@@ -1,0 +1,13 @@
+{
+  "module_name": "beanjamin",
+  "visibility": "private",
+  "namespace": "e76d1b3b04684efdbb7ffb1d2b352fcb",
+  "language": "go",
+  "resource_type": "service",
+  "resource_subtype": "generic",
+  "model_name": "coffee",
+  "initialize_git": false,
+  "generator_version": "0.1.0",
+  "generated_on": "2026-02-25T22:10:31.863258Z",
+  "module_readme_link": "README.md"
+}
