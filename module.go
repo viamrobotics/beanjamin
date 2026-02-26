@@ -62,6 +62,7 @@ type beanjaminCoffee struct {
 
 	name      resource.Name
 	logger    logging.Logger
+	cfg       *Config
 	sw        toggleswitch.Switch
 	sequences map[string][]Step
 
@@ -114,6 +115,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	s := &beanjaminCoffee{
 		name:       name,
 		logger:     logger,
+		cfg:        conf,
 		sw:         sw,
 		sequences:  conf.Sequences,
 		cancelCtx:  cancelCtx,
