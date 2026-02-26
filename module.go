@@ -8,6 +8,9 @@ import (
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
 	generic "go.viam.com/rdk/services/generic"
+
+	// Register the multi-poses-execution-switch model.
+	_ "beanjamin/multiposesexecutionswitch"
 )
 
 var (
