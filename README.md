@@ -111,15 +111,15 @@ Orchestrates a full coffee brew cycle by moving through a configurable sequence 
   // each step has a pose name and an optional pause (in seconds) after it completes
   // poses can be repeated with different pauses at each occurrence
   "sequence": [
-    {"pose": "grinder_approach"},
-    {"pose": "grinder_activate", "pause_secs": 10},
-    {"pose": "grinder_approach", "pause_secs": 5},
-    {"pose": "tamper_approach"},
-    {"pose": "tamper_activate", "pause_secs": 3},
-    {"pose": "coffee_approach"},
-    {"pose": "coffee_in"},
-    {"pose": "coffee_locked_mid"},
-    {"pose": "coffee_locked_final", "pause_secs": 25}
+    {"pose_name": "grinder_approach"},
+    {"pose_name": "grinder_activate", "pause_secs": 10},
+    {"pose_name": "grinder_approach", "pause_secs": 5},
+    {"pose_name": "tamper_approach"},
+    {"pose_name": "tamper_activate", "pause_secs": 3},
+    {"pose_name": "coffee_approach"},
+    {"pose_name": "coffee_in"},
+    {"pose_name": "coffee_locked_mid"},
+    {"pose_name": "coffee_locked_final", "pause_secs": 25}
   ]
 }
 ```
