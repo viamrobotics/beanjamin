@@ -3,9 +3,17 @@
   "module_id": "e76d1b3b04684efdbb7ffb1d2b352fcb:beanjamin",
   "visibility": "private",
   "url": "",
-  "description": "Modular generic service: coffee",
-  "applications": null,
-  "markdown_link": "README.md",
+  "description": "Beanjamin module: coffee service and multi-poses execution switch",
+  "models": [
+    {
+      "api": "rdk:service:generic",
+      "model": "e76d1b3b04684efdbb7ffb1d2b352fcb:beanjamin:coffee"
+    },
+    {
+      "api": "rdk:component:switch",
+      "model": "e76d1b3b04684efdbb7ffb1d2b352fcb:beanjamin:multi-poses-execution-switch"
+    }
+  ],
   "entrypoint": "bin/beanjamin",
   "first_run": "",
   "build": {
