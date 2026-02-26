@@ -5,8 +5,6 @@ The `viam:beanjamin` module provides two models for arm-based automation workflo
 1. **`viam:beanjamin:coffee`** - A generic service placeholder for coffee machine control (not yet implemented).
 2. **`viam:beanjamin:multi-poses-execution-switch`** - A switch component that moves an arm between predefined poses using the Motion service.
 
-It also ships a CLI (`beanjamin-cli`) for ad-hoc arm pose queries and movements.
-
 ---
 
 ## Model: `viam:beanjamin:multi-poses-execution-switch`
@@ -102,55 +100,3 @@ Returns:
 
 Placeholder service for future coffee machine control. Currently has no configuration attributes and `DoCommand` is not implemented.
 
----
-
-## CLI: `beanjamin-cli`
-
-A standalone tool for querying and commanding arm poses on a running Viam machine.
-
-Authentication can be provided via flags or environment variables (`VIAM_API_KEY`, `VIAM_API_KEY_ID`).
-
-### `get-pose`
-
-Get the current pose of a component in the world frame.
-
-```bash
-beanjamin-cli get-pose \
-  --address <machine-address> \
-  --api-key <key> --api-key-id <key-id> \
-  --component-name arm
-```
-
-Output:
-
-```
-Component: arm
-Frame:     world
-Position:  x=100.00  y=200.00  z=300.00 (mm)
-Orientation: ox=0.0000  oy=0.0000  oz=1.0000  theta=0.00 (deg)
-```
-
-### `move-to-pose`
-
-Move an arm to a specified pose via the Motion service. Automatically builds a world state from the robot's frame system for obstacle avoidance.
-
-```bash
-beanjamin-cli move-to-pose \
-  --address <machine-address> \
-  --api-key <key> --api-key-id <key-id> \
-  --component-name arm \
-  --x 100 --y 200 --z 300 \
-  --ox 0 --oy 0 --oz 1 --theta 0 \
-  --frame world
-```
-
-| Flag               | Default   | Description |
-|--------------------|-----------|-------------|
-| `--address`        | (required)| Machine gRPC address. |
-| `--api-key`        | env var   | API key for auth. |
-| `--api-key-id`     | env var   | API key ID for auth. |
-| `--component-name` | `arm`     | Name of the component to move/query. |
-| `--x/y/z`          | `0`       | Position in mm. |
-| `--ox/oy/oz`       | `0,0,1`   | Orientation axis vector. |
-| `--theta`          | `0`       | Rotation angle in degrees. |
-| `--frame`          | `world`   | Reference frame for the destination. |
