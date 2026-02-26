@@ -140,7 +140,21 @@ Returns on success:
 
 Returns an error if a brew is already in progress, a motion step fails, or the request is cancelled.
 
-**`cancel`** - Cancel a brew cycle in progress. The cycle stops after the current motion completes.
+**`unbrew`** - Run the sequence in reverse. Only allowed when the switch is at the last position in the sequence (e.g., `coffee_locked_final`). Skips the current position and works backwards through every prior step.
+
+```json
+{ "unbrew": true }
+```
+
+Returns on success:
+
+```json
+{ "status": "complete" }
+```
+
+Returns an error if the switch is not at the last position, a cycle is already running, or a motion step fails.
+
+**`cancel`** - Cancel a brew or unbrew cycle in progress. The cycle stops after the current motion completes.
 
 ```json
 { "cancel": true }
