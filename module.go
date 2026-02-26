@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -52,6 +53,7 @@ type beanjaminCoffee struct {
 	poseNames  []string
 	pauseAfter map[string]time.Duration
 
+	mu         sync.Mutex
 	cancelCtx  context.Context
 	cancelFunc func()
 	brewing    atomic.Bool
@@ -105,7 +107,22 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 	if _, ok := cmd["brew"]; ok {
 		return s.brew(ctx)
 	}
-	return nil, fmt.Errorf("unknown command, supported commands: brew")
+	if _, ok := cmd["cancel"]; ok {
+		return s.cancel()
+	}
+	return nil, fmt.Errorf("unknown command, supported commands: brew, cancel")
+}
+
+func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
+	if !s.brewing.Load() {
+		return nil, errors.New("no brew cycle in progress")
+	}
+	s.mu.Lock()
+	s.cancelFunc()
+	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
+	s.mu.Unlock()
+	s.logger.Infof("brew cycle cancelled")
+	return map[string]interface{}{"status": "cancelled"}, nil
 }
 
 func (s *beanjaminCoffee) brew(ctx context.Context) (map[string]interface{}, error) {
@@ -114,14 +131,18 @@ func (s *beanjaminCoffee) brew(ctx context.Context) (map[string]interface{}, err
 	}
 	defer s.brewing.Store(false)
 
+	s.mu.Lock()
+	cancelCtx := s.cancelCtx
+	s.mu.Unlock()
+
 	s.logger.Infof("starting brew cycle with %d steps", len(s.poseNames))
 
 	for i, poseName := range s.poseNames {
 		select {
 		case <-ctx.Done():
 			return nil, fmt.Errorf("brew cancelled at step %d (%q): %w", i, poseName, ctx.Err())
-		case <-s.cancelCtx.Done():
-			return nil, fmt.Errorf("brew cancelled at step %d (%q): component closing", i, poseName)
+		case <-cancelCtx.Done():
+			return nil, fmt.Errorf("brew cancelled at step %d (%q)", i, poseName)
 		default:
 		}
 
@@ -140,8 +161,8 @@ func (s *beanjaminCoffee) brew(ctx context.Context) (map[string]interface{}, err
 			case <-time.After(pause):
 			case <-ctx.Done():
 				return nil, fmt.Errorf("brew cancelled during pause after %q: %w", poseName, ctx.Err())
-			case <-s.cancelCtx.Done():
-				return nil, fmt.Errorf("brew cancelled during pause after %q: component closing", poseName)
+			case <-cancelCtx.Done():
+				return nil, fmt.Errorf("brew cancelled during pause after %q", poseName)
 			}
 		}
 	}

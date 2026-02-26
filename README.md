@@ -147,6 +147,18 @@ Returns on success:
 
 Returns an error if a brew is already in progress, a motion step fails, or the request is cancelled.
 
+**`cancel`** - Cancel a brew cycle in progress. The cycle stops after the current motion completes.
+
+```json
+{ "cancel": true }
+```
+
+Returns:
+
+```json
+{ "status": "cancelled" }
+```
+
 ### Behavior
 
 - The `sequence` field defines the exact order of poses to execute. Poses can be repeated and reordered as needed.
