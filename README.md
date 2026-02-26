@@ -31,12 +31,12 @@ Moves an arm (or any movable component) between a list of named poses via the Mo
 }
 ```
 
-| Name              | Type     | Required | Description |
-|-------------------|----------|----------|-------------|
-| `component_name`  | string   | Yes      | Name of the arm component to move. |
-| `motion`          | string   | Yes      | Name of the motion service (typically `"builtin"`). |
-| `reference_frame` | string   | No       | Reference frame for poses. Defaults to `"world"`. |
-| `poses`           | array    | Yes      | One or more named poses. Each pose needs a `pose_name` and position/orientation fields. |
+| Name              | Type   | Required | Description                                                                             |
+| ----------------- | ------ | -------- | --------------------------------------------------------------------------------------- |
+| `component_name`  | string | Yes      | Name of the arm component to move.                                                      |
+| `motion`          | string | Yes      | Name of the motion service (typically `"builtin"`).                                     |
+| `reference_frame` | string | No       | Reference frame for poses. Defaults to `"world"`.                                       |
+| `poses`           | array  | Yes      | One or more named poses. Each pose needs a `pose_name` and position/orientation fields. |
 
 **Pose fields:** `x`, `y`, `z` are in millimeters. `o_x`, `o_y`, `o_z` define the orientation axis, `theta_degrees` is the rotation angle in degrees.
 
@@ -66,11 +66,11 @@ Moves an arm (or any movable component) between a list of named poses via the Mo
 
 ### Switch Interface
 
-| Method                 | Description |
-|------------------------|-------------|
+| Method                 | Description                                        |
+| ---------------------- | -------------------------------------------------- |
 | `GetNumberOfPositions` | Returns the total number of poses and their names. |
-| `GetPosition`          | Returns the index of the current pose (0-based). |
-| `SetPosition(index)`   | Moves the arm to the pose at the given index. |
+| `GetPosition`          | Returns the index of the current pose (0-based).   |
+| `SetPosition(index)`   | Moves the arm to the pose at the given index.      |
 
 ### DoCommand
 
@@ -99,3 +99,50 @@ Returns:
 **API:** `rdk:service:generic`
 
 Placeholder service for future coffee machine control. Currently has no configuration attributes and `DoCommand` is not implemented.
+
+---
+
+## Development
+
+When iterating on poses, we recommend using the built-in `viam` CLI motion commands to query and test arm positions on a running machine.
+
+Note: `--organization` , `--location`, and `--machine` will be infered from the part ID
+
+### Print motion service status
+
+```bash
+viam robot part motion print-status \
+  --organization <org> \
+  --location <location> \
+  --machine <machine> \
+  --part <part>
+```
+
+### Get the current pose of a component
+
+```bash
+viam robot part motion get-pose \
+  --organization <org> \
+  --location <location> \
+  --machine <machine> \
+  --part <part> \
+  --component <component-name>
+```
+
+### Move a component to a pose
+
+```bash
+viam robot part motion set-pose \
+  --organization <org> \
+  --location <location> \
+  --machine <machine> \
+  --part <part> \
+  --component <component-name> \
+  -x <mm> -y <mm> -z <mm> \
+  --ox <float> --oy <float> --oz <float> --theta <degrees>
+```
+
+Note: Only the pose values specified will be modified. Example if you only set `-x 100`, it will move the component by just changing the X value of its current pose
+
+Once you've found the right poses, add them to your `multi-poses-execution-switch` configuration.
+
