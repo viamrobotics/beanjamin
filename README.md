@@ -2,7 +2,7 @@
 
 The `viam:beanjamin` module provides two models for arm-based automation workflows:
 
-1. **`viam:beanjamin:coffee`** - A generic service placeholder for coffee machine control (not yet implemented).
+1. **`viam:beanjamin:coffee`** - A generic service that orchestrates a full coffee brew cycle by sequentially moving through all poses on a pose switcher.
 2. **`viam:beanjamin:multi-poses-execution-switch`** - A switch component that moves an arm between predefined poses using the Motion service.
 
 ---
@@ -98,7 +98,50 @@ Returns:
 
 **API:** `rdk:service:generic`
 
-Placeholder service for future coffee machine control. Currently has no configuration attributes and `DoCommand` is not implemented.
+Orchestrates a full coffee brew cycle by sequentially moving through every pose defined on a `multi-poses-execution-switch` component. A single `DoCommand` triggers the entire sequence — no manual button presses needed.
+
+### Configuration
+
+```json
+{
+  "pose_switcher_name": "<string>"
+}
+```
+
+| Name                 | Type   | Required | Description                                                                                  |
+| -------------------- | ------ | -------- | -------------------------------------------------------------------------------------------- |
+| `pose_switcher_name` | string | Yes      | Name of the `multi-poses-execution-switch` component to drive during the brew cycle.         |
+
+### Example Configuration
+
+```json
+{
+  "pose_switcher_name": "multi-pose-execution-switch"
+}
+```
+
+### DoCommand
+
+**`brew`** - Run the full brew cycle. Moves through every pose on the switcher in order (e.g., grinder approach → grinder activate → tamper approach → tamper activate → coffee approach → coffee in → coffee locked). Only one brew can run at a time.
+
+```json
+{ "brew": true }
+```
+
+Returns on success:
+
+```json
+{ "status": "complete" }
+```
+
+Returns an error if a brew is already in progress, a motion step fails, or the request is cancelled.
+
+### Behavior
+
+- On startup, the service queries the pose switcher for all pose names via `GetNumberOfPositions`.
+- When `{"brew": true}` is received, it iterates through each pose in order, calling `set_position_by_name` on the switcher.
+- Per-step pause durations can be configured in the source code (`pauseAfter` map in `module.go`) for steps that need dwell time (e.g., waiting for the grinder to finish).
+- The brew cycle is cancellation-aware — cancelling the request or stopping the service will halt the cycle between steps.
 
 ---
 
