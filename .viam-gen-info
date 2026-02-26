@@ -1,7 +1,7 @@
 {
   "module_name": "beanjamin",
   "visibility": "private",
-  "namespace": "e76d1b3b04684efdbb7ffb1d2b352fcb",
+  "namespace": "viam",
   "language": "go",
   "resource_type": "service",
   "resource_subtype": "generic",

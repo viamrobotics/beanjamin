@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	Coffee           = resource.NewModel("e76d1b3b04684efdbb7ffb1d2b352fcb", "beanjamin", "coffee")
+	Coffee           = resource.NewModel("viam", "beanjamin", "coffee")
 	errUnimplemented = errors.New("unimplemented")
 )
 
