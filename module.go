@@ -81,6 +81,22 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, fmt.Errorf("resource %q is not a switch", conf.PoseSwitcherName)
 	}
 
+	_, validPoses, err := sw.GetNumberOfPositions(ctx, nil)
+	if err != nil {
+		cancelFunc()
+		return nil, fmt.Errorf("failed to get positions from switch: %w", err)
+	}
+	validSet := make(map[string]bool, len(validPoses))
+	for _, p := range validPoses {
+		validSet[p] = true
+	}
+	for _, poseName := range conf.Sequence {
+		if !validSet[poseName] {
+			cancelFunc()
+			return nil, fmt.Errorf("pose %q in sequence does not exist on switch %q (available: %v)", poseName, conf.PoseSwitcherName, validPoses)
+		}
+	}
+
 	pauseAfter := make(map[string]time.Duration, len(conf.PauseSecs))
 	for poseName, secs := range conf.PauseSecs {
 		pauseAfter[poseName] = time.Duration(secs * float64(time.Second))
