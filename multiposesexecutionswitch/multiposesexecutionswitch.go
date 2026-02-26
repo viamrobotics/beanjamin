@@ -121,7 +121,25 @@ func (s *multiPosesExecutionSwitch) Name() resource.Name {
 }
 
 func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
-	return nil, resource.ErrDoUnimplemented
+	if name, ok := cmd["set_position_by_name"].(string); ok {
+		for i, pn := range s.poseNames {
+			if pn == name {
+				return nil, s.SetPosition(ctx, uint32(i), nil)
+			}
+		}
+		return nil, fmt.Errorf("unknown pose name %q", name)
+	}
+
+	if _, ok := cmd["get_current_position_name"]; ok {
+		s.mu.Lock()
+		pos := s.position
+		s.mu.Unlock()
+		return map[string]interface{}{
+			"position_name": s.poseNames[pos],
+		}, nil
+	}
+
+	return nil, fmt.Errorf("unknown command, supported commands: set_position_by_name, get_current_position_name")
 }
 
 func (s *multiPosesExecutionSwitch) GetNumberOfPositions(ctx context.Context, extra map[string]interface{}) (uint32, []string, error) {
