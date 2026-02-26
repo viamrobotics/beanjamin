@@ -1,4 +1,4 @@
-# Model e76d1b3b04684efdbb7ffb1d2b352fcb:beanjamin:coffee
+# Model viam:beanjamin:coffee
 
 Provide a description of the model and any relevant information.
 
