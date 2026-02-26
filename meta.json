@@ -9,13 +9,13 @@
       "api": "rdk:service:generic",
       "model": "viam:beanjamin:coffee",
       "short_description": "Placeholder service for coffee machine control.",
-      "markdown_link": "viam_beanjamin_coffee.md#model-viambeanjamincoffee"
+      "markdown_link": "README.md#model-viambeanjamincoffee"
     },
     {
       "api": "rdk:component:switch",
       "model": "viam:beanjamin:multi-poses-execution-switch",
       "short_description": "Switch that moves an arm between predefined poses via the Motion service.",
-      "markdown_link": "viam_beanjamin_coffee.md#model-viambeanjaminmulti-poses-execution-switch"
+      "markdown_link": "README.md#model-viambeanjaminmulti-poses-execution-switch"
     }
   ],
   "entrypoint": "bin/beanjamin",
