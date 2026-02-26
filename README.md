@@ -104,21 +104,11 @@ Orchestrates a full coffee brew cycle by sequentially moving through every pose 
 
 ```json
 {
-  "pose_switcher_name": "<string>",
-  "pause_secs": { "<pose_name>": <seconds>, ... }
-}
-```
-
-| Name                 | Type              | Required | Description                                                                          |
-| -------------------- | ----------------- | -------- | ------------------------------------------------------------------------------------ |
-| `pose_switcher_name` | string            | Yes      | Name of the `multi-poses-execution-switch` component to drive during the brew cycle. |
-| `pause_secs`         | map[string]float64 | No       | Seconds to wait after each pose completes. Keys are pose names.                      |
-
-### Example Configuration
-
-```json
-{
+  // string (required) — name of the multi-poses-execution-switch component
   "pose_switcher_name": "multi-pose-execution-switch",
+
+  // map[string]float64 (optional) — seconds to pause after each pose completes
+  // only list poses that need a delay; unlisted poses have no pause
   "pause_secs": {
     "grinder_activate": 10,
     "tamper_activate": 3,
