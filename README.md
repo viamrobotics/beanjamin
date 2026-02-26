@@ -98,7 +98,7 @@ Returns:
 
 **API:** `rdk:service:generic`
 
-Orchestrates a full coffee brew cycle by moving through a configurable sequence of poses on a `multi-poses-execution-switch` component. A single `DoCommand` triggers the entire sequence — no manual button presses needed.
+Runs named sequences of poses on a `multi-poses-execution-switch` component. Supports multiple sequences, forward/reverse execution, and optional position enforcement.
 
 ### Configuration
 
@@ -107,71 +107,57 @@ Orchestrates a full coffee brew cycle by moving through a configurable sequence 
   // string (required) — name of the multi-poses-execution-switch component
   "pose_switcher_name": "multi-pose-execution-switch",
 
-  // []Step (required) — ordered list of steps to execute
-  // each step has a pose name and an optional pause (in seconds) after it completes
-  // poses can be repeated with different pauses at each occurrence
-  "sequence": [
-    {"pose_name": "grinder_approach"},
-    {"pose_name": "grinder_activate", "pause_secs": 10},
-    {"pose_name": "grinder_approach", "pause_secs": 5},
-    {"pose_name": "tamper_approach"},
-    {"pose_name": "tamper_activate", "pause_secs": 3},
-    {"pose_name": "coffee_approach"},
-    {"pose_name": "coffee_in"},
-    {"pose_name": "coffee_locked_mid"},
-    {"pose_name": "coffee_locked_final", "pause_secs": 25}
-  ]
+  // map[string][]Step (required) — named sequences of steps
+  // each step has a pose_name and optional pause_secs
+  "sequences": {
+    "brew": [
+      {"pose_name": "grinder_approach"},
+      {"pose_name": "grinder_activate", "pause_secs": 10},
+      {"pose_name": "grinder_approach", "pause_secs": 5},
+      {"pose_name": "tamper_approach"},
+      {"pose_name": "tamper_activate", "pause_secs": 3},
+      {"pose_name": "coffee_approach"},
+      {"pose_name": "coffee_in"},
+      {"pose_name": "coffee_locked_mid"},
+      {"pose_name": "coffee_locked_final", "pause_secs": 25}
+    ],
+    "clean": [
+      {"pose_name": "grinder_approach"},
+      {"pose_name": "tamper_approach"}
+    ]
+  }
 }
 ```
 
 ### DoCommand
 
-**`brew`** - Run the full brew cycle. Moves through the configured sequence of poses in order. Only one brew can run at a time.
+**`run`** - Run a named sequence forward. Only one sequence can run at a time. Optionally pass `enforce_start` to check that the switch is at the first step before running.
 
 ```json
-{ "brew": true }
+{"run": "brew"}
+{"run": "brew", "enforce_start": true}
 ```
 
-Returns on success:
+**`rewind`** - Run a named sequence in reverse. Only allowed when the switch is at the last step of that sequence.
 
 ```json
-{ "status": "complete" }
+{"rewind": "brew"}
 ```
 
-Returns an error if a brew is already in progress, a motion step fails, or the request is cancelled.
-
-**`unbrew`** - Run the sequence in reverse. Only allowed when the switch is at the last position in the sequence. Skips the current position and works backwards through every prior step.
+**`cancel`** - Cancel whatever sequence is currently running.
 
 ```json
-{ "unbrew": true }
+{"cancel": true}
 ```
 
-Returns on success:
-
-```json
-{ "status": "complete" }
-```
-
-Returns an error if the switch is not at the last position, a cycle is already running, or a motion step fails.
-
-**`cancel`** - Cancel a brew or unbrew cycle in progress. The cycle stops after the current motion completes.
-
-```json
-{ "cancel": true }
-```
-
-Returns:
-
-```json
-{ "status": "cancelled" }
-```
+All commands return `{"status": "complete"}` on success or `{"status": "cancelled"}` for cancel.
 
 ### Behavior
 
-- The `sequence` field defines the exact order of poses to execute. Poses can be repeated and reordered as needed.
-- When `{"brew": true}` is received, it iterates through the sequence, calling `set_position_by_name` on the switcher for each step.
-- Each step can optionally include `pause_secs` to wait after the pose completes. Steps without `pause_secs` (or set to 0) have no pause.
-- The brew cycle is cancellation-aware — cancelling the request or stopping the service will halt the cycle between steps.
+- The `sequences` map defines named sequences of poses. Each can be run or rewound independently.
+- Poses can be repeated with different pauses at each occurrence.
+- `enforce_start` on `run` checks the switch is at the first step. `rewind` always checks the switch is at the last step.
+- All execution is cancellation-aware — cancel stops the sequence between steps.
 
 ---
 
