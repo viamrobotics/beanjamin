@@ -98,7 +98,7 @@ Returns:
 
 **API:** `rdk:service:generic`
 
-Orchestrates a full coffee brew cycle by sequentially moving through every pose defined on a `multi-poses-execution-switch` component. A single `DoCommand` triggers the entire sequence — no manual button presses needed.
+Orchestrates a full coffee brew cycle by moving through a configurable sequence of poses on a `multi-poses-execution-switch` component. A single `DoCommand` triggers the entire sequence — no manual button presses needed.
 
 ### Configuration
 
@@ -107,19 +107,33 @@ Orchestrates a full coffee brew cycle by sequentially moving through every pose 
   // string (required) — name of the multi-poses-execution-switch component
   "pose_switcher_name": "multi-pose-execution-switch",
 
+  // []string (required) — ordered list of pose names to execute
+  // poses can be repeated and in any order
+  "sequence": [
+    "grinder_approach",
+    "grinder_activate",
+    "grinder_approach",
+    "tamper_approach",
+    "tamper_activate",
+    "coffee_approach",
+    "coffee_in",
+    "coffee_locked_mid",
+    "coffee_locked_final"
+  ],
+
   // map[string]float64 (optional) — seconds to pause after each pose completes
   // only list poses that need a delay; unlisted poses have no pause
   "pause_secs": {
     "grinder_activate": 10,
     "tamper_activate": 3,
-    "coffee_locked": 25
+    "coffee_locked_final": 25
   }
 }
 ```
 
 ### DoCommand
 
-**`brew`** - Run the full brew cycle. Moves through every pose on the switcher in order (e.g., grinder approach → grinder activate → tamper approach → tamper activate → coffee approach → coffee in → coffee locked). Only one brew can run at a time.
+**`brew`** - Run the full brew cycle. Moves through the configured sequence of poses in order. Only one brew can run at a time.
 
 ```json
 { "brew": true }
@@ -135,8 +149,8 @@ Returns an error if a brew is already in progress, a motion step fails, or the r
 
 ### Behavior
 
-- On startup, the service queries the pose switcher for all pose names via `GetNumberOfPositions`.
-- When `{"brew": true}` is received, it iterates through each pose in order, calling `set_position_by_name` on the switcher.
+- The `sequence` field defines the exact order of poses to execute. Poses can be repeated and reordered as needed.
+- When `{"brew": true}` is received, it iterates through the sequence, calling `set_position_by_name` on the switcher for each step.
 - Per-step pause durations are configured via the `pause_secs` config field. Only poses that need dwell time need to be listed.
 - The brew cycle is cancellation-aware — cancelling the request or stopping the service will halt the cycle between steps.
 

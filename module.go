@@ -28,12 +28,16 @@ func init() {
 
 type Config struct {
 	PoseSwitcherName string             `json:"pose_switcher_name"`
+	Sequence         []string           `json:"sequence"`
 	PauseSecs        map[string]float64 `json:"pause_secs,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.PoseSwitcherName == "" {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "switch_name")
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "pose_switcher_name")
+	}
+	if len(cfg.Sequence) == 0 {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "sequence")
 	}
 	return []string{cfg.PoseSwitcherName}, nil, nil
 }
@@ -75,12 +79,6 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, fmt.Errorf("resource %q is not a switch", conf.PoseSwitcherName)
 	}
 
-	_, poseNames, err := sw.GetNumberOfPositions(ctx, nil)
-	if err != nil {
-		cancelFunc()
-		return nil, fmt.Errorf("failed to get positions from switch: %w", err)
-	}
-
 	pauseAfter := make(map[string]time.Duration, len(conf.PauseSecs))
 	for poseName, secs := range conf.PauseSecs {
 		pauseAfter[poseName] = time.Duration(secs * float64(time.Second))
@@ -91,7 +89,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger:     logger,
 		cfg:        conf,
 		sw:         sw,
-		poseNames:  poseNames,
+		poseNames:  conf.Sequence,
 		pauseAfter: pauseAfter,
 		cancelCtx:  cancelCtx,
 		cancelFunc: cancelFunc,
