@@ -27,10 +27,14 @@ func init() {
 	)
 }
 
+type Step struct {
+	Pose     string  `json:"pose"`
+	PauseSec float64 `json:"pause_secs,omitempty"`
+}
+
 type Config struct {
-	PoseSwitcherName string             `json:"pose_switcher_name"`
-	Sequence         []string           `json:"sequence"`
-	PauseSecs        map[string]float64 `json:"pause_secs,omitempty"`
+	PoseSwitcherName string `json:"pose_switcher_name"`
+	Sequence         []Step `json:"sequence"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -39,6 +43,11 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 	if len(cfg.Sequence) == 0 {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "sequence")
+	}
+	for i, step := range cfg.Sequence {
+		if step.Pose == "" {
+			return nil, nil, fmt.Errorf("%s: sequence[%d] is missing required field \"pose\"", path, i)
+		}
 	}
 	return []string{cfg.PoseSwitcherName}, nil, nil
 }
@@ -49,9 +58,8 @@ type beanjaminCoffee struct {
 	name      resource.Name
 	logger    logging.Logger
 	cfg       *Config
-	sw         toggleswitch.Switch
-	poseNames  []string
-	pauseAfter map[string]time.Duration
+	sw       toggleswitch.Switch
+	sequence []Step
 
 	mu         sync.Mutex
 	cancelCtx  context.Context
@@ -90,16 +98,11 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	for _, p := range validPoses {
 		validSet[p] = true
 	}
-	for _, poseName := range conf.Sequence {
-		if !validSet[poseName] {
+	for i, step := range conf.Sequence {
+		if !validSet[step.Pose] {
 			cancelFunc()
-			return nil, fmt.Errorf("pose %q in sequence does not exist on switch %q (available: %v)", poseName, conf.PoseSwitcherName, validPoses)
+			return nil, fmt.Errorf("sequence[%d]: pose %q does not exist on switch %q (available: %v)", i, step.Pose, conf.PoseSwitcherName, validPoses)
 		}
-	}
-
-	pauseAfter := make(map[string]time.Duration, len(conf.PauseSecs))
-	for poseName, secs := range conf.PauseSecs {
-		pauseAfter[poseName] = time.Duration(secs * float64(time.Second))
 	}
 
 	s := &beanjaminCoffee{
@@ -107,8 +110,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger:     logger,
 		cfg:        conf,
 		sw:         sw,
-		poseNames:  conf.Sequence,
-		pauseAfter: pauseAfter,
+		sequence:   conf.Sequence,
 		cancelCtx:  cancelCtx,
 		cancelFunc: cancelFunc,
 	}
@@ -151,34 +153,35 @@ func (s *beanjaminCoffee) brew(ctx context.Context) (map[string]interface{}, err
 	cancelCtx := s.cancelCtx
 	s.mu.Unlock()
 
-	s.logger.Infof("starting brew cycle with %d steps", len(s.poseNames))
+	s.logger.Infof("starting brew cycle with %d steps", len(s.sequence))
 
-	for i, poseName := range s.poseNames {
+	for i, step := range s.sequence {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("brew cancelled at step %d (%q): %w", i, poseName, ctx.Err())
+			return nil, fmt.Errorf("brew cancelled at step %d (%q): %w", i, step.Pose, ctx.Err())
 		case <-cancelCtx.Done():
-			return nil, fmt.Errorf("brew cancelled at step %d (%q)", i, poseName)
+			return nil, fmt.Errorf("brew cancelled at step %d (%q)", i, step.Pose)
 		default:
 		}
 
-		s.logger.Infof("brew step %d/%d: moving to %q", i+1, len(s.poseNames), poseName)
+		s.logger.Infof("brew step %d/%d: moving to %q", i+1, len(s.sequence), step.Pose)
 
 		_, err := s.sw.DoCommand(ctx, map[string]interface{}{
-			"set_position_by_name": poseName,
+			"set_position_by_name": step.Pose,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("brew failed at step %d (%q): %w", i, poseName, err)
+			return nil, fmt.Errorf("brew failed at step %d (%q): %w", i, step.Pose, err)
 		}
 
-		if pause, ok := s.pauseAfter[poseName]; ok && pause > 0 {
-			s.logger.Infof("pausing %s after %q", pause, poseName)
+		if step.PauseSec > 0 {
+			pause := time.Duration(step.PauseSec * float64(time.Second))
+			s.logger.Infof("pausing %s after %q", pause, step.Pose)
 			select {
 			case <-time.After(pause):
 			case <-ctx.Done():
-				return nil, fmt.Errorf("brew cancelled during pause after %q: %w", poseName, ctx.Err())
+				return nil, fmt.Errorf("brew cancelled during pause after %q: %w", step.Pose, ctx.Err())
 			case <-cancelCtx.Done():
-				return nil, fmt.Errorf("brew cancelled during pause after %q", poseName)
+				return nil, fmt.Errorf("brew cancelled during pause after %q", step.Pose)
 			}
 		}
 	}

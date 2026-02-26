@@ -107,27 +107,20 @@ Orchestrates a full coffee brew cycle by moving through a configurable sequence 
   // string (required) — name of the multi-poses-execution-switch component
   "pose_switcher_name": "multi-pose-execution-switch",
 
-  // []string (required) — ordered list of pose names to execute
-  // poses can be repeated and in any order
+  // []Step (required) — ordered list of steps to execute
+  // each step has a pose name and an optional pause (in seconds) after it completes
+  // poses can be repeated with different pauses at each occurrence
   "sequence": [
-    "grinder_approach",
-    "grinder_activate",
-    "grinder_approach",
-    "tamper_approach",
-    "tamper_activate",
-    "coffee_approach",
-    "coffee_in",
-    "coffee_locked_mid",
-    "coffee_locked_final"
-  ],
-
-  // map[string]float64 (optional) — seconds to pause after each pose completes
-  // only list poses that need a delay; unlisted poses have no pause
-  "pause_secs": {
-    "grinder_activate": 10,
-    "tamper_activate": 3,
-    "coffee_locked_final": 25
-  }
+    {"pose": "grinder_approach"},
+    {"pose": "grinder_activate", "pause_secs": 10},
+    {"pose": "grinder_approach", "pause_secs": 5},
+    {"pose": "tamper_approach"},
+    {"pose": "tamper_activate", "pause_secs": 3},
+    {"pose": "coffee_approach"},
+    {"pose": "coffee_in"},
+    {"pose": "coffee_locked_mid"},
+    {"pose": "coffee_locked_final", "pause_secs": 25}
+  ]
 }
 ```
 
@@ -163,7 +156,7 @@ Returns:
 
 - The `sequence` field defines the exact order of poses to execute. Poses can be repeated and reordered as needed.
 - When `{"brew": true}` is received, it iterates through the sequence, calling `set_position_by_name` on the switcher for each step.
-- Per-step pause durations are configured via the `pause_secs` config field. Only poses that need dwell time need to be listed.
+- Each step can optionally include `pause_secs` to wait after the pose completes. Steps without `pause_secs` (or set to 0) have no pause.
 - The brew cycle is cancellation-aware — cancelling the request or stopping the service will halt the cycle between steps.
 
 ---
