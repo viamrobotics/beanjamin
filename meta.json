@@ -1,17 +1,17 @@
 {
   "$schema": "https://dl.viam.dev/module.schema.json",
-  "module_id": "e76d1b3b04684efdbb7ffb1d2b352fcb:beanjamin",
+  "module_id": "viam:beanjamin",
   "visibility": "private",
   "url": "",
   "description": "Beanjamin module: coffee service and multi-poses execution switch",
   "models": [
     {
       "api": "rdk:service:generic",
-      "model": "e76d1b3b04684efdbb7ffb1d2b352fcb:beanjamin:coffee"
+      "model": "viam:beanjamin:coffee"
     },
     {
       "api": "rdk:component:switch",
-      "model": "e76d1b3b04684efdbb7ffb1d2b352fcb:beanjamin:multi-poses-execution-switch"
+      "model": "viam:beanjamin:multi-poses-execution-switch"
     }
   ],
   "entrypoint": "bin/beanjamin",
