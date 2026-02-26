@@ -27,14 +27,14 @@ func init() {
 }
 
 type Config struct {
-	SwitchName string `json:"switch_name"`
+	PoseSwitcherName string `json:"pose_switcher_name"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
-	if cfg.SwitchName == "" {
+	if cfg.PoseSwitcherName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "switch_name")
 	}
-	return []string{cfg.SwitchName}, nil, nil
+	return []string{cfg.PoseSwitcherName}, nil, nil
 }
 
 type beanjaminCoffee struct {
@@ -62,15 +62,15 @@ func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf
 func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Name, conf *Config, logger logging.Logger) (resource.Resource, error) {
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 
-	switchRes, ok := deps[toggleswitch.Named(conf.SwitchName)]
+	switchRes, ok := deps[toggleswitch.Named(conf.PoseSwitcherName)]
 	if !ok {
 		cancelFunc()
-		return nil, fmt.Errorf("switch %q not found in dependencies", conf.SwitchName)
+		return nil, fmt.Errorf("switch %q not found in dependencies", conf.PoseSwitcherName)
 	}
 	sw, ok := switchRes.(toggleswitch.Switch)
 	if !ok {
 		cancelFunc()
-		return nil, fmt.Errorf("resource %q is not a switch", conf.SwitchName)
+		return nil, fmt.Errorf("resource %q is not a switch", conf.PoseSwitcherName)
 	}
 
 	_, poseNames, err := sw.GetNumberOfPositions(ctx, nil)
