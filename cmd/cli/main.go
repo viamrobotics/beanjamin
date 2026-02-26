@@ -56,11 +56,11 @@ type connFlags struct {
 	apiKeyID *string
 }
 
-func addConnFlags(fs *flag.FlagSet) connFlags {
+func addConnFlags(flagSet *flag.FlagSet) connFlags {
 	return connFlags{
-		address:  fs.String("address", "", "Machine gRPC address (required)"),
-		apiKey:   fs.String("api-key", os.Getenv("VIAM_API_KEY"), "API key (or set VIAM_API_KEY env var)"),
-		apiKeyID: fs.String("api-key-id", os.Getenv("VIAM_API_KEY_ID"), "API key ID (or set VIAM_API_KEY_ID env var)"),
+		address:  flagSet.String("address", "", "Machine gRPC address (required)"),
+		apiKey:   flagSet.String("api-key", os.Getenv("VIAM_API_KEY"), "API key (or set VIAM_API_KEY env var)"),
+		apiKeyID: flagSet.String("api-key-id", os.Getenv("VIAM_API_KEY_ID"), "API key ID (or set VIAM_API_KEY_ID env var)"),
 	}
 }
 
@@ -88,25 +88,25 @@ func (c connFlags) connect(ctx context.Context, logger logging.Logger) (robot.Ro
 }
 
 func runMoveToPose(args []string) error {
-	fs := flag.NewFlagSet("move-to-pose", flag.ExitOnError)
-	conn := addConnFlags(fs)
+	flagSet := flag.NewFlagSet("move-to-pose", flag.ExitOnError)
+	conn := addConnFlags(flagSet)
 
-	componentName := fs.String("component-name", "arm", "Name of the arm to move")
+	componentName := flagSet.String("component-name", "arm", "Name of the arm to move")
 
 	// Pose flags (position in mm)
-	x := fs.Float64("x", 0, "X position in mm")
-	y := fs.Float64("y", 0, "Y position in mm")
-	z := fs.Float64("z", 0, "Z position in mm")
+	x := flagSet.Float64("x", 0, "X position in mm")
+	y := flagSet.Float64("y", 0, "Y position in mm")
+	z := flagSet.Float64("z", 0, "Z position in mm")
 
 	// Orientation flags (OrientationVector, degrees)
-	ox := fs.Float64("ox", 0, "Orientation vector X component")
-	oy := fs.Float64("oy", 0, "Orientation vector Y component")
-	oz := fs.Float64("oz", 1, "Orientation vector Z component")
-	theta := fs.Float64("theta", 0, "Orientation angle in degrees")
+	ox := flagSet.Float64("ox", 0, "Orientation vector X component")
+	oy := flagSet.Float64("oy", 0, "Orientation vector Y component")
+	oz := flagSet.Float64("oz", 1, "Orientation vector Z component")
+	theta := flagSet.Float64("theta", 0, "Orientation angle in degrees")
 
-	frame := fs.String("frame", "world", "Reference frame for the destination pose")
+	frame := flagSet.String("frame", "world", "Reference frame for the destination pose")
 
-	if err := fs.Parse(args); err != nil {
+	if err := flagSet.Parse(args); err != nil {
 		return err
 	}
 	if err := conn.validate(); err != nil {
@@ -133,10 +133,38 @@ func runMoveToPose(args []string) error {
 	)
 	destination := referenceframe.NewPoseInFrame(*frame, pose)
 
-	logger.Infof("Moving %q to (%.1f, %.1f, %.1f) in frame %q", *componentName, *x, *y, *z, *frame)
+	// Build WorldState from the robot's frame system so the planner avoids obstacles.
+	fsCfg, err := machine.FrameSystemConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("getting frame system config: %w", err)
+	}
+	fs, err := referenceframe.NewFrameSystem("robot", fsCfg.Parts, nil)
+	if err != nil {
+		return fmt.Errorf("building frame system: %w", err)
+	}
+	inputs, err := machine.CurrentInputs(ctx)
+	if err != nil {
+		return fmt.Errorf("getting current inputs: %w", err)
+	}
+	geomMap, err := referenceframe.FrameSystemGeometries(fs, inputs)
+	if err != nil {
+		return fmt.Errorf("computing frame system geometries: %w", err)
+	}
+	obstacles := make([]*referenceframe.GeometriesInFrame, 0, len(geomMap))
+	for _, g := range geomMap {
+		obstacles = append(obstacles, g)
+	}
+	worldState, err := referenceframe.NewWorldState(obstacles, nil)
+	if err != nil {
+		return fmt.Errorf("creating world state: %w", err)
+	}
+
+	logger.Infof("Moving %q to (%.1f, %.1f, %.1f) in frame %q with %d obstacle frames",
+		*componentName, *x, *y, *z, *frame, len(obstacles))
 	_, err = motionService.Move(ctx, motion.MoveReq{
 		ComponentName: *componentName,
 		Destination:   destination,
+		WorldState:    worldState,
 	})
 	if err != nil {
 		return fmt.Errorf("motion.Move failed: %w", err)
@@ -147,12 +175,12 @@ func runMoveToPose(args []string) error {
 }
 
 func runGetPose(args []string) error {
-	fs := flag.NewFlagSet("get-pose", flag.ExitOnError)
-	conn := addConnFlags(fs)
+	flagSet := flag.NewFlagSet("get-pose", flag.ExitOnError)
+	conn := addConnFlags(flagSet)
 
-	componentName := fs.String("component-name", "arm", "Name of the component to query")
+	componentName := flagSet.String("component-name", "arm", "Name of the component to query")
 
-	if err := fs.Parse(args); err != nil {
+	if err := flagSet.Parse(args); err != nil {
 		return err
 	}
 	if err := conn.validate(); err != nil {
