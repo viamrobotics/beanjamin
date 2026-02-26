@@ -125,10 +125,13 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 	if _, ok := cmd["brew"]; ok {
 		return s.brew(ctx)
 	}
+	if _, ok := cmd["unbrew"]; ok {
+		return s.unbrew(ctx)
+	}
 	if _, ok := cmd["cancel"]; ok {
 		return s.cancel()
 	}
-	return nil, fmt.Errorf("unknown command, supported commands: brew, cancel")
+	return nil, fmt.Errorf("unknown command, supported commands: brew, unbrew, cancel")
 }
 
 func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
@@ -144,8 +147,36 @@ func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
 }
 
 func (s *beanjaminCoffee) brew(ctx context.Context) (map[string]interface{}, error) {
+	return s.runSteps(ctx, "brew", s.sequence)
+}
+
+func (s *beanjaminCoffee) unbrew(ctx context.Context) (map[string]interface{}, error) {
+	lastPose := s.sequence[len(s.sequence)-1].PoseName
+	resp, err := s.sw.DoCommand(ctx, map[string]interface{}{
+		"get_current_position_name": true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current position: %w", err)
+	}
+	currentPose, ok := resp["position_name"].(string)
+	if !ok {
+		return nil, errors.New("unexpected response from get_current_position_name")
+	}
+	if currentPose != lastPose {
+		return nil, fmt.Errorf("unbrew requires switch to be at %q, but currently at %q", lastPose, currentPose)
+	}
+
+	reversed := make([]Step, 0, len(s.sequence)-1)
+	for i := len(s.sequence) - 2; i >= 0; i-- {
+		reversed = append(reversed, s.sequence[i])
+	}
+
+	return s.runSteps(ctx, "unbrew", reversed)
+}
+
+func (s *beanjaminCoffee) runSteps(ctx context.Context, label string, steps []Step) (map[string]interface{}, error) {
 	if !s.brewing.CompareAndSwap(false, true) {
-		return nil, errors.New("brew cycle already in progress")
+		return nil, fmt.Errorf("%s cycle already in progress", label)
 	}
 	defer s.brewing.Store(false)
 
@@ -153,24 +184,24 @@ func (s *beanjaminCoffee) brew(ctx context.Context) (map[string]interface{}, err
 	cancelCtx := s.cancelCtx
 	s.mu.Unlock()
 
-	s.logger.Infof("starting brew cycle with %d steps", len(s.sequence))
+	s.logger.Infof("starting %s cycle with %d steps", label, len(steps))
 
-	for i, step := range s.sequence {
+	for i, step := range steps {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("brew cancelled at step %d (%q): %w", i, step.PoseName, ctx.Err())
+			return nil, fmt.Errorf("%s cancelled at step %d (%q): %w", label, i, step.PoseName, ctx.Err())
 		case <-cancelCtx.Done():
-			return nil, fmt.Errorf("brew cancelled at step %d (%q)", i, step.PoseName)
+			return nil, fmt.Errorf("%s cancelled at step %d (%q)", label, i, step.PoseName)
 		default:
 		}
 
-		s.logger.Infof("brew step %d/%d: moving to %q", i+1, len(s.sequence), step.PoseName)
+		s.logger.Infof("%s step %d/%d: moving to %q", label, i+1, len(steps), step.PoseName)
 
 		_, err := s.sw.DoCommand(ctx, map[string]interface{}{
 			"set_position_by_name": step.PoseName,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("brew failed at step %d (%q): %w", i, step.PoseName, err)
+			return nil, fmt.Errorf("%s failed at step %d (%q): %w", label, i, step.PoseName, err)
 		}
 
 		if step.PauseSec > 0 {
@@ -179,14 +210,14 @@ func (s *beanjaminCoffee) brew(ctx context.Context) (map[string]interface{}, err
 			select {
 			case <-time.After(pause):
 			case <-ctx.Done():
-				return nil, fmt.Errorf("brew cancelled during pause after %q: %w", step.PoseName, ctx.Err())
+				return nil, fmt.Errorf("%s cancelled during pause after %q: %w", label, step.PoseName, ctx.Err())
 			case <-cancelCtx.Done():
-				return nil, fmt.Errorf("brew cancelled during pause after %q", step.PoseName)
+				return nil, fmt.Errorf("%s cancelled during pause after %q", label, step.PoseName)
 			}
 		}
 	}
 
-	s.logger.Infof("brew cycle complete")
+	s.logger.Infof("%s cycle complete", label)
 	return map[string]interface{}{"status": "complete"}, nil
 }
 
