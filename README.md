@@ -98,7 +98,7 @@ Returns:
 
 **API:** `rdk:service:generic`
 
-Orchestrates a full coffee brew cycle by sequentially moving through every pose defined on a `multi-poses-execution-switch` component. A single `DoCommand` triggers the entire sequence — no manual button presses needed.
+Orchestrates a full coffee brew cycle by moving through a configurable sequence of poses on a `multi-poses-execution-switch` component. A single `DoCommand` triggers the entire sequence — no manual button presses needed.
 
 ### Configuration
 
@@ -107,19 +107,26 @@ Orchestrates a full coffee brew cycle by sequentially moving through every pose 
   // string (required) — name of the multi-poses-execution-switch component
   "pose_switcher_name": "multi-pose-execution-switch",
 
-  // map[string]float64 (optional) — seconds to pause after each pose completes
-  // only list poses that need a delay; unlisted poses have no pause
-  "pause_secs": {
-    "grinder_activate": 10,
-    "tamper_activate": 3,
-    "coffee_locked": 25
-  }
+  // []Step (required) — ordered list of steps to execute
+  // each step has a pose name and an optional pause (in seconds) after it completes
+  // poses can be repeated with different pauses at each occurrence
+  "sequence": [
+    {"pose_name": "grinder_approach"},
+    {"pose_name": "grinder_activate", "pause_secs": 10},
+    {"pose_name": "grinder_approach", "pause_secs": 5},
+    {"pose_name": "tamper_approach"},
+    {"pose_name": "tamper_activate", "pause_secs": 3},
+    {"pose_name": "coffee_approach"},
+    {"pose_name": "coffee_in"},
+    {"pose_name": "coffee_locked_mid"},
+    {"pose_name": "coffee_locked_final", "pause_secs": 25}
+  ]
 }
 ```
 
 ### DoCommand
 
-**`brew`** - Run the full brew cycle. Moves through every pose on the switcher in order (e.g., grinder approach → grinder activate → tamper approach → tamper activate → coffee approach → coffee in → coffee locked). Only one brew can run at a time.
+**`brew`** - Run the full brew cycle. Moves through the configured sequence of poses in order. Only one brew can run at a time.
 
 ```json
 { "brew": true }
@@ -133,11 +140,23 @@ Returns on success:
 
 Returns an error if a brew is already in progress, a motion step fails, or the request is cancelled.
 
+**`cancel`** - Cancel a brew cycle in progress. The cycle stops after the current motion completes.
+
+```json
+{ "cancel": true }
+```
+
+Returns:
+
+```json
+{ "status": "cancelled" }
+```
+
 ### Behavior
 
-- On startup, the service queries the pose switcher for all pose names via `GetNumberOfPositions`.
-- When `{"brew": true}` is received, it iterates through each pose in order, calling `set_position_by_name` on the switcher.
-- Per-step pause durations are configured via the `pause_secs` config field. Only poses that need dwell time need to be listed.
+- The `sequence` field defines the exact order of poses to execute. Poses can be repeated and reordered as needed.
+- When `{"brew": true}` is received, it iterates through the sequence, calling `set_position_by_name` on the switcher for each step.
+- Each step can optionally include `pause_secs` to wait after the pose completes. Steps without `pause_secs` (or set to 0) have no pause.
 - The brew cycle is cancellation-aware — cancelling the request or stopping the service will halt the cycle between steps.
 
 ---
