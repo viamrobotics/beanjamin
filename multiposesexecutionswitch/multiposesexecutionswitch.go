@@ -49,7 +49,7 @@ type PoseConf struct {
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.ReferenceFrame == "" {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "reference_frame")
+		cfg.ReferenceFrame = referenceframe.World
 	}
 	if cfg.ComponentName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "component_name")
