@@ -17,7 +17,7 @@ import (
 	"go.viam.com/rdk/spatialmath"
 )
 
-var Model = resource.NewModel("e76d1b3b04684efdbb7ffb1d2b352fcb", "beanjamin", "multi-poses-execution-switch")
+var Model = resource.NewModel("viam", "beanjamin", "multi-poses-execution-switch")
 
 func init() {
 	resource.RegisterComponent(
