@@ -140,10 +140,10 @@ Returns on success:
 
 Returns an error if a brew is already in progress, a motion step fails, or the request is cancelled.
 
-**`unbrew`** - Run the sequence in reverse. Only allowed when the switch is at the last position in the sequence. Skips the current position and works backwards through every prior step.
+**`rewind`** - Run the sequence in reverse. Only allowed when the switch is at the last position in the sequence. Skips the current position and works backwards through every prior step.
 
 ```json
-{ "unbrew": true }
+{ "rewind": true }
 ```
 
 Returns on success:
@@ -154,7 +154,7 @@ Returns on success:
 
 Returns an error if the switch is not at the last position, a cycle is already running, or a motion step fails.
 
-**`cancel`** - Cancel a brew or unbrew cycle in progress. The cycle stops after the current motion completes.
+**`cancel`** - Cancel a brew or rewind cycle in progress. The cycle stops after the current motion completes.
 
 ```json
 { "cancel": true }

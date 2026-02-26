@@ -125,13 +125,13 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 	if _, ok := cmd["brew"]; ok {
 		return s.brew(ctx)
 	}
-	if _, ok := cmd["unbrew"]; ok {
-		return s.unbrew(ctx)
+	if _, ok := cmd["rewind"]; ok {
+		return s.rewind(ctx)
 	}
 	if _, ok := cmd["cancel"]; ok {
 		return s.cancel()
 	}
-	return nil, fmt.Errorf("unknown command, supported commands: brew, unbrew, cancel")
+	return nil, fmt.Errorf("unknown command, supported commands: brew, rewind, cancel")
 }
 
 func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
@@ -150,7 +150,7 @@ func (s *beanjaminCoffee) brew(ctx context.Context) (map[string]interface{}, err
 	return s.runSteps(ctx, "brew", s.sequence)
 }
 
-func (s *beanjaminCoffee) unbrew(ctx context.Context) (map[string]interface{}, error) {
+func (s *beanjaminCoffee) rewind(ctx context.Context) (map[string]interface{}, error) {
 	lastPose := s.sequence[len(s.sequence)-1].PoseName
 	resp, err := s.sw.DoCommand(ctx, map[string]interface{}{
 		"get_current_position_name": true,
@@ -163,7 +163,7 @@ func (s *beanjaminCoffee) unbrew(ctx context.Context) (map[string]interface{}, e
 		return nil, errors.New("unexpected response from get_current_position_name")
 	}
 	if currentPose != lastPose {
-		return nil, fmt.Errorf("unbrew requires switch to be at %q, but currently at %q", lastPose, currentPose)
+		return nil, fmt.Errorf("rewind requires switch to be at %q, but currently at %q", lastPose, currentPose)
 	}
 
 	reversed := make([]Step, 0, len(s.sequence)-1)
@@ -171,7 +171,7 @@ func (s *beanjaminCoffee) unbrew(ctx context.Context) (map[string]interface{}, e
 		reversed = append(reversed, s.sequence[i])
 	}
 
-	return s.runSteps(ctx, "unbrew", reversed)
+	return s.runSteps(ctx, "rewind", reversed)
 }
 
 func (s *beanjaminCoffee) runSteps(ctx context.Context, label string, steps []Step) (map[string]interface{}, error) {
