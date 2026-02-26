@@ -8,7 +8,7 @@
     {
       "api": "rdk:service:generic",
       "model": "viam:beanjamin:coffee",
-      "short_description": "Placeholder service for coffee machine control.",
+      "short_description": "Orchestrates a full coffee brew cycle by sequentially moving through poses on a pose switcher.",
       "markdown_link": "viam_beanjamin_coffee.md#model-viambeanjamincoffee"
     },
     {
