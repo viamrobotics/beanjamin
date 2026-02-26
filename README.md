@@ -104,19 +104,26 @@ Orchestrates a full coffee brew cycle by sequentially moving through every pose 
 
 ```json
 {
-  "pose_switcher_name": "<string>"
+  "pose_switcher_name": "<string>",
+  "pause_secs": { "<pose_name>": <seconds>, ... }
 }
 ```
 
-| Name                 | Type   | Required | Description                                                                                  |
-| -------------------- | ------ | -------- | -------------------------------------------------------------------------------------------- |
-| `pose_switcher_name` | string | Yes      | Name of the `multi-poses-execution-switch` component to drive during the brew cycle.         |
+| Name                 | Type              | Required | Description                                                                          |
+| -------------------- | ----------------- | -------- | ------------------------------------------------------------------------------------ |
+| `pose_switcher_name` | string            | Yes      | Name of the `multi-poses-execution-switch` component to drive during the brew cycle. |
+| `pause_secs`         | map[string]float64 | No       | Seconds to wait after each pose completes. Keys are pose names.                      |
 
 ### Example Configuration
 
 ```json
 {
-  "pose_switcher_name": "multi-pose-execution-switch"
+  "pose_switcher_name": "multi-pose-execution-switch",
+  "pause_secs": {
+    "grinder_activate": 10,
+    "tamper_activate": 3,
+    "coffee_locked": 25
+  }
 }
 ```
 
@@ -140,7 +147,7 @@ Returns an error if a brew is already in progress, a motion step fails, or the r
 
 - On startup, the service queries the pose switcher for all pose names via `GetNumberOfPositions`.
 - When `{"brew": true}` is received, it iterates through each pose in order, calling `set_position_by_name` on the switcher.
-- Per-step pause durations can be configured in the source code (`pauseAfter` map in `module.go`) for steps that need dwell time (e.g., waiting for the grinder to finish).
+- Per-step pause durations are configured via the `pause_secs` config field. Only poses that need dwell time need to be listed.
 - The brew cycle is cancellation-aware — cancelling the request or stopping the service will halt the cycle between steps.
 
 ---
