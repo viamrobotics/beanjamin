@@ -27,7 +27,8 @@ func init() {
 }
 
 type Config struct {
-	PoseSwitcherName string `json:"pose_switcher_name"`
+	PoseSwitcherName string             `json:"pose_switcher_name"`
+	PauseSecs        map[string]float64 `json:"pause_secs,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -43,8 +44,9 @@ type beanjaminCoffee struct {
 	name      resource.Name
 	logger    logging.Logger
 	cfg       *Config
-	sw        toggleswitch.Switch
-	poseNames []string
+	sw         toggleswitch.Switch
+	poseNames  []string
+	pauseAfter map[string]time.Duration
 
 	cancelCtx  context.Context
 	cancelFunc func()
@@ -79,12 +81,18 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, fmt.Errorf("failed to get positions from switch: %w", err)
 	}
 
+	pauseAfter := make(map[string]time.Duration, len(conf.PauseSecs))
+	for poseName, secs := range conf.PauseSecs {
+		pauseAfter[poseName] = time.Duration(secs * float64(time.Second))
+	}
+
 	s := &beanjaminCoffee{
 		name:       name,
 		logger:     logger,
 		cfg:        conf,
 		sw:         sw,
 		poseNames:  poseNames,
+		pauseAfter: pauseAfter,
 		cancelCtx:  cancelCtx,
 		cancelFunc: cancelFunc,
 	}
@@ -110,17 +118,6 @@ func (s *beanjaminCoffee) brew(ctx context.Context) (map[string]interface{}, err
 
 	s.logger.Infof("starting brew cycle with %d steps", len(s.poseNames))
 
-	// Pause durations after each pose completes. Adjust these as you test the flow.
-	pauseAfter := map[string]time.Duration{
-		// "grinder_approach":  0 * time.Second,
-		// "grinder_activate":  10 * time.Second, // wait for grinder to finish
-		// "tamper_approach":   0 * time.Second,
-		// "tamper_activate":   3 * time.Second,  // wait for tamp pressure
-		// "coffee_approach":   0 * time.Second,
-		// "coffee_in":         0 * time.Second,
-		// "coffee_locked":     25 * time.Second, // wait for espresso to pull
-	}
-
 	for i, poseName := range s.poseNames {
 		select {
 		case <-ctx.Done():
@@ -139,7 +136,7 @@ func (s *beanjaminCoffee) brew(ctx context.Context) (map[string]interface{}, err
 			return nil, fmt.Errorf("brew failed at step %d (%q): %w", i, poseName, err)
 		}
 
-		if pause, ok := pauseAfter[poseName]; ok && pause > 0 {
+		if pause, ok := s.pauseAfter[poseName]; ok && pause > 0 {
 			s.logger.Infof("pausing %s after %q", pause, poseName)
 			select {
 			case <-time.After(pause):
