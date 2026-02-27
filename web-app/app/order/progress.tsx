@@ -4,9 +4,9 @@ import Image from "next/image";
 import { useEffect, useState, useRef } from "react";
 
 const STAGES = [
-  { label: "Grinding...", image: "/progress-grinding.png" },
-  { label: "Tamping...", image: "/progress-pressing.png" },
-  { label: "Pulling...", image: "/progress-pulling.png" },
+  { label: "Grinding...", image: "./progress-grinding.png" },
+  { label: "Tamping...", image: "./progress-pressing.png" },
+  { label: "Pulling...", image: "./progress-pulling.png" },
 ] as const;
 
 const STAGE_DURATION = 5000;
