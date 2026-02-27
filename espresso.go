@@ -65,6 +65,41 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}
 	}, nil
 }
 
+func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {
+	actions := map[string]func(ctx, cancelCtx context.Context) error{
+		"grind_coffee":      s.grindCoffee,
+		"tamp_ground":       s.tampGround,
+		"lock_porta_filter": s.lockPortaFilter,
+	}
+
+	action, ok := actions[name]
+	if !ok {
+		names := make([]string, 0, len(actions))
+		for k := range actions {
+			names = append(names, k)
+		}
+		return nil, fmt.Errorf("unknown action %q, available actions: %v", name, names)
+	}
+
+	if !s.running.CompareAndSwap(false, true) {
+		return nil, errors.New("a sequence is already running")
+	}
+	defer s.running.Store(false)
+
+	s.mu.Lock()
+	cancelCtx := s.cancelCtx
+	s.mu.Unlock()
+
+	s.logger.Infof("executing action %q", name)
+
+	if err := action(ctx, cancelCtx); err != nil {
+		return nil, err
+	}
+
+	s.logger.Infof("action %q complete", name)
+	return map[string]interface{}{"status": "complete", "action": name}, nil
+}
+
 func (s *beanjaminCoffee) prepareEspresso(ctx context.Context) error {
 	if !s.running.CompareAndSwap(false, true) {
 		return errors.New("a sequence is already running")
