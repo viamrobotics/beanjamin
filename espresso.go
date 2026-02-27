@@ -67,9 +67,10 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}
 
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
-		"grind_coffee":      s.grindCoffee,
-		"tamp_ground":       s.tampGround,
-		"lock_porta_filter": s.lockPortaFilter,
+		"grind_coffee":        s.grindCoffee,
+		"tamp_ground":         s.tampGround,
+		"lock_porta_filter":   s.lockPortaFilter,
+		"unlock_porta_filter": s.unlockPortaFilter,
 	}
 
 	action, ok := actions[name]
@@ -164,6 +165,20 @@ func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error 
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 			return fmt.Errorf("lock_porta_filter: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) error {
+	steps := []Step{
+		{PoseName: "coffee_locked_mid", PauseSec: 2},
+		{PoseName: "coffee_in", PauseSec: 1},
+		{PoseName: "coffee_approach", PauseSec: 1},
+	}
+	for _, step := range steps {
+		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+			return fmt.Errorf("unlock_porta_filter: %w", err)
 		}
 	}
 	return nil
