@@ -130,8 +130,8 @@ func (s *beanjaminCoffee) prepareEspresso(ctx context.Context) error {
 func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 	steps := []Step{
 		{PoseName: "grinder_approach", PauseSec: 1},
-		{PoseName: "grinder_activate", PauseSec: 1},
-		{PoseName: "grinder_approach", PauseSec: 10},
+		{PoseName: "grinder_activate", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
+		{PoseName: "grinder_approach", PauseSec: 10, LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
@@ -144,8 +144,8 @@ func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
 	steps := []Step{
 		{PoseName: "tamper_approach", PauseSec: 1},
-		{PoseName: "tamper_activate", PauseSec: 5},
-		{PoseName: "tamper_approach", PauseSec: 1},
+		{PoseName: "tamper_activate", PauseSec: 5, LinearConstraint: defaultApproachConstraint},
+		{PoseName: "tamper_approach", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
@@ -158,7 +158,7 @@ func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
 func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error {
 	steps := []Step{
 		{PoseName: "coffee_approach", PauseSec: 1},
-		{PoseName: "coffee_in", PauseSec: 1},
+		{PoseName: "coffee_in", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
 		{PoseName: "coffee_locked_mid", PauseSec: 5},
 		{PoseName: "coffee_locked_final", PauseSec: 5},
 	}
@@ -174,7 +174,7 @@ func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) erro
 	steps := []Step{
 		{PoseName: "coffee_locked_mid", PauseSec: 2},
 		{PoseName: "coffee_in", PauseSec: 1},
-		{PoseName: "coffee_approach", PauseSec: 1},
+		{PoseName: "coffee_approach", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
@@ -195,11 +195,8 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 
 	s.logger.Infof("moving to %q", step.PoseName)
 
-	_, err := s.sw.DoCommand(ctx, map[string]interface{}{
-		"set_position_by_name": step.PoseName,
-	})
-	if err != nil {
-		return fmt.Errorf("move to %q failed: %w", step.PoseName, err)
+	if err := s.moveToPose(ctx, step); err != nil {
+		return err
 	}
 
 	if step.PauseSec > 0 {
