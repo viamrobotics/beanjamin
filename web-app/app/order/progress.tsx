@@ -4,12 +4,10 @@ import Image from "next/image";
 import { useEffect, useState, useRef } from "react";
 
 const STAGES = [
-  { label: "Grinding...", image: "./progress-grinding.png" },
-  { label: "Tamping...", image: "./progress-pressing.png" },
-  { label: "Pulling...", image: "./progress-pulling.png" },
+  { label: "Grinding...", image: "./progress-grinding.png", duration: 30000 },
+  { label: "Tamping...", image: "./progress-pressing.png", duration: 15000 },
+  { label: "Pulling...", image: "./progress-pulling.png", duration: 30000 },
 ] as const;
-
-const STAGE_DURATION = 5000;
 
 const PALETTES = [
   // Grinding — cool muted (teal, slate blue, lavender)
@@ -34,7 +32,7 @@ export function Progress({ onComplete }: { onComplete: () => void }) {
         completeCalled.current = true;
         onComplete();
       }
-    }, STAGE_DURATION);
+    }, STAGES[stage].duration);
     return () => clearTimeout(timer);
   }, [stage, onComplete]);
 
@@ -98,13 +96,13 @@ export function Progress({ onComplete }: { onComplete: () => void }) {
             >
               <div
                 key={i === stage ? fillKey : `done-${i}`}
-                className={`h-full rounded-full ${
-                  i < stage
+                className={`h-full rounded-full ${i < stage
                     ? "w-full bg-white/80"
                     : i === stage
                       ? "progress-fill bg-white/80"
                       : "w-0"
-                }`}
+                  }`}
+                style={i === stage ? { animationDuration: `${STAGES[i].duration}ms` } : undefined}
               />
             </div>
           ))}
