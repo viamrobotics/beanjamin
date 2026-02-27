@@ -99,7 +99,7 @@ export async function POST(request: NextRequest) {
     const seed = Math.floor(Math.random() * 10); // 0-9 for variation
 
     const message = await client.messages.create({
-      model: "claude-sonnet-4-5-20250514",
+      model: "claude-sonnet-4-6",
       max_tokens: 200,
       system: SYSTEM_PROMPT,
       messages: [

@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "postinstall": "find node_modules/speech-service-api/src/speech_service_api_js -name '*.js' -type f -delete && find node_modules/speech-service-api/src/speech_service_api_js -name '*.ts' -exec sed -i '' 's/\\.js\"/\"/g' {} +"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

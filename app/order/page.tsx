@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { DRINKS } from "./drinks";
 import { ChooseDrink } from "./choose-drink";
 import { EnterName } from "./enter-name";
@@ -16,7 +16,10 @@ export default function OrderPage() {
   const [misspelled, setMisspelled] = useState("");
   const [pronunciation, setPronunciation] = useState("");
   const [loading, setLoading] = useState(false);
-  const [queueCount] = useState(() => Math.floor(Math.random() * 5) + 1);
+  const [queueCount, setQueueCount] = useState(1);
+  useEffect(() => {
+    setQueueCount(Math.floor(Math.random() * 5) + 1);
+  }, []);
 
   async function handleSubmit() {
     if (!name.trim() || !selectedDrink) return;
