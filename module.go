@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"beanjamin/speechclient"
+
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
@@ -33,8 +35,9 @@ type Step struct {
 }
 
 type Config struct {
-	PoseSwitcherName string              `json:"pose_switcher_name"`
-	Sequences        map[string][]Step   `json:"sequences"`
+	PoseSwitcherName  string            `json:"pose_switcher_name"`
+	Sequences         map[string][]Step `json:"sequences"`
+	SpeechServiceName string            `json:"speech_service_name,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -54,7 +57,11 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 			}
 		}
 	}
-	return []string{cfg.PoseSwitcherName}, nil, nil
+	var optDeps []string
+	if cfg.SpeechServiceName != "" {
+		optDeps = append(optDeps, cfg.SpeechServiceName)
+	}
+	return []string{cfg.PoseSwitcherName}, optDeps, nil
 }
 
 type beanjaminCoffee struct {
@@ -64,6 +71,7 @@ type beanjaminCoffee struct {
 	logger    logging.Logger
 	cfg       *Config
 	sw        toggleswitch.Switch
+	speech    speechclient.Speech // nil when speech_service_name is not configured
 	sequences map[string][]Step
 
 	mu         sync.Mutex
@@ -112,11 +120,25 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		}
 	}
 
+	var speech speechclient.Speech
+	if conf.SpeechServiceName != "" {
+		speechRes, ok := deps[speechclient.Named(conf.SpeechServiceName)]
+		if ok {
+			speech, _ = speechRes.(speechclient.Speech)
+		}
+		if speech != nil {
+			logger.Infof("speech service %q connected", conf.SpeechServiceName)
+		} else {
+			logger.Warnf("speech service %q configured but not available", conf.SpeechServiceName)
+		}
+	}
+
 	s := &beanjaminCoffee{
 		name:       name,
 		logger:     logger,
 		cfg:        conf,
 		sw:         sw,
+		speech:     speech,
 		sequences:  conf.Sequences,
 		cancelCtx:  cancelCtx,
 		cancelFunc: cancelFunc,
@@ -155,10 +177,13 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		}
 		return s.runSteps(ctx, seqName+":rewind", reversed)
 	}
+	if orderRaw, ok := cmd["prepare_order"]; ok {
+		return s.prepareOrder(ctx, orderRaw)
+	}
 	if _, ok := cmd["cancel"]; ok {
 		return s.cancel()
 	}
-	return nil, fmt.Errorf("unknown command, supported commands: run, rewind, cancel")
+	return nil, fmt.Errorf("unknown command, supported commands: run, rewind, cancel, prepare_order")
 }
 
 func (s *beanjaminCoffee) checkPosition(ctx context.Context, expected string) error {
