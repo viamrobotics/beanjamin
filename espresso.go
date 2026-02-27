@@ -159,8 +159,8 @@ func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error 
 	steps := []Step{
 		{PoseName: "coffee_approach", PauseSec: 1},
 		{PoseName: "coffee_in", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
-		{PoseName: "coffee_locked_mid", PauseSec: 5},
-		{PoseName: "coffee_locked_final", PauseSec: 5},
+		{PoseName: "coffee_locked_mid", PauseSec: 1},
+		{PoseName: "coffee_locked_final", PauseSec: 1},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
