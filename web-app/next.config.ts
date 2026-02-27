@@ -1,9 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
-  transpilePackages: ['speech-service-api'],
-  serverExternalPackages: ['node-datachannel'],
+  output: "export",
+  assetPrefix: "./",
+  images: { unoptimized: true },
 };
 
 export default nextConfig;

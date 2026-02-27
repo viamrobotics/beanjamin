@@ -3,11 +3,11 @@ import { useState } from "react";
 import { QueueIndicator } from "./queue-indicator";
 
 const HEARTS = [
-  { src: "/heart1.svg", width: 168, height: 180 },
-  { src: "/heart2.svg", width: 149, height: 180 },
-  { src: "/heart3.svg", width: 167, height: 180 },
-  { src: "/heart4.svg", width: 161, height: 180 },
-  { src: "/heart5.svg", width: 175, height: 180 },
+  { src: "./heart1.svg", width: 168, height: 180 },
+  { src: "./heart2.svg", width: 149, height: 180 },
+  { src: "./heart3.svg", width: 167, height: 180 },
+  { src: "./heart4.svg", width: 161, height: 180 },
+  { src: "./heart5.svg", width: 175, height: 180 },
 ];
 
 export function OrderResult({

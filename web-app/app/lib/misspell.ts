@@ -1,8 +1,4 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { announceOrder } from "@/app/lib/speechService";
-import { NextRequest, NextResponse } from "next/server";
-
-const client = new Anthropic();
 
 const SYSTEM_PROMPT = `You are a barista name misspelling generator for a fun coffee shop app. Given a customer's name, return a plausibly wrong version — the kind of misspelling you'd see scrawled on a coffee cup by a barista who half-heard the name in a noisy café.
 
@@ -84,57 +80,47 @@ Respond with ONLY a JSON object, no markdown fencing:
   "strategy": "brief description of what you did"
 }`;
 
-export async function POST(request: NextRequest) {
-  try {
-    const { name } = await request.json();
+export interface MisspellResult {
+  original: string;
+  misspelled: string;
+  pronunciation: string;
+  chaos: string;
+  strategy: string;
+}
 
-    if (!name || typeof name !== "string") {
-      return NextResponse.json(
-        { error: "Please provide a name" },
-        { status: 400 },
-      );
-    }
+export async function misspellName(
+  name: string,
+  anthropicApiKey: string
+): Promise<MisspellResult> {
+  const client = new Anthropic({
+    apiKey: anthropicApiKey,
+    dangerouslyAllowBrowser: true,
+  });
 
-    const trimmed = name.trim().substring(0, 50); // cap length for safety
-    const seed = Math.floor(Math.random() * 10); // 0-9 for variation
+  const trimmed = name.trim().substring(0, 50);
+  const seed = Math.floor(Math.random() * 10);
 
-    const message = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 200,
-      system: SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: `Customer name: "${trimmed}" (seed: ${seed})`,
-        },
-      ],
-    });
+  const message = await client.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 200,
+    system: SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content: `Customer name: "${trimmed}" (seed: ${seed})`,
+      },
+    ],
+  });
 
-    const text =
-      message.content[0].type === "text" ? message.content[0].text : "";
+  const text =
+    message.content[0].type === "text" ? message.content[0].text : "";
+  const result = JSON.parse(text);
 
-    // Parse the JSON response
-    const result = JSON.parse(text);
-
-    // Announce over speaker — don't fail the request if speech errors
-    try {
-      await announceOrder(result.pronunciation);
-    } catch (speechErr) {
-      console.error("Speech announcement failed:", speechErr);
-    }
-
-    return NextResponse.json({
-      original: trimmed,
-      misspelled: result.misspelled,
-      pronunciation: result.pronunciation,
-      chaos: result.chaos,
-      strategy: result.strategy,
-    });
-  } catch (error) {
-    console.error("Misspell API error:", error);
-    return NextResponse.json(
-      { error: "Failed to generate misspelling" },
-      { status: 500 },
-    );
-  }
+  return {
+    original: trimmed,
+    misspelled: result.misspelled,
+    pronunciation: result.pronunciation,
+    chaos: result.chaos,
+    strategy: result.strategy,
+  };
 }

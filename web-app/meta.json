@@ -1,0 +1,14 @@
+{
+  "module_id": "viam:beanjamin-app",
+  "visibility": "public",
+  "url": "https://github.com/viamrobotics/beanjamin",
+  "description": "Barista bot web app — coffee ordering with creative name misspelling",
+  "entrypoint": "index.html",
+  "applications": [
+    {
+      "name": "beanjamin",
+      "type": "single_machine",
+      "entrypoint": "index.html"
+    }
+  ]
+}
