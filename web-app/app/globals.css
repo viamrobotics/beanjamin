@@ -1,0 +1,145 @@
+@import "tailwindcss";
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes fade-in-up-hero {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0);
+  }
+}
+
+@keyframes scale-fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+
+.anim-in {
+  animation: fade-in-up 500ms cubic-bezier(0.23, 1, 0.32, 1) backwards;
+}
+
+.anim-in-hero {
+  animation: fade-in-up-hero 600ms cubic-bezier(0.23, 1, 0.32, 1) backwards;
+}
+
+.anim-fade {
+  animation: fade-in 500ms cubic-bezier(0.23, 1, 0.32, 1) backwards;
+}
+
+.anim-pop {
+  animation: pop-in 700ms cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+  will-change: transform;
+}
+
+.anim-scale {
+  animation: scale-fade-in 600ms cubic-bezier(0.23, 1, 0.32, 1) backwards;
+}
+
+.press {
+  transition: transform 100ms ease;
+}
+.press:active {
+  transform: scale(0.97);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .press:hover {
+    transform: scale(1.02);
+  }
+  .drink-card:not(:disabled):hover {
+    transform: scale(1.03);
+  }
+}
+
+/* Progress page: stage icon pop in (matches beans pop on home) */
+@keyframes stage-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.stage-icon-pop {
+  animation: stage-pop-in 700ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  will-change: transform;
+}
+
+/* Progress page: fill a notched bar segment over 5s */
+@keyframes fill-segment {
+  from {
+    width: 0%;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+.progress-fill {
+  animation: fill-segment 5s linear forwards;
+  will-change: width;
+}
+
+/* Slow drifting movement for gradient blobs */
+@keyframes gradient-drift {
+  0% {
+    transform: translate(0%, 0%) rotate(0deg);
+  }
+  33% {
+    transform: translate(-5%, 3%) rotate(3deg);
+  }
+  66% {
+    transform: translate(3%, -4%) rotate(-2deg);
+  }
+  100% {
+    transform: translate(0%, 0%) rotate(0deg);
+  }
+}
+
+.gradient-drift {
+  animation: gradient-drift 20s ease-in-out infinite;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-in,
+  .anim-in-hero,
+  .anim-fade,
+  .anim-pop,
+  .anim-scale {
+    animation: none;
+  }
+  .stage-icon-pop {
+    animation: none;
+  }
+  .progress-fill {
+    animation: none;
+    width: 100%;
+  }
+  .gradient-drift {
+    animation: none;
+  }
+}
