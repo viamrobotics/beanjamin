@@ -24,6 +24,7 @@ import (
 //	8  coffee_in
 //	9  coffee_locked_mid
 //	10 coffee_locked_final
+//	11 dump_grounds       (physically co-located with home, accessible from home only)
 var statePoseNames = []string{
 	"home",                // 0
 	"grinder_approach",    // 1
@@ -36,6 +37,7 @@ var statePoseNames = []string{
 	"coffee_in",           // 8
 	"coffee_locked_mid",   // 9
 	"coffee_locked_final", // 10
+	"dump_grounds",        // 11
 }
 
 // validTransitions maps each state index to the state indices it may move to.
@@ -61,12 +63,12 @@ var statePoseNames = []string{
 // coffee_approach (7), from which it may freely go anywhere.
 var validTransitions = map[int][]int{
 	// ── Approach / home states ── freely reachable from each other + own section entry ──
-	0: {1, 3, 4, 6, 7},    // home             → any approach
-	1: {0, 2, 3, 4, 6, 7}, // grinder_approach (pre)  → home, grinder_activate, any approach
-	3: {0, 1, 2, 4, 6, 7}, // grinder_approach (post) → home, grinder_activate, any approach
-	4: {0, 1, 3, 5, 6, 7}, // tamper_approach  (pre)  → home, tamper_activate,  any approach
-	6: {0, 1, 3, 4, 5, 7}, // tamper_approach  (post) → home, tamper_activate,  any approach
-	7: {0, 1, 3, 4, 6, 8}, // coffee_approach         → home, any approach, coffee_in
+	0:  {1, 3, 4, 6, 7, 11}, // home             → any approach, dump_grounds
+	1:  {0, 2, 3, 4, 6, 7},  // grinder_approach (pre)  → home, grinder_activate, any approach
+	3:  {0, 1, 2, 4, 6, 7},  // grinder_approach (post) → home, grinder_activate, any approach
+	4:  {0, 1, 3, 5, 6, 7},  // tamper_approach  (pre)  → home, tamper_activate,  any approach
+	6:  {0, 1, 3, 4, 5, 7},  // tamper_approach  (post) → home, tamper_activate,  any approach
+	7:  {0, 1, 3, 4, 6, 8},  // coffee_approach         → home, any approach, coffee_in
 
 	// ── Activate states ── own section's approach states only ──
 	2: {1, 3}, // grinder_activate → grinder_approach (pre or post)
@@ -76,6 +78,9 @@ var validTransitions = map[int][]int{
 	8:  {7, 9},  // coffee_in          → coffee_approach or coffee_locked_mid
 	9:  {8, 10}, // coffee_locked_mid  → coffee_in or coffee_locked_final
 	10: {9},     // coffee_locked_final → coffee_locked_mid only (must retrace backward)
+
+	// ── Utility states ── only reachable from / return to home ──
+	11: {0}, // dump_grounds → home only
 }
 
 // inferStateIndex returns the state machine index corresponding to poseName,
