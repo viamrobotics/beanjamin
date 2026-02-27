@@ -329,6 +329,19 @@ func (s *beanjaminCoffee) moveTo(ctx context.Context, poseName string) (map[stri
 	cancelCtx := s.cancelCtx
 	s.mu.Unlock()
 
+	// Enforce the state machine: find the shortest valid path and walk it.
+	intermediates, _, err := s.resolvePath(poseName)
+	if err != nil {
+		return nil, err
+	}
+	for _, stateIdx := range intermediates {
+		intermediate := statePoseNames[stateIdx]
+		s.logger.Infof("move_to: routing through %q (state %d)", intermediate, stateIdx)
+		if err := s.executeStep(ctx, cancelCtx, Step{PoseName: intermediate}); err != nil {
+			return nil, fmt.Errorf("move_to: intermediate step to %q: %w", intermediate, err)
+		}
+	}
+
 	s.logger.Infof("move_to %q", poseName)
 	if err := s.executeStep(ctx, cancelCtx, Step{PoseName: poseName}); err != nil {
 		return nil, err
