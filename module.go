@@ -14,6 +14,7 @@ import (
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
 	generic "go.viam.com/rdk/services/generic"
+	"go.viam.com/rdk/services/motion"
 
 	// Register the multi-poses-execution-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
@@ -29,13 +30,20 @@ func init() {
 	)
 }
 
+type StepLinearConstraint struct {
+	LineToleranceMm          float64 `json:"line_tolerance_mm"`
+	OrientationToleranceDegs float64 `json:"orientation_tolerance_degs"`
+}
+
 type Step struct {
-	PoseName string  `json:"pose_name"`
-	PauseSec float64 `json:"pause_secs,omitempty"`
+	PoseName         string                `json:"pose_name"`
+	PauseSec         float64               `json:"pause_secs,omitempty"`
+	LinearConstraint *StepLinearConstraint `json:"linear_constraint,omitempty"`
 }
 
 type Config struct {
 	PoseSwitcherName  string            `json:"pose_switcher_name"`
+	MotionServiceName string            `json:"motion_service_name"`
 	Sequences         map[string][]Step `json:"sequences"`
 	SpeechServiceName string            `json:"speech_service_name,omitempty"`
 }
@@ -43,6 +51,9 @@ type Config struct {
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.PoseSwitcherName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "pose_switcher_name")
+	}
+	if cfg.MotionServiceName == "" {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "motion_service_name")
 	}
 	if len(cfg.Sequences) == 0 {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "sequences")
@@ -57,11 +68,19 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 			}
 		}
 	}
+
+	reqDeps := []string{cfg.PoseSwitcherName}
+	if cfg.MotionServiceName == "builtin" {
+		reqDeps = append(reqDeps, motion.Named("builtin").String())
+	} else {
+		reqDeps = append(reqDeps, cfg.MotionServiceName)
+	}
+
 	var optDeps []string
 	if cfg.SpeechServiceName != "" {
 		optDeps = append(optDeps, cfg.SpeechServiceName)
 	}
-	return []string{cfg.PoseSwitcherName}, optDeps, nil
+	return reqDeps, optDeps, nil
 }
 
 type beanjaminCoffee struct {
@@ -71,6 +90,7 @@ type beanjaminCoffee struct {
 	logger    logging.Logger
 	cfg       *Config
 	sw        toggleswitch.Switch
+	motion    motion.Service
 	speech    speechclient.Speech // nil when speech_service_name is not configured
 	sequences map[string][]Step
 
@@ -100,6 +120,12 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	if !ok {
 		cancelFunc()
 		return nil, fmt.Errorf("resource %q is not a switch", conf.PoseSwitcherName)
+	}
+
+	motionSvc, err := motion.FromProvider(deps, conf.MotionServiceName)
+	if err != nil {
+		cancelFunc()
+		return nil, fmt.Errorf("motion service %q not found in dependencies: %w", conf.MotionServiceName, err)
 	}
 
 	_, validPoses, err := sw.GetNumberOfPositions(ctx, nil)
@@ -138,6 +164,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger:     logger,
 		cfg:        conf,
 		sw:         sw,
+		motion:     motionSvc,
 		speech:     speech,
 		sequences:  conf.Sequences,
 		cancelCtx:  cancelCtx,
@@ -241,10 +268,7 @@ func (s *beanjaminCoffee) runSteps(ctx context.Context, label string, steps []St
 
 		s.logger.Infof("%s step %d/%d: moving to %q", label, i+1, len(steps), step.PoseName)
 
-		_, err := s.sw.DoCommand(ctx, map[string]interface{}{
-			"set_position_by_name": step.PoseName,
-		})
-		if err != nil {
+		if err := s.moveToPose(ctx, step); err != nil {
 			return nil, fmt.Errorf("%s failed at step %d (%q): %w", label, i, step.PoseName, err)
 		}
 

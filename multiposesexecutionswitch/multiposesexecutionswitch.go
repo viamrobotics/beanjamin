@@ -139,7 +139,26 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 		}, nil
 	}
 
-	return nil, fmt.Errorf("unknown command, supported commands: set_position_by_name, get_current_position_name")
+	if name, ok := cmd["get_pose_by_name"].(string); ok {
+		for _, pc := range s.cfg.Poses {
+			if pc.PoseName == name {
+				return map[string]interface{}{
+					"x":               pc.X,
+					"y":               pc.Y,
+					"z":               pc.Z,
+					"o_x":             pc.OX,
+					"o_y":             pc.OY,
+					"o_z":             pc.OZ,
+					"theta_degrees":   pc.ThetaDegrees,
+					"reference_frame": s.cfg.ReferenceFrame,
+					"component_name":  s.cfg.ComponentName,
+				}, nil
+			}
+		}
+		return nil, fmt.Errorf("unknown pose name %q", name)
+	}
+
+	return nil, fmt.Errorf("unknown command, supported commands: set_position_by_name, get_current_position_name, get_pose_by_name")
 }
 
 func (s *multiPosesExecutionSwitch) GetNumberOfPositions(ctx context.Context, extra map[string]interface{}) (uint32, []string, error) {
