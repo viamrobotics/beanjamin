@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
@@ -108,6 +107,10 @@ type beanjaminCoffee struct {
 	cancelCtx  context.Context
 	cancelFunc func()
 	running    atomic.Bool
+
+	// currentStateIdx tracks position in the state machine (-1 = uninitialized).
+	// Accessed only under mu.
+	currentStateIdx int
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -174,16 +177,31 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	}
 
 	s := &beanjaminCoffee{
-		name:       name,
-		logger:     logger,
-		cfg:        conf,
-		sw:         sw,
-		motion:     motionSvc,
-		speech:     speech,
-		sequences:  conf.Sequences,
-		cancelCtx:  cancelCtx,
-		cancelFunc: cancelFunc,
+		name:            name,
+		logger:          logger,
+		cfg:             conf,
+		sw:              sw,
+		motion:          motionSvc,
+		speech:          speech,
+		sequences:       conf.Sequences,
+		cancelCtx:       cancelCtx,
+		cancelFunc:      cancelFunc,
+		currentStateIdx: -1,
 	}
+
+	// Infer the initial state from the switch's current position so the state
+	// machine is ready to use without a manual set_state_index call.
+	if resp, err := sw.DoCommand(ctx, map[string]interface{}{"get_current_position_name": true}); err != nil {
+		logger.Warnf("state machine: could not query switch for current position: %v", err)
+	} else if poseName, ok := resp["position_name"].(string); ok {
+		if idx := inferStateIndex(poseName); idx >= 0 {
+			s.currentStateIdx = idx
+			logger.Infof("state machine: initialized to index %d (%q) from switch position", idx, poseName)
+		} else {
+			logger.Warnf("state machine: switch position %q does not match any known state; use set_state_index to initialize", poseName)
+		}
+	}
+
 	return s, nil
 }
 
@@ -192,6 +210,14 @@ func (s *beanjaminCoffee) Name() resource.Name {
 }
 
 func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	// State machine introspection and control.
+	if _, ok := cmd["get_state"]; ok {
+		return s.getState(), nil
+	}
+	if idxRaw, ok := cmd["set_state_index"]; ok {
+		return s.setStateIndex(idxRaw)
+	}
+
 	if seqName, ok := cmd["run"].(string); ok {
 		steps, exists := s.sequences[seqName]
 		if !exists {
@@ -255,9 +281,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		}
 		return res, err
 	}
-	err := fmt.Errorf("unknown command, supported commands: run, rewind, cancel, prepare_order, execute_action")
-	s.logger.Warnw("DoCommand", "error", err)
-	return nil, err
+	return nil, fmt.Errorf("unknown command, supported commands: run, rewind, cancel, prepare_order, execute_action, get_state, set_state_index")
 }
 
 func (s *beanjaminCoffee) checkPosition(ctx context.Context, expected string) error {
@@ -302,30 +326,9 @@ func (s *beanjaminCoffee) runSteps(ctx context.Context, label string, steps []St
 	s.logger.Infof("starting %s with %d steps", label, len(steps))
 
 	for i, step := range steps {
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("%s cancelled at step %d (%q): %w", label, i, step.PoseName, ctx.Err())
-		case <-cancelCtx.Done():
-			return nil, fmt.Errorf("%s cancelled at step %d (%q)", label, i, step.PoseName)
-		default:
-		}
-
-		s.logger.Infof("%s step %d/%d: moving to %q", label, i+1, len(steps), step.PoseName)
-
-		if err := s.moveToPose(ctx, step); err != nil {
-			return nil, fmt.Errorf("%s failed at step %d (%q): %w", label, i, step.PoseName, err)
-		}
-
-		if step.PauseSec > 0 {
-			pause := time.Duration(step.PauseSec * float64(time.Second))
-			s.logger.Infof("pausing %s after %q", pause, step.PoseName)
-			select {
-			case <-time.After(pause):
-			case <-ctx.Done():
-				return nil, fmt.Errorf("%s cancelled during pause after %q: %w", label, step.PoseName, ctx.Err())
-			case <-cancelCtx.Done():
-				return nil, fmt.Errorf("%s cancelled during pause after %q", label, step.PoseName)
-			}
+		s.logger.Infof("%s step %d/%d: %q", label, i+1, len(steps), step.PoseName)
+		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+			return nil, fmt.Errorf("%s failed at step %d (%q): %w", label, i+1, step.PoseName, err)
 		}
 	}
 
