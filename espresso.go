@@ -21,7 +21,17 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}
 	initialGreeting, _ := order["initial_greeting"].(string)
 	completionStatement, _ := order["completion_statement"].(string)
 
+	if initialGreeting == "" {
+		initialGreeting = pickGreeting(customerName)
+	}
+
 	s.logger.Infof("prepare_order: %s – %s", customerName, initialGreeting)
+
+	if s.speech != nil {
+		if _, err := s.speech.Say(ctx, initialGreeting, true); err != nil {
+			s.logger.Warnf("failed to say greeting: %v", err)
+		}
+	}
 
 	if err := s.prepareEspresso(ctx); err != nil {
 		return nil, err
