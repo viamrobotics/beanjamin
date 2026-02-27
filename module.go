@@ -155,10 +155,13 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		}
 		return s.runSteps(ctx, seqName+":rewind", reversed)
 	}
+	if orderRaw, ok := cmd["prepare_order"]; ok {
+		return s.prepareOrder(ctx, orderRaw)
+	}
 	if _, ok := cmd["cancel"]; ok {
 		return s.cancel()
 	}
-	return nil, fmt.Errorf("unknown command, supported commands: run, rewind, cancel")
+	return nil, fmt.Errorf("unknown command, supported commands: run, rewind, cancel, prepare_order")
 }
 
 func (s *beanjaminCoffee) checkPosition(ctx context.Context, expected string) error {
