@@ -43,10 +43,15 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}
 		return nil, err
 	}
 
-	if customerName != "" && s.speech != nil {
-		msg := pickAlmostReady(customerName)
-		if _, err := s.speech.Say(ctx, msg, true); err != nil {
-			s.logger.Warnf("failed to say almost-ready: %v", err)
+	if s.speech != nil {
+		msg := completionStatement
+		if msg == "" && customerName != "" {
+			msg = pickAlmostReady(customerName)
+		}
+		if msg != "" {
+			if _, err := s.speech.Say(ctx, msg, true); err != nil {
+				s.logger.Warnf("failed to say almost-ready: %v", err)
+			}
 		}
 	}
 
