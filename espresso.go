@@ -15,7 +15,13 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}
 
 	drink, _ := order["drink"].(string)
 	if drink != "espresso" {
-		return nil, fmt.Errorf("unsupported drink %q, only \"espresso\" is supported", drink)
+		msg := pickUnsupportedDrink(drink)
+		if s.speech != nil {
+			if _, err := s.speech.Say(ctx, msg, true); err != nil {
+				s.logger.Warnf("failed to say rejection: %v", err)
+			}
+		}
+		return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
 	}
 	customerName, _ := order["customer_name"].(string)
 	initialGreeting, _ := order["initial_greeting"].(string)

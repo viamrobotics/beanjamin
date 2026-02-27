@@ -29,6 +29,21 @@ var almostReady = []string{
 	"Your espresso is coming together, %s!",
 }
 
+var unsupportedDrink = []string{
+	// polite
+	"I'm sorry, I can only make espresso at the moment. May I offer you one instead?",
+	"Unfortunately, %s isn't on the menu yet. How about a nice espresso?",
+	// cheeky
+	"A %s? Bold request. I only do espresso, and I do it well.",
+	"Look, I'm a one-trick pony and that trick is espresso. Take it or leave it.",
+	// sassy
+	"Oh, you wanted a %s? That's cute. I make espresso. Period.",
+	"%s? Do I look like a vending machine? Espresso. That's the deal.",
+	// unhinged
+	"A %s?! In THIS economy?! You're getting an espresso and you'll like it.",
+	"Did you just ask me for a %s? I have one arm and zero patience. Espresso or nothing.",
+}
+
 func pickGreeting(customerName string) string {
 	if customerName != "" {
 		return fmt.Sprintf(greetingsNamed[rand.Intn(len(greetingsNamed))], customerName)
@@ -38,4 +53,8 @@ func pickGreeting(customerName string) string {
 
 func pickAlmostReady(customerName string) string {
 	return fmt.Sprintf(almostReady[rand.Intn(len(almostReady))], customerName)
+}
+
+func pickUnsupportedDrink(drink string) string {
+	return fmt.Sprintf(unsupportedDrink[rand.Intn(len(unsupportedDrink))], drink)
 }
