@@ -13,6 +13,7 @@ import (
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
+	"go.viam.com/rdk/motionplan"
 	"go.viam.com/rdk/services/motion"
 	"go.viam.com/rdk/spatialmath"
 )
@@ -30,10 +31,16 @@ func init() {
 }
 
 type Config struct {
-	ReferenceFrame string     `json:"reference_frame"`
-	ComponentName  string     `json:"component_name"`
-	Motion         string     `json:"motion"`
-	Poses          []PoseConf `json:"poses"`
+	ReferenceFrame    string               `json:"reference_frame"`
+	ComponentName     string               `json:"component_name"`
+	Motion            string               `json:"motion"`
+	Poses             []PoseConf           `json:"poses"`
+	LinearConstraint  *LinearConstraintConf `json:"linear_constraint,omitempty"`
+}
+
+type LinearConstraintConf struct {
+	LineToleranceMm          float64 `json:"line_tolerance_mm"`
+	OrientationToleranceDegs float64 `json:"orientation_tolerance_degs"`
 }
 
 type PoseConf struct {
@@ -176,10 +183,22 @@ func (s *multiPosesExecutionSwitch) goToPosition(ctx context.Context, position u
 	)
 	destination := referenceframe.NewPoseInFrame(s.cfg.ReferenceFrame, pose)
 
-	_, err := s.motion.Move(ctx, motion.MoveReq{
+	moveReq := motion.MoveReq{
 		ComponentName: s.cfg.ComponentName,
 		Destination:   destination,
-	})
+	}
+	if s.cfg.LinearConstraint != nil {
+		moveReq.Constraints = &motionplan.Constraints{
+			LinearConstraint: []motionplan.LinearConstraint{
+				{
+					LineToleranceMm:          s.cfg.LinearConstraint.LineToleranceMm,
+					OrientationToleranceDegs: s.cfg.LinearConstraint.OrientationToleranceDegs,
+				},
+			},
+		}
+	}
+
+	_, err := s.motion.Move(ctx, moveReq)
 	if err != nil {
 		return fmt.Errorf("failed to move to pose %q: %w", pc.PoseName, err)
 	}
