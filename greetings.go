@@ -31,11 +31,11 @@ var almostReady = []string{
 
 var unsupportedDrink = []string{
 	// polite
-	"I'm sorry, I can only make espresso at the moment. May I offer you one instead?",
+	"I'm sorry, I cannot make a %s at the moment. May I offer you an espresso instead?",
 	"Unfortunately, %s isn't on the menu yet. How about a nice espresso?",
 	// cheeky
 	"A %s? Bold request. I only do espresso, and I do it well.",
-	"Look, I'm a one-trick pony and that trick is espresso. Take it or leave it.",
+	"Look, I'm a one-trick pony and that trick is espresso. %s is not in my repertoire.",
 	// sassy
 	"Oh, you wanted a %s? That's cute. I make espresso. Period.",
 	"%s? Do I look like a vending machine? Espresso. That's the deal.",
