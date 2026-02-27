@@ -107,6 +107,9 @@ Runs named sequences of poses on a `multi-poses-execution-switch` component. Sup
   // string (required) — name of the multi-poses-execution-switch component
   "pose_switcher_name": "multi-pose-execution-switch",
 
+  // string (optional) — name of a viam-labs speech service for spoken greetings
+  "speech_service_name": "speech-1",
+
   // map[string][]Step (required) — named sequences of steps
   // each step has a pose_name and optional pause_secs
   "sequences": {
@@ -144,7 +147,28 @@ Runs named sequences of poses on a `multi-poses-execution-switch` component. Sup
 {"rewind": "brew"}
 ```
 
-**`cancel`** - Cancel whatever sequence is currently running.
+**`prepare_order`** - Prepare a drink order with optional speech greetings. Currently only supports espresso.
+
+```json
+{
+  "prepare_order": {
+    "drink": "espresso",
+    "customer_name": "Alice",
+    "initial_greeting": "optional custom greeting",
+    "completion_statement": "optional custom completion message"
+  }
+}
+```
+
+Only `drink` is required. If `initial_greeting` is omitted, a random greeting is generated. If `customer_name` is provided, it personalizes the greeting and completion messages. Runs the full espresso sequence: grind, tamp, and lock porta filter.
+
+**`execute_action`** - Run a single coffee-making action by name. Available actions: `grind_coffee`, `tamp_ground`, `lock_porta_filter`, `unlock_porta_filter`.
+
+```json
+{"execute_action": "grind_coffee"}
+```
+
+**`cancel`** - Cancel whatever sequence or action is currently running.
 
 ```json
 {"cancel": true}
