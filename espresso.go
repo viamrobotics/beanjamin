@@ -37,6 +37,13 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}
 		return nil, err
 	}
 
+	if customerName != "" && s.speech != nil {
+		msg := pickAlmostReady(customerName)
+		if _, err := s.speech.Say(ctx, msg, true); err != nil {
+			s.logger.Warnf("failed to say almost-ready: %v", err)
+		}
+	}
+
 	s.logger.Infof("prepare_order complete: %s – %s", customerName, completionStatement)
 
 	return map[string]interface{}{
