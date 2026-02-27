@@ -97,10 +97,10 @@ export function Progress({ onComplete }: { onComplete: () => void }) {
               <div
                 key={i === stage ? fillKey : `done-${i}`}
                 className={`h-full rounded-full ${i < stage
-                    ? "w-full bg-white/80"
-                    : i === stage
-                      ? "progress-fill bg-white/80"
-                      : "w-0"
+                  ? "w-full bg-white/80"
+                  : i === stage
+                    ? "progress-fill bg-white/80"
+                    : "w-0"
                   }`}
                 style={i === stage ? { animationDuration: `${STAGES[i].duration}ms` } : undefined}
               />
