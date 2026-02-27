@@ -88,7 +88,7 @@ export async function prepareOrder(
   );
 
   const greeting = opts.pronunciation
-    ? `One ${opts.drinkLabel} for ${opts.pronunciation}!`
+    ? `One ${opts.drinkLabel} coming right up!`
     : undefined;
 
   const command = Struct.fromJson({
