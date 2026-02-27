@@ -92,6 +92,24 @@ Returns:
 { "position_name": "home" }
 ```
 
+**`get_pose_by_name`** - Get the pose coordinates, reference frame, and component name for a named pose.
+
+```json
+{ "get_pose_by_name": "home" }
+```
+
+Returns:
+
+```json
+{
+  "x": 0, "y": 0, "z": 500,
+  "o_x": 0, "o_y": 0, "o_z": 1,
+  "theta_degrees": 0,
+  "reference_frame": "world",
+  "component_name": "my-arm"
+}
+```
+
 ---
 
 ## Model: `viam:beanjamin:coffee`
@@ -107,11 +125,14 @@ Runs named sequences of poses on a `multi-poses-execution-switch` component. Sup
   // string (required) — name of the multi-poses-execution-switch component
   "pose_switcher_name": "multi-pose-execution-switch",
 
+  // string (required) — name of the motion service (typically "builtin")
+  "motion_service_name": "builtin",
+
   // string (optional) — name of a viam-labs speech service for spoken greetings
   "speech_service_name": "speech-1",
 
   // map[string][]Step (required) — named sequences of steps
-  // each step has a pose_name and optional pause_secs
+  // each step has a pose_name, optional pause_secs, and optional linear_constraint
   "sequences": {
     "brew": [
       {"pose_name": "grinder_approach"},
@@ -119,7 +140,7 @@ Runs named sequences of poses on a `multi-poses-execution-switch` component. Sup
       {"pose_name": "grinder_approach", "pause_secs": 5},
       {"pose_name": "tamper_approach"},
       {"pose_name": "tamper_activate", "pause_secs": 3},
-      {"pose_name": "coffee_approach"},
+      {"pose_name": "coffee_approach", "linear_constraint": {"line_tolerance_mm": 1, "orientation_tolerance_degs": 2}},
       {"pose_name": "coffee_in"},
       {"pose_name": "coffee_locked_mid"},
       {"pose_name": "coffee_locked_final", "pause_secs": 25}
@@ -131,6 +152,14 @@ Runs named sequences of poses on a `multi-poses-execution-switch` component. Sup
   }
 }
 ```
+
+**Step fields:**
+
+| Name                | Type   | Required | Description                                                                                                                       |
+| ------------------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `pose_name`         | string | Yes      | Name of the target pose (must exist on the switch).                                                                               |
+| `pause_secs`        | float  | No       | Seconds to pause after reaching the pose.                                                                                         |
+| `linear_constraint` | object | No       | If set, the motion planner uses a straight-line path. Fields: `line_tolerance_mm` (max deviation) and `orientation_tolerance_degs`. |
 
 ### DoCommand
 
