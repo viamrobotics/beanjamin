@@ -274,6 +274,9 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		}
 		return res, err
 	}
+	if poseName, ok := cmd["move_to"].(string); ok {
+		return s.moveTo(ctx, poseName)
+	}
 	if _, ok := cmd["cancel"]; ok {
 		res, err := s.cancel()
 		if err != nil {
@@ -281,7 +284,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		}
 		return res, err
 	}
-	return nil, fmt.Errorf("unknown command, supported commands: run, rewind, cancel, prepare_order, execute_action, get_state, set_state_index")
+	return nil, fmt.Errorf("unknown command, supported commands: run, rewind, cancel, prepare_order, execute_action, move_to, get_state, set_state_index")
 }
 
 func (s *beanjaminCoffee) checkPosition(ctx context.Context, expected string) error {
@@ -311,6 +314,26 @@ func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
 	s.mu.Unlock()
 	s.logger.Infof("sequence cancelled")
 	return map[string]interface{}{"status": "cancelled"}, nil
+}
+
+// moveTo moves the robot to a named pose through the state machine, automatically
+// routing through any required intermediate states. This is the safe alternative
+// to commanding the switch directly from the debug Stream Deck page.
+func (s *beanjaminCoffee) moveTo(ctx context.Context, poseName string) (map[string]interface{}, error) {
+	if !s.running.CompareAndSwap(false, true) {
+		return nil, errors.New("a sequence is already running")
+	}
+	defer s.running.Store(false)
+
+	s.mu.Lock()
+	cancelCtx := s.cancelCtx
+	s.mu.Unlock()
+
+	s.logger.Infof("move_to %q", poseName)
+	if err := s.executeStep(ctx, cancelCtx, Step{PoseName: poseName}); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"status": "complete", "pose": poseName}, nil
 }
 
 func (s *beanjaminCoffee) runSteps(ctx context.Context, label string, steps []Step) (map[string]interface{}, error) {
