@@ -28,7 +28,7 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}
 	completionStatement, _ := order["completion_statement"].(string)
 
 	if initialGreeting == "" {
-		initialGreeting = pickGreeting(customerName)
+		initialGreeting = pickGreeting("")
 	}
 
 	s.logger.Infof("prepare_order: %s – %s", customerName, initialGreeting)
@@ -45,13 +45,16 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}
 
 	if s.speech != nil {
 		msg := completionStatement
-		if msg == "" && customerName != "" {
-			msg = pickAlmostReady(customerName)
+		if msg == "" {
+			msg = pickAlmostReady()
 		}
-		if msg != "" {
-			if _, err := s.speech.Say(ctx, msg, true); err != nil {
-				s.logger.Warnf("failed to say almost-ready: %v", err)
-			}
+		if _, err := s.speech.Say(ctx, msg, true); err != nil {
+			s.logger.Warnf("failed to say almost-ready: %v", err)
+		}
+
+		callout := "Espresso for " + customerName
+		if _, err := s.speech.Say(ctx, callout, true); err != nil {
+			s.logger.Warnf("failed to say callout: %v", err)
 		}
 	}
 

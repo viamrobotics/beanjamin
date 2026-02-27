@@ -20,7 +20,7 @@ type Step = "welcome" | "drink" | "name" | "progress" | "result";
 export default function Home() {
   const [step, setStep] = useState<Step>("welcome");
   const [name, setName] = useState("");
-  const [selectedDrink, setSelectedDrink] = useState<string | null>("espresso");
+  const [selectedDrink, setSelectedDrink] = useState<string | null>(null);
   const [misspelled, setMisspelled] = useState("");
   const [loading, setLoading] = useState(false);
   const [queueCount, setQueueCount] = useState(1);
@@ -196,7 +196,7 @@ export default function Home() {
         onReset={() => {
           setStep("welcome");
           setName("");
-          setSelectedDrink("espresso");
+          setSelectedDrink(null);
           setQueueCount(Math.floor(Math.random() * 5) + 1);
         }}
       />

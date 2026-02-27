@@ -21,12 +21,12 @@ var greetingsNamed = []string{
 	"Let me whip up an espresso for you, %s!",
 }
 
-var almostReady = []string{
-	"%s, your espresso is almost ready!",
-	"Almost there, %s! Just a moment.",
-	"Hang tight %s, your coffee is nearly done!",
-	"%s, just putting the finishing touches on your espresso.",
-	"Your espresso is coming together, %s!",
+var almostReadyAnonymous = []string{
+	"Your espresso is almost ready!",
+	"Almost there! Just a moment.",
+	"Hang tight, your coffee is nearly done!",
+	"Just putting the finishing touches on your espresso.",
+	"Your espresso is coming together!",
 }
 
 var unsupportedDrink = []string{
@@ -51,8 +51,8 @@ func pickGreeting(customerName string) string {
 	return greetingsAnonymous[rand.Intn(len(greetingsAnonymous))]
 }
 
-func pickAlmostReady(customerName string) string {
-	return fmt.Sprintf(almostReady[rand.Intn(len(almostReady))], customerName)
+func pickAlmostReady() string {
+	return almostReadyAnonymous[rand.Intn(len(almostReadyAnonymous))]
 }
 
 func pickUnsupportedDrink(drink string) string {
