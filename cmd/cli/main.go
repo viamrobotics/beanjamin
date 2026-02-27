@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"beanjamin/speechclient"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/robot"
 	"go.viam.com/rdk/robot/client"
@@ -26,6 +27,8 @@ func realMain() error {
 	}
 
 	switch os.Args[1] {
+	case "say":
+		return runSay(os.Args[2:])
 	default:
 		printUsage()
 		return fmt.Errorf("unknown command: %s", os.Args[1])
@@ -36,7 +39,7 @@ func printUsage() {
 	fmt.Println("Usage: beanjamin-cli <command> [flags]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  (no commands registered)")
+	fmt.Println("  say         Say text aloud via the speech service")
 }
 
 // connFlags holds the shared connection flags used by all commands.
@@ -60,6 +63,50 @@ func (c connFlags) validate() error {
 	}
 	if *c.apiKey == "" || *c.apiKeyID == "" {
 		return fmt.Errorf("--api-key and --api-key-id are required (or set VIAM_API_KEY / VIAM_API_KEY_ID)")
+	}
+	return nil
+}
+
+func runSay(args []string) error {
+	flagSet := flag.NewFlagSet("say", flag.ExitOnError)
+	conn := addConnFlags(flagSet)
+
+	serviceName := flagSet.String("service", "speech-1", "Name of the speech service")
+	blocking := flagSet.Bool("blocking", true, "Wait for speech to finish before returning")
+
+	if err := flagSet.Parse(args); err != nil {
+		return err
+	}
+	if err := conn.validate(); err != nil {
+		return err
+	}
+
+	text := flagSet.Arg(0)
+	if text == "" {
+		return fmt.Errorf("usage: beanjamin-cli say [flags] \"text to speak\"")
+	}
+
+	ctx := context.Background()
+	logger := logging.NewLogger("cli")
+
+	machine, err := conn.connect(ctx, logger)
+	if err != nil {
+		return err
+	}
+	defer machine.Close(ctx)
+
+	speechSvc, err := speechclient.FromRobot(machine, *serviceName)
+	if err != nil {
+		return fmt.Errorf("getting speech service %q: %w", *serviceName, err)
+	}
+
+	resp, err := speechSvc.Say(ctx, text, *blocking)
+	if err != nil {
+		return fmt.Errorf("say failed: %w", err)
+	}
+
+	if resp != "" {
+		fmt.Println(resp)
 	}
 	return nil
 }
