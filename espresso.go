@@ -208,34 +208,15 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 	default:
 	}
 
-	// Resolve the shortest path from the current state to the target pose.
-	// If intermediate states are required, move through them first (no constraints or pauses).
-	intermediates, finalStateIdx, err := s.resolvePath(step.PoseName)
-	if err != nil {
-		return err
-	}
-
-	for _, stateIdx := range intermediates {
-		poseName := statePoseNames[stateIdx]
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("cancelled before intermediate move to %q: %w", poseName, ctx.Err())
-		case <-cancelCtx.Done():
-			return fmt.Errorf("cancelled before intermediate move to %q", poseName)
-		default:
-		}
-		s.logger.Infof("intermediate move to %q (state %d)", poseName, stateIdx)
-		if err := s.moveToPose(ctx, Step{PoseName: poseName}); err != nil {
-			return fmt.Errorf("intermediate move to %q: %w", poseName, err)
-		}
-		s.commitTransition(stateIdx)
-	}
-
 	s.logger.Infof("moving to %q", step.PoseName)
 	if err := s.moveToPose(ctx, step); err != nil {
 		return err
 	}
-	s.commitTransition(finalStateIdx)
+
+	// Keep state index current so move_to commands always know where the robot is.
+	if idx := inferStateIndex(step.PoseName); idx >= 0 {
+		s.commitTransition(idx)
+	}
 
 	if step.PauseSec > 0 {
 		pause := time.Duration(step.PauseSec * float64(time.Second))
