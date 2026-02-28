@@ -35,10 +35,16 @@ type StepLinearConstraint struct {
 	OrientationToleranceDegs float64 `json:"orientation_tolerance_degs"`
 }
 
+type AllowedCollision struct {
+	Frame1 string `json:"frame1"`
+	Frame2 string `json:"frame2"`
+}
+
 type Step struct {
-	PoseName         string                `json:"pose_name"`
-	PauseSec         float64               `json:"pause_secs,omitempty"`
-	LinearConstraint *StepLinearConstraint `json:"linear_constraint,omitempty"`
+	PoseName          string                `json:"pose_name"`
+	PauseSec          float64               `json:"pause_secs,omitempty"`
+	LinearConstraint  *StepLinearConstraint `json:"linear_constraint,omitempty"`
+	AllowedCollisions []AllowedCollision    `json:"allowed_collisions,omitempty"`
 }
 
 type Config struct {

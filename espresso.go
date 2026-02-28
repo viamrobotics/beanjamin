@@ -159,11 +159,15 @@ func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
 }
 
 func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error {
+	coffeeCollisions := []AllowedCollision{
+		{Frame1: "filter", Frame2: "coffee-machine-actuation-area"},
+		{Frame1: "coffee-claws-middle", Frame2: "coffee-machine-actuation-area"},
+	}
 	steps := []Step{
 		{PoseName: "coffee_approach", PauseSec: 1},
-		{PoseName: "coffee_in", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
-		{PoseName: "coffee_locked_mid", PauseSec: 1},
-		{PoseName: "coffee_locked_final", PauseSec: 1},
+		{PoseName: "coffee_in", PauseSec: 1, LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeCollisions},
+		{PoseName: "coffee_locked_mid", PauseSec: 1, AllowedCollisions: coffeeCollisions},
+		{PoseName: "coffee_locked_final", PauseSec: 1, AllowedCollisions: coffeeCollisions},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
@@ -174,9 +178,13 @@ func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error 
 }
 
 func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) error {
+	coffeeCollisions := []AllowedCollision{
+		{Frame1: "filter", Frame2: "coffee-machine-actuation-area"},
+		{Frame1: "coffee-claws-middle", Frame2: "coffee-machine-actuation-area"},
+	}
 	steps := []Step{
-		{PoseName: "coffee_locked_mid", PauseSec: 2},
-		{PoseName: "coffee_in", PauseSec: 1},
+		{PoseName: "coffee_locked_mid", PauseSec: 2, AllowedCollisions: coffeeCollisions},
+		{PoseName: "coffee_in", PauseSec: 1, AllowedCollisions: coffeeCollisions},
 		{PoseName: "coffee_approach", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
