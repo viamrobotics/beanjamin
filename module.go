@@ -41,10 +41,12 @@ type AllowedCollision struct {
 }
 
 type Step struct {
-	PoseName          string                `json:"pose_name"`
-	PauseSec          float64               `json:"pause_secs,omitempty"`
-	LinearConstraint  *StepLinearConstraint `json:"linear_constraint,omitempty"`
-	AllowedCollisions []AllowedCollision    `json:"allowed_collisions,omitempty"`
+	PoseName            string                `json:"pose_name"`
+	PauseSec            float64               `json:"pause_secs,omitempty"`
+	LinearConstraint    *StepLinearConstraint `json:"linear_constraint,omitempty"`
+	AllowedCollisions   []AllowedCollision    `json:"allowed_collisions,omitempty"`
+	PivotFromPose       string                `json:"pivot_from_pose,omitempty"`
+	PivotDegreesPerStep float64               `json:"pivot_degrees_per_step,omitempty"`
 }
 
 type Config struct {
@@ -71,6 +73,10 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		for i, step := range steps {
 			if step.PoseName == "" {
 				return nil, nil, fmt.Errorf("%s: sequences[%q][%d] is missing required field \"pose_name\"", path, name, i)
+			}
+			if step.PivotFromPose != "" && step.PivotDegreesPerStep <= 0 {
+				return nil, nil, fmt.Errorf(
+					"%s: sequences[%q][%d] has pivot_from_pose but pivot_degrees_per_step must be > 0", path, name, i)
 			}
 		}
 	}
@@ -148,6 +154,10 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 			if !validSet[step.PoseName] {
 				cancelFunc()
 				return nil, fmt.Errorf("sequences[%q][%d]: pose %q does not exist on switch %q (available: %v)", seqName, i, step.PoseName, conf.PoseSwitcherName, validPoses)
+			}
+			if step.PivotFromPose != "" && !validSet[step.PivotFromPose] {
+				cancelFunc()
+				return nil, fmt.Errorf("sequences[%q][%d]: pivot_from_pose %q does not exist on switch %q (available: %v)", seqName, i, step.PivotFromPose, conf.PoseSwitcherName, validPoses)
 			}
 		}
 	}

@@ -166,8 +166,8 @@ func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error 
 	steps := []Step{
 		{PoseName: "coffee_approach", PauseSec: 1},
 		{PoseName: "coffee_in", PauseSec: 1, LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeCollisions},
-		{PoseName: "coffee_locked_mid", PauseSec: 1, AllowedCollisions: coffeeCollisions},
-		{PoseName: "coffee_locked_final", PauseSec: 1, AllowedCollisions: coffeeCollisions},
+		{PoseName: "coffee_locked_final", PivotFromPose: "coffee_in", PivotDegreesPerStep: 5,
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeCollisions},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
@@ -183,8 +183,8 @@ func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) erro
 		{Frame1: "coffee-claws-middle", Frame2: "coffee-machine-actuation-area"},
 	}
 	steps := []Step{
-		{PoseName: "coffee_locked_mid", PauseSec: 2, AllowedCollisions: coffeeCollisions},
-		{PoseName: "coffee_in", PauseSec: 1, AllowedCollisions: coffeeCollisions},
+		{PoseName: "coffee_in", PivotFromPose: "coffee_locked_final", PivotDegreesPerStep: 5,
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeCollisions},
 		{PoseName: "coffee_approach", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
@@ -204,10 +204,16 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 	default:
 	}
 
-	s.logger.Infof("moving to %q", step.PoseName)
-
-	if err := s.moveToPose(ctx, step); err != nil {
-		return err
+	if step.PivotFromPose != "" {
+		s.logger.Infof("pivoting from %q to %q", step.PivotFromPose, step.PoseName)
+		if err := s.executePivot(ctx, cancelCtx, step); err != nil {
+			return err
+		}
+	} else {
+		s.logger.Infof("moving to %q", step.PoseName)
+		if err := s.moveToPose(ctx, step); err != nil {
+			return err
+		}
 	}
 
 	if step.PauseSec > 0 {
