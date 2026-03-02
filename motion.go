@@ -47,16 +47,34 @@ func (s *beanjaminCoffee) moveToPose(ctx context.Context, step Step) error {
 		Destination:   destination,
 	}
 
+	if step.LinearConstraint != nil || len(step.AllowedCollisions) > 0 {
+		if moveReq.Constraints == nil {
+			moveReq.Constraints = &motionplan.Constraints{}
+		}
+	}
+
 	if step.LinearConstraint != nil {
 		s.logger.Infof("applying linear constraint to %q (line=%.1fmm, orient=%.1f°)",
 			step.PoseName, step.LinearConstraint.LineToleranceMm, step.LinearConstraint.OrientationToleranceDegs)
-		moveReq.Constraints = &motionplan.Constraints{
-			LinearConstraint: []motionplan.LinearConstraint{
-				{
-					LineToleranceMm:          step.LinearConstraint.LineToleranceMm,
-					OrientationToleranceDegs: step.LinearConstraint.OrientationToleranceDegs,
-				},
+		moveReq.Constraints.LinearConstraint = []motionplan.LinearConstraint{
+			{
+				LineToleranceMm:          step.LinearConstraint.LineToleranceMm,
+				OrientationToleranceDegs: step.LinearConstraint.OrientationToleranceDegs,
 			},
+		}
+	}
+
+	if len(step.AllowedCollisions) > 0 {
+		allows := make([]motionplan.CollisionSpecificationAllowedFrameCollisions, len(step.AllowedCollisions))
+		for i, ac := range step.AllowedCollisions {
+			allows[i] = motionplan.CollisionSpecificationAllowedFrameCollisions{
+				Frame1: ac.Frame1,
+				Frame2: ac.Frame2,
+			}
+		}
+		s.logger.Infof("allowing %d collision pair(s) for %q", len(allows), step.PoseName)
+		moveReq.Constraints.CollisionSpecification = []motionplan.CollisionSpecification{
+			{Allows: allows},
 		}
 	}
 
