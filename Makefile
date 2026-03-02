@@ -30,7 +30,16 @@ endif
 
 module: test module.tar.gz
 
-all: test module.tar.gz
+web-app-install:
+	cd web-app && npm ci
+
+web-app-build: web-app-install
+	cd web-app && npm run build
+
+web-app-module: web-app-build
+	cd web-app && tar czf module.tar.gz -C out . -C .. meta.json
+
+all: test module.tar.gz web-app-module
 
 setup:
 	go mod tidy
