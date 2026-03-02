@@ -1,22 +1,56 @@
-name: Deploy Module
+name: Deploy Module and App
 on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+
 jobs:
-  publish:
+  publish-module:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      # actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Build module artifact
         run: make module.tar.gz
 
       - name: Upload to Viam Registry
-        uses: viamrobotics/upload-module@v1
+        # viamrobotics/upload-module@v1.2
+        uses: viamrobotics/upload-module@31b3909ba4d40f22a58c8479f3b4302538a5099b
         with:
           module-path: module.tar.gz
           platform: linux/amd64
+          version: ${{ github.ref_name }}
+          key-id: ${{ secrets.viam_key_id }}
+          key-value: ${{ secrets.viam_key_secret }}
+          do-update: ${{ !github.event.release.prerelease }}
+          do-upload: true
+
+  publish-app:
+    runs-on: ubuntu-24.04
+    steps:
+      # actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      # actions/setup-node@v6.2.0
+      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web-app/package-lock.json
+
+      - name: Build web app artifact
+        run: make web-app-module
+
+      - name: Upload to Viam Registry
+        # viamrobotics/upload-module@v1.2
+        uses: viamrobotics/upload-module@31b3909ba4d40f22a58c8479f3b4302538a5099b
+        with:
+          meta-path: web-app/meta.json
+          module-path: web-app/module.tar.gz
+          platform: any
           version: ${{ github.ref_name }}
           key-id: ${{ secrets.viam_key_id }}
           key-value: ${{ secrets.viam_key_secret }}
