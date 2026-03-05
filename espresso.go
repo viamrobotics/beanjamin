@@ -10,7 +10,7 @@ import (
 var coffeeBrewingCollisions = []AllowedCollision{
 	{Frame1: "filter", Frame2: "coffee-machine-actuation-area"},
 	{Frame1: "coffee-claws-middle", Frame2: "coffee-machine-actuation-area"},
-	{Frame1: "claws", Frame2: "coffee-machine-actuation-area"},
+	{Frame1: "gripper:claws", Frame2: "coffee-machine-actuation-area"},
 }
 
 func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}) (map[string]interface{}, error) {
