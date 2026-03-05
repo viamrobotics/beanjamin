@@ -20,6 +20,10 @@ Moves an arm (or any movable component) between a list of named poses via the Mo
   "component_name": "<string>",
   "motion": "<string>",
   "reference_frame": "<string>",
+  "linear_constraint": {
+    "line_tolerance_mm": <float>,
+    "orientation_tolerance_degs": <float>
+  },
   "poses": [
     {
       "pose_name": "<string>",
@@ -31,14 +35,22 @@ Moves an arm (or any movable component) between a list of named poses via the Mo
 }
 ```
 
-| Name              | Type   | Required | Description                                                                             |
-| ----------------- | ------ | -------- | --------------------------------------------------------------------------------------- |
-| `component_name`  | string | Yes      | Name of the arm component to move.                                                      |
-| `motion`          | string | Yes      | Name of the motion service (typically `"builtin"`).                                     |
-| `reference_frame` | string | No       | Reference frame for poses. Defaults to `"world"`.                                       |
-| `poses`           | array  | Yes      | One or more named poses. Each pose needs a `pose_name` and position/orientation fields. |
+| Name                | Type   | Required | Description                                                                             |
+| ------------------- | ------ | -------- | --------------------------------------------------------------------------------------- |
+| `component_name`    | string | Yes      | Name of the arm component to move.                                                      |
+| `motion`            | string | Yes      | Name of the motion service (typically `"builtin"`).                                     |
+| `reference_frame`   | string | No       | Reference frame for poses. Defaults to `"world"`.                                       |
+| `linear_constraint` | object | No       | When set, forces the arm to move in a straight line between poses.                      |
+| `poses`             | array  | Yes      | One or more named poses. Each pose needs a `pose_name` and position/orientation fields. |
 
 **Pose fields:** `x`, `y`, `z` are in millimeters. `o_x`, `o_y`, `o_z` define the orientation axis, `theta_degrees` is the rotation angle in degrees.
+
+**Linear constraint fields:**
+
+| Name                        | Type  | Description                                                              |
+| --------------------------- | ----- | ------------------------------------------------------------------------ |
+| `line_tolerance_mm`          | float | Max deviation from the straight-line path between start and goal, in mm. |
+| `orientation_tolerance_degs` | float | Max orientation deviation allowed during the movement, in degrees.       |
 
 ### Example Configuration
 
@@ -47,6 +59,10 @@ Moves an arm (or any movable component) between a list of named poses via the Mo
   "component_name": "my-arm",
   "motion": "builtin",
   "reference_frame": "world",
+  "linear_constraint": {
+    "line_tolerance_mm": 1,
+    "orientation_tolerance_degs": 2
+  },
   "poses": [
     {
       "pose_name": "home",
