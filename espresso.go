@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+var coffeeBrewingCollisions = []AllowedCollision{
+	{Frame1: "filter", Frame2: "coffee-machine-actuation-area"},
+	{Frame1: "coffee-claws-middle", Frame2: "coffee-machine-actuation-area"},
+	{Frame1: "claws", Frame2: "coffee-machine-actuation-area"},
+}
+
 func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}) (map[string]interface{}, error) {
 	order, ok := orderRaw.(map[string]interface{})
 	if !ok {
@@ -159,15 +165,11 @@ func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
 }
 
 func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error {
-	coffeeCollisions := []AllowedCollision{
-		{Frame1: "filter", Frame2: "coffee-machine-actuation-area"},
-		{Frame1: "coffee-claws-middle", Frame2: "coffee-machine-actuation-area"},
-	}
 	steps := []Step{
 		{PoseName: "coffee_approach", PauseSec: 1},
-		{PoseName: "coffee_in", PauseSec: 1, LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeCollisions},
+		{PoseName: "coffee_in", PauseSec: 1, LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
 		{PoseName: "coffee_locked_final", PivotFromPose: "coffee_in", PivotDegreesPerStep: 5,
-			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeCollisions},
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
@@ -178,13 +180,9 @@ func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error 
 }
 
 func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) error {
-	coffeeCollisions := []AllowedCollision{
-		{Frame1: "filter", Frame2: "coffee-machine-actuation-area"},
-		{Frame1: "coffee-claws-middle", Frame2: "coffee-machine-actuation-area"},
-	}
 	steps := []Step{
 		{PoseName: "coffee_in", PivotFromPose: "coffee_locked_final", PivotDegreesPerStep: 5,
-			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeCollisions},
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
 		{PoseName: "coffee_approach", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
