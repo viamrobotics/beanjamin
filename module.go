@@ -197,39 +197,69 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 	if seqName, ok := cmd["run"].(string); ok {
 		steps, exists := s.sequences[seqName]
 		if !exists {
-			return nil, fmt.Errorf("unknown sequence %q", seqName)
+			err := fmt.Errorf("unknown sequence %q", seqName)
+			s.logger.Warnw("DoCommand", "error", err)
+			return nil, err
 		}
 		if enforceStart, _ := cmd["enforce_start"].(bool); enforceStart {
 			if err := s.checkPosition(ctx, steps[0].PoseName); err != nil {
-				return nil, fmt.Errorf("run %q: %w", seqName, err)
+				err = fmt.Errorf("run %q: %w", seqName, err)
+				s.logger.Errorw("DoCommand", "error", err)
+				return nil, err
 			}
 		}
-		return s.runSteps(ctx, seqName, steps)
+		res, err := s.runSteps(ctx, seqName, steps)
+		if err != nil {
+			s.logger.Errorw("DoCommand", "error", err)
+		}
+		return res, err
 	}
 	if seqName, ok := cmd["rewind"].(string); ok {
 		steps, exists := s.sequences[seqName]
 		if !exists {
-			return nil, fmt.Errorf("unknown sequence %q", seqName)
+			err := fmt.Errorf("unknown sequence %q", seqName)
+			s.logger.Warnw("DoCommand", "error", err)
+			return nil, err
 		}
 		if err := s.checkPosition(ctx, steps[len(steps)-1].PoseName); err != nil {
-			return nil, fmt.Errorf("rewind %q: %w", seqName, err)
+			err = fmt.Errorf("rewind %q: %w", seqName, err)
+			s.logger.Errorw("DoCommand", "error", err)
+			return nil, err
 		}
 		reversed := make([]Step, 0, len(steps)-1)
 		for i := len(steps) - 2; i >= 0; i-- {
 			reversed = append(reversed, steps[i])
 		}
-		return s.runSteps(ctx, seqName+":rewind", reversed)
+		res, err := s.runSteps(ctx, seqName+":rewind", reversed)
+		if err != nil {
+			s.logger.Errorw("DoCommand", "error", err)
+		}
+		return res, err
 	}
 	if orderRaw, ok := cmd["prepare_order"]; ok {
-		return s.prepareOrder(ctx, orderRaw)
+		res, err := s.prepareOrder(ctx, orderRaw)
+		if err != nil {
+			s.logger.Errorw("DoCommand", "error", err)
+		}
+		return res, err
 	}
 	if actionName, ok := cmd["execute_action"].(string); ok {
-		return s.executeAction(ctx, actionName)
+		res, err := s.executeAction(ctx, actionName)
+		if err != nil {
+			s.logger.Errorw("DoCommand", "error", err)
+		}
+		return res, err
 	}
 	if _, ok := cmd["cancel"]; ok {
-		return s.cancel()
+		res, err := s.cancel()
+		if err != nil {
+			s.logger.Errorw("DoCommand", "error", err)
+		}
+		return res, err
 	}
-	return nil, fmt.Errorf("unknown command, supported commands: run, rewind, cancel, prepare_order, execute_action")
+	err := fmt.Errorf("unknown command, supported commands: run, rewind, cancel, prepare_order, execute_action")
+	s.logger.Warnw("DoCommand", "error", err)
+	return nil, err
 }
 
 func (s *beanjaminCoffee) checkPosition(ctx context.Context, expected string) error {

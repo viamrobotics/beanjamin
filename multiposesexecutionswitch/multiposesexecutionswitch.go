@@ -124,10 +124,16 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 	if name, ok := cmd["set_position_by_name"].(string); ok {
 		for i, pn := range s.poseNames {
 			if pn == name {
-				return nil, s.SetPosition(ctx, uint32(i), nil)
+				if err := s.SetPosition(ctx, uint32(i), nil); err != nil {
+					s.logger.Errorw("DoCommand", "error", err)
+					return nil, err
+				}
+				return nil, nil
 			}
 		}
-		return nil, fmt.Errorf("unknown pose name %q", name)
+		err := fmt.Errorf("unknown pose name %q", name)
+		s.logger.Warnw("DoCommand", "error", err)
+		return nil, err
 	}
 
 	if _, ok := cmd["get_current_position_name"]; ok {
@@ -155,10 +161,14 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 				}, nil
 			}
 		}
-		return nil, fmt.Errorf("unknown pose name %q", name)
+		err := fmt.Errorf("unknown pose name %q", name)
+		s.logger.Warnw("DoCommand", "error", err)
+		return nil, err
 	}
 
-	return nil, fmt.Errorf("unknown command, supported commands: set_position_by_name, get_current_position_name, get_pose_by_name")
+	err := fmt.Errorf("unknown command, supported commands: set_position_by_name, get_current_position_name, get_pose_by_name")
+	s.logger.Warnw("DoCommand", "error", err)
+	return nil, err
 }
 
 func (s *multiPosesExecutionSwitch) GetNumberOfPositions(ctx context.Context, extra map[string]interface{}) (uint32, []string, error) {
