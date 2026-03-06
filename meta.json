@@ -16,6 +16,12 @@
       "model": "viam:beanjamin:multi-poses-execution-switch",
       "short_description": "Switch that moves an arm between predefined poses via the Motion service.",
       "markdown_link": "README.md#model-viambeanjaminmulti-poses-execution-switch"
+    },
+    {
+      "api": "rdk:service:generic",
+      "model": "viam:beanjamin:text-to-speech",
+      "short_description": "Text-to-speech service using Google Cloud TTS API with audioout playback.",
+      "markdown_link": "README.md#model-viambeanjamintext-to-speech"
     }
   ],
   "entrypoint": "bin/beanjamin",

@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 
-	"beanjamin/speechclient"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/robot"
 	"go.viam.com/rdk/robot/client"
+	generic "go.viam.com/rdk/services/generic"
 	"go.viam.com/utils/rpc"
 )
 
@@ -72,7 +72,6 @@ func runSay(args []string) error {
 	conn := addConnFlags(flagSet)
 
 	serviceName := flagSet.String("service", "speech-1", "Name of the speech service")
-	blocking := flagSet.Bool("blocking", true, "Wait for speech to finish before returning")
 
 	if err := flagSet.Parse(args); err != nil {
 		return err
@@ -95,18 +94,20 @@ func runSay(args []string) error {
 	}
 	defer machine.Close(ctx)
 
-	speechSvc, err := speechclient.FromRobot(machine, *serviceName)
+	speechSvc, err := generic.FromRobot(machine, *serviceName)
 	if err != nil {
 		return fmt.Errorf("getting speech service %q: %w", *serviceName, err)
 	}
 
-	resp, err := speechSvc.Say(ctx, text, *blocking)
+	resp, err := speechSvc.DoCommand(ctx, map[string]interface{}{
+		"say": text,
+	})
 	if err != nil {
 		return fmt.Errorf("say failed: %w", err)
 	}
 
-	if resp != "" {
-		fmt.Println(resp)
+	if t, ok := resp["text"].(string); ok && t != "" {
+		fmt.Println(t)
 	}
 	return nil
 }
