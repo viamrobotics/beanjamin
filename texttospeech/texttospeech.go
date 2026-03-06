@@ -6,6 +6,7 @@ package texttospeech
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 
@@ -121,10 +122,11 @@ func (s *ttsService) Say(ctx context.Context, text string) (string, error) {
 		return "", fmt.Errorf("Google TTS synthesis failed: %w", err)
 	}
 
-	err = s.audioOut.Play(ctx, resp.AudioContent, &utils.AudioInfo{
+	stereo := monoToStereo(resp.AudioContent)
+	err = s.audioOut.Play(ctx, stereo, &utils.AudioInfo{
 		Codec:        utils.CodecPCM16,
 		SampleRateHz: defaultSampleRateHz,
-		NumChannels:  1,
+		NumChannels:  2,
 	}, nil)
 	if err != nil {
 		return "", fmt.Errorf("audio_out play failed: %w", err)
@@ -142,6 +144,17 @@ func (s *ttsService) DoCommand(ctx context.Context, cmd map[string]interface{}) 
 		return map[string]interface{}{"text": result}, nil
 	}
 	return nil, fmt.Errorf("unknown command, supported commands: say")
+}
+
+// monoToStereo duplicates each LINEAR16 sample so mono PCM becomes stereo.
+func monoToStereo(mono []byte) []byte {
+	stereo := make([]byte, len(mono)*2)
+	for i := 0; i < len(mono)-1; i += 2 {
+		sample := binary.LittleEndian.Uint16(mono[i:])
+		binary.LittleEndian.PutUint16(stereo[i*2:], sample)
+		binary.LittleEndian.PutUint16(stereo[i*2+2:], sample)
+	}
+	return stereo
 }
 
 func (s *ttsService) Close(ctx context.Context) error {
