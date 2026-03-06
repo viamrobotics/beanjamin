@@ -8,8 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"beanjamin/speechclient"
-
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
@@ -90,7 +88,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 
 	var optDeps []string
 	if cfg.SpeechServiceName != "" {
-		optDeps = append(optDeps, cfg.SpeechServiceName)
+		optDeps = append(optDeps, generic.Named(cfg.SpeechServiceName).String())
 	}
 	return reqDeps, optDeps, nil
 }
@@ -103,7 +101,7 @@ type beanjaminCoffee struct {
 	cfg       *Config
 	sw        toggleswitch.Switch
 	motion    motion.Service
-	speech    speechclient.Speech // nil when speech_service_name is not configured
+	speech    resource.Resource // nil when speech_service_name is not configured
 	sequences map[string][]Step
 
 	mu         sync.Mutex
@@ -162,11 +160,11 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		}
 	}
 
-	var speech speechclient.Speech
+	var speech resource.Resource
 	if conf.SpeechServiceName != "" {
-		speechRes, ok := deps[speechclient.Named(conf.SpeechServiceName)]
+		speechRes, ok := deps[generic.Named(conf.SpeechServiceName)]
 		if ok {
-			speech, _ = speechRes.(speechclient.Speech)
+			speech = speechRes
 		}
 		if speech != nil {
 			logger.Infof("speech service %q connected", conf.SpeechServiceName)

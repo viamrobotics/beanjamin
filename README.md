@@ -1,9 +1,10 @@
 # Beanjamin Module
 
-The `viam:beanjamin` module provides two models for arm-based automation workflows:
+The `viam:beanjamin` module provides three models for arm-based automation workflows:
 
 1. **`viam:beanjamin:coffee`** - A generic service that orchestrates a full coffee brew cycle by sequentially moving through all poses on a pose switcher.
 2. **`viam:beanjamin:multi-poses-execution-switch`** - A switch component that moves an arm between predefined poses using the Motion service.
+3. **`viam:beanjamin:text-to-speech`** - A generic service that synthesises speech via Google Cloud Text-to-Speech and plays it through an audioout service.
 
 ---
 
@@ -128,8 +129,8 @@ Runs named sequences of poses on a `multi-poses-execution-switch` component. Sup
   // string (required) — name of the motion service (typically "builtin")
   "motion_service_name": "builtin",
 
-  // string (optional) — name of a viam-labs speech service for spoken greetings
-  "speech_service_name": "speech-1",
+  // string (optional) — name of a text-to-speech generic service for spoken greetings
+  "speech_service_name": "speech",
 
   // map[string][]Step (required) — named sequences of steps
   // each step has a pose_name, optional pause_secs, and optional linear_constraint
@@ -211,6 +212,72 @@ All commands return `{"status": "complete"}` on success or `{"status": "cancelle
 - Poses can be repeated with different pauses at each occurrence.
 - `enforce_start` on `run` checks the switch is at the first step. `rewind` always checks the switch is at the last step.
 - All execution is cancellation-aware — cancel stops the sequence between steps.
+
+---
+
+## Model: `viam:beanjamin:text-to-speech`
+
+**API:** `rdk:service:generic`
+
+Synthesises speech using the [Google Cloud Text-to-Speech API](https://cloud.google.com/text-to-speech) and plays the resulting audio through an `rdk:component:audio_out` component. Can be used standalone or as the speech backend for the `coffee` service (via `speech_service_name`).
+
+### Prerequisites
+
+- A Google Cloud project with the Text-to-Speech API enabled.
+- A service account key (JSON) with access to the API.
+- A configured `audio_out` component on the same machine.
+
+### Configuration
+
+```json
+{
+  "audio_out": "<string>",
+  "google_credentials_json": { ... },
+  "language_code": "<string>",
+  "voice_name": "<string>"
+}
+```
+
+| Name                     | Type   | Required | Description                                                                                                    |
+| ------------------------ | ------ | -------- | -------------------------------------------------------------------------------------------------------------- |
+| `audio_out`              | string | Yes      | Name of the `audio_out` component dependency used for playback.                                                |
+| `google_credentials_json`| object | Yes      | Google Cloud service account credentials as a JSON object (not a string).                                      |
+| `language_code`          | string | No       | BCP-47 language code. Defaults to `"en-US"`.                                                                   |
+| `voice_name`             | string | No       | Specific Google voice name (e.g. `"en-US-Neural2-F"`). If omitted, Google picks a default for the language.    |
+
+### Example Configuration
+
+```json
+{
+  "audio_out": "ao",
+  "google_credentials_json": {
+    "type": "service_account",
+    "project_id": "my-project",
+    "private_key_id": "abc123",
+    "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
+    "client_email": "tts@my-project.iam.gserviceaccount.com",
+    "client_id": "123456789",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token"
+  },
+  "language_code": "en-US",
+  "voice_name": "en-US-Neural2-F"
+}
+```
+
+### DoCommand
+
+**`say`** — Synthesise and play text. The call blocks until playback completes.
+
+```json
+{"say": "Hello, your espresso is ready!"}
+```
+
+Returns:
+
+```json
+{"text": "Hello, your espresso is ready!"}
+```
 
 ---
 

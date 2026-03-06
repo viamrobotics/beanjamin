@@ -7,6 +7,18 @@ import (
 	"time"
 )
 
+// say sends text to the speech service via DoCommand. It is a no-op when
+// no speech service is configured.
+func (s *beanjaminCoffee) say(ctx context.Context, text string) error {
+	if s.speech == nil {
+		return nil
+	}
+	_, err := s.speech.DoCommand(ctx, map[string]interface{}{
+		"say": text,
+	})
+	return err
+}
+
 var coffeeBrewingCollisions = []AllowedCollision{
 	{Frame1: "filter", Frame2: "coffee-machine-actuation-area"},
 	{Frame1: "coffee-claws-middle", Frame2: "coffee-machine-actuation-area"},
@@ -22,10 +34,8 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}
 	drink, _ := order["drink"].(string)
 	if drink != "espresso" {
 		msg := pickUnsupportedDrink(drink)
-		if s.speech != nil {
-			if _, err := s.speech.Say(ctx, msg, true); err != nil {
-				s.logger.Warnf("failed to say rejection: %v", err)
-			}
+		if err := s.say(ctx, msg); err != nil {
+			s.logger.Warnf("failed to say rejection: %v", err)
 		}
 		return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
 	}
@@ -39,29 +49,25 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}
 
 	s.logger.Infof("prepare_order: %s – %s", customerName, initialGreeting)
 
-	if s.speech != nil {
-		if _, err := s.speech.Say(ctx, initialGreeting, true); err != nil {
-			s.logger.Warnf("failed to say greeting: %v", err)
-		}
+	if err := s.say(ctx, initialGreeting); err != nil {
+		s.logger.Warnf("failed to say greeting: %v", err)
 	}
 
 	if err := s.prepareEspresso(ctx); err != nil {
 		return nil, err
 	}
 
-	if s.speech != nil {
-		msg := completionStatement
-		if msg == "" {
-			msg = pickAlmostReady()
-		}
-		if _, err := s.speech.Say(ctx, msg, true); err != nil {
-			s.logger.Warnf("failed to say almost-ready: %v", err)
-		}
+	msg := completionStatement
+	if msg == "" {
+		msg = pickAlmostReady()
+	}
+	if err := s.say(ctx, msg); err != nil {
+		s.logger.Warnf("failed to say almost-ready: %v", err)
+	}
 
-		callout := "Espresso for " + customerName
-		if _, err := s.speech.Say(ctx, callout, true); err != nil {
-			s.logger.Warnf("failed to say callout: %v", err)
-		}
+	callout := "Espresso for " + customerName
+	if err := s.say(ctx, callout); err != nil {
+		s.logger.Warnf("failed to say callout: %v", err)
 	}
 
 	s.logger.Infof("prepare_order complete: %s – %s", customerName, completionStatement)

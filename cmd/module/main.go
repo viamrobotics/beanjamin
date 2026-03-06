@@ -3,6 +3,7 @@ package main
 import (
 	"beanjamin"
 	"beanjamin/multiposesexecutionswitch"
+	"beanjamin/texttospeech"
 
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/module"
@@ -14,5 +15,6 @@ func main() {
 	module.ModularMain(
 		resource.APIModel{API: generic.API, Model: beanjamin.Coffee},
 		resource.APIModel{API: toggleswitch.API, Model: multiposesexecutionswitch.Model},
+		resource.APIModel{API: generic.API, Model: texttospeech.Model},
 	)
 }
