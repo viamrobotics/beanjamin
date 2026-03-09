@@ -28,10 +28,11 @@ type Service interface {
 
 	// ResolvePath finds the shortest sequence of state transitions from the current
 	// state to any state whose pose name matches targetPose.
-	ResolvePath(targetPose string) (intermediates []int, finalStateIdx int, err error)
+	ResolvePath(targetPose string) (intermediates []string, finalPose string, err error)
 
-	// CommitTransition records the new state index after a move completes successfully.
-	CommitTransition(newStateIdx int)
+	// CommitTransition records the new state after a move completes successfully.
+	// Unknown pose names are silently ignored.
+	CommitTransition(poseName string)
 
 	// InitFromPoseName sets the state index from a pose name. Returns true if the
 	// pose name matched a known state, false otherwise.
@@ -61,7 +62,7 @@ func (s *service) Name() resource.Name {
 
 // ResolvePath finds the shortest sequence of state transitions from the current
 // state to any state whose pose name matches targetPose.
-func (s *service) ResolvePath(targetPose string) (intermediates []int, finalStateIdx int, err error) {
+func (s *service) ResolvePath(targetPose string) (intermediates []string, finalPose string, err error) {
 	s.mu.Lock()
 	current := s.idx
 	s.mu.Unlock()
@@ -69,10 +70,15 @@ func (s *service) ResolvePath(targetPose string) (intermediates []int, finalStat
 	return ResolvePath(current, targetPose)
 }
 
-// CommitTransition records the new state index after a move completes successfully.
-func (s *service) CommitTransition(newStateIdx int) {
+// CommitTransition records the new state after a move completes successfully.
+// Unknown pose names are silently ignored.
+func (s *service) CommitTransition(poseName string) {
+	idx := InferIndex(poseName)
+	if idx < 0 {
+		return
+	}
 	s.mu.Lock()
-	s.idx = newStateIdx
+	s.idx = idx
 	s.mu.Unlock()
 }
 
@@ -89,7 +95,7 @@ func (s *service) InitFromPoseName(poseName string) bool {
 	return true
 }
 
-func (s *service) DoCommand(ctx context.Context, cmd map[string]any) (map[string]any, error) {
+func (s *service) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	if _, ok := cmd["get_state"]; ok {
 		return s.getState(), nil
 	}
@@ -99,7 +105,7 @@ func (s *service) DoCommand(ctx context.Context, cmd map[string]any) (map[string
 	return nil, errors.New("unknown command, supported commands: get_state, set_state_index")
 }
 
-func (s *service) getState() map[string]any {
+func (s *service) getState() map[string]interface{} {
 	s.mu.Lock()
 	idx := s.idx
 	s.mu.Unlock()
@@ -109,24 +115,24 @@ func (s *service) getState() map[string]any {
 		stateName = statePoseNames[idx]
 	}
 
-	var allowedNext []map[string]any
+	var allowedNext []map[string]interface{}
 	if idx >= 0 {
 		for _, nextIdx := range validTransitions[idx] {
-			allowedNext = append(allowedNext, map[string]any{
+			allowedNext = append(allowedNext, map[string]interface{}{
 				"index": nextIdx,
 				"name":  statePoseNames[nextIdx],
 			})
 		}
 	}
 
-	return map[string]any{
+	return map[string]interface{}{
 		"state_index":         idx,
 		"state_name":          stateName,
 		"allowed_transitions": allowedNext,
 	}
 }
 
-func (s *service) setStateIndex(idxRaw any) (map[string]any, error) {
+func (s *service) setStateIndex(idxRaw any) (map[string]interface{}, error) {
 	var idx int
 	switch v := idxRaw.(type) {
 	case float64:
@@ -143,7 +149,7 @@ func (s *service) setStateIndex(idxRaw any) (map[string]any, error) {
 	s.idx = idx
 	s.mu.Unlock()
 	s.logger.Infof("state machine: state manually set to index %d (%q)", idx, statePoseNames[idx])
-	return map[string]any{
+	return map[string]interface{}{
 		"status":      "ok",
 		"state_index": idx,
 		"state_name":  statePoseNames[idx],

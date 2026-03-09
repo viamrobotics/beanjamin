@@ -63,6 +63,8 @@ func TestIsDirectTransition(t *testing.T) {
 			{0, 7, "home→coffee_approach"},
 			{0, 10, "home→dump_grounds"},
 			{0, 11, "home→pre_dump_grounds"},
+			{2, 3, "grinder_activate→grinder_approach(post)"},
+			{5, 6, "tamper_activate→tamper_approach(post)"},
 			{7, 8, "coffee_approach→coffee_in"},
 			{8, 9, "coffee_in→coffee_locked_final"},
 			{9, 8, "coffee_locked_final→coffee_in"},
@@ -85,6 +87,8 @@ func TestIsDirectTransition(t *testing.T) {
 		}{
 			{8, 0, "coffee_in→home"},
 			{9, 0, "coffee_locked_final→home"},
+			{2, 1, "grinder_activate→grinder_approach(pre)"},
+			{5, 4, "tamper_activate→tamper_approach(pre)"},
 			{2, 5, "grinder_activate→tamper_activate"},
 			{5, 2, "tamper_activate→grinder_activate"},
 			{9, 7, "coffee_locked_final→coffee_approach"},
@@ -102,7 +106,7 @@ func TestIsDirectTransition(t *testing.T) {
 func TestValidatePath(t *testing.T) {
 	t.Run("valid sequence", func(t *testing.T) {
 		poses := []string{"home", "grinder_approach", "grinder_activate", "grinder_approach"}
-		if err := ValidatePath(poses); err != nil {
+		if err := ValidatePath(poses, -1); err != nil {
 			t.Errorf("expected valid path, got error: %v", err)
 		}
 	})
@@ -110,7 +114,7 @@ func TestValidatePath(t *testing.T) {
 	t.Run("unknown poses skipped", func(t *testing.T) {
 		// Poses not in the state machine should be ignored without error.
 		poses := []string{"home", "custom_approach_step", "coffee_approach"}
-		if err := ValidatePath(poses); err != nil {
+		if err := ValidatePath(poses, -1); err != nil {
 			t.Errorf("expected unknown poses to be skipped, got error: %v", err)
 		}
 	})
@@ -118,20 +122,31 @@ func TestValidatePath(t *testing.T) {
 	t.Run("invalid transition", func(t *testing.T) {
 		// coffee_in → home is not a direct transition.
 		poses := []string{"coffee_in", "home"}
-		if err := ValidatePath(poses); err == nil {
+		if err := ValidatePath(poses, -1); err == nil {
 			t.Error("expected error for invalid transition coffee_in→home, got nil")
 		}
 	})
 
 	t.Run("single pose", func(t *testing.T) {
-		if err := ValidatePath([]string{"home"}); err != nil {
+		if err := ValidatePath([]string{"home"}, -1); err != nil {
 			t.Errorf("single-pose path should be valid, got: %v", err)
 		}
 	})
 
 	t.Run("empty", func(t *testing.T) {
-		if err := ValidatePath(nil); err != nil {
+		if err := ValidatePath(nil, -1); err != nil {
 			t.Errorf("empty path should be valid, got: %v", err)
+		}
+	})
+
+	t.Run("rewind with seeded start disambiguates post-approach", func(t *testing.T) {
+		// A rewind of [grinder_approach, grinder_activate, grinder_approach] produces
+		// [grinder_approach, grinder_activate] starting from grinder_approach(post=3).
+		// Without seeding, grinder_approach would be inferred as pre(1), which is also
+		// a valid source for grinder_activate — but seeding idx=3 is more precise.
+		poses := []string{"grinder_approach", "grinder_activate"}
+		if err := ValidatePath(poses, 3); err != nil {
+			t.Errorf("expected valid rewind path from post-approach, got error: %v", err)
 		}
 	})
 }
@@ -146,12 +161,12 @@ func TestResolvePath(t *testing.T) {
 
 	t.Run("direct adjacent transition has no intermediates", func(t *testing.T) {
 		// home (0) → coffee_approach (7) is a direct edge.
-		intermediates, finalIdx, err := ResolvePath(0, "coffee_approach")
+		intermediates, finalPose, err := ResolvePath(0, "coffee_approach")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if finalIdx != 7 {
-			t.Errorf("finalIdx = %d, want 7", finalIdx)
+		if finalPose != "coffee_approach" {
+			t.Errorf("finalPose = %q, want %q", finalPose, "coffee_approach")
 		}
 		if len(intermediates) != 0 {
 			t.Errorf("expected no intermediates, got %v", intermediates)
@@ -160,20 +175,20 @@ func TestResolvePath(t *testing.T) {
 
 	t.Run("retrace through coffee locked state", func(t *testing.T) {
 		// coffee_locked_final (9) → coffee_approach (7) must retrace: 9 → 8 → 7.
-		intermediates, finalIdx, err := ResolvePath(9, "coffee_approach")
+		intermediates, finalPose, err := ResolvePath(9, "coffee_approach")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if finalIdx != 7 {
-			t.Errorf("finalIdx = %d, want 7", finalIdx)
+		if finalPose != "coffee_approach" {
+			t.Errorf("finalPose = %q, want %q", finalPose, "coffee_approach")
 		}
-		want := []int{8}
+		want := []string{"coffee_in"}
 		if len(intermediates) != len(want) {
 			t.Fatalf("intermediates = %v, want %v", intermediates, want)
 		}
 		for i, v := range want {
 			if intermediates[i] != v {
-				t.Errorf("intermediates[%d] = %d, want %d", i, intermediates[i], v)
+				t.Errorf("intermediates[%d] = %q, want %q", i, intermediates[i], v)
 			}
 		}
 	})
@@ -187,12 +202,12 @@ func TestResolvePath(t *testing.T) {
 
 	t.Run("resolving current pose is a no-op", func(t *testing.T) {
 		// Already at home — no moves needed, no error.
-		intermediates, finalIdx, err := ResolvePath(0, "home")
+		intermediates, finalPose, err := ResolvePath(0, "home")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if finalIdx != 0 {
-			t.Errorf("finalIdx = %d, want 0", finalIdx)
+		if finalPose != "home" {
+			t.Errorf("finalPose = %q, want %q", finalPose, "home")
 		}
 		if len(intermediates) != 0 {
 			t.Errorf("expected no intermediates, got %v", intermediates)

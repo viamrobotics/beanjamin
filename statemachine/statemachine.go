@@ -53,8 +53,8 @@ var statePoseNames = []string{
 //
 //  2. Activate and locked states may ONLY move to adjacent states within their own
 //     section; they cannot jump to a different section's approach:
-//     - grinder_activate (2)     ↔ grinder_approach (1, 3)
-//     - tamper_activate  (5)     ↔ tamper_approach  (4, 6)
+//     - grinder_activate (2)     → grinder_approach (post, 3) only
+//     - tamper_activate  (5)     → tamper_approach  (post, 6) only
 //     - coffee_in        (8)     ↔ coffee_approach (7) or coffee_locked_final (9)
 //     - coffee_locked_final (9)  → coffee_in (8) only (must retrace backward via pivot)
 //
@@ -69,9 +69,9 @@ var validTransitions = map[int][]int{
 	6: {0, 1, 3, 4, 5, 7, 11},  // tamper_approach  (post) → home, tamper_activate,  any approach, pre_dump_grounds
 	7: {0, 1, 3, 4, 6, 8, 11},  // coffee_approach         → home, any approach, coffee_in, pre_dump_grounds
 
-	// ── Activate states ── own section's approach states only ──
-	2: {1, 3}, // grinder_activate → grinder_approach (pre or post)
-	5: {4, 6}, // tamper_activate  → tamper_approach  (pre or post)
+	// ── Activate states ── post-activate approach only ──
+	2: {3}, // grinder_activate → grinder_approach (post)
+	5: {6}, // tamper_activate  → tamper_approach  (post)
 
 	// ── Coffee locked states ── coffee_locked_final retraces to coffee_in via pivot ──
 	8: {7, 9}, // coffee_in          → coffee_approach or coffee_locked_final
@@ -104,14 +104,33 @@ func isDirectTransition(from, to int) bool {
 	return slices.Contains(validTransitions[from], to)
 }
 
+// inferIndexFrom returns the state index for poseName that is directly
+// reachable from fromIdx, or the lowest index if fromIdx < 0.
+// Returns -1 if the pose name is unknown.
+func inferIndexFrom(poseName string, fromIdx int) int {
+	if fromIdx >= 0 {
+		for _, next := range validTransitions[fromIdx] {
+			if statePoseNames[next] == poseName {
+				return next
+			}
+		}
+	}
+	return InferIndex(poseName)
+}
+
 // ValidatePath iterates over poseNames, skips any where InferIndex returns -1,
 // and for each consecutive pair of known-state indices checks isDirectTransition.
+// When a pose name appears at multiple indices, the index reachable from the
+// previous state is preferred. startIdx seeds the initial context (-1 means none).
 // Returns an error if any consecutive pair lacks a direct transition.
-func ValidatePath(poseNames []string) error {
-	prevIdx := -1
+func ValidatePath(poseNames []string, startIdx int) error {
+	prevIdx := startIdx
 	prevName := ""
+	if startIdx >= 0 && startIdx < len(statePoseNames) {
+		prevName = statePoseNames[startIdx]
+	}
 	for _, name := range poseNames {
-		idx := InferIndex(name)
+		idx := inferIndexFrom(name, prevIdx)
 		if idx < 0 {
 			// Not a known state; skip it.
 			continue
@@ -127,19 +146,19 @@ func ValidatePath(poseNames []string) error {
 
 // ResolvePath finds the shortest sequence of state transitions from currentIdx
 // to any state whose pose name matches targetPose.
-// Returns intermediates (state indices to visit before the target, not including
-// currentIdx itself or finalStateIdx) and the finalStateIdx.
+// Returns intermediates (pose names to visit before the target, not including
+// the current pose or the final pose) and the final pose name.
 // Returns an error if currentIdx < 0 (uninitialized) or no path exists.
-func ResolvePath(currentIdx int, targetPose string) (intermediates []int, finalStateIdx int, err error) {
+func ResolvePath(currentIdx int, targetPose string) (intermediates []string, finalPose string, err error) {
 	if currentIdx < 0 {
-		return nil, -1, fmt.Errorf(
+		return nil, "", fmt.Errorf(
 			"state machine: current state is uninitialized; " +
 				"call {\"get_state\": true} to see valid indices, then {\"set_state_index\": N} to initialize",
 		)
 	}
 
 	if statePoseNames[currentIdx] == targetPose {
-		return nil, currentIdx, nil
+		return nil, targetPose, nil
 	}
 
 	type bfsNode struct {
@@ -165,7 +184,12 @@ func ResolvePath(currentIdx int, targetPose string) (intermediates []int, finalS
 			if statePoseNames[next] == targetPose {
 				// newPath = [currentIdx, ..., finalStateIdx]
 				// Intermediates are everything between start and end.
-				return newPath[1 : len(newPath)-1], next, nil
+				idxIntermediates := newPath[1 : len(newPath)-1]
+				names := make([]string, len(idxIntermediates))
+				for i, idx := range idxIntermediates {
+					names[i] = statePoseNames[idx]
+				}
+				return names, targetPose, nil
 			}
 
 			visited[next] = true
@@ -173,7 +197,7 @@ func ResolvePath(currentIdx int, targetPose string) (intermediates []int, finalS
 		}
 	}
 
-	return nil, -1, fmt.Errorf(
+	return nil, "", fmt.Errorf(
 		"state machine: no valid path from %q (index %d) to pose %q",
 		statePoseNames[currentIdx], currentIdx, targetPose,
 	)

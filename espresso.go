@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"beanjamin/statemachine"
 )
 
 // say sends text to the speech service via DoCommand. It is a no-op when
@@ -222,10 +220,8 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 		}
 	}
 
-	// Keep state index current so move_to commands always know where the robot is.
-	if idx := statemachine.InferIndex(step.PoseName); idx >= 0 {
-		s.stateMachine.CommitTransition(idx)
-	}
+	// Keep state current so the state machine always knows where the robot is.
+	s.stateMachine.CommitTransition(step.PoseName)
 
 	if step.PauseSec > 0 {
 		pause := time.Duration(step.PauseSec * float64(time.Second))

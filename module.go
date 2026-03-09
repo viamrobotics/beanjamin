@@ -242,7 +242,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		for i, step := range steps {
 			poseNames[i] = step.PoseName
 		}
-		if err := statemachine.ValidatePath(poseNames); err != nil {
+		if err := statemachine.ValidatePath(poseNames, -1); err != nil {
 			s.logger.Errorw("DoCommand", "error", err)
 			return nil, err
 		}
@@ -272,7 +272,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		for i, step := range reversed {
 			reversedPoseNames[i] = step.PoseName
 		}
-		if err := statemachine.ValidatePath(reversedPoseNames); err != nil {
+		if err := statemachine.ValidatePath(reversedPoseNames, statemachine.InferIndex(steps[len(steps)-1].PoseName)); err != nil {
 			s.logger.Errorw("DoCommand", "error", err)
 			return nil, err
 		}
@@ -336,7 +336,6 @@ func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
 	s.logger.Infof("sequence cancelled")
 	return map[string]interface{}{"status": "cancelled"}, nil
 }
-
 
 func (s *beanjaminCoffee) runSteps(ctx context.Context, label string, steps []Step) (map[string]interface{}, error) {
 	if !s.running.CompareAndSwap(false, true) {

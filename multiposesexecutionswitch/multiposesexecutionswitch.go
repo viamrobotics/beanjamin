@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/golang/geo/r3"
@@ -60,6 +61,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.Motion == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "motion")
 	}
+	if cfg.StateMachineName == "" {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "state_machine_name")
+	}
 	if len(cfg.Poses) == 0 {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "poses")
 	}
@@ -69,24 +73,18 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 	}
 
-	if cfg.StateMachineName == "" {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "state_machine_name")
-	}
-
-	reqDeps := []string{cfg.ComponentName}
+	reqDeps := []string{cfg.ComponentName, generic.Named(cfg.StateMachineName).String()}
 	if cfg.Motion == "builtin" {
 		reqDeps = append(reqDeps, motion.Named("builtin").String())
 	} else {
 		reqDeps = append(reqDeps, cfg.Motion)
 	}
-	reqDeps = append(reqDeps, generic.Named(cfg.StateMachineName).String())
 
 	return reqDeps, nil, nil
 }
 
 type multiPosesExecutionSwitch struct {
 	resource.AlwaysRebuild
-	resource.TriviallyCloseable
 
 	name         resource.Name
 	logger       logging.Logger
@@ -95,7 +93,9 @@ type multiPosesExecutionSwitch struct {
 	poseNames    []string
 	stateMachine statemachine.Service
 
-	executing atomic.Bool
+	executing  atomic.Bool
+	mu         sync.Mutex
+	cancelFunc context.CancelFunc
 }
 
 func newMultiPosesExecutionSwitch(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (toggleswitch.Switch, error) {
@@ -130,6 +130,7 @@ func newMultiPosesExecutionSwitch(ctx context.Context, deps resource.Dependencie
 		motion:       motionSvc,
 		poseNames:    poseNames,
 		stateMachine: sm,
+		cancelFunc:   func() {},
 	}, nil
 }
 
@@ -156,6 +157,7 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 	if _, ok := cmd["get_current_position_name"]; ok {
 		pos, err := s.GetPosition(ctx, nil)
 		if err != nil {
+			s.logger.Warnw("DoCommand", "error", err)
 			return nil, err
 		}
 		return map[string]interface{}{
@@ -184,9 +186,28 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 		return nil, err
 	}
 
-	err := fmt.Errorf("unknown command, supported commands: set_position_by_name, get_current_position_name, get_pose_by_name")
+	if _, ok := cmd["cancel"]; ok {
+		if !s.executing.Load() {
+			err := errors.New("no move in progress")
+			s.logger.Warnw("DoCommand", "error", err)
+			return nil, err
+		}
+		s.mu.Lock()
+		s.cancelFunc()
+		s.mu.Unlock()
+		return map[string]interface{}{"status": "cancelled"}, nil
+	}
+
+	err := fmt.Errorf("unknown command, supported commands: set_position_by_name, get_current_position_name, get_pose_by_name, cancel")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
+}
+
+func (s *multiPosesExecutionSwitch) Close(context.Context) error {
+	s.mu.Lock()
+	s.cancelFunc()
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *multiPosesExecutionSwitch) GetNumberOfPositions(ctx context.Context, extra map[string]interface{}) (uint32, []string, error) {
@@ -257,39 +278,38 @@ func (s *multiPosesExecutionSwitch) goToPosition(ctx context.Context, position u
 	}
 	defer s.executing.Store(false)
 
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.mu.Lock()
+	s.cancelFunc = cancel
+	s.mu.Unlock()
+
 	targetPose := s.cfg.Poses[position]
 	s.logger.Infof("moving %s to pose %q (index %d)", s.cfg.ComponentName, targetPose.PoseName, position)
 
-	intermediates, finalStateIdx, err := s.stateMachine.ResolvePath(targetPose.PoseName)
+	intermediates, finalPose, err := s.stateMachine.ResolvePath(targetPose.PoseName)
 	if err != nil {
-		s.logger.Warnf("state machine ResolvePath failed for %q: %v; falling back to direct move", targetPose.PoseName, err)
-		if err := s.movePose(ctx, &targetPose); err != nil {
-			return err
-		}
-		if idx := statemachine.InferIndex(targetPose.PoseName); idx >= 0 {
-			s.stateMachine.CommitTransition(idx)
-		}
-		return nil
+		s.logger.Warnf("state machine ResolvePath failed for %q: %v", targetPose.PoseName, err)
+		return err
 	}
 
 	// Execute intermediate poses.
-	for _, stateIdx := range intermediates {
-		intermediateName := statemachine.PoseNameAt(stateIdx)
-		pc, ok := s.poseConfigByName(intermediateName)
+	for _, name := range intermediates {
+		pc, ok := s.poseConfigByName(name)
 		if !ok {
-			s.logger.Warnf("intermediate pose %q not found in poses config; skipping", intermediateName)
+			s.logger.Warnf("intermediate pose %q not found in poses config; skipping", name)
 			continue
 		}
-		s.logger.Infof("routing through intermediate pose %q (state %d)", intermediateName, stateIdx)
+		s.logger.Infof("routing through intermediate pose %q", name)
 		if err := s.movePose(ctx, pc); err != nil {
 			return err
 		}
-		s.stateMachine.CommitTransition(stateIdx)
+		s.stateMachine.CommitTransition(name)
 	}
 	// Execute the final target pose.
 	if err := s.movePose(ctx, &targetPose); err != nil {
 		return err
 	}
-	s.stateMachine.CommitTransition(finalStateIdx)
+	s.stateMachine.CommitTransition(finalPose)
 	return nil
 }
