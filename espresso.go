@@ -182,13 +182,16 @@ func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error 
 			return fmt.Errorf("lock_portafilter: %w", err)
 		}
 	}
-	s.filterLocked = true
-	s.logger.Infof("portafilter locked, filter frame will be re-parented for planning")
+	if err := s.lockFilterFrame(ctx); err != nil {
+		s.logger.Warnf("failed to lock filter frame: %v", err)
+	}
 	return nil
 }
 
 func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) error {
-	s.filterLocked = false
+	if err := s.unlockFilterFrame(ctx); err != nil {
+		return fmt.Errorf("unlock filter frame: %w", err)
+	}
 	steps := []Step{
 		{PoseName: "coffee_in", PivotFromPose: "coffee_locked_final", PivotDegreesPerStep: 5,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},

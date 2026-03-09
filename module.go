@@ -11,6 +11,7 @@ import (
 	"go.viam.com/rdk/components/arm"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot/framesystem"
 	generic "go.viam.com/rdk/services/generic"
@@ -97,11 +98,10 @@ type beanjaminCoffee struct {
 	cfg       *Config
 	sw        toggleswitch.Switch
 	arm       arm.Arm
-	fs        framesystem.Service
-	speech    resource.Resource // nil when speech_service_name is not configured
+	fsSvc     framesystem.Service
+	cachedFS  *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
+	speech    resource.Resource           // nil when speech_service_name is not configured
 	sequences map[string][]Step
-
-	filterLocked bool // true when portafilter is locked into the coffee machine
 
 	mu         sync.Mutex
 	cancelCtx  context.Context
@@ -141,6 +141,12 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	if err != nil {
 		cancelFunc()
 		return nil, fmt.Errorf("frame system service not found in dependencies: %w", err)
+	}
+
+	cachedFS, err := framesystem.NewFromService(ctx, fsSvc, nil)
+	if err != nil {
+		cancelFunc()
+		return nil, fmt.Errorf("build initial frame system: %w", err)
 	}
 
 	_, validPoses, err := sw.GetNumberOfPositions(ctx, nil)
@@ -184,7 +190,8 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		cfg:        conf,
 		sw:         sw,
 		arm:        armComp,
-		fs:         fsSvc,
+		fsSvc:      fsSvc,
+		cachedFS:   cachedFS,
 		speech:     speech,
 		sequences:  conf.Sequences,
 		cancelCtx:  cancelCtx,

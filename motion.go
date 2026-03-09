@@ -66,50 +66,42 @@ func (s *beanjaminCoffee) fetchPose(ctx context.Context, poseName string) (*pose
 	return &poseData{pose: pose, refFrame: refFrame, componentName: componentName}, nil
 }
 
-// buildFrameSystem constructs a frame system from the framesystem service,
-// optionally re-parenting the filter frame to the world when the portafilter is locked.
-func (s *beanjaminCoffee) buildFrameSystem(ctx context.Context) (*referenceframe.FrameSystem, referenceframe.FrameSystemInputs, error) {
-	fs, err := framesystem.NewFromService(ctx, s.fs, nil)
-	if err != nil {
-		return nil, nil, fmt.Errorf("build frame system: %w", err)
-	}
-
-	fsInputs, err := s.fs.CurrentInputs(ctx)
+// currentInputs returns the cached frame system and fresh joint inputs.
+func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.FrameSystem, referenceframe.FrameSystemInputs, error) {
+	fsInputs, err := s.fsSvc.CurrentInputs(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get current inputs: %w", err)
 	}
-
-	if s.filterLocked {
-		if err := s.reparentFilterFrame(ctx, fs, fsInputs); err != nil {
-			return nil, nil, fmt.Errorf("reparent filter frame: %w", err)
-		}
-	}
-
-	return fs, fsInputs, nil
+	return s.cachedFS, fsInputs, nil
 }
 
-// reparentFilterFrame detaches the "filter" frame from the arm subtree and
-// re-adds it as a static frame parented to the world at its current pose.
-// Any descendant frames of "filter" are preserved and re-attached under the
-// new static frame, maintaining their relative transforms.
-func (s *beanjaminCoffee) reparentFilterFrame(ctx context.Context, fs *referenceframe.FrameSystem, fsInputs referenceframe.FrameSystemInputs) error {
+// lockFilterFrame re-parents the "filter" frame from the arm subtree to the
+// world at its current pose. Call this after physically locking the portafilter.
+// The cached frame system is mutated in place so all subsequent planning calls
+// see the filter at its locked position.
+func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	const filterFrameName = "filter"
 
-	filterFrame := fs.Frame(filterFrameName)
+	fsInputs, err := s.fsSvc.CurrentInputs(ctx)
+	if err != nil {
+		return fmt.Errorf("get current inputs: %w", err)
+	}
+
+	filterFrame := s.cachedFS.Frame(filterFrameName)
 	if filterFrame == nil {
 		return fmt.Errorf("frame %q not found in frame system", filterFrameName)
 	}
 
 	// 1. Compute filter's world pose using current joint inputs.
 	filterPIF := referenceframe.NewPoseInFrame(filterFrameName, spatialmath.NewZeroPose())
-	tf, err := fs.Transform(fsInputs.ToLinearInputs(), filterPIF, referenceframe.World)
+	tf, err := s.cachedFS.Transform(fsInputs.ToLinearInputs(), filterPIF, referenceframe.World)
 	if err != nil {
 		return fmt.Errorf("transform filter to world: %w", err)
 	}
 	worldPose := tf.(*referenceframe.PoseInFrame).Pose()
 
 	// 2. Get the filter's geometry from the frame system config.
-	cfg, err := s.fs.FrameSystemConfig(ctx)
+	cfg, err := s.fsSvc.FrameSystemConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("get frame system config: %w", err)
 	}
@@ -125,14 +117,55 @@ func (s *beanjaminCoffee) reparentFilterFrame(ctx context.Context, fs *reference
 	}
 
 	// 3. Collect filter's descendants in BFS order before removal.
-	//    BFS guarantees parents appear before children, so re-adding in
-	//    order will always find the parent frame already present.
-	type descendantEntry struct {
-		frame      referenceframe.Frame
-		parentName string
+	descendants := collectDescendants(s.cachedFS, filterFrameName)
+
+	// 4. Remove filter (and all descendants) from the arm subtree.
+	s.cachedFS.RemoveFrame(filterFrame)
+
+	// 5. Re-add filter as a static frame parented to world at the locked position.
+	newFrame, err := referenceframe.NewStaticFrameWithGeometry(filterFrameName, worldPose, geom)
+	if err != nil {
+		return fmt.Errorf("create static filter frame: %w", err)
 	}
+	if err := s.cachedFS.AddFrame(newFrame, s.cachedFS.World()); err != nil {
+		return fmt.Errorf("add filter frame to world: %w", err)
+	}
+
+	// 6. Re-attach descendants under the new static filter, preserving subtree structure.
+	for _, d := range descendants {
+		parent := s.cachedFS.Frame(d.parentName)
+		if err := s.cachedFS.AddFrame(d.frame, parent); err != nil {
+			return fmt.Errorf("re-add descendant %q under %q: %w", d.frame.Name(), d.parentName, err)
+		}
+	}
+
+	s.logger.Infof("locked filter frame at world pose %v (%d descendants preserved)", worldPose.Point(), len(descendants))
+	return nil
+}
+
+// unlockFilterFrame rebuilds the cached frame system from the service,
+// restoring the filter frame to its original position in the arm subtree.
+func (s *beanjaminCoffee) unlockFilterFrame(ctx context.Context) error {
+	fs, err := framesystem.NewFromService(ctx, s.fsSvc, nil)
+	if err != nil {
+		return fmt.Errorf("rebuild frame system: %w", err)
+	}
+	s.cachedFS = fs
+	s.logger.Infof("unlocked filter frame, frame system restored from service")
+	return nil
+}
+
+type descendantEntry struct {
+	frame      referenceframe.Frame
+	parentName string
+}
+
+// collectDescendants returns all descendants of the given frame in BFS order.
+// BFS guarantees parents appear before children, so re-adding in order will
+// always find the parent frame already present.
+func collectDescendants(fs *referenceframe.FrameSystem, rootName string) []descendantEntry {
 	var descendants []descendantEntry
-	queue := []string{filterFrameName}
+	queue := []string{rootName}
 	for len(queue) > 0 {
 		parentName := queue[0]
 		queue = queue[1:]
@@ -146,29 +179,7 @@ func (s *beanjaminCoffee) reparentFilterFrame(ctx context.Context, fs *reference
 			queue = append(queue, name)
 		}
 	}
-
-	// 4. Remove filter (and all descendants) from the arm subtree.
-	fs.RemoveFrame(filterFrame)
-
-	// 5. Re-add filter as a static frame parented to world at the locked position.
-	newFrame, err := referenceframe.NewStaticFrameWithGeometry(filterFrameName, worldPose, geom)
-	if err != nil {
-		return fmt.Errorf("create static filter frame: %w", err)
-	}
-	if err := fs.AddFrame(newFrame, fs.World()); err != nil {
-		return fmt.Errorf("add filter frame to world: %w", err)
-	}
-
-	// 6. Re-attach descendants under the new static filter, preserving subtree structure.
-	for _, d := range descendants {
-		parent := fs.Frame(d.parentName) // "filter" (now static) or a previously re-added descendant
-		if err := fs.AddFrame(d.frame, parent); err != nil {
-			return fmt.Errorf("re-add descendant %q under %q: %w", d.frame.Name(), d.parentName, err)
-		}
-	}
-
-	s.logger.Infof("re-parented filter frame to world at %v (%d descendants preserved)", worldPose.Point(), len(descendants))
-	return nil
+	return descendants
 }
 
 // buildConstraints converts step-level linear constraints and allowed collisions
@@ -203,7 +214,7 @@ func buildConstraints(lc *StepLinearConstraint, allowedCollisions []AllowedColli
 
 // moveToRawPose plans a motion using armplanning and executes it on the arm.
 func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision) error {
-	fs, fsInputs, err := s.buildFrameSystem(ctx)
+	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return err
 	}
@@ -279,7 +290,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	s.logger.Infof("pivot %q → %q: %d waypoints (%.1f°/step)",
 		step.PivotFromPose, step.PoseName, len(poses)-1, step.PivotDegreesPerStep)
 
-	fs, fsInputs, err := s.buildFrameSystem(ctx)
+	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return err
 	}
