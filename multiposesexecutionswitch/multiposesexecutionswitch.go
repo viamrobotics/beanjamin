@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
 
 	"github.com/golang/geo/r3"
@@ -13,8 +12,11 @@ import (
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
+	generic "go.viam.com/rdk/services/generic"
 	"go.viam.com/rdk/services/motion"
 	"go.viam.com/rdk/spatialmath"
+
+	"beanjamin/statemachine"
 )
 
 var Model = resource.NewModel("viam", "beanjamin", "multi-poses-execution-switch")
@@ -30,10 +32,11 @@ func init() {
 }
 
 type Config struct {
-	ReferenceFrame string     `json:"reference_frame"`
-	ComponentName  string     `json:"component_name"`
-	Motion         string     `json:"motion"`
-	Poses          []PoseConf `json:"poses"`
+	ReferenceFrame   string     `json:"reference_frame"`
+	ComponentName    string     `json:"component_name"`
+	Motion           string     `json:"motion"`
+	Poses            []PoseConf `json:"poses"`
+	StateMachineName string     `json:"state_machine_name,omitempty"`
 }
 
 type PoseConf struct {
@@ -73,21 +76,25 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		reqDeps = append(reqDeps, cfg.Motion)
 	}
 
-	return reqDeps, nil, nil
+	var optDeps []string
+	if cfg.StateMachineName != "" {
+		optDeps = append(optDeps, generic.Named(cfg.StateMachineName).String())
+	}
+
+	return reqDeps, optDeps, nil
 }
 
 type multiPosesExecutionSwitch struct {
 	resource.AlwaysRebuild
 	resource.TriviallyCloseable
 
-	name      resource.Name
-	logger    logging.Logger
-	cfg       *Config
-	motion    motion.Service
-	poseNames []string
+	name         resource.Name
+	logger       logging.Logger
+	cfg          *Config
+	motion       motion.Service
+	poseNames    []string
+	stateMachine statemachine.Service // nil if not configured
 
-	mu        sync.Mutex
-	position  uint32
 	executing atomic.Bool
 }
 
@@ -107,12 +114,25 @@ func newMultiPosesExecutionSwitch(ctx context.Context, deps resource.Dependencie
 		poseNames[i] = p.PoseName
 	}
 
+	var sm statemachine.Service
+	if conf.StateMachineName != "" {
+		smRes, ok := deps[generic.Named(conf.StateMachineName)]
+		if !ok {
+			logger.Warnf("state machine %q configured but not found in dependencies; continuing without state machine", conf.StateMachineName)
+		} else if smSvc, ok := smRes.(statemachine.Service); !ok {
+			logger.Warnf("resource %q is not a statemachine.Service; continuing without state machine", conf.StateMachineName)
+		} else {
+			sm = smSvc
+		}
+	}
+
 	return &multiPosesExecutionSwitch{
-		name:      rawConf.ResourceName(),
-		logger:    logger,
-		cfg:       conf,
-		motion:    motionSvc,
-		poseNames: poseNames,
+		name:         rawConf.ResourceName(),
+		logger:       logger,
+		cfg:          conf,
+		motion:       motionSvc,
+		poseNames:    poseNames,
+		stateMachine: sm,
 	}, nil
 }
 
@@ -137,9 +157,10 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 	}
 
 	if _, ok := cmd["get_current_position_name"]; ok {
-		s.mu.Lock()
-		pos := s.position
-		s.mu.Unlock()
+		pos, err := s.GetPosition(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
 		return map[string]interface{}{
 			"position_name": s.poseNames[pos],
 		}, nil
@@ -176,9 +197,27 @@ func (s *multiPosesExecutionSwitch) GetNumberOfPositions(ctx context.Context, ex
 }
 
 func (s *multiPosesExecutionSwitch) GetPosition(ctx context.Context, extra map[string]interface{}) (uint32, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.position, nil
+	if s.stateMachine == nil {
+		return 0, errors.New("state machine not configured; cannot determine current position")
+	}
+	resp, err := s.stateMachine.DoCommand(ctx, map[string]interface{}{"get_state": true})
+	if err != nil {
+		return 0, fmt.Errorf("failed to get state machine state: %w", err)
+	}
+	stateIdx, ok := resp["state_index"].(int)
+	if !ok {
+		return 0, errors.New("unexpected state_index type from state machine")
+	}
+	if stateIdx < 0 {
+		return 0, errors.New("state machine is uninitialized; use set_state_index to initialize")
+	}
+	currentPoseName := statemachine.PoseNameAt(stateIdx)
+	for i, name := range s.poseNames {
+		if name == currentPoseName {
+			return uint32(i), nil
+		}
+	}
+	return 0, fmt.Errorf("state machine current pose %q is not in this switch's pose list", currentPoseName)
 }
 
 func (s *multiPosesExecutionSwitch) SetPosition(ctx context.Context, position uint32, extra map[string]interface{}) error {
@@ -188,17 +227,18 @@ func (s *multiPosesExecutionSwitch) SetPosition(ctx context.Context, position ui
 	return s.goToPosition(ctx, position)
 }
 
-// goToPosition moves the component to the pose at the given index.
-func (s *multiPosesExecutionSwitch) goToPosition(ctx context.Context, position uint32) error {
-	if !s.executing.CompareAndSwap(false, true) {
-		return errors.New("switch is currently executing")
+// poseConfigByName finds the PoseConf with the given name from cfg.Poses.
+func (s *multiPosesExecutionSwitch) poseConfigByName(name string) (*PoseConf, bool) {
+	for i := range s.cfg.Poses {
+		if s.cfg.Poses[i].PoseName == name {
+			return &s.cfg.Poses[i], true
+		}
 	}
-	defer s.executing.Store(false)
+	return nil, false
+}
 
-	pc := s.cfg.Poses[position]
-
-	s.logger.Infof("moving %s to pose %q (index %d)", s.cfg.ComponentName, pc.PoseName, position)
-
+// movePose executes a single motion move to the given pose configuration.
+func (s *multiPosesExecutionSwitch) movePose(ctx context.Context, pc *PoseConf) error {
 	pose := spatialmath.NewPose(
 		r3.Vector{X: pc.X, Y: pc.Y, Z: pc.Z},
 		&spatialmath.OrientationVectorDegrees{OX: pc.OX, OY: pc.OY, OZ: pc.OZ, Theta: pc.ThetaDegrees},
@@ -212,10 +252,56 @@ func (s *multiPosesExecutionSwitch) goToPosition(ctx context.Context, position u
 	if err != nil {
 		return fmt.Errorf("failed to move to pose %q: %w", pc.PoseName, err)
 	}
+	return nil
+}
 
-	s.mu.Lock()
-	s.position = position
-	s.mu.Unlock()
+// goToPosition moves the component to the pose at the given index, routing
+// through state-machine intermediates when a state machine is configured.
+func (s *multiPosesExecutionSwitch) goToPosition(ctx context.Context, position uint32) error {
+	if !s.executing.CompareAndSwap(false, true) {
+		return errors.New("switch is currently executing")
+	}
+	defer s.executing.Store(false)
 
+	targetPose := s.cfg.Poses[position]
+	s.logger.Infof("moving %s to pose %q (index %d)", s.cfg.ComponentName, targetPose.PoseName, position)
+
+	if s.stateMachine != nil {
+		intermediates, finalStateIdx, err := s.stateMachine.ResolvePath(targetPose.PoseName)
+		if err != nil {
+			s.logger.Warnf("state machine ResolvePath failed for %q: %v; falling back to direct move", targetPose.PoseName, err)
+		} else {
+			// Execute intermediate poses.
+			for _, stateIdx := range intermediates {
+				intermediateName := statemachine.PoseNameAt(stateIdx)
+				pc, ok := s.poseConfigByName(intermediateName)
+				if !ok {
+					s.logger.Warnf("intermediate pose %q not found in poses config; skipping", intermediateName)
+					continue
+				}
+				s.logger.Infof("routing through intermediate pose %q (state %d)", intermediateName, stateIdx)
+				if err := s.movePose(ctx, pc); err != nil {
+					return err
+				}
+				s.stateMachine.CommitTransition(stateIdx)
+			}
+			// Execute the final target pose.
+			if err := s.movePose(ctx, &targetPose); err != nil {
+				return err
+			}
+			s.stateMachine.CommitTransition(finalStateIdx)
+			return nil
+		}
+	}
+
+	// Direct move (no state machine or fallback).
+	if err := s.movePose(ctx, &targetPose); err != nil {
+		return err
+	}
+	if s.stateMachine != nil {
+		if idx := statemachine.InferIndex(targetPose.PoseName); idx >= 0 {
+			s.stateMachine.CommitTransition(idx)
+		}
+	}
 	return nil
 }

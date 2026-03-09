@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"beanjamin/statemachine"
 )
 
 // say sends text to the speech service via DoCommand. It is a no-op when
@@ -208,14 +210,21 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 	default:
 	}
 
-	s.logger.Infof("moving to %q", step.PoseName)
-	if err := s.moveToPose(ctx, step); err != nil {
-		return err
+	if step.PivotFromPose != "" {
+		s.logger.Infof("pivoting from %q to %q", step.PivotFromPose, step.PoseName)
+		if err := s.executePivot(ctx, cancelCtx, step); err != nil {
+			return err
+		}
+	} else {
+		s.logger.Infof("moving to %q", step.PoseName)
+		if err := s.moveToPose(ctx, step); err != nil {
+			return err
+		}
 	}
 
 	// Keep state index current so move_to commands always know where the robot is.
-	if idx := inferStateIndex(step.PoseName); idx >= 0 {
-		s.commitTransition(idx)
+	if idx := statemachine.InferIndex(step.PoseName); idx >= 0 {
+		s.stateMachine.CommitTransition(idx)
 	}
 
 	if step.PauseSec > 0 {

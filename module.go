@@ -13,6 +13,7 @@ import (
 	generic "go.viam.com/rdk/services/generic"
 	"go.viam.com/rdk/services/motion"
 
+	"beanjamin/statemachine"
 	// Register the multi-poses-execution-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
 )
@@ -49,6 +50,7 @@ type Step struct {
 type Config struct {
 	PoseSwitcherName  string            `json:"pose_switcher_name"`
 	MotionServiceName string            `json:"motion_service_name"`
+	StateMachineName  string            `json:"state_machine_name"`
 	Sequences         map[string][]Step `json:"sequences"`
 	SpeechServiceName string            `json:"speech_service_name,omitempty"`
 }
@@ -59,6 +61,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 	if cfg.MotionServiceName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "motion_service_name")
+	}
+	if cfg.StateMachineName == "" {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "state_machine_name")
 	}
 	if len(cfg.Sequences) == 0 {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "sequences")
@@ -84,6 +89,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	} else {
 		reqDeps = append(reqDeps, cfg.MotionServiceName)
 	}
+	reqDeps = append(reqDeps, generic.Named(cfg.StateMachineName).String())
 
 	var optDeps []string
 	if cfg.SpeechServiceName != "" {
@@ -108,9 +114,7 @@ type beanjaminCoffee struct {
 	cancelFunc func()
 	running    atomic.Bool
 
-	// currentStateIdx tracks position in the state machine (-1 = uninitialized).
-	// Accessed only under mu.
-	currentStateIdx int
+	stateMachine statemachine.Service
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -139,6 +143,17 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	if err != nil {
 		cancelFunc()
 		return nil, fmt.Errorf("motion service %q not found in dependencies: %w", conf.MotionServiceName, err)
+	}
+
+	smRes, ok := deps[generic.Named(conf.StateMachineName)]
+	if !ok {
+		cancelFunc()
+		return nil, fmt.Errorf("state machine %q not found in dependencies", conf.StateMachineName)
+	}
+	sm, ok := smRes.(statemachine.Service)
+	if !ok {
+		cancelFunc()
+		return nil, fmt.Errorf("resource %q is not a statemachine.Service", conf.StateMachineName)
 	}
 
 	_, validPoses, err := sw.GetNumberOfPositions(ctx, nil)
@@ -177,16 +192,16 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	}
 
 	s := &beanjaminCoffee{
-		name:            name,
-		logger:          logger,
-		cfg:             conf,
-		sw:              sw,
-		motion:          motionSvc,
-		speech:          speech,
-		sequences:       conf.Sequences,
-		cancelCtx:       cancelCtx,
-		cancelFunc:      cancelFunc,
-		currentStateIdx: -1,
+		name:         name,
+		logger:       logger,
+		cfg:          conf,
+		sw:           sw,
+		motion:       motionSvc,
+		speech:       speech,
+		sequences:    conf.Sequences,
+		cancelCtx:    cancelCtx,
+		cancelFunc:   cancelFunc,
+		stateMachine: sm,
 	}
 
 	// Infer the initial state from the switch's current position so the state
@@ -194,9 +209,8 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	if resp, err := sw.DoCommand(ctx, map[string]any{"get_current_position_name": true}); err != nil {
 		logger.Warnf("state machine: could not query switch for current position: %v", err)
 	} else if poseName, ok := resp["position_name"].(string); ok {
-		if idx := inferStateIndex(poseName); idx >= 0 {
-			s.currentStateIdx = idx
-			logger.Infof("state machine: initialized to index %d (%q) from switch position", idx, poseName)
+		if sm.InitFromPoseName(poseName) {
+			logger.Infof("state machine: initialized from switch position %q", poseName)
 		} else {
 			logger.Warnf("state machine: switch position %q does not match any known state; use set_state_index to initialize", poseName)
 		}
@@ -210,14 +224,6 @@ func (s *beanjaminCoffee) Name() resource.Name {
 }
 
 func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]any) (map[string]any, error) {
-	// State machine introspection and control.
-	if _, ok := cmd["get_state"]; ok {
-		return s.getState(), nil
-	}
-	if idxRaw, ok := cmd["set_state_index"]; ok {
-		return s.setStateIndex(idxRaw)
-	}
-
 	if seqName, ok := cmd["run"].(string); ok {
 		steps, exists := s.sequences[seqName]
 		if !exists {
@@ -231,6 +237,14 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]any) (ma
 				s.logger.Errorw("DoCommand", "error", err)
 				return nil, err
 			}
+		}
+		poseNames := make([]string, len(steps))
+		for i, step := range steps {
+			poseNames[i] = step.PoseName
+		}
+		if err := statemachine.ValidatePath(poseNames); err != nil {
+			s.logger.Errorw("DoCommand", "error", err)
+			return nil, err
 		}
 		res, err := s.runSteps(ctx, seqName, steps)
 		if err != nil {
@@ -253,6 +267,14 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]any) (ma
 		reversed := make([]Step, 0, len(steps)-1)
 		for i := len(steps) - 2; i >= 0; i-- {
 			reversed = append(reversed, steps[i])
+		}
+		reversedPoseNames := make([]string, len(reversed))
+		for i, step := range reversed {
+			reversedPoseNames[i] = step.PoseName
+		}
+		if err := statemachine.ValidatePath(reversedPoseNames); err != nil {
+			s.logger.Errorw("DoCommand", "error", err)
+			return nil, err
 		}
 		res, err := s.runSteps(ctx, seqName+":rewind", reversed)
 		if err != nil {
@@ -284,7 +306,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]any) (ma
 		}
 		return res, err
 	}
-	return nil, fmt.Errorf("unknown command, supported commands: run, rewind, cancel, prepare_order, execute_action, move_to, get_state, set_state_index")
+	return nil, fmt.Errorf("unknown command, supported commands: run, rewind, cancel, prepare_order, execute_action, move_to")
 }
 
 func (s *beanjaminCoffee) checkPosition(ctx context.Context, expected string) error {
@@ -330,12 +352,12 @@ func (s *beanjaminCoffee) moveTo(ctx context.Context, poseName string) (map[stri
 	s.mu.Unlock()
 
 	// Enforce the state machine: find the shortest valid path and walk it.
-	intermediates, _, err := s.resolvePath(poseName)
+	intermediates, _, err := s.stateMachine.ResolvePath(poseName)
 	if err != nil {
 		return nil, err
 	}
 	for _, stateIdx := range intermediates {
-		intermediate := statePoseNames[stateIdx]
+		intermediate := statemachine.PoseNameAt(stateIdx)
 		s.logger.Infof("move_to: routing through %q (state %d)", intermediate, stateIdx)
 		if err := s.executeStep(ctx, cancelCtx, Step{PoseName: intermediate}); err != nil {
 			return nil, fmt.Errorf("move_to: intermediate step to %q: %w", intermediate, err)
