@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 
 	"github.com/golang/geo/r3"
 
+	"go.viam.com/rdk/components/arm"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
@@ -36,8 +38,8 @@ type Config struct {
 	ReferenceFrame   string     `json:"reference_frame"`
 	ComponentName    string     `json:"component_name"`
 	Motion           string     `json:"motion"`
-	Poses            []PoseConf `json:"poses"`
 	StateMachineName string     `json:"state_machine_name"`
+	Poses            []PoseConf `json:"poses"`
 }
 
 type PoseConf struct {
@@ -90,6 +92,7 @@ type multiPosesExecutionSwitch struct {
 	logger       logging.Logger
 	cfg          *Config
 	motion       motion.Service
+	arm          arm.Arm
 	poseNames    []string
 	stateMachine statemachine.Service
 
@@ -123,11 +126,23 @@ func newMultiPosesExecutionSwitch(ctx context.Context, deps resource.Dependencie
 		return nil, fmt.Errorf("resource %q is not a statemachine.Service", conf.StateMachineName)
 	}
 
+	// Try to resolve the component as an arm for pose detection at startup.
+	// If the component is not an arm (or not found), pose detection is unavailable.
+	var armComp arm.Arm
+	if compRes, ok := deps[arm.Named(conf.ComponentName)]; ok {
+		if a, ok := compRes.(arm.Arm); ok {
+			armComp = a
+		} else {
+			logger.Warnf("component %q is not an arm; automatic pose detection at startup will be unavailable", conf.ComponentName)
+		}
+	}
+
 	return &multiPosesExecutionSwitch{
 		name:         rawConf.ResourceName(),
 		logger:       logger,
 		cfg:          conf,
 		motion:       motionSvc,
+		arm:          armComp,
 		poseNames:    poseNames,
 		stateMachine: sm,
 		cancelFunc:   func() {},
@@ -165,6 +180,15 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 		}, nil
 	}
 
+	if _, ok := cmd["detect_current_pose"]; ok {
+		poseName, err := s.detectCurrentPose(ctx)
+		if err != nil {
+			s.logger.Warnw("DoCommand", "error", err)
+			return nil, err
+		}
+		return map[string]interface{}{"pose_name": poseName}, nil
+	}
+
 	if name, ok := cmd["get_pose_by_name"].(string); ok {
 		for _, pc := range s.cfg.Poses {
 			if pc.PoseName == name {
@@ -198,7 +222,7 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 		return map[string]interface{}{"status": "cancelled"}, nil
 	}
 
-	err := fmt.Errorf("unknown command, supported commands: set_position_by_name, get_current_position_name, get_pose_by_name, cancel")
+	err := fmt.Errorf("unknown command, supported commands: set_position_by_name, get_current_position_name, detect_current_pose, get_pose_by_name, cancel")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }
@@ -236,6 +260,63 @@ func (s *multiPosesExecutionSwitch) SetPosition(ctx context.Context, position ui
 		return fmt.Errorf("requested position %d is greater than highest possible position %d", position, len(s.poseNames)-1)
 	}
 	return s.goToPosition(ctx, position)
+}
+
+// detectCurrentPose queries the arm's current end position and finds the closest
+// configured pose within tolerance. Returns the pose name, or an error if no pose
+// matches or the component is not an arm.
+func (s *multiPosesExecutionSwitch) detectCurrentPose(ctx context.Context) (string, error) {
+	if s.arm == nil {
+		return "", errors.New("component is not an arm; automatic pose detection unavailable — use set_state to initialize manually")
+	}
+
+	currentPose, err := s.arm.EndPosition(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to get arm end position: %w", err)
+	}
+
+	const positionToleranceMm = 5.0
+	const orientationToleranceDeg = 5.0
+
+	bestName := ""
+	bestPosDist := math.MaxFloat64
+
+	cp := currentPose.Point()
+
+	for _, pc := range s.cfg.Poses {
+		target := spatialmath.NewPose(
+			r3.Vector{X: pc.X, Y: pc.Y, Z: pc.Z},
+			&spatialmath.OrientationVectorDegrees{OX: pc.OX, OY: pc.OY, OZ: pc.OZ, Theta: pc.ThetaDegrees},
+		)
+
+		tp := target.Point()
+		dx, dy, dz := cp.X-tp.X, cp.Y-tp.Y, cp.Z-tp.Z
+		posDist := math.Sqrt(dx*dx + dy*dy + dz*dz)
+		if posDist > positionToleranceMm {
+			continue
+		}
+
+		q1 := currentPose.Orientation().Quaternion()
+		q2 := target.Orientation().Quaternion()
+		dot := q1.Real*q2.Real + q1.Imag*q2.Imag + q1.Jmag*q2.Jmag + q1.Kmag*q2.Kmag
+		oriAngleDeg := 2 * math.Acos(math.Min(1.0, math.Abs(dot))) * 180 / math.Pi
+		if oriAngleDeg > orientationToleranceDeg {
+			continue
+		}
+
+		if posDist < bestPosDist {
+			bestPosDist = posDist
+			bestName = pc.PoseName
+		}
+	}
+
+	if bestName == "" {
+		return "", fmt.Errorf(
+			"arm position does not match any configured pose within %.1fmm / %.1f°; use set_state to initialize manually",
+			positionToleranceMm, orientationToleranceDeg,
+		)
+	}
+	return bestName, nil
 }
 
 // poseConfigByName finds the PoseConf with the given name from cfg.Poses.

@@ -204,15 +204,14 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		stateMachine: sm,
 	}
 
-	// Infer the initial state from the switch's current position so the state
-	// machine is ready to use without a manual set_state_index call.
-	if resp, err := sw.DoCommand(ctx, map[string]interface{}{"get_current_position_name": true}); err != nil {
-		logger.Warnf("state machine: could not query switch for current position: %v", err)
-	} else if poseName, ok := resp["position_name"].(string); ok {
+	// Detect the arm's current pose and initialize the state machine from it,
+	if resp, err := sw.DoCommand(ctx, map[string]interface{}{"detect_current_pose": true}); err != nil {
+		logger.Warnf("state machine: could not detect arm pose at startup: %v; use set_state to initialize manually", err)
+	} else if poseName, ok := resp["pose_name"].(string); ok {
 		if sm.InitFromPoseName(poseName) {
-			logger.Infof("state machine: initialized from switch position %q", poseName)
+			logger.Infof("state machine: auto-initialized from detected arm pose %q", poseName)
 		} else {
-			logger.Warnf("state machine: switch position %q does not match any known state; use set_state to initialize", poseName)
+			logger.Warnf("state machine: detected pose %q does not match any known state; use set_state to initialize manually", poseName)
 		}
 	}
 
