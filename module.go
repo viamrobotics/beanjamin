@@ -296,9 +296,6 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		}
 		return res, err
 	}
-	if poseName, ok := cmd["move_to"].(string); ok {
-		return s.moveTo(ctx, poseName)
-	}
 	if _, ok := cmd["cancel"]; ok {
 		res, err := s.cancel()
 		if err != nil {
@@ -306,7 +303,9 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		}
 		return res, err
 	}
-	return nil, fmt.Errorf("unknown command, supported commands: run, rewind, cancel, prepare_order, execute_action, move_to")
+	err := fmt.Errorf("unknown command, supported commands: run, rewind, cancel, prepare_order, execute_action")
+	s.logger.Warnw("DoCommand", "error", err)
+	return nil, err
 }
 
 func (s *beanjaminCoffee) checkPosition(ctx context.Context, expected string) error {
@@ -338,38 +337,6 @@ func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
 	return map[string]interface{}{"status": "cancelled"}, nil
 }
 
-// moveTo moves the robot to a named pose through the state machine, automatically
-// routing through any required intermediate states. This is the safe alternative
-// to commanding the switch directly from the debug Stream Deck page.
-func (s *beanjaminCoffee) moveTo(ctx context.Context, poseName string) (map[string]interface{}, error) {
-	if !s.running.CompareAndSwap(false, true) {
-		return nil, errors.New("a sequence is already running")
-	}
-	defer s.running.Store(false)
-
-	s.mu.Lock()
-	cancelCtx := s.cancelCtx
-	s.mu.Unlock()
-
-	// Enforce the state machine: find the shortest valid path and walk it.
-	intermediates, _, err := s.stateMachine.ResolvePath(poseName)
-	if err != nil {
-		return nil, err
-	}
-	for _, stateIdx := range intermediates {
-		intermediate := statemachine.PoseNameAt(stateIdx)
-		s.logger.Infof("move_to: routing through %q (state %d)", intermediate, stateIdx)
-		if err := s.executeStep(ctx, cancelCtx, Step{PoseName: intermediate}); err != nil {
-			return nil, fmt.Errorf("move_to: intermediate step to %q: %w", intermediate, err)
-		}
-	}
-
-	s.logger.Infof("move_to %q", poseName)
-	if err := s.executeStep(ctx, cancelCtx, Step{PoseName: poseName}); err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{"status": "complete", "pose": poseName}, nil
-}
 
 func (s *beanjaminCoffee) runSteps(ctx context.Context, label string, steps []Step) (map[string]interface{}, error) {
 	if !s.running.CompareAndSwap(false, true) {
