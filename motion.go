@@ -171,34 +171,14 @@ func (s *beanjaminCoffee) reparentFilterFrame(ctx context.Context, fs *reference
 	return nil
 }
 
-// moveToRawPose plans a motion using armplanning and executes it on the arm.
-func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision) error {
-	fs, fsInputs, err := s.buildFrameSystem(ctx)
-	if err != nil {
-		return err
+// buildConstraints converts step-level linear constraints and allowed collisions
+// into the motionplan.Constraints structure used by armplanning.
+func buildConstraints(lc *StepLinearConstraint, allowedCollisions []AllowedCollision) *motionplan.Constraints {
+	if lc == nil && len(allowedCollisions) == 0 {
+		return nil
 	}
-
-	// Transform destination to world frame.
-	destination := referenceframe.NewPoseInFrame(pd.refFrame, pd.pose)
-	tf, err := fs.Transform(fsInputs.ToLinearInputs(), destination, referenceframe.World)
-	if err != nil {
-		return fmt.Errorf("transform destination to world: %w", err)
-	}
-	goalPose := tf.(*referenceframe.PoseInFrame)
-
-	startState := armplanning.NewPlanState(nil, fsInputs)
-	goalState := armplanning.NewPlanState(
-		referenceframe.FrameSystemPoses{pd.componentName: goalPose}, nil,
-	)
-
-	// Build constraints.
-	var constraints *motionplan.Constraints
-	if lc != nil || len(allowedCollisions) > 0 {
-		constraints = &motionplan.Constraints{}
-	}
+	constraints := &motionplan.Constraints{}
 	if lc != nil {
-		s.logger.Infof("applying linear constraint (line=%.1fmm, orient=%.1f°)",
-			lc.LineToleranceMm, lc.OrientationToleranceDegs)
 		constraints.LinearConstraint = []motionplan.LinearConstraint{
 			{
 				LineToleranceMm:          lc.LineToleranceMm,
@@ -214,17 +194,44 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 				Frame2: ac.Frame2,
 			}
 		}
-		s.logger.Infof("allowing %d collision pair(s)", len(allows))
 		constraints.CollisionSpecification = []motionplan.CollisionSpecification{
 			{Allows: allows},
 		}
+	}
+	return constraints
+}
+
+// moveToRawPose plans a motion using armplanning and executes it on the arm.
+func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision) error {
+	fs, fsInputs, err := s.buildFrameSystem(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Transform destination to world frame.
+	destination := referenceframe.NewPoseInFrame(pd.refFrame, pd.pose)
+	tf, err := fs.Transform(fsInputs.ToLinearInputs(), destination, referenceframe.World)
+	if err != nil {
+		return fmt.Errorf("transform destination to world: %w", err)
+	}
+	goalPose := tf.(*referenceframe.PoseInFrame)
+
+	constraints := buildConstraints(lc, allowedCollisions)
+	if lc != nil {
+		s.logger.Infof("applying linear constraint (line=%.1fmm, orient=%.1f°)",
+			lc.LineToleranceMm, lc.OrientationToleranceDegs)
+	}
+	if len(allowedCollisions) > 0 {
+		s.logger.Infof("allowing %d collision pair(s)", len(allowedCollisions))
 	}
 
 	// Plan.
 	plan, _, err := armplanning.PlanMotion(ctx, s.logger, &armplanning.PlanRequest{
 		FrameSystem: fs,
-		Goals:       []*armplanning.PlanState{goalState},
-		StartState:  startState,
+		Goals: []*armplanning.PlanState{
+			armplanning.NewPlanState(referenceframe.FrameSystemPoses{pd.componentName: goalPose}, nil),
+		},
+		StartState:  armplanning.NewPlanState(nil, fsInputs),
 		Constraints: constraints,
 	})
 	if err != nil {
@@ -240,8 +247,15 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 }
 
 // executePivot fetches start and end poses, computes interpolated waypoints,
-// and moves through each one (skipping the first since we're already there).
+// plans a single multi-goal trajectory through all of them, and executes it
+// in one MoveThroughJointPositions call.
 func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step) error {
+	// Merge both contexts so cancellation from either stops planning and execution.
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(cancelCtx, func() { cancel() })
+	defer stop()
+	defer cancel()
+
 	startPD, err := s.fetchPose(ctx, step.PivotFromPose)
 	if err != nil {
 		return fmt.Errorf("pivot start: %w", err)
@@ -265,26 +279,46 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	s.logger.Infof("pivot %q → %q: %d waypoints (%.1f°/step)",
 		step.PivotFromPose, step.PoseName, len(poses)-1, step.PivotDegreesPerStep)
 
-	// Skip poses[0] — we're already at the start pose.
-	for i := 1; i < len(poses); i++ {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("pivot cancelled at waypoint %d/%d: %w", i, len(poses)-1, ctx.Err())
-		case <-cancelCtx.Done():
-			return fmt.Errorf("pivot cancelled at waypoint %d/%d", i, len(poses)-1)
-		default:
-		}
-
-		wp := &poseData{
-			pose:          poses[i],
-			refFrame:      startPD.refFrame,
-			componentName: startPD.componentName,
-		}
-		if err := s.moveToRawPose(ctx, wp, step.LinearConstraint, step.AllowedCollisions); err != nil {
-			return fmt.Errorf("pivot waypoint %d/%d failed: %w", i, len(poses)-1, err)
-		}
+	fs, fsInputs, err := s.buildFrameSystem(ctx)
+	if err != nil {
+		return err
 	}
-	return nil
+	linearInputs := fsInputs.ToLinearInputs()
+
+	// Build a goal state for each waypoint (skip poses[0] — we're already there).
+	goals := make([]*armplanning.PlanState, 0, len(poses)-1)
+	for _, pose := range poses[1:] {
+		pif := referenceframe.NewPoseInFrame(startPD.refFrame, pose)
+		tf, err := fs.Transform(linearInputs, pif, referenceframe.World)
+		if err != nil {
+			return fmt.Errorf("transform pivot waypoint to world: %w", err)
+		}
+		goalPose := tf.(*referenceframe.PoseInFrame)
+		goals = append(goals, armplanning.NewPlanState(
+			referenceframe.FrameSystemPoses{startPD.componentName: goalPose}, nil,
+		))
+	}
+
+	// Build constraints.
+	constraints := buildConstraints(step.LinearConstraint, step.AllowedCollisions)
+
+	// Plan all waypoints in a single call.
+	plan, _, err := armplanning.PlanMotion(ctx, s.logger, &armplanning.PlanRequest{
+		FrameSystem: fs,
+		Goals:       goals,
+		StartState:  armplanning.NewPlanState(nil, fsInputs),
+		Constraints: constraints,
+	})
+	if err != nil {
+		return fmt.Errorf("plan pivot motion: %w", err)
+	}
+
+	// Execute the full trajectory in one call.
+	positions, err := plan.Trajectory().GetFrameInputs(startPD.componentName)
+	if err != nil {
+		return fmt.Errorf("get frame inputs from pivot plan: %w", err)
+	}
+	return s.arm.MoveThroughJointPositions(ctx, positions, nil, nil)
 }
 
 // computePivotPoses returns interpolated poses between startPose and endPose.
