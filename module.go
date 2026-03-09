@@ -191,7 +191,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 
 	// Infer the initial state from the switch's current position so the state
 	// machine is ready to use without a manual set_state_index call.
-	if resp, err := sw.DoCommand(ctx, map[string]interface{}{"get_current_position_name": true}); err != nil {
+	if resp, err := sw.DoCommand(ctx, map[string]any{"get_current_position_name": true}); err != nil {
 		logger.Warnf("state machine: could not query switch for current position: %v", err)
 	} else if poseName, ok := resp["position_name"].(string); ok {
 		if idx := inferStateIndex(poseName); idx >= 0 {
@@ -209,7 +209,7 @@ func (s *beanjaminCoffee) Name() resource.Name {
 	return s.name
 }
 
-func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]any) (map[string]any, error) {
 	// State machine introspection and control.
 	if _, ok := cmd["get_state"]; ok {
 		return s.getState(), nil
@@ -288,7 +288,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 }
 
 func (s *beanjaminCoffee) checkPosition(ctx context.Context, expected string) error {
-	resp, err := s.sw.DoCommand(ctx, map[string]interface{}{
+	resp, err := s.sw.DoCommand(ctx, map[string]any{
 		"get_current_position_name": true,
 	})
 	if err != nil {
@@ -304,7 +304,7 @@ func (s *beanjaminCoffee) checkPosition(ctx context.Context, expected string) er
 	return nil
 }
 
-func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
+func (s *beanjaminCoffee) cancel() (map[string]any, error) {
 	if !s.running.Load() {
 		return nil, errors.New("no sequence in progress")
 	}
@@ -313,13 +313,13 @@ func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
 	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
 	s.mu.Unlock()
 	s.logger.Infof("sequence cancelled")
-	return map[string]interface{}{"status": "cancelled"}, nil
+	return map[string]any{"status": "cancelled"}, nil
 }
 
 // moveTo moves the robot to a named pose through the state machine, automatically
 // routing through any required intermediate states. This is the safe alternative
 // to commanding the switch directly from the debug Stream Deck page.
-func (s *beanjaminCoffee) moveTo(ctx context.Context, poseName string) (map[string]interface{}, error) {
+func (s *beanjaminCoffee) moveTo(ctx context.Context, poseName string) (map[string]any, error) {
 	if !s.running.CompareAndSwap(false, true) {
 		return nil, errors.New("a sequence is already running")
 	}
@@ -346,10 +346,10 @@ func (s *beanjaminCoffee) moveTo(ctx context.Context, poseName string) (map[stri
 	if err := s.executeStep(ctx, cancelCtx, Step{PoseName: poseName}); err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"status": "complete", "pose": poseName}, nil
+	return map[string]any{"status": "complete", "pose": poseName}, nil
 }
 
-func (s *beanjaminCoffee) runSteps(ctx context.Context, label string, steps []Step) (map[string]interface{}, error) {
+func (s *beanjaminCoffee) runSteps(ctx context.Context, label string, steps []Step) (map[string]any, error) {
 	if !s.running.CompareAndSwap(false, true) {
 		return nil, errors.New("a sequence is already running")
 	}
@@ -369,7 +369,7 @@ func (s *beanjaminCoffee) runSteps(ctx context.Context, label string, steps []St
 	}
 
 	s.logger.Infof("%s complete", label)
-	return map[string]interface{}{"status": "complete"}, nil
+	return map[string]any{"status": "complete"}, nil
 }
 
 func (s *beanjaminCoffee) Close(context.Context) error {
