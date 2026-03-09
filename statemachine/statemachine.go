@@ -118,11 +118,10 @@ func inferIndexFrom(poseName string, fromIdx int) int {
 	return InferIndex(poseName)
 }
 
-// ValidatePath iterates over poseNames, skips any where InferIndex returns -1,
-// and for each consecutive pair of known-state indices checks isDirectTransition.
+// ValidatePath checks that every pose in poseNames is a known state machine state
+// and that each consecutive pair has a direct transition.
 // When a pose name appears at multiple indices, the index reachable from the
 // previous state is preferred. startIdx seeds the initial context (-1 means none).
-// Returns an error if any consecutive pair lacks a direct transition.
 func ValidatePath(poseNames []string, startIdx int) error {
 	prevIdx := startIdx
 	prevName := ""
@@ -132,8 +131,7 @@ func ValidatePath(poseNames []string, startIdx int) error {
 	for _, name := range poseNames {
 		idx := inferIndexFrom(name, prevIdx)
 		if idx < 0 {
-			// Not a known state; skip it.
-			continue
+			return fmt.Errorf("unknown state machine pose %q", name)
 		}
 		if prevIdx >= 0 && !isDirectTransition(prevIdx, idx) {
 			return fmt.Errorf("invalid sequence: no direct state machine transition from %q to %q", prevName, name)

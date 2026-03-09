@@ -111,11 +111,10 @@ func TestValidatePath(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown poses skipped", func(t *testing.T) {
-		// Poses not in the state machine should be ignored without error.
+	t.Run("unknown pose returns error", func(t *testing.T) {
 		poses := []string{"home", "custom_approach_step", "coffee_approach"}
-		if err := ValidatePath(poses, -1); err != nil {
-			t.Errorf("expected unknown poses to be skipped, got error: %v", err)
+		if err := ValidatePath(poses, -1); err == nil {
+			t.Error("expected error for unknown pose, got nil")
 		}
 	})
 

@@ -297,8 +297,7 @@ func (s *multiPosesExecutionSwitch) goToPosition(ctx context.Context, position u
 	for _, name := range intermediates {
 		pc, ok := s.poseConfigByName(name)
 		if !ok {
-			s.logger.Warnf("intermediate pose %q not found in poses config; skipping", name)
-			continue
+			return fmt.Errorf("intermediate pose %q is not configured on this switch", name)
 		}
 		s.logger.Infof("routing through intermediate pose %q", name)
 		if err := s.movePose(ctx, pc); err != nil {
