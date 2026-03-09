@@ -232,12 +232,11 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	}
 
 	// Execute — extract joint positions and send to arm.
-	// Skip positions[0] as it's the current position (start state).
 	positions, err := plan.Trajectory().GetFrameInputs(pd.componentName)
 	if err != nil {
 		return fmt.Errorf("get frame inputs from plan: %w", err)
 	}
-	return s.arm.MoveThroughJointPositions(ctx, positions[1:], nil, nil)
+	return s.arm.MoveThroughJointPositions(ctx, positions, nil, nil)
 }
 
 // executePivot fetches start and end poses, computes interpolated waypoints,
