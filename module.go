@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
@@ -14,6 +13,7 @@ import (
 	generic "go.viam.com/rdk/services/generic"
 	"go.viam.com/rdk/services/motion"
 
+	"beanjamin/statemachine"
 	// Register the multi-poses-execution-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
 )
@@ -50,6 +50,7 @@ type Step struct {
 type Config struct {
 	PoseSwitcherName  string            `json:"pose_switcher_name"`
 	MotionServiceName string            `json:"motion_service_name"`
+	StateMachineName  string            `json:"state_machine_name"`
 	Sequences         map[string][]Step `json:"sequences"`
 	SpeechServiceName string            `json:"speech_service_name,omitempty"`
 }
@@ -60,6 +61,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 	if cfg.MotionServiceName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "motion_service_name")
+	}
+	if cfg.StateMachineName == "" {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "state_machine_name")
 	}
 	if len(cfg.Sequences) == 0 {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "sequences")
@@ -85,6 +89,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	} else {
 		reqDeps = append(reqDeps, cfg.MotionServiceName)
 	}
+	reqDeps = append(reqDeps, generic.Named(cfg.StateMachineName).String())
 
 	var optDeps []string
 	if cfg.SpeechServiceName != "" {
@@ -108,6 +113,8 @@ type beanjaminCoffee struct {
 	cancelCtx  context.Context
 	cancelFunc func()
 	running    atomic.Bool
+
+	stateMachine statemachine.Service
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -136,6 +143,17 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	if err != nil {
 		cancelFunc()
 		return nil, fmt.Errorf("motion service %q not found in dependencies: %w", conf.MotionServiceName, err)
+	}
+
+	smRes, ok := deps[generic.Named(conf.StateMachineName)]
+	if !ok {
+		cancelFunc()
+		return nil, fmt.Errorf("state machine %q not found in dependencies", conf.StateMachineName)
+	}
+	sm, ok := smRes.(statemachine.Service)
+	if !ok {
+		cancelFunc()
+		return nil, fmt.Errorf("resource %q is not a statemachine.Service", conf.StateMachineName)
 	}
 
 	_, validPoses, err := sw.GetNumberOfPositions(ctx, nil)
@@ -174,16 +192,27 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	}
 
 	s := &beanjaminCoffee{
-		name:       name,
-		logger:     logger,
-		cfg:        conf,
-		sw:         sw,
-		motion:     motionSvc,
-		speech:     speech,
-		sequences:  conf.Sequences,
-		cancelCtx:  cancelCtx,
-		cancelFunc: cancelFunc,
+		name:         name,
+		logger:       logger,
+		cfg:          conf,
+		sw:           sw,
+		motion:       motionSvc,
+		speech:       speech,
+		sequences:    conf.Sequences,
+		cancelCtx:    cancelCtx,
+		cancelFunc:   cancelFunc,
+		stateMachine: sm,
 	}
+
+	// GetPosition auto-detects and initializes the state machine from the component's
+	// current pose. Logs a warning if detection fails; use set_state to initialize manually.
+	if idx, err := sw.GetPosition(ctx, nil); err != nil {
+		logger.Warnf("state machine: could not determine initial position: %v; use set_state to initialize manually", err)
+	} else {
+		_, names, _ := sw.GetNumberOfPositions(ctx, nil)
+		logger.Infof("state machine: initialized at %q", names[idx])
+	}
+
 	return s, nil
 }
 
@@ -206,6 +235,14 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 				return nil, err
 			}
 		}
+		poseNames := make([]string, len(steps))
+		for i, step := range steps {
+			poseNames[i] = step.PoseName
+		}
+		if err := s.stateMachine.ValidatePath(poseNames, ""); err != nil {
+			s.logger.Errorw("DoCommand", "error", err)
+			return nil, err
+		}
 		res, err := s.runSteps(ctx, seqName, steps)
 		if err != nil {
 			s.logger.Errorw("DoCommand", "error", err)
@@ -227,6 +264,14 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		reversed := make([]Step, 0, len(steps)-1)
 		for i := len(steps) - 2; i >= 0; i-- {
 			reversed = append(reversed, steps[i])
+		}
+		reversedPoseNames := make([]string, len(reversed))
+		for i, step := range reversed {
+			reversedPoseNames[i] = step.PoseName
+		}
+		if err := s.stateMachine.ValidatePath(reversedPoseNames, steps[len(steps)-1].PoseName); err != nil {
+			s.logger.Errorw("DoCommand", "error", err)
+			return nil, err
 		}
 		res, err := s.runSteps(ctx, seqName+":rewind", reversed)
 		if err != nil {
@@ -261,17 +306,15 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 }
 
 func (s *beanjaminCoffee) checkPosition(ctx context.Context, expected string) error {
-	resp, err := s.sw.DoCommand(ctx, map[string]interface{}{
-		"get_current_position_name": true,
-	})
+	idx, err := s.sw.GetPosition(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to get current position: %w", err)
 	}
-	currentPose, ok := resp["position_name"].(string)
-	if !ok {
-		return errors.New("unexpected response from get_current_position_name")
+	_, names, err := s.sw.GetNumberOfPositions(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to get position names: %w", err)
 	}
-	if currentPose != expected {
+	if currentPose := names[idx]; currentPose != expected {
 		return fmt.Errorf("expected switch at %q, but currently at %q", expected, currentPose)
 	}
 	return nil
@@ -302,30 +345,9 @@ func (s *beanjaminCoffee) runSteps(ctx context.Context, label string, steps []St
 	s.logger.Infof("starting %s with %d steps", label, len(steps))
 
 	for i, step := range steps {
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("%s cancelled at step %d (%q): %w", label, i, step.PoseName, ctx.Err())
-		case <-cancelCtx.Done():
-			return nil, fmt.Errorf("%s cancelled at step %d (%q)", label, i, step.PoseName)
-		default:
-		}
-
-		s.logger.Infof("%s step %d/%d: moving to %q", label, i+1, len(steps), step.PoseName)
-
-		if err := s.moveToPose(ctx, step); err != nil {
-			return nil, fmt.Errorf("%s failed at step %d (%q): %w", label, i, step.PoseName, err)
-		}
-
-		if step.PauseSec > 0 {
-			pause := time.Duration(step.PauseSec * float64(time.Second))
-			s.logger.Infof("pausing %s after %q", pause, step.PoseName)
-			select {
-			case <-time.After(pause):
-			case <-ctx.Done():
-				return nil, fmt.Errorf("%s cancelled during pause after %q: %w", label, step.PoseName, ctx.Err())
-			case <-cancelCtx.Done():
-				return nil, fmt.Errorf("%s cancelled during pause after %q", label, step.PoseName)
-			}
+		s.logger.Infof("%s step %d/%d: %q", label, i+1, len(steps), step.PoseName)
+		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+			return nil, fmt.Errorf("%s failed at step %d (%q): %w", label, i+1, step.PoseName, err)
 		}
 	}
 

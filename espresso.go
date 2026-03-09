@@ -220,6 +220,9 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 		}
 	}
 
+	// Keep state current so the state machine always knows where the robot is.
+	s.stateMachine.CommitTransition(step.PoseName)
+
 	if step.PauseSec > 0 {
 		pause := time.Duration(step.PauseSec * float64(time.Second))
 		s.logger.Infof("pausing %s after %q", pause, step.PoseName)
