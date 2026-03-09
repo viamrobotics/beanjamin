@@ -15,7 +15,7 @@ func (s *beanjaminCoffee) say(ctx context.Context, text string) error {
 	if s.speech == nil {
 		return nil
 	}
-	_, err := s.speech.DoCommand(ctx, map[string]any{
+	_, err := s.speech.DoCommand(ctx, map[string]interface{}{
 		"say": text,
 	})
 	return err
@@ -27,8 +27,8 @@ var coffeeBrewingCollisions = []AllowedCollision{
 	{Frame1: "gripper:claws", Frame2: "coffee-machine-actuation-area"},
 }
 
-func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw any) (map[string]any, error) {
-	order, ok := orderRaw.(map[string]any)
+func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}) (map[string]interface{}, error) {
+	order, ok := orderRaw.(map[string]interface{})
 	if !ok {
 		return nil, errors.New("prepare_order value must be an object with keys: drink, customer_name, initial_greeting, completion_statement")
 	}
@@ -74,7 +74,7 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw any) (map[s
 
 	s.logger.Infof("prepare_order complete: %s – %s", customerName, completionStatement)
 
-	return map[string]any{
+	return map[string]interface{}{
 		"status":               "complete",
 		"customer_name":        customerName,
 		"initial_greeting":     initialGreeting,
@@ -82,7 +82,7 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw any) (map[s
 	}, nil
 }
 
-func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]any, error) {
+func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
 		"grind_coffee":        s.grindCoffee,
 		"tamp_ground":         s.tampGround,
@@ -115,7 +115,7 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 	}
 
 	s.logger.Infof("action %q complete", name)
-	return map[string]any{"status": "complete", "action": name}, nil
+	return map[string]interface{}{"status": "complete", "action": name}, nil
 }
 
 func (s *beanjaminCoffee) prepareEspresso(ctx context.Context) error {

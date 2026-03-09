@@ -22,10 +22,9 @@ import (
 //	6  tamper_approach   (post-tamp)
 //	7  coffee_approach
 //	8  coffee_in
-//	9  coffee_locked_mid
-//	10 coffee_locked_final
-//	11 dump_grounds        (rotation at dump position)
-//	12 pre_dump_grounds    (approach to dump; freely connected to approach group)
+//	9  coffee_locked_final
+//	10 dump_grounds        (rotation at dump position)
+//	11 pre_dump_grounds    (approach to dump; freely connected to approach group)
 var statePoseNames = []string{
 	"home",                // 0
 	"grinder_approach",    // 1
@@ -36,10 +35,9 @@ var statePoseNames = []string{
 	"tamper_approach",     // 6
 	"coffee_approach",     // 7
 	"coffee_in",           // 8
-	"coffee_locked_mid",   // 9
-	"coffee_locked_final", // 10
-	"dump_grounds",        // 11
-	"pre_dump_grounds",    // 12
+	"coffee_locked_final", // 9
+	"dump_grounds",        // 10
+	"pre_dump_grounds",    // 11
 }
 
 // validTransitions maps each state index to the state indices it may move to.
@@ -57,33 +55,31 @@ var statePoseNames = []string{
 //     section; they cannot jump to a different section's approach:
 //     - grinder_activate (2)     ↔ grinder_approach (1, 3)
 //     - tamper_activate  (5)     ↔ tamper_approach  (4, 6)
-//     - coffee_in        (8)     ↔ coffee_approach (7) or coffee_locked_mid (9)
-//     - coffee_locked_mid (9)    ↔ coffee_in (8) or coffee_locked_final (10)
-//     - coffee_locked_final (10) → coffee_locked_mid (9) only (no forward state)
+//     - coffee_in        (8)     ↔ coffee_approach (7) or coffee_locked_final (9)
+//     - coffee_locked_final (9)  → coffee_in (8) only (must retrace backward via pivot)
 //
-// To leave the coffee locking section the robot must retrace step-by-step back to
-// coffee_approach (7), from which it may freely go anywhere.
+// To leave the coffee locking section the robot pivots back to coffee_in (8), then
+// moves to coffee_approach (7), from which it may freely go anywhere.
 var validTransitions = map[int][]int{
 	// ── Approach / home states ── freely reachable from each other + own section entry ──
-	0: {1, 3, 4, 6, 7, 11, 12}, // home             → any approach, dump_grounds, pre_dump_grounds
-	1: {0, 2, 3, 4, 6, 7, 12},  // grinder_approach (pre)  → home, grinder_activate, any approach, pre_dump_grounds
-	3: {0, 1, 2, 4, 6, 7, 12},  // grinder_approach (post) → home, grinder_activate, any approach, pre_dump_grounds
-	4: {0, 1, 3, 5, 6, 7, 12},  // tamper_approach  (pre)  → home, tamper_activate,  any approach, pre_dump_grounds
-	6: {0, 1, 3, 4, 5, 7, 12},  // tamper_approach  (post) → home, tamper_activate,  any approach, pre_dump_grounds
-	7: {0, 1, 3, 4, 6, 8, 12},  // coffee_approach         → home, any approach, coffee_in, pre_dump_grounds
+	0: {1, 3, 4, 6, 7, 10, 11}, // home             → any approach, dump_grounds, pre_dump_grounds
+	1: {0, 2, 3, 4, 6, 7, 11},  // grinder_approach (pre)  → home, grinder_activate, any approach, pre_dump_grounds
+	3: {0, 1, 2, 4, 6, 7, 11},  // grinder_approach (post) → home, grinder_activate, any approach, pre_dump_grounds
+	4: {0, 1, 3, 5, 6, 7, 11},  // tamper_approach  (pre)  → home, tamper_activate,  any approach, pre_dump_grounds
+	6: {0, 1, 3, 4, 5, 7, 11},  // tamper_approach  (post) → home, tamper_activate,  any approach, pre_dump_grounds
+	7: {0, 1, 3, 4, 6, 8, 11},  // coffee_approach         → home, any approach, coffee_in, pre_dump_grounds
 
 	// ── Activate states ── own section's approach states only ──
 	2: {1, 3}, // grinder_activate → grinder_approach (pre or post)
 	5: {4, 6}, // tamper_activate  → tamper_approach  (pre or post)
 
-	// ── Coffee locked states ── adjacent within section only ──
-	8:  {7, 9},  // coffee_in          → coffee_approach or coffee_locked_mid
-	9:  {8, 10}, // coffee_locked_mid  → coffee_in or coffee_locked_final
-	10: {9},     // coffee_locked_final → coffee_locked_mid only (must retrace backward)
+	// ── Coffee locked states ── coffee_locked_final retraces to coffee_in via pivot ──
+	8: {7, 9}, // coffee_in          → coffee_approach or coffee_locked_final
+	9: {8},    // coffee_locked_final → coffee_in only (pivot back, then retrace to approach)
 
 	// ── Dump states ── pre_dump_grounds is in the approach group; dump_grounds is terminal ──
-	11: {0, 12},                // dump_grounds    → home or pre_dump_grounds
-	12: {0, 1, 3, 4, 6, 7, 11}, // pre_dump_grounds → approach group + dump_grounds
+	10: {0, 11},                // dump_grounds    → home or pre_dump_grounds
+	11: {0, 1, 3, 4, 6, 7, 10}, // pre_dump_grounds → approach group + dump_grounds
 }
 
 // InferIndex returns the state machine index corresponding to poseName,

@@ -16,10 +16,9 @@ func TestInferIndex(t *testing.T) {
 		{"tamper_activate", 5},
 		{"coffee_approach", 7},
 		{"coffee_in", 8},
-		{"coffee_locked_mid", 9},
-		{"coffee_locked_final", 10},
-		{"dump_grounds", 11},
-		{"pre_dump_grounds", 12},
+		{"coffee_locked_final", 9},
+		{"dump_grounds", 10},
+		{"pre_dump_grounds", 11},
 		{"not_a_pose", -1},
 	}
 	for _, tc := range tests {
@@ -40,9 +39,9 @@ func TestPoseNameAt(t *testing.T) {
 		{0, "home"},
 		{1, "grinder_approach"},
 		{3, "grinder_approach"},
-		{10, "coffee_locked_final"},
-		{11, "dump_grounds"},
-		{12, "pre_dump_grounds"},
+		{9, "coffee_locked_final"},
+		{10, "dump_grounds"},
+		{11, "pre_dump_grounds"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.wantName, func(t *testing.T) {
@@ -62,14 +61,13 @@ func TestIsDirectTransition(t *testing.T) {
 		}{
 			{0, 1, "home→grinder_approach"},
 			{0, 7, "home→coffee_approach"},
-			{0, 11, "home→dump_grounds"},
-			{0, 12, "home→pre_dump_grounds"},
+			{0, 10, "home→dump_grounds"},
+			{0, 11, "home→pre_dump_grounds"},
 			{7, 8, "coffee_approach→coffee_in"},
-			{8, 9, "coffee_in→coffee_locked_mid"},
-			{9, 10, "coffee_locked_mid→coffee_locked_final"},
-			{10, 9, "coffee_locked_final→coffee_locked_mid"},
-			{11, 12, "dump_grounds→pre_dump_grounds"},
-			{12, 11, "pre_dump_grounds→dump_grounds"},
+			{8, 9, "coffee_in→coffee_locked_final"},
+			{9, 8, "coffee_locked_final→coffee_in"},
+			{10, 11, "dump_grounds→pre_dump_grounds"},
+			{11, 10, "pre_dump_grounds→dump_grounds"},
 		}
 		for _, p := range pairs {
 			t.Run(p.label, func(t *testing.T) {
@@ -86,10 +84,10 @@ func TestIsDirectTransition(t *testing.T) {
 			label    string
 		}{
 			{8, 0, "coffee_in→home"},
-			{10, 0, "coffee_locked_final→home"},
+			{9, 0, "coffee_locked_final→home"},
 			{2, 5, "grinder_activate→tamper_activate"},
 			{5, 2, "tamper_activate→grinder_activate"},
-			{9, 7, "coffee_locked_mid→coffee_approach"},
+			{9, 7, "coffee_locked_final→coffee_approach"},
 		}
 		for _, p := range pairs {
 			t.Run(p.label, func(t *testing.T) {
@@ -160,16 +158,16 @@ func TestResolvePath(t *testing.T) {
 		}
 	})
 
-	t.Run("retrace through coffee locked states", func(t *testing.T) {
-		// coffee_locked_final (10) → coffee_approach (7) must retrace: 10 → 9 → 8 → 7.
-		intermediates, finalIdx, err := ResolvePath(10, "coffee_approach")
+	t.Run("retrace through coffee locked state", func(t *testing.T) {
+		// coffee_locked_final (9) → coffee_approach (7) must retrace: 9 → 8 → 7.
+		intermediates, finalIdx, err := ResolvePath(9, "coffee_approach")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if finalIdx != 7 {
 			t.Errorf("finalIdx = %d, want 7", finalIdx)
 		}
-		want := []int{9, 8}
+		want := []int{8}
 		if len(intermediates) != len(want) {
 			t.Fatalf("intermediates = %v, want %v", intermediates, want)
 		}

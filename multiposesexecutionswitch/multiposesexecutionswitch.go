@@ -36,7 +36,7 @@ type Config struct {
 	ComponentName    string     `json:"component_name"`
 	Motion           string     `json:"motion"`
 	Poses            []PoseConf `json:"poses"`
-	StateMachineName string     `json:"state_machine_name,omitempty"`
+	StateMachineName string     `json:"state_machine_name"`
 }
 
 type PoseConf struct {
@@ -69,19 +69,19 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 	}
 
+	if cfg.StateMachineName == "" {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "state_machine_name")
+	}
+
 	reqDeps := []string{cfg.ComponentName}
 	if cfg.Motion == "builtin" {
 		reqDeps = append(reqDeps, motion.Named("builtin").String())
 	} else {
 		reqDeps = append(reqDeps, cfg.Motion)
 	}
+	reqDeps = append(reqDeps, generic.Named(cfg.StateMachineName).String())
 
-	var optDeps []string
-	if cfg.StateMachineName != "" {
-		optDeps = append(optDeps, generic.Named(cfg.StateMachineName).String())
-	}
-
-	return reqDeps, optDeps, nil
+	return reqDeps, nil, nil
 }
 
 type multiPosesExecutionSwitch struct {
@@ -93,7 +93,7 @@ type multiPosesExecutionSwitch struct {
 	cfg          *Config
 	motion       motion.Service
 	poseNames    []string
-	stateMachine statemachine.Service // nil if not configured
+	stateMachine statemachine.Service
 
 	executing atomic.Bool
 }
@@ -114,16 +114,13 @@ func newMultiPosesExecutionSwitch(ctx context.Context, deps resource.Dependencie
 		poseNames[i] = p.PoseName
 	}
 
-	var sm statemachine.Service
-	if conf.StateMachineName != "" {
-		smRes, ok := deps[generic.Named(conf.StateMachineName)]
-		if !ok {
-			logger.Warnf("state machine %q configured but not found in dependencies; continuing without state machine", conf.StateMachineName)
-		} else if smSvc, ok := smRes.(statemachine.Service); !ok {
-			logger.Warnf("resource %q is not a statemachine.Service; continuing without state machine", conf.StateMachineName)
-		} else {
-			sm = smSvc
-		}
+	smRes, ok := deps[generic.Named(conf.StateMachineName)]
+	if !ok {
+		return nil, fmt.Errorf("state machine %q not found in dependencies", conf.StateMachineName)
+	}
+	sm, ok := smRes.(statemachine.Service)
+	if !ok {
+		return nil, fmt.Errorf("resource %q is not a statemachine.Service", conf.StateMachineName)
 	}
 
 	return &multiPosesExecutionSwitch{
@@ -197,9 +194,6 @@ func (s *multiPosesExecutionSwitch) GetNumberOfPositions(ctx context.Context, ex
 }
 
 func (s *multiPosesExecutionSwitch) GetPosition(ctx context.Context, extra map[string]interface{}) (uint32, error) {
-	if s.stateMachine == nil {
-		return 0, errors.New("state machine not configured; cannot determine current position")
-	}
 	resp, err := s.stateMachine.DoCommand(ctx, map[string]interface{}{"get_state": true})
 	if err != nil {
 		return 0, fmt.Errorf("failed to get state machine state: %w", err)
@@ -266,42 +260,36 @@ func (s *multiPosesExecutionSwitch) goToPosition(ctx context.Context, position u
 	targetPose := s.cfg.Poses[position]
 	s.logger.Infof("moving %s to pose %q (index %d)", s.cfg.ComponentName, targetPose.PoseName, position)
 
-	if s.stateMachine != nil {
-		intermediates, finalStateIdx, err := s.stateMachine.ResolvePath(targetPose.PoseName)
-		if err != nil {
-			s.logger.Warnf("state machine ResolvePath failed for %q: %v; falling back to direct move", targetPose.PoseName, err)
-		} else {
-			// Execute intermediate poses.
-			for _, stateIdx := range intermediates {
-				intermediateName := statemachine.PoseNameAt(stateIdx)
-				pc, ok := s.poseConfigByName(intermediateName)
-				if !ok {
-					s.logger.Warnf("intermediate pose %q not found in poses config; skipping", intermediateName)
-					continue
-				}
-				s.logger.Infof("routing through intermediate pose %q (state %d)", intermediateName, stateIdx)
-				if err := s.movePose(ctx, pc); err != nil {
-					return err
-				}
-				s.stateMachine.CommitTransition(stateIdx)
-			}
-			// Execute the final target pose.
-			if err := s.movePose(ctx, &targetPose); err != nil {
-				return err
-			}
-			s.stateMachine.CommitTransition(finalStateIdx)
-			return nil
+	intermediates, finalStateIdx, err := s.stateMachine.ResolvePath(targetPose.PoseName)
+	if err != nil {
+		s.logger.Warnf("state machine ResolvePath failed for %q: %v; falling back to direct move", targetPose.PoseName, err)
+		if err := s.movePose(ctx, &targetPose); err != nil {
+			return err
 		}
-	}
-
-	// Direct move (no state machine or fallback).
-	if err := s.movePose(ctx, &targetPose); err != nil {
-		return err
-	}
-	if s.stateMachine != nil {
 		if idx := statemachine.InferIndex(targetPose.PoseName); idx >= 0 {
 			s.stateMachine.CommitTransition(idx)
 		}
+		return nil
 	}
+
+	// Execute intermediate poses.
+	for _, stateIdx := range intermediates {
+		intermediateName := statemachine.PoseNameAt(stateIdx)
+		pc, ok := s.poseConfigByName(intermediateName)
+		if !ok {
+			s.logger.Warnf("intermediate pose %q not found in poses config; skipping", intermediateName)
+			continue
+		}
+		s.logger.Infof("routing through intermediate pose %q (state %d)", intermediateName, stateIdx)
+		if err := s.movePose(ctx, pc); err != nil {
+			return err
+		}
+		s.stateMachine.CommitTransition(stateIdx)
+	}
+	// Execute the final target pose.
+	if err := s.movePose(ctx, &targetPose); err != nil {
+		return err
+	}
+	s.stateMachine.CommitTransition(finalStateIdx)
 	return nil
 }
