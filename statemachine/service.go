@@ -16,10 +16,39 @@ var Model = resource.NewModel("viam", "beanjamin", "state-machine")
 
 func init() {
 	resource.RegisterService(generic.API, Model,
-		resource.Registration[resource.Resource, resource.NoNativeConfig]{
+		resource.Registration[resource.Resource, *Config]{
 			Constructor: newService,
 		},
 	)
+}
+
+// Config holds optional configuration for the state machine service.
+type Config struct {
+	Transitions map[string][]string `json:"transitions,omitempty"`
+}
+
+// Validate checks the configuration.
+func (cfg *Config) Validate(path string) ([]string, []string, error) {
+	if len(cfg.Transitions) == 0 {
+		return nil, nil, nil
+	}
+	// Build set of known states.
+	known := make(map[string]bool, len(cfg.Transitions))
+	for name := range cfg.Transitions {
+		if name == "uninitialized" {
+			return nil, nil, fmt.Errorf("%s: \"uninitialized\" is a reserved state name", path)
+		}
+		known[name] = true
+	}
+	// Verify all transition targets are known states.
+	for name, targets := range cfg.Transitions {
+		for _, target := range targets {
+			if !known[target] {
+				return nil, nil, fmt.Errorf("%s: transition from %q targets unknown state %q", path, name, target)
+			}
+		}
+	}
+	return nil, nil, nil
 }
 
 // Service is the interface for the standalone state machine component.
@@ -27,32 +56,49 @@ type Service interface {
 	resource.Resource
 
 	// ResolvePath finds the shortest sequence of state transitions from the current
-	// state to any state whose pose name matches targetPose.
+	// state to the state whose pose name matches targetPose.
 	ResolvePath(targetPose string) (intermediates []string, finalPose string, err error)
 
 	// CommitTransition records the new state after a move completes successfully.
 	// Unknown pose names are silently ignored.
 	CommitTransition(poseName string)
 
-	// InitFromPoseName sets the state index from a pose name. Returns true if the
+	// InitFromPoseName sets the current state from a pose name. Returns true if the
 	// pose name matched a known state, false otherwise.
 	InitFromPoseName(poseName string) bool
+
+	// ValidatePath checks that every pose in poseNames is a known state machine state
+	// and that each consecutive pair has a direct transition.
+	// startPose seeds the initial context ("" means none).
+	ValidatePath(poseNames []string, startPose string) error
 }
 
 type service struct {
 	resource.AlwaysRebuild
 
-	name   resource.Name
-	logger logging.Logger
-	mu     sync.Mutex
-	idx    int // -1 = uninitialized
+	name        resource.Name
+	logger      logging.Logger
+	mu          sync.Mutex
+	currentPose string // "" = uninitialized
+	transitions map[string][]string
 }
 
 func newService(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
+	conf, err := resource.NativeConfig[*Config](rawConf)
+	if err != nil {
+		return nil, err
+	}
+
+	transitions := conf.Transitions
+	if len(transitions) == 0 {
+		transitions = defaultTransitions()
+	}
+
 	return &service{
-		name:   rawConf.ResourceName(),
-		logger: logger,
-		idx:    -1,
+		name:        rawConf.ResourceName(),
+		logger:      logger,
+		currentPose: "",
+		transitions: transitions,
 	}, nil
 }
 
@@ -61,98 +107,92 @@ func (s *service) Name() resource.Name {
 }
 
 // ResolvePath finds the shortest sequence of state transitions from the current
-// state to any state whose pose name matches targetPose.
+// state to the state whose pose name matches targetPose.
 func (s *service) ResolvePath(targetPose string) (intermediates []string, finalPose string, err error) {
 	s.mu.Lock()
-	current := s.idx
+	current := s.currentPose
 	s.mu.Unlock()
 
-	return ResolvePath(current, targetPose)
+	return resolvePath(s.transitions, current, targetPose)
 }
 
 // CommitTransition records the new state after a move completes successfully.
 // Unknown pose names are silently ignored.
 func (s *service) CommitTransition(poseName string) {
-	idx := InferIndex(poseName)
-	if idx < 0 {
+	if _, ok := s.transitions[poseName]; !ok {
 		return
 	}
 	s.mu.Lock()
-	s.idx = idx
+	s.currentPose = poseName
 	s.mu.Unlock()
 }
 
-// InitFromPoseName sets the state index from a pose name. Returns true if the
+// InitFromPoseName sets the current state from a pose name. Returns true if the
 // pose name matched a known state, false otherwise.
 func (s *service) InitFromPoseName(poseName string) bool {
-	idx := InferIndex(poseName)
-	if idx < 0 {
+	if _, ok := s.transitions[poseName]; !ok {
 		return false
 	}
 	s.mu.Lock()
-	s.idx = idx
+	s.currentPose = poseName
 	s.mu.Unlock()
 	return true
+}
+
+// ValidatePath checks that every pose in poseNames is a known state machine state
+// and that each consecutive pair has a direct transition.
+func (s *service) ValidatePath(poseNames []string, startPose string) error {
+	return validatePath(s.transitions, poseNames, startPose)
 }
 
 func (s *service) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	if _, ok := cmd["get_state"]; ok {
 		return s.getState(), nil
 	}
-	if idxRaw, ok := cmd["set_state_index"]; ok {
-		return s.setStateIndex(idxRaw)
+	if nameRaw, ok := cmd["set_state"]; ok {
+		return s.setState(nameRaw)
 	}
-	return nil, errors.New("unknown command, supported commands: get_state, set_state_index")
+	return nil, errors.New("unknown command, supported commands: get_state, set_state")
 }
 
 func (s *service) getState() map[string]interface{} {
 	s.mu.Lock()
-	idx := s.idx
+	pose := s.currentPose
 	s.mu.Unlock()
 
-	stateName := "uninitialized"
-	if idx >= 0 && idx < len(statePoseNames) {
-		stateName = statePoseNames[idx]
+	stateName := pose
+	if stateName == "" {
+		stateName = "uninitialized"
 	}
 
-	var allowedNext []map[string]interface{}
-	if idx >= 0 {
-		for _, nextIdx := range validTransitions[idx] {
-			allowedNext = append(allowedNext, map[string]interface{}{
-				"index": nextIdx,
-				"name":  statePoseNames[nextIdx],
-			})
+	allowedNext := []string{}
+	if pose != "" {
+		if targets, ok := s.transitions[pose]; ok {
+			allowedNext = targets
 		}
 	}
 
 	return map[string]interface{}{
-		"state_index":         idx,
 		"state_name":          stateName,
 		"allowed_transitions": allowedNext,
 	}
 }
 
-func (s *service) setStateIndex(idxRaw any) (map[string]interface{}, error) {
-	var idx int
-	switch v := idxRaw.(type) {
-	case float64:
-		idx = int(v)
-	case int:
-		idx = v
-	default:
-		return nil, fmt.Errorf("set_state_index: value must be an integer, got %T", idxRaw)
+func (s *service) setState(nameRaw any) (map[string]interface{}, error) {
+	name, ok := nameRaw.(string)
+	if !ok {
+		return nil, fmt.Errorf("set_state: value must be a string, got %T", nameRaw)
 	}
-	if idx < 0 || idx >= len(statePoseNames) {
-		return nil, fmt.Errorf("set_state_index: %d is out of range [0, %d]", idx, len(statePoseNames)-1)
+	if _, ok := s.transitions[name]; !ok {
+		return nil, fmt.Errorf("set_state: %q is not a known state", name)
 	}
 	s.mu.Lock()
-	s.idx = idx
+	s.currentPose = name
 	s.mu.Unlock()
-	s.logger.Infof("state machine: state manually set to index %d (%q)", idx, statePoseNames[idx])
+	s.logger.Infof("state machine: state manually set to %q", name)
 	return map[string]interface{}{
-		"status":      "ok",
-		"state_index": idx,
-		"state_name":  statePoseNames[idx],
+		"status":     "ok",
+		"state_name": name,
 	}, nil
 }
 

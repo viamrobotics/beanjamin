@@ -4,77 +4,55 @@ import (
 	"testing"
 )
 
-func TestInferIndex(t *testing.T) {
-	tests := []struct {
-		pose    string
-		wantIdx int
-	}{
-		{"home", 0},
-		{"grinder_approach", 1}, // lowest index for duplicate
-		{"grinder_activate", 2},
-		{"tamper_approach", 4}, // lowest index for duplicate
-		{"tamper_activate", 5},
-		{"coffee_approach", 7},
-		{"coffee_in", 8},
-		{"coffee_locked_final", 9},
-		{"dump_grounds", 10},
-		{"pre_dump_grounds", 11},
-		{"not_a_pose", -1},
+func TestDefaultTransitions(t *testing.T) {
+	tr := defaultTransitions()
+	expectedKeys := []string{
+		"home", "grinder_approach", "grinder_activate",
+		"tamper_approach", "tamper_activate",
+		"coffee_approach", "coffee_in", "coffee_locked_final",
+		"dump_grounds", "pre_dump_grounds",
 	}
-	for _, tc := range tests {
-		t.Run(tc.pose, func(t *testing.T) {
-			got := InferIndex(tc.pose)
-			if got != tc.wantIdx {
-				t.Errorf("got %d, want %d", got, tc.wantIdx)
+	if len(tr) != len(expectedKeys) {
+		t.Errorf("expected %d states, got %d", len(expectedKeys), len(tr))
+	}
+	for _, key := range expectedKeys {
+		if _, ok := tr[key]; !ok {
+			t.Errorf("missing expected state %q", key)
+		}
+	}
+	// No dangling targets.
+	for from, targets := range tr {
+		for _, to := range targets {
+			if _, ok := tr[to]; !ok {
+				t.Errorf("state %q has dangling target %q", from, to)
 			}
-		})
-	}
-}
-
-func TestPoseNameAt(t *testing.T) {
-	tests := []struct {
-		idx      int
-		wantName string
-	}{
-		{0, "home"},
-		{1, "grinder_approach"},
-		{3, "grinder_approach"},
-		{9, "coffee_locked_final"},
-		{10, "dump_grounds"},
-		{11, "pre_dump_grounds"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.wantName, func(t *testing.T) {
-			got := PoseNameAt(tc.idx)
-			if got != tc.wantName {
-				t.Errorf("PoseNameAt(%d) = %q, want %q", tc.idx, got, tc.wantName)
-			}
-		})
+		}
 	}
 }
 
 func TestIsDirectTransition(t *testing.T) {
+	tr := defaultTransitions()
+
 	t.Run("valid", func(t *testing.T) {
 		pairs := []struct {
-			from, to int
-			label    string
+			from, to string
 		}{
-			{0, 1, "home→grinder_approach"},
-			{0, 7, "home→coffee_approach"},
-			{0, 10, "home→dump_grounds"},
-			{0, 11, "home→pre_dump_grounds"},
-			{2, 3, "grinder_activate→grinder_approach(post)"},
-			{5, 6, "tamper_activate→tamper_approach(post)"},
-			{7, 8, "coffee_approach→coffee_in"},
-			{8, 9, "coffee_in→coffee_locked_final"},
-			{9, 8, "coffee_locked_final→coffee_in"},
-			{10, 11, "dump_grounds→pre_dump_grounds"},
-			{11, 10, "pre_dump_grounds→dump_grounds"},
+			{"home", "grinder_approach"},
+			{"home", "coffee_approach"},
+			{"home", "dump_grounds"},
+			{"home", "pre_dump_grounds"},
+			{"grinder_activate", "grinder_approach"},
+			{"tamper_activate", "tamper_approach"},
+			{"coffee_approach", "coffee_in"},
+			{"coffee_in", "coffee_locked_final"},
+			{"coffee_locked_final", "coffee_in"},
+			{"dump_grounds", "pre_dump_grounds"},
+			{"pre_dump_grounds", "dump_grounds"},
 		}
 		for _, p := range pairs {
-			t.Run(p.label, func(t *testing.T) {
-				if !isDirectTransition(p.from, p.to) {
-					t.Errorf("expected direct transition %d→%d", p.from, p.to)
+			t.Run(p.from+"→"+p.to, func(t *testing.T) {
+				if !isDirectTransition(tr, p.from, p.to) {
+					t.Errorf("expected direct transition %q→%q", p.from, p.to)
 				}
 			})
 		}
@@ -82,21 +60,18 @@ func TestIsDirectTransition(t *testing.T) {
 
 	t.Run("invalid", func(t *testing.T) {
 		pairs := []struct {
-			from, to int
-			label    string
+			from, to string
 		}{
-			{8, 0, "coffee_in→home"},
-			{9, 0, "coffee_locked_final→home"},
-			{2, 1, "grinder_activate→grinder_approach(pre)"},
-			{5, 4, "tamper_activate→tamper_approach(pre)"},
-			{2, 5, "grinder_activate→tamper_activate"},
-			{5, 2, "tamper_activate→grinder_activate"},
-			{9, 7, "coffee_locked_final→coffee_approach"},
+			{"coffee_in", "home"},
+			{"coffee_locked_final", "home"},
+			{"grinder_activate", "tamper_activate"},
+			{"tamper_activate", "grinder_activate"},
+			{"coffee_locked_final", "coffee_approach"},
 		}
 		for _, p := range pairs {
-			t.Run(p.label, func(t *testing.T) {
-				if isDirectTransition(p.from, p.to) {
-					t.Errorf("expected no direct transition %d→%d", p.from, p.to)
+			t.Run(p.from+"→"+p.to, func(t *testing.T) {
+				if isDirectTransition(tr, p.from, p.to) {
+					t.Errorf("expected no direct transition %q→%q", p.from, p.to)
 				}
 			})
 		}
@@ -104,16 +79,18 @@ func TestIsDirectTransition(t *testing.T) {
 }
 
 func TestValidatePath(t *testing.T) {
+	tr := defaultTransitions()
+
 	t.Run("valid sequence", func(t *testing.T) {
 		poses := []string{"home", "grinder_approach", "grinder_activate", "grinder_approach"}
-		if err := ValidatePath(poses, -1); err != nil {
+		if err := validatePath(tr, poses, ""); err != nil {
 			t.Errorf("expected valid path, got error: %v", err)
 		}
 	})
 
 	t.Run("unknown pose returns error", func(t *testing.T) {
 		poses := []string{"home", "custom_approach_step", "coffee_approach"}
-		if err := ValidatePath(poses, -1); err == nil {
+		if err := validatePath(tr, poses, ""); err == nil {
 			t.Error("expected error for unknown pose, got nil")
 		}
 	})
@@ -121,46 +98,45 @@ func TestValidatePath(t *testing.T) {
 	t.Run("invalid transition", func(t *testing.T) {
 		// coffee_in → home is not a direct transition.
 		poses := []string{"coffee_in", "home"}
-		if err := ValidatePath(poses, -1); err == nil {
+		if err := validatePath(tr, poses, ""); err == nil {
 			t.Error("expected error for invalid transition coffee_in→home, got nil")
 		}
 	})
 
 	t.Run("single pose", func(t *testing.T) {
-		if err := ValidatePath([]string{"home"}, -1); err != nil {
+		if err := validatePath(tr, []string{"home"}, ""); err != nil {
 			t.Errorf("single-pose path should be valid, got: %v", err)
 		}
 	})
 
 	t.Run("empty", func(t *testing.T) {
-		if err := ValidatePath(nil, -1); err != nil {
+		if err := validatePath(tr, nil, ""); err != nil {
 			t.Errorf("empty path should be valid, got: %v", err)
 		}
 	})
 
-	t.Run("rewind with seeded start disambiguates post-approach", func(t *testing.T) {
-		// A rewind of [grinder_approach, grinder_activate, grinder_approach] produces
-		// [grinder_approach, grinder_activate] starting from grinder_approach(post=3).
-		// Without seeding, grinder_approach would be inferred as pre(1), which is also
-		// a valid source for grinder_activate — but seeding idx=3 is more precise.
-		poses := []string{"grinder_approach", "grinder_activate"}
-		if err := ValidatePath(poses, 3); err != nil {
-			t.Errorf("expected valid rewind path from post-approach, got error: %v", err)
+	t.Run("rewind with seeded start", func(t *testing.T) {
+		// Rewind of a grinder sequence starting from grinder_approach,
+		// going back through grinder_activate then grinder_approach.
+		poses := []string{"grinder_activate", "grinder_approach"}
+		if err := validatePath(tr, poses, "grinder_approach"); err != nil {
+			t.Errorf("expected valid rewind path, got error: %v", err)
 		}
 	})
 }
 
 func TestResolvePath(t *testing.T) {
+	tr := defaultTransitions()
+
 	t.Run("uninitialized returns error", func(t *testing.T) {
-		_, _, err := ResolvePath(-1, "home")
+		_, _, err := resolvePath(tr, "", "home")
 		if err == nil {
 			t.Error("expected error for uninitialized state, got nil")
 		}
 	})
 
 	t.Run("direct adjacent transition has no intermediates", func(t *testing.T) {
-		// home (0) → coffee_approach (7) is a direct edge.
-		intermediates, finalPose, err := ResolvePath(0, "coffee_approach")
+		intermediates, finalPose, err := resolvePath(tr, "home", "coffee_approach")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -173,8 +149,8 @@ func TestResolvePath(t *testing.T) {
 	})
 
 	t.Run("retrace through coffee locked state", func(t *testing.T) {
-		// coffee_locked_final (9) → coffee_approach (7) must retrace: 9 → 8 → 7.
-		intermediates, finalPose, err := ResolvePath(9, "coffee_approach")
+		// coffee_locked_final → coffee_approach must retrace: coffee_locked_final → coffee_in → coffee_approach.
+		intermediates, finalPose, err := resolvePath(tr, "coffee_locked_final", "coffee_approach")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -193,15 +169,14 @@ func TestResolvePath(t *testing.T) {
 	})
 
 	t.Run("unreachable pose returns error", func(t *testing.T) {
-		_, _, err := ResolvePath(0, "nonexistent_pose")
+		_, _, err := resolvePath(tr, "home", "nonexistent_pose")
 		if err == nil {
 			t.Error("expected error for unreachable pose, got nil")
 		}
 	})
 
 	t.Run("resolving current pose is a no-op", func(t *testing.T) {
-		// Already at home — no moves needed, no error.
-		intermediates, finalPose, err := ResolvePath(0, "home")
+		intermediates, finalPose, err := resolvePath(tr, "home", "home")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -210,6 +185,34 @@ func TestResolvePath(t *testing.T) {
 		}
 		if len(intermediates) != 0 {
 			t.Errorf("expected no intermediates, got %v", intermediates)
+		}
+	})
+}
+
+func TestConfigProvidedTransitions(t *testing.T) {
+	// Minimal two-state custom graph.
+	customTransitions := map[string][]string{
+		"state_a": {"state_b"},
+		"state_b": {"state_a"},
+	}
+
+	t.Run("direct transition", func(t *testing.T) {
+		intermediates, finalPose, err := resolvePath(customTransitions, "state_a", "state_b")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if finalPose != "state_b" {
+			t.Errorf("finalPose = %q, want %q", finalPose, "state_b")
+		}
+		if len(intermediates) != 0 {
+			t.Errorf("expected no intermediates, got %v", intermediates)
+		}
+	})
+
+	t.Run("unknown target returns error", func(t *testing.T) {
+		_, _, err := resolvePath(customTransitions, "state_a", "state_c")
+		if err == nil {
+			t.Error("expected error for unknown target, got nil")
 		}
 	})
 }

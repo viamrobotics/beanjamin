@@ -212,7 +212,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		if sm.InitFromPoseName(poseName) {
 			logger.Infof("state machine: initialized from switch position %q", poseName)
 		} else {
-			logger.Warnf("state machine: switch position %q does not match any known state; use set_state_index to initialize", poseName)
+			logger.Warnf("state machine: switch position %q does not match any known state; use set_state to initialize", poseName)
 		}
 	}
 
@@ -242,7 +242,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		for i, step := range steps {
 			poseNames[i] = step.PoseName
 		}
-		if err := statemachine.ValidatePath(poseNames, -1); err != nil {
+		if err := s.stateMachine.ValidatePath(poseNames, ""); err != nil {
 			s.logger.Errorw("DoCommand", "error", err)
 			return nil, err
 		}
@@ -272,7 +272,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		for i, step := range reversed {
 			reversedPoseNames[i] = step.PoseName
 		}
-		if err := statemachine.ValidatePath(reversedPoseNames, statemachine.InferIndex(steps[len(steps)-1].PoseName)); err != nil {
+		if err := s.stateMachine.ValidatePath(reversedPoseNames, steps[len(steps)-1].PoseName); err != nil {
 			s.logger.Errorw("DoCommand", "error", err)
 			return nil, err
 		}

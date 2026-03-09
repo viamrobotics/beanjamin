@@ -219,14 +219,10 @@ func (s *multiPosesExecutionSwitch) GetPosition(ctx context.Context, extra map[s
 	if err != nil {
 		return 0, fmt.Errorf("failed to get state machine state: %w", err)
 	}
-	stateIdx, ok := resp["state_index"].(int)
-	if !ok {
-		return 0, errors.New("unexpected state_index type from state machine")
+	currentPoseName, ok := resp["state_name"].(string)
+	if !ok || currentPoseName == "uninitialized" {
+		return 0, errors.New("state machine is uninitialized; use set_state to initialize")
 	}
-	if stateIdx < 0 {
-		return 0, errors.New("state machine is uninitialized; use set_state_index to initialize")
-	}
-	currentPoseName := statemachine.PoseNameAt(stateIdx)
 	for i, name := range s.poseNames {
 		if name == currentPoseName {
 			return uint32(i), nil
