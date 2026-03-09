@@ -10,7 +10,9 @@ import (
 
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
+	"go.viam.com/rdk/robot/framesystem"
 	generic "go.viam.com/rdk/services/generic"
 	"go.viam.com/rdk/services/motion"
 
@@ -79,7 +81,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 	}
 
-	reqDeps := []string{cfg.PoseSwitcherName}
+	reqDeps := []string{cfg.PoseSwitcherName, framesystem.PublicServiceName.String()}
 	if cfg.MotionServiceName == "builtin" {
 		reqDeps = append(reqDeps, motion.Named("builtin").String())
 	} else {
@@ -101,8 +103,12 @@ type beanjaminCoffee struct {
 	cfg       *Config
 	sw        toggleswitch.Switch
 	motion    motion.Service
+	fs        framesystem.Service
 	speech    resource.Resource // nil when speech_service_name is not configured
 	sequences map[string][]Step
+
+	releasedObstacle           *referenceframe.GeometriesInFrame // nil when portafilter is on arm
+	releasedCollisionAllowances []AllowedCollision               // allow arm-attached filter to pass through everything
 
 	mu         sync.Mutex
 	cancelCtx  context.Context
@@ -136,6 +142,12 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	if err != nil {
 		cancelFunc()
 		return nil, fmt.Errorf("motion service %q not found in dependencies: %w", conf.MotionServiceName, err)
+	}
+
+	fsSvc, err := framesystem.FromDependencies(deps)
+	if err != nil {
+		cancelFunc()
+		return nil, fmt.Errorf("frame system service not found in dependencies: %w", err)
 	}
 
 	_, validPoses, err := sw.GetNumberOfPositions(ctx, nil)
@@ -179,6 +191,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		cfg:        conf,
 		sw:         sw,
 		motion:     motionSvc,
+		fs:         fsSvc,
 		speech:     speech,
 		sequences:  conf.Sequences,
 		cancelCtx:  cancelCtx,

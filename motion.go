@@ -72,9 +72,16 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	moveReq := motion.MoveReq{
 		ComponentName: pd.componentName,
 		Destination:   destination,
+		WorldState:    s.buildWorldState(),
 	}
 
-	if lc != nil || len(allowedCollisions) > 0 {
+	// Merge step-level and released-filter collision allowances.
+	allAllowedCollisions := allowedCollisions
+	if s.releasedCollisionAllowances != nil {
+		allAllowedCollisions = append(allAllowedCollisions, s.releasedCollisionAllowances...)
+	}
+
+	if lc != nil || len(allAllowedCollisions) > 0 {
 		moveReq.Constraints = &motionplan.Constraints{}
 	}
 
@@ -89,9 +96,9 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 		}
 	}
 
-	if len(allowedCollisions) > 0 {
-		allows := make([]motionplan.CollisionSpecificationAllowedFrameCollisions, len(allowedCollisions))
-		for i, ac := range allowedCollisions {
+	if len(allAllowedCollisions) > 0 {
+		allows := make([]motionplan.CollisionSpecificationAllowedFrameCollisions, len(allAllowedCollisions))
+		for i, ac := range allAllowedCollisions {
 			allows[i] = motionplan.CollisionSpecificationAllowedFrameCollisions{
 				Frame1: ac.Frame1,
 				Frame2: ac.Frame2,
@@ -153,6 +160,73 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 		}
 	}
 	return nil
+}
+
+// captureFilterObstacle snapshots the "filter" frame's current world pose and
+// geometry from the frame system, storing it as a static obstacle for the
+// motion planner. Call this after locking the portafilter so subsequent moves
+// avoid the now-detached filter.
+func (s *beanjaminCoffee) captureFilterObstacle(ctx context.Context) error {
+	const filterFrame = "filter"
+
+	// 1. Get the filter's current world pose.
+	pif, err := s.fs.GetPose(ctx, filterFrame, referenceframe.World, nil, nil)
+	if err != nil {
+		return fmt.Errorf("get filter world pose: %w", err)
+	}
+
+	// 2. Find the filter's geometry from the frame system config.
+	cfg, err := s.fs.FrameSystemConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("get frame system config: %w", err)
+	}
+	var geom spatialmath.Geometry
+	for _, part := range cfg.Parts {
+		if part.FrameConfig.Name() == filterFrame {
+			geom = part.FrameConfig.Geometry()
+			break
+		}
+	}
+	if geom == nil {
+		return fmt.Errorf("no geometry found for frame %q", filterFrame)
+	}
+
+	// 3. Transform the geometry to its world position.
+	worldGeom := geom.Transform(pif.Pose())
+	worldGeom.SetLabel("released-filter")
+
+	// 4. Store as a static obstacle in the world frame.
+	s.releasedObstacle = referenceframe.NewGeometriesInFrame(referenceframe.World, []spatialmath.Geometry{worldGeom})
+
+	// 5. Build collision allowances so the arm-attached (phantom) filter frame
+	//    can pass through all other frames without blocking the planner.
+	var allowances []AllowedCollision
+	for _, part := range cfg.Parts {
+		name := part.FrameConfig.Name()
+		if name == filterFrame {
+			continue
+		}
+		allowances = append(allowances, AllowedCollision{Frame1: filterFrame, Frame2: name})
+	}
+	allowances = append(allowances, AllowedCollision{Frame1: filterFrame, Frame2: "released-filter"})
+	s.releasedCollisionAllowances = allowances
+
+	s.logger.Infof("captured filter obstacle at world pose %v with %d collision allowances", pif.Pose().Point(), len(allowances))
+	return nil
+}
+
+// buildWorldState returns a WorldState containing the released filter obstacle,
+// or nil if the portafilter is still attached to the arm.
+func (s *beanjaminCoffee) buildWorldState() *referenceframe.WorldState {
+	if s.releasedObstacle == nil {
+		return nil
+	}
+	ws, err := referenceframe.NewWorldState([]*referenceframe.GeometriesInFrame{s.releasedObstacle}, nil)
+	if err != nil {
+		s.logger.Warnf("failed to build world state with filter obstacle: %v", err)
+		return nil
+	}
+	return ws
 }
 
 // computePivotPoses returns interpolated poses between startPose and endPose.
