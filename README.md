@@ -156,10 +156,10 @@ Runs named sequences of poses on a `multi-poses-execution-switch` component. Sup
 
 **Step fields:**
 
-| Name                | Type   | Required | Description                                                                                                                       |
-| ------------------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `pose_name`         | string | Yes      | Name of the target pose (must exist on the switch).                                                                               |
-| `pause_secs`        | float  | No       | Seconds to pause after reaching the pose.                                                                                         |
+| Name                | Type   | Required | Description                                                                                                                         |
+| ------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `pose_name`         | string | Yes      | Name of the target pose (must exist on the switch).                                                                                 |
+| `pause_secs`        | float  | No       | Seconds to pause after reaching the pose.                                                                                           |
 | `linear_constraint` | object | No       | If set, the motion planner uses a straight-line path. Fields: `line_tolerance_mm` (max deviation) and `orientation_tolerance_degs`. |
 
 ### DoCommand
@@ -192,7 +192,7 @@ Runs named sequences of poses on a `multi-poses-execution-switch` component. Sup
 
 Only `drink` is required. If `initial_greeting` is omitted, a random greeting is generated. If `customer_name` is provided, it personalizes the greeting and completion messages. Runs the full espresso sequence: grind, tamp, and lock porta filter.
 
-**`execute_action`** - Run a single coffee-making action by name. Available actions: `grind_coffee`, `tamp_ground`, `lock_porta_filter`, `unlock_porta_filter`.
+**`execute_action`** - Run a single coffee-making action by name. Available actions: `grind_coffee`, `tamp_ground`, `lock_portafilter`, `unlock_portafilter`.
 
 ```json
 {"execute_action": "grind_coffee"}
@@ -238,12 +238,12 @@ Synthesises speech using the [Google Cloud Text-to-Speech API](https://cloud.goo
 }
 ```
 
-| Name                     | Type   | Required | Description                                                                                                    |
-| ------------------------ | ------ | -------- | -------------------------------------------------------------------------------------------------------------- |
-| `audio_out`              | string | Yes      | Name of the `audio_out` component dependency used for playback.                                                |
-| `google_credentials_json`| object | Yes      | Google Cloud service account credentials as a JSON object (not a string).                                      |
-| `language_code`          | string | No       | BCP-47 language code. Defaults to `"en-US"`.                                                                   |
-| `voice_name`             | string | No       | Specific Google voice name (e.g. `"en-US-Neural2-F"`). If omitted, Google picks a default for the language.    |
+| Name                      | Type   | Required | Description                                                                                                 |
+| ------------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------- |
+| `audio_out`               | string | Yes      | Name of the `audio_out` component dependency used for playback.                                             |
+| `google_credentials_json` | object | Yes      | Google Cloud service account credentials as a JSON object (not a string).                                   |
+| `language_code`           | string | No       | BCP-47 language code. Defaults to `"en-US"`.                                                                |
+| `voice_name`              | string | No       | Specific Google voice name (e.g. `"en-US-Neural2-F"`). If omitted, Google picks a default for the language. |
 
 ### Example Configuration
 
