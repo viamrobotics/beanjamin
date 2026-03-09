@@ -94,8 +94,8 @@ type multiPosesExecutionSwitch struct {
 	poseNames    []string
 	stateMachine statemachine.Service
 
-	executing  atomic.Bool
 	mu         sync.Mutex
+	executing  atomic.Bool
 	cancelFunc context.CancelFunc
 }
 
@@ -166,15 +166,6 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 		}, nil
 	}
 
-	if _, ok := cmd["detect_current_pose"]; ok {
-		poseName, err := s.detectCurrentPose(ctx)
-		if err != nil {
-			s.logger.Warnw("DoCommand", "error", err)
-			return nil, err
-		}
-		return map[string]interface{}{"pose_name": poseName}, nil
-	}
-
 	if name, ok := cmd["get_pose_by_name"].(string); ok {
 		for _, pc := range s.cfg.Poses {
 			if pc.PoseName == name {
@@ -208,7 +199,7 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 		return map[string]interface{}{"status": "cancelled"}, nil
 	}
 
-	err := fmt.Errorf("unknown command, supported commands: set_position_by_name, get_current_position_name, detect_current_pose, get_pose_by_name, cancel")
+	err := fmt.Errorf("unknown command, supported commands: set_position_by_name, get_current_position_name, get_pose_by_name, cancel")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }
@@ -225,13 +216,17 @@ func (s *multiPosesExecutionSwitch) GetNumberOfPositions(ctx context.Context, ex
 }
 
 func (s *multiPosesExecutionSwitch) GetPosition(ctx context.Context, extra map[string]interface{}) (uint32, error) {
-	resp, err := s.stateMachine.DoCommand(ctx, map[string]interface{}{"get_state": true})
-	if err != nil {
-		return 0, fmt.Errorf("failed to get state machine state: %w", err)
-	}
-	currentPoseName, ok := resp["state_name"].(string)
-	if !ok || currentPoseName == "uninitialized" {
-		return 0, errors.New("state machine is uninitialized; use set_state to initialize")
+	currentPoseName := s.stateMachine.GetState()
+	if currentPoseName == "" {
+		// State machine uninitialized — detect from current component pose and initialize.
+		detected, err := s.detectCurrentPose(ctx)
+		if err != nil {
+			return 0, fmt.Errorf("state machine uninitialized and pose detection failed: %w", err)
+		}
+		if err := s.stateMachine.SetState(detected); err != nil {
+			return 0, fmt.Errorf("failed to initialize state machine from detected pose: %w", err)
+		}
+		currentPoseName = detected
 	}
 	for i, name := range s.poseNames {
 		if name == currentPoseName {

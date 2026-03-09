@@ -204,15 +204,13 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		stateMachine: sm,
 	}
 
-	// Detect the arm's current pose and initialize the state machine from it,
-	if resp, err := sw.DoCommand(ctx, map[string]interface{}{"detect_current_pose": true}); err != nil {
-		logger.Warnf("state machine: could not detect arm pose at startup: %v; use set_state to initialize manually", err)
-	} else if poseName, ok := resp["pose_name"].(string); ok {
-		if sm.InitFromPoseName(poseName) {
-			logger.Infof("state machine: auto-initialized from detected arm pose %q", poseName)
-		} else {
-			logger.Warnf("state machine: detected pose %q does not match any known state; use set_state to initialize manually", poseName)
-		}
+	// GetPosition auto-detects and initializes the state machine from the component's
+	// current pose. Logs a warning if detection fails; use set_state to initialize manually.
+	if idx, err := sw.GetPosition(ctx, nil); err != nil {
+		logger.Warnf("state machine: could not determine initial position: %v; use set_state to initialize manually", err)
+	} else {
+		_, names, _ := sw.GetNumberOfPositions(ctx, nil)
+		logger.Infof("state machine: initialized at %q", names[idx])
 	}
 
 	return s, nil
@@ -308,17 +306,15 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 }
 
 func (s *beanjaminCoffee) checkPosition(ctx context.Context, expected string) error {
-	resp, err := s.sw.DoCommand(ctx, map[string]interface{}{
-		"get_current_position_name": true,
-	})
+	idx, err := s.sw.GetPosition(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to get current position: %w", err)
 	}
-	currentPose, ok := resp["position_name"].(string)
-	if !ok {
-		return errors.New("unexpected response from get_current_position_name")
+	_, names, err := s.sw.GetNumberOfPositions(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to get position names: %w", err)
 	}
-	if currentPose != expected {
+	if currentPose := names[idx]; currentPose != expected {
 		return fmt.Errorf("expected switch at %q, but currently at %q", expected, currentPose)
 	}
 	return nil

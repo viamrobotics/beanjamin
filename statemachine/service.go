@@ -55,6 +55,13 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 type Service interface {
 	resource.Resource
 
+	// GetState returns the current pose name, or "" if uninitialized.
+	GetState() string
+
+	// SetState sets the current state to the given pose name.
+	// Returns an error if the pose name is not a known state.
+	SetState(poseName string) error
+
 	// ResolvePath finds the shortest sequence of state transitions from the current
 	// state to the state whose pose name matches targetPose.
 	ResolvePath(targetPose string) (intermediates []string, finalPose string, err error)
@@ -62,10 +69,6 @@ type Service interface {
 	// CommitTransition records the new state after a move completes successfully.
 	// Unknown pose names are silently ignored.
 	CommitTransition(poseName string)
-
-	// InitFromPoseName sets the current state from a pose name. Returns true if the
-	// pose name matched a known state, false otherwise.
-	InitFromPoseName(poseName string) bool
 
 	// ValidatePath checks that every pose in poseNames is a known state machine state
 	// and that each consecutive pair has a direct transition.
@@ -101,14 +104,17 @@ func (s *service) Name() resource.Name {
 	return s.name
 }
 
+// GetState returns the current pose name, or "" if uninitialized.
+func (s *service) GetState() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.currentPose
+}
+
 // ResolvePath finds the shortest sequence of state transitions from the current
 // state to the state whose pose name matches targetPose.
 func (s *service) ResolvePath(targetPose string) (intermediates []string, finalPose string, err error) {
-	s.mu.Lock()
-	current := s.currentPose
-	s.mu.Unlock()
-
-	return resolvePath(s.transitions, current, targetPose)
+	return resolvePath(s.transitions, s.GetState(), targetPose)
 }
 
 // CommitTransition records the new state after a move completes successfully.
@@ -122,16 +128,17 @@ func (s *service) CommitTransition(poseName string) {
 	s.mu.Unlock()
 }
 
-// InitFromPoseName sets the current state from a pose name. Returns true if the
-// pose name matched a known state, false otherwise.
-func (s *service) InitFromPoseName(poseName string) bool {
+// SetState sets the current state to the given pose name.
+// Returns an error if the pose name is not a known state.
+func (s *service) SetState(poseName string) error {
 	if _, ok := s.transitions[poseName]; !ok {
-		return false
+		return fmt.Errorf("set_state: %q is not a known state", poseName)
 	}
 	s.mu.Lock()
 	s.currentPose = poseName
 	s.mu.Unlock()
-	return true
+	s.logger.Infof("state machine: state set to %q", poseName)
+	return nil
 }
 
 // ValidatePath checks that every pose in poseNames is a known state machine state
@@ -141,53 +148,5 @@ func (s *service) ValidatePath(poseNames []string, startPose string) error {
 }
 
 func (s *service) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
-	if _, ok := cmd["get_state"]; ok {
-		return s.getState(), nil
-	}
-	if nameRaw, ok := cmd["set_state"]; ok {
-		return s.setState(nameRaw)
-	}
-	return nil, errors.New("unknown command, supported commands: get_state, set_state")
+	return nil, errors.New("state machine does not support DoCommand; use GetState, SetState, ResolvePath, CommitTransition, and ValidatePath methods instead")
 }
-
-func (s *service) getState() map[string]interface{} {
-	s.mu.Lock()
-	pose := s.currentPose
-	s.mu.Unlock()
-
-	stateName := pose
-	if stateName == "" {
-		stateName = "uninitialized"
-	}
-
-	allowedNext := []string{}
-	if pose != "" {
-		if targets, ok := s.transitions[pose]; ok {
-			allowedNext = targets
-		}
-	}
-
-	return map[string]interface{}{
-		"state_name":          stateName,
-		"allowed_transitions": allowedNext,
-	}
-}
-
-func (s *service) setState(nameRaw any) (map[string]interface{}, error) {
-	name, ok := nameRaw.(string)
-	if !ok {
-		return nil, fmt.Errorf("set_state: value must be a string, got %T", nameRaw)
-	}
-	if _, ok := s.transitions[name]; !ok {
-		return nil, fmt.Errorf("set_state: %q is not a known state", name)
-	}
-	s.mu.Lock()
-	s.currentPose = name
-	s.mu.Unlock()
-	s.logger.Infof("state machine: state manually set to %q", name)
-	return map[string]interface{}{
-		"status":     "ok",
-		"state_name": name,
-	}, nil
-}
-
