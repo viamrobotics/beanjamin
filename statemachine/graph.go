@@ -4,23 +4,6 @@ import (
 	"fmt"
 )
 
-// defaultTransitions returns the default state machine graph.
-// Each key is a unique state name; values are the states directly reachable from that state.
-func defaultTransitions() map[string][]string {
-	return map[string][]string{
-		"home":                {"grinder_approach", "tamper_approach", "coffee_approach", "dump_grounds", "pre_dump_grounds"},
-		"grinder_approach":    {"home", "grinder_activate", "tamper_approach", "coffee_approach", "pre_dump_grounds"},
-		"grinder_activate":    {"grinder_approach"},
-		"tamper_approach":     {"home", "grinder_approach", "tamper_activate", "coffee_approach", "pre_dump_grounds"},
-		"tamper_activate":     {"tamper_approach"},
-		"coffee_approach":     {"home", "grinder_approach", "tamper_approach", "coffee_in", "pre_dump_grounds"},
-		"coffee_in":           {"coffee_approach", "coffee_locked_final"},
-		"coffee_locked_final": {"coffee_in"},
-		"dump_grounds":        {"home", "pre_dump_grounds"},
-		"pre_dump_grounds":    {"home", "grinder_approach", "tamper_approach", "coffee_approach", "dump_grounds"},
-	}
-}
-
 // isDirectTransition checks if there is a direct transition from state from to state to.
 func isDirectTransition(transitions map[string][]string, from, to string) bool {
 	for _, next := range transitions[from] {

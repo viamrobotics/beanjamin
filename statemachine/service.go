@@ -75,6 +75,7 @@ type Service interface {
 
 type service struct {
 	resource.AlwaysRebuild
+	resource.TriviallyCloseable
 
 	name        resource.Name
 	logger      logging.Logger
@@ -88,17 +89,11 @@ func newService(ctx context.Context, deps resource.Dependencies, rawConf resourc
 	if err != nil {
 		return nil, err
 	}
-
-	transitions := conf.Transitions
-	if len(transitions) == 0 {
-		transitions = defaultTransitions()
-	}
-
 	return &service{
 		name:        rawConf.ResourceName(),
 		logger:      logger,
 		currentPose: "",
-		transitions: transitions,
+		transitions: conf.Transitions,
 	}, nil
 }
 
@@ -196,6 +191,3 @@ func (s *service) setState(nameRaw any) (map[string]interface{}, error) {
 	}, nil
 }
 
-func (s *service) Close(context.Context) error {
-	return nil
-}

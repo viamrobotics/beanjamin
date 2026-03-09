@@ -269,16 +269,19 @@ func (s *multiPosesExecutionSwitch) movePose(ctx context.Context, pc *PoseConf) 
 // goToPosition moves the component to the pose at the given index, routing
 // through state-machine intermediates when a state machine is configured.
 func (s *multiPosesExecutionSwitch) goToPosition(ctx context.Context, position uint32) error {
+	ctx, cancel := context.WithCancel(ctx)
+
+	s.mu.Lock()
 	if !s.executing.CompareAndSwap(false, true) {
+		s.mu.Unlock()
+		cancel()
 		return errors.New("switch is currently executing")
 	}
-	defer s.executing.Store(false)
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	s.mu.Lock()
 	s.cancelFunc = cancel
 	s.mu.Unlock()
+
+	defer s.executing.Store(false)
+	defer cancel()
 
 	targetPose := s.cfg.Poses[position]
 	s.logger.Infof("moving %s to pose %q (index %d)", s.cfg.ComponentName, targetPose.PoseName, position)
