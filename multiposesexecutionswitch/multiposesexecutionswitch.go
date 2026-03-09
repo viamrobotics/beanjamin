@@ -10,7 +10,6 @@ import (
 
 	"github.com/golang/geo/r3"
 
-	"go.viam.com/rdk/components/arm"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
@@ -92,7 +91,6 @@ type multiPosesExecutionSwitch struct {
 	logger       logging.Logger
 	cfg          *Config
 	motion       motion.Service
-	arm          arm.Arm
 	poseNames    []string
 	stateMachine statemachine.Service
 
@@ -126,23 +124,11 @@ func newMultiPosesExecutionSwitch(ctx context.Context, deps resource.Dependencie
 		return nil, fmt.Errorf("resource %q is not a statemachine.Service", conf.StateMachineName)
 	}
 
-	// Try to resolve the component as an arm for pose detection at startup.
-	// If the component is not an arm (or not found), pose detection is unavailable.
-	var armComp arm.Arm
-	if compRes, ok := deps[arm.Named(conf.ComponentName)]; ok {
-		if a, ok := compRes.(arm.Arm); ok {
-			armComp = a
-		} else {
-			logger.Warnf("component %q is not an arm; automatic pose detection at startup will be unavailable", conf.ComponentName)
-		}
-	}
-
 	return &multiPosesExecutionSwitch{
 		name:         rawConf.ResourceName(),
 		logger:       logger,
 		cfg:          conf,
 		motion:       motionSvc,
-		arm:          armComp,
 		poseNames:    poseNames,
 		stateMachine: sm,
 		cancelFunc:   func() {},
@@ -262,18 +248,15 @@ func (s *multiPosesExecutionSwitch) SetPosition(ctx context.Context, position ui
 	return s.goToPosition(ctx, position)
 }
 
-// detectCurrentPose queries the arm's current end position and finds the closest
-// configured pose within tolerance. Returns the pose name, or an error if no pose
-// matches or the component is not an arm.
+// detectCurrentPose queries the component's current pose via the motion service and
+// finds the closest configured pose within tolerance. Returns the pose name, or an
+// error if no pose matches.
 func (s *multiPosesExecutionSwitch) detectCurrentPose(ctx context.Context) (string, error) {
-	if s.arm == nil {
-		return "", errors.New("component is not an arm; automatic pose detection unavailable — use set_state to initialize manually")
-	}
-
-	currentPose, err := s.arm.EndPosition(ctx, nil)
+	poseInFrame, err := s.motion.GetPose(ctx, s.cfg.ComponentName, s.cfg.ReferenceFrame, nil, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to get arm end position: %w", err)
+		return "", fmt.Errorf("failed to get component pose: %w", err)
 	}
+	currentPose := poseInFrame.Pose()
 
 	const positionToleranceMm = 5.0
 	const orientationToleranceDeg = 5.0
