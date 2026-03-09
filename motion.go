@@ -7,8 +7,9 @@ import (
 
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/motionplan"
+	"go.viam.com/rdk/motionplan/armplanning"
 	"go.viam.com/rdk/referenceframe"
-	"go.viam.com/rdk/services/motion"
+	"go.viam.com/rdk/robot/framesystem"
 	"go.viam.com/rdk/spatialmath"
 )
 
@@ -65,53 +66,178 @@ func (s *beanjaminCoffee) fetchPose(ctx context.Context, poseName string) (*pose
 	return &poseData{pose: pose, refFrame: refFrame, componentName: componentName}, nil
 }
 
-// moveToRawPose moves to a computed pose with optional linear constraint and allowed collisions.
+// buildFrameSystem constructs a frame system from the framesystem service,
+// optionally re-parenting the filter frame to the world when the portafilter is locked.
+func (s *beanjaminCoffee) buildFrameSystem(ctx context.Context) (*referenceframe.FrameSystem, referenceframe.FrameSystemInputs, error) {
+	fs, err := framesystem.NewFromService(ctx, s.fs, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build frame system: %w", err)
+	}
+
+	fsInputs, err := s.fs.CurrentInputs(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get current inputs: %w", err)
+	}
+
+	if s.filterLocked {
+		if err := s.reparentFilterFrame(ctx, fs, fsInputs); err != nil {
+			return nil, nil, fmt.Errorf("reparent filter frame: %w", err)
+		}
+	}
+
+	return fs, fsInputs, nil
+}
+
+// reparentFilterFrame detaches the "filter" frame from the arm subtree and
+// re-adds it as a static frame parented to the world at its current pose.
+// Any descendant frames of "filter" are preserved and re-attached under the
+// new static frame, maintaining their relative transforms.
+func (s *beanjaminCoffee) reparentFilterFrame(ctx context.Context, fs *referenceframe.FrameSystem, fsInputs referenceframe.FrameSystemInputs) error {
+	const filterFrame = "filter"
+
+	filterF := fs.Frame(filterFrame)
+	if filterF == nil {
+		return fmt.Errorf("frame %q not found in frame system", filterFrame)
+	}
+
+	// 1. Compute filter's world pose using current joint inputs.
+	filterPIF := referenceframe.NewPoseInFrame(filterFrame, spatialmath.NewZeroPose())
+	tf, err := fs.Transform(fsInputs.ToLinearInputs(), filterPIF, referenceframe.World)
+	if err != nil {
+		return fmt.Errorf("transform filter to world: %w", err)
+	}
+	worldPose := tf.(*referenceframe.PoseInFrame).Pose()
+
+	// 2. Get the filter's geometry from the frame system config.
+	cfg, err := s.fs.FrameSystemConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("get frame system config: %w", err)
+	}
+	var geom spatialmath.Geometry
+	for _, part := range cfg.Parts {
+		if part.FrameConfig.Name() == filterFrame {
+			geom = part.FrameConfig.Geometry()
+			break
+		}
+	}
+	if geom == nil {
+		return fmt.Errorf("no geometry found for frame %q", filterFrame)
+	}
+
+	// 3. Collect filter's descendants in BFS order before removal.
+	//    BFS guarantees parents appear before children, so re-adding in
+	//    order will always find the parent frame already present.
+	type descendantEntry struct {
+		frame      referenceframe.Frame
+		parentName string
+	}
+	var descendants []descendantEntry
+	queue := []string{filterFrame}
+	for len(queue) > 0 {
+		parentName := queue[0]
+		queue = queue[1:]
+		for _, name := range fs.FrameNames() {
+			f := fs.Frame(name)
+			p, err := fs.Parent(f)
+			if err != nil || p.Name() != parentName {
+				continue
+			}
+			descendants = append(descendants, descendantEntry{f, parentName})
+			queue = append(queue, name)
+		}
+	}
+
+	// 4. Remove filter (and all descendants) from the arm subtree.
+	fs.RemoveFrame(filterF)
+
+	// 5. Re-add filter as a static frame parented to world at the locked position.
+	newFrame, err := referenceframe.NewStaticFrameWithGeometry(filterFrame, worldPose, geom)
+	if err != nil {
+		return fmt.Errorf("create static filter frame: %w", err)
+	}
+	if err := fs.AddFrame(newFrame, fs.World()); err != nil {
+		return fmt.Errorf("add filter frame to world: %w", err)
+	}
+
+	// 6. Re-attach descendants under the new static filter, preserving subtree structure.
+	for _, d := range descendants {
+		parent := fs.Frame(d.parentName) // "filter" (now static) or a previously re-added descendant
+		if err := fs.AddFrame(d.frame, parent); err != nil {
+			return fmt.Errorf("re-add descendant %q under %q: %w", d.frame.Name(), d.parentName, err)
+		}
+	}
+
+	s.logger.Infof("re-parented filter frame to world at %v (%d descendants preserved)", worldPose.Point(), len(descendants))
+	return nil
+}
+
+// moveToRawPose plans a motion using armplanning and executes it on the arm.
 func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision) error {
+	fs, fsInputs, err := s.buildFrameSystem(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Transform destination to world frame.
 	destination := referenceframe.NewPoseInFrame(pd.refFrame, pd.pose)
-
-	moveReq := motion.MoveReq{
-		ComponentName: pd.componentName,
-		Destination:   destination,
-		WorldState:    s.buildWorldState(),
+	tf, err := fs.Transform(fsInputs.ToLinearInputs(), destination, referenceframe.World)
+	if err != nil {
+		return fmt.Errorf("transform destination to world: %w", err)
 	}
+	goalPose := tf.(*referenceframe.PoseInFrame)
 
-	// Merge step-level and released-filter collision allowances.
-	allAllowedCollisions := allowedCollisions
-	if s.releasedCollisionAllowances != nil {
-		allAllowedCollisions = append(allAllowedCollisions, s.releasedCollisionAllowances...)
+	startState := armplanning.NewPlanState(nil, fsInputs)
+	goalState := armplanning.NewPlanState(
+		referenceframe.FrameSystemPoses{pd.componentName: goalPose}, nil,
+	)
+
+	// Build constraints.
+	var constraints *motionplan.Constraints
+	if lc != nil || len(allowedCollisions) > 0 {
+		constraints = &motionplan.Constraints{}
 	}
-
-	if lc != nil || len(allAllowedCollisions) > 0 {
-		moveReq.Constraints = &motionplan.Constraints{}
-	}
-
 	if lc != nil {
 		s.logger.Infof("applying linear constraint (line=%.1fmm, orient=%.1f°)",
 			lc.LineToleranceMm, lc.OrientationToleranceDegs)
-		moveReq.Constraints.LinearConstraint = []motionplan.LinearConstraint{
+		constraints.LinearConstraint = []motionplan.LinearConstraint{
 			{
 				LineToleranceMm:          lc.LineToleranceMm,
 				OrientationToleranceDegs: lc.OrientationToleranceDegs,
 			},
 		}
 	}
-
-	if len(allAllowedCollisions) > 0 {
-		allows := make([]motionplan.CollisionSpecificationAllowedFrameCollisions, len(allAllowedCollisions))
-		for i, ac := range allAllowedCollisions {
+	if len(allowedCollisions) > 0 {
+		allows := make([]motionplan.CollisionSpecificationAllowedFrameCollisions, len(allowedCollisions))
+		for i, ac := range allowedCollisions {
 			allows[i] = motionplan.CollisionSpecificationAllowedFrameCollisions{
 				Frame1: ac.Frame1,
 				Frame2: ac.Frame2,
 			}
 		}
 		s.logger.Infof("allowing %d collision pair(s)", len(allows))
-		moveReq.Constraints.CollisionSpecification = []motionplan.CollisionSpecification{
+		constraints.CollisionSpecification = []motionplan.CollisionSpecification{
 			{Allows: allows},
 		}
 	}
 
-	_, err := s.motion.Move(ctx, moveReq)
-	return err
+	// Plan.
+	plan, _, err := armplanning.PlanMotion(ctx, s.logger, &armplanning.PlanRequest{
+		FrameSystem: fs,
+		Goals:       []*armplanning.PlanState{goalState},
+		StartState:  startState,
+		Constraints: constraints,
+	})
+	if err != nil {
+		return fmt.Errorf("plan motion: %w", err)
+	}
+
+	// Execute — extract joint positions and send to arm.
+	// Skip positions[0] as it's the current position (start state).
+	positions, err := plan.Trajectory().GetFrameInputs(pd.componentName)
+	if err != nil {
+		return fmt.Errorf("get frame inputs from plan: %w", err)
+	}
+	return s.arm.MoveThroughJointPositions(ctx, positions[1:], nil, nil)
 }
 
 // executePivot fetches start and end poses, computes interpolated waypoints,
@@ -160,73 +286,6 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 		}
 	}
 	return nil
-}
-
-// captureFilterObstacle snapshots the "filter" frame's current world pose and
-// geometry from the frame system, storing it as a static obstacle for the
-// motion planner. Call this after locking the portafilter so subsequent moves
-// avoid the now-detached filter.
-func (s *beanjaminCoffee) captureFilterObstacle(ctx context.Context) error {
-	const filterFrame = "filter"
-
-	// 1. Get the filter's current world pose.
-	pif, err := s.fs.GetPose(ctx, filterFrame, referenceframe.World, nil, nil)
-	if err != nil {
-		return fmt.Errorf("get filter world pose: %w", err)
-	}
-
-	// 2. Find the filter's geometry from the frame system config.
-	cfg, err := s.fs.FrameSystemConfig(ctx)
-	if err != nil {
-		return fmt.Errorf("get frame system config: %w", err)
-	}
-	var geom spatialmath.Geometry
-	for _, part := range cfg.Parts {
-		if part.FrameConfig.Name() == filterFrame {
-			geom = part.FrameConfig.Geometry()
-			break
-		}
-	}
-	if geom == nil {
-		return fmt.Errorf("no geometry found for frame %q", filterFrame)
-	}
-
-	// 3. Transform the geometry to its world position.
-	worldGeom := geom.Transform(pif.Pose())
-	worldGeom.SetLabel("released-filter")
-
-	// 4. Store as a static obstacle in the world frame.
-	s.releasedObstacle = referenceframe.NewGeometriesInFrame(referenceframe.World, []spatialmath.Geometry{worldGeom})
-
-	// 5. Build collision allowances so the arm-attached (phantom) filter frame
-	//    can pass through all other frames without blocking the planner.
-	var allowances []AllowedCollision
-	for _, part := range cfg.Parts {
-		name := part.FrameConfig.Name()
-		if name == filterFrame {
-			continue
-		}
-		allowances = append(allowances, AllowedCollision{Frame1: filterFrame, Frame2: name})
-	}
-	allowances = append(allowances, AllowedCollision{Frame1: filterFrame, Frame2: "released-filter"})
-	s.releasedCollisionAllowances = allowances
-
-	s.logger.Infof("captured filter obstacle at world pose %v with %d collision allowances", pif.Pose().Point(), len(allowances))
-	return nil
-}
-
-// buildWorldState returns a WorldState containing the released filter obstacle,
-// or nil if the portafilter is still attached to the arm.
-func (s *beanjaminCoffee) buildWorldState() *referenceframe.WorldState {
-	if s.releasedObstacle == nil {
-		return nil
-	}
-	ws, err := referenceframe.NewWorldState([]*referenceframe.GeometriesInFrame{s.releasedObstacle}, nil)
-	if err != nil {
-		s.logger.Warnf("failed to build world state with filter obstacle: %v", err)
-		return nil
-	}
-	return ws
 }
 
 // computePivotPoses returns interpolated poses between startPose and endPose.

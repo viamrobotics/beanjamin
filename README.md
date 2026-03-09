@@ -126,8 +126,8 @@ Runs named sequences of poses on a `multi-poses-execution-switch` component. Sup
   // string (required) — name of the multi-poses-execution-switch component
   "pose_switcher_name": "multi-pose-execution-switch",
 
-  // string (required) — name of the motion service (typically "builtin")
-  "motion_service_name": "builtin",
+  // string (required) — name of the arm component used for motion planning and execution
+  "arm_name": "my-arm",
 
   // string (optional) — name of a text-to-speech generic service for spoken greetings
   "speech_service_name": "speech",
