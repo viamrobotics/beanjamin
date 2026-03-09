@@ -148,5 +148,11 @@ func (s *service) ValidatePath(poseNames []string, startPose string) error {
 }
 
 func (s *service) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
-	return nil, errors.New("state machine does not support DoCommand; use GetState, SetState, ResolvePath, CommitTransition, and ValidatePath methods instead")
+	if name, ok := cmd["set_state"].(string); ok {
+		return map[string]interface{}{
+			"status":     "ok",
+			"state_name": name,
+		}, s.SetState(name)
+	}
+	return nil, errors.New("unknown command, supported commands: set_state")
 }

@@ -4,9 +4,9 @@ import (
 	"testing"
 )
 
-// defaultTransitions returns the default state machine graph.
+// testTransitions returns the default state machine graph.
 // Each key is a unique state name; values are the states directly reachable from that state.
-func defaultTransitions() map[string][]string {
+func testTransitions() map[string][]string {
 	return map[string][]string{
 		"home":                {"grinder_approach", "tamper_approach", "coffee_approach", "dump_grounds", "pre_dump_grounds"},
 		"grinder_approach":    {"home", "grinder_activate", "tamper_approach", "coffee_approach", "pre_dump_grounds"},
@@ -22,7 +22,7 @@ func defaultTransitions() map[string][]string {
 }
 
 func TestDefaultTransitions(t *testing.T) {
-	tr := defaultTransitions()
+	tr := testTransitions()
 	expectedKeys := []string{
 		"home", "grinder_approach", "grinder_activate",
 		"tamper_approach", "tamper_activate",
@@ -48,7 +48,7 @@ func TestDefaultTransitions(t *testing.T) {
 }
 
 func TestIsDirectTransition(t *testing.T) {
-	tr := defaultTransitions()
+	tr := testTransitions()
 
 	t.Run("valid", func(t *testing.T) {
 		pairs := []struct {
@@ -96,7 +96,7 @@ func TestIsDirectTransition(t *testing.T) {
 }
 
 func TestValidatePath(t *testing.T) {
-	tr := defaultTransitions()
+	tr := testTransitions()
 
 	t.Run("valid sequence", func(t *testing.T) {
 		poses := []string{"home", "grinder_approach", "grinder_activate", "grinder_approach"}
@@ -143,7 +143,7 @@ func TestValidatePath(t *testing.T) {
 }
 
 func TestResolvePath(t *testing.T) {
-	tr := defaultTransitions()
+	tr := testTransitions()
 
 	t.Run("uninitialized returns error", func(t *testing.T) {
 		_, _, err := resolvePath(tr, "", "home")
