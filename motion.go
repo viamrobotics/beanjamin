@@ -93,15 +93,15 @@ func (s *beanjaminCoffee) buildFrameSystem(ctx context.Context) (*referenceframe
 // Any descendant frames of "filter" are preserved and re-attached under the
 // new static frame, maintaining their relative transforms.
 func (s *beanjaminCoffee) reparentFilterFrame(ctx context.Context, fs *referenceframe.FrameSystem, fsInputs referenceframe.FrameSystemInputs) error {
-	const filterFrame = "filter"
+	const filterFrameName = "filter"
 
-	filterF := fs.Frame(filterFrame)
-	if filterF == nil {
-		return fmt.Errorf("frame %q not found in frame system", filterFrame)
+	filterFrame := fs.Frame(filterFrameName)
+	if filterFrame == nil {
+		return fmt.Errorf("frame %q not found in frame system", filterFrameName)
 	}
 
 	// 1. Compute filter's world pose using current joint inputs.
-	filterPIF := referenceframe.NewPoseInFrame(filterFrame, spatialmath.NewZeroPose())
+	filterPIF := referenceframe.NewPoseInFrame(filterFrameName, spatialmath.NewZeroPose())
 	tf, err := fs.Transform(fsInputs.ToLinearInputs(), filterPIF, referenceframe.World)
 	if err != nil {
 		return fmt.Errorf("transform filter to world: %w", err)
@@ -115,13 +115,13 @@ func (s *beanjaminCoffee) reparentFilterFrame(ctx context.Context, fs *reference
 	}
 	var geom spatialmath.Geometry
 	for _, part := range cfg.Parts {
-		if part.FrameConfig.Name() == filterFrame {
+		if part.FrameConfig.Name() == filterFrameName {
 			geom = part.FrameConfig.Geometry()
 			break
 		}
 	}
 	if geom == nil {
-		return fmt.Errorf("no geometry found for frame %q", filterFrame)
+		return fmt.Errorf("no geometry found for frame %q", filterFrameName)
 	}
 
 	// 3. Collect filter's descendants in BFS order before removal.
@@ -132,7 +132,7 @@ func (s *beanjaminCoffee) reparentFilterFrame(ctx context.Context, fs *reference
 		parentName string
 	}
 	var descendants []descendantEntry
-	queue := []string{filterFrame}
+	queue := []string{filterFrameName}
 	for len(queue) > 0 {
 		parentName := queue[0]
 		queue = queue[1:]
@@ -148,10 +148,10 @@ func (s *beanjaminCoffee) reparentFilterFrame(ctx context.Context, fs *reference
 	}
 
 	// 4. Remove filter (and all descendants) from the arm subtree.
-	fs.RemoveFrame(filterF)
+	fs.RemoveFrame(filterFrame)
 
 	// 5. Re-add filter as a static frame parented to world at the locked position.
-	newFrame, err := referenceframe.NewStaticFrameWithGeometry(filterFrame, worldPose, geom)
+	newFrame, err := referenceframe.NewStaticFrameWithGeometry(filterFrameName, worldPose, geom)
 	if err != nil {
 		return fmt.Errorf("create static filter frame: %w", err)
 	}
