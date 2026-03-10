@@ -183,7 +183,7 @@ func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error 
 		}
 	}
 	if err := s.lockFilterFrame(ctx); err != nil {
-		s.logger.Warnf("failed to lock filter frame: %v", err)
+		return fmt.Errorf("lock filter frame: %w", err)
 	}
 	return nil
 }
