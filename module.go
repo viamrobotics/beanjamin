@@ -8,11 +8,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.viam.com/rdk/components/arm"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
+	"go.viam.com/rdk/robot/framesystem"
 	generic "go.viam.com/rdk/services/generic"
-	"go.viam.com/rdk/services/motion"
 
 	// Register the multi-poses-execution-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
@@ -49,7 +51,7 @@ type Step struct {
 
 type Config struct {
 	PoseSwitcherName  string            `json:"pose_switcher_name"`
-	MotionServiceName string            `json:"motion_service_name"`
+	ArmName           string            `json:"arm_name"`
 	Sequences         map[string][]Step `json:"sequences"`
 	SpeechServiceName string            `json:"speech_service_name,omitempty"`
 }
@@ -58,8 +60,8 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.PoseSwitcherName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "pose_switcher_name")
 	}
-	if cfg.MotionServiceName == "" {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "motion_service_name")
+	if cfg.ArmName == "" {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "arm_name")
 	}
 	if len(cfg.Sequences) == 0 {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "sequences")
@@ -79,12 +81,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 	}
 
-	reqDeps := []string{cfg.PoseSwitcherName}
-	if cfg.MotionServiceName == "builtin" {
-		reqDeps = append(reqDeps, motion.Named("builtin").String())
-	} else {
-		reqDeps = append(reqDeps, cfg.MotionServiceName)
-	}
+	reqDeps := []string{cfg.PoseSwitcherName, framesystem.PublicServiceName.String(), arm.Named(cfg.ArmName).String()}
 
 	var optDeps []string
 	if cfg.SpeechServiceName != "" {
@@ -100,8 +97,10 @@ type beanjaminCoffee struct {
 	logger    logging.Logger
 	cfg       *Config
 	sw        toggleswitch.Switch
-	motion    motion.Service
-	speech    resource.Resource // nil when speech_service_name is not configured
+	arm       arm.Arm
+	fsSvc     framesystem.Service
+	cachedFS  *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
+	speech    resource.Resource           // nil when speech_service_name is not configured
 	sequences map[string][]Step
 
 	mu         sync.Mutex
@@ -132,10 +131,22 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, fmt.Errorf("resource %q is not a switch", conf.PoseSwitcherName)
 	}
 
-	motionSvc, err := motion.FromProvider(deps, conf.MotionServiceName)
+	armComp, err := arm.FromProvider(deps, conf.ArmName)
 	if err != nil {
 		cancelFunc()
-		return nil, fmt.Errorf("motion service %q not found in dependencies: %w", conf.MotionServiceName, err)
+		return nil, fmt.Errorf("arm %q not found in dependencies: %w", conf.ArmName, err)
+	}
+
+	fsSvc, err := framesystem.FromDependencies(deps)
+	if err != nil {
+		cancelFunc()
+		return nil, fmt.Errorf("frame system service not found in dependencies: %w", err)
+	}
+
+	cachedFS, err := framesystem.NewFromService(ctx, fsSvc, nil)
+	if err != nil {
+		cancelFunc()
+		return nil, fmt.Errorf("build initial frame system: %w", err)
 	}
 
 	_, validPoses, err := sw.GetNumberOfPositions(ctx, nil)
@@ -178,7 +189,9 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger:     logger,
 		cfg:        conf,
 		sw:         sw,
-		motion:     motionSvc,
+		arm:        armComp,
+		fsSvc:      fsSvc,
+		cachedFS:   cachedFS,
 		speech:     speech,
 		sequences:  conf.Sequences,
 		cancelCtx:  cancelCtx,

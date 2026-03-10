@@ -84,8 +84,8 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
 		"grind_coffee":        s.grindCoffee,
 		"tamp_ground":         s.tampGround,
-		"lock_porta_filter":   s.lockPortaFilter,
-		"unlock_porta_filter": s.unlockPortaFilter,
+		"lock_portafilter":   s.lockPortaFilter,
+		"unlock_portafilter": s.unlockPortaFilter,
 	}
 
 	action, ok := actions[name]
@@ -179,13 +179,19 @@ func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error 
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-			return fmt.Errorf("lock_porta_filter: %w", err)
+			return fmt.Errorf("lock_portafilter: %w", err)
 		}
+	}
+	if err := s.lockFilterFrame(ctx); err != nil {
+		return fmt.Errorf("lock filter frame: %w", err)
 	}
 	return nil
 }
 
 func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) error {
+	if err := s.unlockFilterFrame(ctx); err != nil {
+		return fmt.Errorf("unlock filter frame: %w", err)
+	}
 	steps := []Step{
 		{PoseName: "coffee_in", PivotFromPose: "coffee_locked_final", PivotDegreesPerStep: 5,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
@@ -193,7 +199,7 @@ func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) erro
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-			return fmt.Errorf("unlock_porta_filter: %w", err)
+			return fmt.Errorf("unlock_portafilter: %w", err)
 		}
 	}
 	return nil
