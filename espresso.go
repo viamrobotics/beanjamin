@@ -21,6 +21,7 @@ func (s *beanjaminCoffee) say(ctx context.Context, text string) error {
 
 var coffeeBrewingCollisions = []AllowedCollision{
 	{Frame1: "filter", Frame2: "coffee-machine-actuation-area"},
+	{Frame1: "portafilter-handle", Frame2: "coffee-machine-actuation-area"},
 	{Frame1: "coffee-claws-middle", Frame2: "coffee-machine-actuation-area"},
 	{Frame1: "gripper:claws", Frame2: "coffee-machine-actuation-area"},
 }
