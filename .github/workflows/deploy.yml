@@ -50,3 +50,35 @@ jobs:
           key-value: ${{ secrets.viam_key_secret }}
           do-update: ${{ !github.event.release.prerelease }}
           do-upload: true
+
+  send-slack-msg:
+    name: Send Slack Message
+    needs: [publish-module, publish-app]
+    runs-on: ubuntu-24.04
+    if: always()
+    steps:
+      - name: Generate success value
+        id: success-value
+        run: |
+          echo "result=${{ (needs.publish-module.result == 'success' && needs.publish-app.result == 'success') && 'success' || 'failure' }}" >> $GITHUB_OUTPUT
+
+      - name: Send slack message
+        # slackapi/slack-github-action@v2.1.1
+        uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            {
+              "channel": "${{ vars.SLACK_CHANNEL_ID }}",
+              "text": "Deploy ${{ github.ref_name }} ${{ steps.success-value.outputs.result == 'success' && '*succeeded* :white_check_mark:' || '*failed* :x:'}}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "${{ steps.success-value.outputs.result == 'success' && format('Deploy *{0}* *succeeded* :white_check_mark:\n\t<{1}/{2}/releases/tag/{0}|Release {0}>', github.ref_name, github.server_url, github.repository) || format('Deploy *{0}* *failed* :x:', github.ref_name) }}\n\tModule: ${{ needs.publish-module.result }}\n\tWeb app: ${{ needs.publish-app.result }}\n\t<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Workflow run>"
+                  }
+                }
+              ]
+            }
