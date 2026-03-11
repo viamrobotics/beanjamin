@@ -37,9 +37,15 @@ web-app-build: web-app-install
 	cd web-app && npm run build
 
 web-app-module: web-app-build
-	cd web-app && tar czf module.tar.gz out meta.json
+	cd web-app && tar czf module.tar.gz out meta.json script.sh
 
 all: test module.tar.gz web-app-module
 
 setup:
+ifeq ($(shell uname), Darwin)
+	brew tap viamrobotics/brews
+	brew install nlopt-static
+else ifeq ($(shell uname), Linux)
+	sudo apt-get update && sudo apt-get install -y --no-install-recommends libnlopt-dev
+endif
 	go mod tidy
