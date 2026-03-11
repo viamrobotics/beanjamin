@@ -63,11 +63,11 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.PoseSwitcherName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "pose_switcher_name")
 	}
+	if cfg.ClawsPoseSwitcherName == "" {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "claws_pose_switcher_name")
+	}
 	if cfg.ArmName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "arm_name")
-	}
-	if cfg.GripperName != "" {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "gripper_name")
 	}
 	if cfg.GripperName != "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "gripper_name")
@@ -88,10 +88,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 					"%s: sequences[%q][%d] has pivot_from_pose but pivot_degrees_per_step must be > 0", path, name, i)
 			}
 		}
-	}
-
-	if cfg.ClawsPoseSwitcherName == "" {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "claws_pose_switcher_name")
 	}
 
 	reqDeps := []string{cfg.PoseSwitcherName, cfg.ClawsPoseSwitcherName, framesystem.PublicServiceName.String(), arm.Named(cfg.ArmName).String()}
@@ -116,7 +112,7 @@ type beanjaminCoffee struct {
 	fsSvc     framesystem.Service
 	cachedFS  *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
 	speech    resource.Resource           // nil when speech_service_name is not configured
-	gripper   gripper.Gripper             // nil when gripper_name is not configured
+	gripper   gripper.Gripper
 	sequences map[string][]Step
 
 	mu         sync.Mutex
@@ -147,12 +143,12 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, fmt.Errorf("resource %q is not a switch", conf.PoseSwitcherName)
 	}
 
-	clawsRes, ok := deps[toggleswitch.Named(conf.ClawsPoseSwitcherName)]
+	clawSwRes, ok := deps[toggleswitch.Named(conf.ClawsPoseSwitcherName)]
 	if !ok {
 		cancelFunc()
 		return nil, fmt.Errorf("claws switch %q not found in dependencies", conf.ClawsPoseSwitcherName)
 	}
-	clawsSw, ok := clawsRes.(toggleswitch.Switch)
+	clawsSw, ok := clawSwRes.(toggleswitch.Switch)
 	if !ok {
 		cancelFunc()
 		return nil, fmt.Errorf("resource %q is not a switch", conf.ClawsPoseSwitcherName)
