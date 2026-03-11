@@ -11,6 +11,8 @@ import (
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/robot/framesystem"
 	"go.viam.com/rdk/spatialmath"
+
+	toggleswitch "go.viam.com/rdk/components/switch"
 )
 
 var defaultApproachConstraint = &StepLinearConstraint{
@@ -18,9 +20,9 @@ var defaultApproachConstraint = &StepLinearConstraint{
 	OrientationToleranceDegs: 2,
 }
 
-// moveToPose fetches a named pose from the switch and moves to it.
-func (s *beanjaminCoffee) moveToPose(ctx context.Context, step Step) error {
-	pd, err := s.fetchPose(ctx, step.PoseName)
+// moveToPose fetches a named pose from the given switch and moves to it.
+func (s *beanjaminCoffee) moveToPose(ctx context.Context, sw toggleswitch.Switch, step Step) error {
+	pd, err := s.fetchPose(ctx, sw, step.PoseName)
 	if err != nil {
 		return err
 	}
@@ -36,9 +38,9 @@ type poseData struct {
 	componentName string
 }
 
-// fetchPose retrieves a named pose from the switch.
-func (s *beanjaminCoffee) fetchPose(ctx context.Context, poseName string) (*poseData, error) {
-	resp, err := s.sw.DoCommand(ctx, map[string]interface{}{
+// fetchPose retrieves a named pose from the given switch.
+func (s *beanjaminCoffee) fetchPose(ctx context.Context, sw toggleswitch.Switch, poseName string) (*poseData, error) {
+	resp, err := sw.DoCommand(ctx, map[string]interface{}{
 		"get_pose_by_name": poseName,
 	})
 	if err != nil {
@@ -260,18 +262,18 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 // executePivot fetches start and end poses, computes interpolated waypoints,
 // plans a single multi-goal trajectory through all of them, and executes it
 // in one MoveThroughJointPositions call.
-func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step) error {
+func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, sw toggleswitch.Switch, step Step) error {
 	// Merge both contexts so cancellation from either stops planning and execution.
 	ctx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(cancelCtx, func() { cancel() })
 	defer stop()
 	defer cancel()
 
-	startPD, err := s.fetchPose(ctx, step.PivotFromPose)
+	startPD, err := s.fetchPose(ctx, sw, step.PivotFromPose)
 	if err != nil {
 		return fmt.Errorf("pivot start: %w", err)
 	}
-	endPD, err := s.fetchPose(ctx, step.PoseName)
+	endPD, err := s.fetchPose(ctx, sw, step.PoseName)
 	if err != nil {
 		return fmt.Errorf("pivot end: %w", err)
 	}

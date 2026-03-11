@@ -51,11 +51,12 @@ type Step struct {
 }
 
 type Config struct {
-	PoseSwitcherName  string            `json:"pose_switcher_name"`
-	ArmName           string            `json:"arm_name"`
-	Sequences         map[string][]Step `json:"sequences"`
-	SpeechServiceName string            `json:"speech_service_name,omitempty"`
-	GripperName string `json:"gripper_name,omitempty"`
+	PoseSwitcherName      string            `json:"pose_switcher_name"`
+	ClawsPoseSwitcherName string            `json:"claws_pose_switcher_name"`
+	ArmName               string            `json:"arm_name"`
+	GripperName           string            `json:"gripper_name"`
+	Sequences             map[string][]Step `json:"sequences"`
+	SpeechServiceName     string            `json:"speech_service_name,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -64,6 +65,12 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 	if cfg.ArmName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "arm_name")
+	}
+	if cfg.GripperName != "" {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "gripper_name")
+	}
+	if cfg.GripperName != "" {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "gripper_name")
 	}
 	if len(cfg.Sequences) == 0 {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "sequences")
@@ -83,15 +90,17 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 	}
 
-	reqDeps := []string{cfg.PoseSwitcherName, framesystem.PublicServiceName.String(), arm.Named(cfg.ArmName).String()}
+	if cfg.ClawsPoseSwitcherName == "" {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "claws_pose_switcher_name")
+	}
+
+	reqDeps := []string{cfg.PoseSwitcherName, cfg.ClawsPoseSwitcherName, framesystem.PublicServiceName.String(), arm.Named(cfg.ArmName).String()}
 
 	var optDeps []string
 	if cfg.SpeechServiceName != "" {
 		optDeps = append(optDeps, generic.Named(cfg.SpeechServiceName).String())
 	}
-	if cfg.GripperName != "" {
-		optDeps = append(optDeps, gripper.Named(cfg.GripperName).String())
-	}
+
 	return reqDeps, optDeps, nil
 }
 
@@ -102,6 +111,7 @@ type beanjaminCoffee struct {
 	logger    logging.Logger
 	cfg       *Config
 	sw        toggleswitch.Switch
+	clawsSw   toggleswitch.Switch
 	arm       arm.Arm
 	fsSvc     framesystem.Service
 	cachedFS  *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
@@ -137,10 +147,27 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, fmt.Errorf("resource %q is not a switch", conf.PoseSwitcherName)
 	}
 
+	clawsRes, ok := deps[toggleswitch.Named(conf.ClawsPoseSwitcherName)]
+	if !ok {
+		cancelFunc()
+		return nil, fmt.Errorf("claws switch %q not found in dependencies", conf.ClawsPoseSwitcherName)
+	}
+	clawsSw, ok := clawsRes.(toggleswitch.Switch)
+	if !ok {
+		cancelFunc()
+		return nil, fmt.Errorf("resource %q is not a switch", conf.ClawsPoseSwitcherName)
+	}
+
 	armComp, err := arm.FromProvider(deps, conf.ArmName)
 	if err != nil {
 		cancelFunc()
 		return nil, fmt.Errorf("arm %q not found in dependencies: %w", conf.ArmName, err)
+	}
+
+	gripperComp, err := gripper.FromProvider(deps, conf.GripperName)
+	if err != nil {
+		cancelFunc()
+		return nil, fmt.Errorf("gripper %q not found in dependencies: %w", conf.GripperName, err)
 	}
 
 	fsSvc, err := framesystem.FromDependencies(deps)
@@ -190,22 +217,12 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		}
 	}
 
-	var gripperComp gripper.Gripper
-	if conf.GripperName != "" {
-		var err error
-		gripperComp, err = gripper.FromProvider(deps, conf.GripperName)
-		if err != nil {
-			logger.Warnf("gripper %q configured but not available: %v", conf.GripperName, err)
-		} else {
-			logger.Infof("gripper %q connected", conf.GripperName)
-		}
-	}
-
 	s := &beanjaminCoffee{
 		name:       name,
 		logger:     logger,
 		cfg:        conf,
 		sw:         sw,
+		clawsSw:    clawsSw,
 		arm:        armComp,
 		fsSvc:      fsSvc,
 		cachedFS:   cachedFS,
@@ -343,7 +360,7 @@ func (s *beanjaminCoffee) runSteps(ctx context.Context, label string, steps []St
 
 		s.logger.Infof("%s step %d/%d: moving to %q", label, i+1, len(steps), step.PoseName)
 
-		if err := s.moveToPose(ctx, step); err != nil {
+		if err := s.moveToPose(ctx, s.sw, step); err != nil {
 			return nil, fmt.Errorf("%s failed at step %d (%q): %w", label, i, step.PoseName, err)
 		}
 
