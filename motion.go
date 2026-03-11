@@ -263,9 +263,6 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	return s.arm.MoveThroughJointPositions(ctx, positions, nil, nil)
 }
 
-// executePivot fetches start and end poses, computes interpolated waypoints,
-// plans a single multi-goal trajectory through all of them, and executes it
-// in one MoveThroughJointPositions call.
 func (s *beanjaminCoffee) switchForFrame(referenceFrame string) (toggleswitch.Switch, error) {
 	switch referenceFrame {
 	case "filter":
@@ -277,6 +274,9 @@ func (s *beanjaminCoffee) switchForFrame(referenceFrame string) (toggleswitch.Sw
 	}
 }
 
+// executePivot fetches start and end poses, computes interpolated waypoints,
+// plans a single multi-goal trajectory through all of them, and executes it
+// in one MoveThroughJointPositions call.
 func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step) error {
 	// Merge both contexts so cancellation from either stops planning and execution.
 	ctx, cancel := context.WithCancel(ctx)
