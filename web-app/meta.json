@@ -3,6 +3,7 @@
   "visibility": "public",
   "url": "https://github.com/viamrobotics/beanjamin",
   "description": "Barista bot web app — coffee ordering with creative name misspelling",
+  "entrypoint": "out/script.sh",
   "applications": [
     {
       "name": "beanjamin",
