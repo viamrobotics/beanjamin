@@ -37,7 +37,7 @@ web-app-build: web-app-install
 	cd web-app && npm run build
 
 web-app-module: web-app-build
-	cd web-app && tar czf module.tar.gz -C out . -C .. meta.json
+	cd web-app && tar czf module.tar.gz out meta.json
 
 all: test module.tar.gz web-app-module
 
