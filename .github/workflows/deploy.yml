@@ -13,20 +13,14 @@ jobs:
       # actions/checkout@v6.0.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-      - name: Build module artifact
-        run: make module.tar.gz
-
-      - name: Upload to Viam Registry
-        # viamrobotics/upload-module@v1.2
-        uses: viamrobotics/upload-module@31b3909ba4d40f22a58c8479f3b4302538a5099b
+      - name: Build and upload to Viam Registry
+        # viamrobotics/build-action@v1.7
+        uses: viamrobotics/build-action@cd35d596eabba93e9b6776f708c54865ec1c8360
         with:
-          module-path: module.tar.gz
-          platform: linux/amd64
           version: ${{ github.ref_name }}
+          ref: ${{ github.sha }}
           key-id: ${{ secrets.viam_key_id }}
           key-value: ${{ secrets.viam_key_secret }}
-          do-update: ${{ !github.event.release.prerelease }}
-          do-upload: true
 
   publish-app:
     runs-on: ubuntu-24.04
@@ -56,3 +50,35 @@ jobs:
           key-value: ${{ secrets.viam_key_secret }}
           do-update: ${{ !github.event.release.prerelease }}
           do-upload: true
+
+  send-slack-msg:
+    name: Send Slack Message
+    needs: [publish-module, publish-app]
+    runs-on: ubuntu-24.04
+    if: always()
+    steps:
+      - name: Generate success value
+        id: success-value
+        run: |
+          echo "result=${{ (needs.publish-module.result == 'success' && needs.publish-app.result == 'success') && 'success' || 'failure' }}" >> $GITHUB_OUTPUT
+
+      - name: Send slack message
+        # slackapi/slack-github-action@v2.1.1
+        uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            {
+              "channel": "${{ vars.SLACK_CHANNEL_ID }}",
+              "text": "Deploy ${{ github.ref_name }} ${{ steps.success-value.outputs.result == 'success' && '*succeeded* :white_check_mark:' || '*failed* :x:'}}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "${{ steps.success-value.outputs.result == 'success' && format('Deploy *{0}* *succeeded* :white_check_mark:\n\t<{1}/{2}/releases/tag/{0}|Release {0}>', github.ref_name, github.server_url, github.repository) || format('Deploy *{0}* *failed* :x:', github.ref_name) }}\n\tModule: ${{ needs.publish-module.result }}\n\tWeb app: ${{ needs.publish-app.result }}\n\t<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Workflow run>"
+                  }
+                }
+              ]
+            }
