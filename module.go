@@ -48,6 +48,7 @@ type Step struct {
 	AllowedCollisions   []AllowedCollision    `json:"allowed_collisions,omitempty"`
 	PivotFromPose       string                `json:"pivot_from_pose,omitempty"`
 	PivotDegreesPerStep float64               `json:"pivot_degrees_per_step,omitempty"`
+	ReferenceFrame      string                `json:"reference_frame,omitempty"`
 }
 
 type Config struct {
@@ -356,7 +357,7 @@ func (s *beanjaminCoffee) runSteps(ctx context.Context, label string, steps []St
 
 		s.logger.Infof("%s step %d/%d: moving to %q", label, i+1, len(steps), step.PoseName)
 
-		if err := s.moveToPose(ctx, s.sw, step); err != nil {
+		if err := s.moveToPose(ctx, step); err != nil {
 			return nil, fmt.Errorf("%s failed at step %d (%q): %w", label, i, step.PoseName, err)
 		}
 

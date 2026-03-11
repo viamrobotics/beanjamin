@@ -20,9 +20,9 @@ var defaultApproachConstraint = &StepLinearConstraint{
 	OrientationToleranceDegs: 2,
 }
 
-// moveToPose fetches a named pose from the given switch and moves to it.
-func (s *beanjaminCoffee) moveToPose(ctx context.Context, sw toggleswitch.Switch, step Step) error {
-	pd, err := s.fetchPose(ctx, sw, step.PoseName)
+// moveToPose fetches a named pose and moves to it.
+func (s *beanjaminCoffee) moveToPose(ctx context.Context, step Step) error {
+	pd, err := s.fetchPose(ctx, step.ReferenceFrame, step.PoseName)
 	if err != nil {
 		return err
 	}
@@ -38,8 +38,12 @@ type poseData struct {
 	componentName string
 }
 
-// fetchPose retrieves a named pose from the given switch.
-func (s *beanjaminCoffee) fetchPose(ctx context.Context, sw toggleswitch.Switch, poseName string) (*poseData, error) {
+// fetchPose retrieves a named pose from the switch determined by referenceFrame.
+func (s *beanjaminCoffee) fetchPose(ctx context.Context, referenceFrame, poseName string) (*poseData, error) {
+	sw, err := s.switchForFrame(referenceFrame)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := sw.DoCommand(ctx, map[string]interface{}{
 		"get_pose_by_name": poseName,
 	})
@@ -262,18 +266,29 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 // executePivot fetches start and end poses, computes interpolated waypoints,
 // plans a single multi-goal trajectory through all of them, and executes it
 // in one MoveThroughJointPositions call.
-func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, sw toggleswitch.Switch, step Step) error {
+func (s *beanjaminCoffee) switchForFrame(referenceFrame string) (toggleswitch.Switch, error) {
+	switch referenceFrame {
+	case "filter":
+		return s.sw, nil
+	case "coffee-claws-middle":
+		return s.clawsSw, nil
+	default:
+		return nil, fmt.Errorf("unknown reference frame %q", referenceFrame)
+	}
+}
+
+func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step) error {
 	// Merge both contexts so cancellation from either stops planning and execution.
 	ctx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(cancelCtx, func() { cancel() })
 	defer stop()
 	defer cancel()
 
-	startPD, err := s.fetchPose(ctx, sw, step.PivotFromPose)
+	startPD, err := s.fetchPose(ctx, step.ReferenceFrame, step.PivotFromPose)
 	if err != nil {
 		return fmt.Errorf("pivot start: %w", err)
 	}
-	endPD, err := s.fetchPose(ctx, sw, step.PoseName)
+	endPD, err := s.fetchPose(ctx, step.ReferenceFrame, step.PoseName)
 	if err != nil {
 		return fmt.Errorf("pivot end: %w", err)
 	}

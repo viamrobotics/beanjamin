@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	toggleswitch "go.viam.com/rdk/components/switch"
 )
 
 // say sends text to the speech service via DoCommand. It is a no-op when
@@ -164,12 +162,12 @@ func (s *beanjaminCoffee) prepareEspresso(ctx context.Context) error {
 
 func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 	steps := []Step{
-		{PoseName: "grinder_approach", PauseSec: 1},
-		{PoseName: "grinder_activate", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
-		{PoseName: "grinder_approach", PauseSec: 10, LinearConstraint: defaultApproachConstraint},
+		{PoseName: "grinder_approach", ReferenceFrame: "filter", PauseSec: 1},
+		{PoseName: "grinder_activate", ReferenceFrame: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
+		{PoseName: "grinder_approach", ReferenceFrame: "filter", PauseSec: 10, LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
-		if err := s.executeStep(ctx, cancelCtx, s.sw, step); err != nil {
+		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 			return fmt.Errorf("grind_coffee: %w", err)
 		}
 	}
@@ -178,12 +176,12 @@ func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 
 func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
 	steps := []Step{
-		{PoseName: "tamper_approach", PauseSec: 1},
-		{PoseName: "tamper_activate", PauseSec: 5, LinearConstraint: defaultApproachConstraint},
-		{PoseName: "tamper_approach", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
+		{PoseName: "tamper_approach", ReferenceFrame: "filter", PauseSec: 1},
+		{PoseName: "tamper_activate", ReferenceFrame: "filter", PauseSec: 5, LinearConstraint: defaultApproachConstraint},
+		{PoseName: "tamper_approach", ReferenceFrame: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
-		if err := s.executeStep(ctx, cancelCtx, s.sw, step); err != nil {
+		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 			return fmt.Errorf("tamp_ground: %w", err)
 		}
 	}
@@ -192,13 +190,13 @@ func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
 
 func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error {
 	steps := []Step{
-		{PoseName: "coffee_approach", PauseSec: 1},
-		{PoseName: "coffee_in", PauseSec: 1, LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
-		{PoseName: "coffee_locked_final", PivotFromPose: "coffee_in", PivotDegreesPerStep: 5,
+		{PoseName: "coffee_approach", ReferenceFrame: "filter", PauseSec: 1},
+		{PoseName: "coffee_in", ReferenceFrame: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
+		{PoseName: "coffee_locked_final", ReferenceFrame: "filter", PivotFromPose: "coffee_in", PivotDegreesPerStep: 5,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
 	}
 	for _, step := range steps {
-		if err := s.executeStep(ctx, cancelCtx, s.sw, step); err != nil {
+		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 			return fmt.Errorf("lock_portafilter: %w", err)
 		}
 	}
@@ -213,12 +211,12 @@ func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) erro
 		return fmt.Errorf("unlock filter frame: %w", err)
 	}
 	steps := []Step{
-		{PoseName: "coffee_in", PivotFromPose: "coffee_locked_final", PivotDegreesPerStep: 5,
+		{PoseName: "coffee_in", ReferenceFrame: "filter", PivotFromPose: "coffee_locked_final", PivotDegreesPerStep: 5,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
-		{PoseName: "coffee_approach", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
+		{PoseName: "coffee_approach", ReferenceFrame: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
-		if err := s.executeStep(ctx, cancelCtx, s.sw, step); err != nil {
+		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 			return fmt.Errorf("unlock_portafilter: %w", err)
 		}
 	}
@@ -232,8 +230,8 @@ func (s *beanjaminCoffee) releaseFilter(ctx, cancelCtx context.Context) error {
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		return fmt.Errorf("release_filter: open gripper: %w", err)
 	}
-	step := Step{PoseName: "filter_released", LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions}
-	if err := s.executeStep(ctx, cancelCtx, s.clawsSw, step); err != nil {
+	step := Step{PoseName: "filter_released", ReferenceFrame: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions}
+	if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 		return fmt.Errorf("release_filter: %w", err)
 	}
 	return nil
@@ -244,8 +242,8 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("grab_filter: no gripper configured")
 	}
 
-	approachStep := Step{PoseName: "filter_released", LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions}
-	if err := s.executeStep(ctx, cancelCtx, s.clawsSw, approachStep); err != nil {
+	approachStep := Step{PoseName: "filter_released", ReferenceFrame: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions}
+	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("grab_filter: %w", err)
 	}
 
@@ -253,8 +251,8 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("grab_filter: open gripper: %w", err)
 	}
 
-	alignStep := Step{PoseName: "coffee_locked_final", LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions}
-	if err := s.executeStep(ctx, cancelCtx, s.clawsSw, alignStep); err != nil {
+	alignStep := Step{PoseName: "coffee_locked_final", ReferenceFrame: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions}
+	if err := s.executeStep(ctx, cancelCtx, alignStep); err != nil {
 		return fmt.Errorf("grab_filter: %w", err)
 	}
 
@@ -265,16 +263,16 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 }
 
 func (s *beanjaminCoffee) turnCoffeeButtonOn(ctx, cancelCtx context.Context) error {
-	step := Step{PoseName: "coffee_button_on", PauseSec: 15, LinearConstraint: defaultApproachConstraint}
-	if err := s.executeStep(ctx, cancelCtx, s.clawsSw, step); err != nil {
+	step := Step{PoseName: "coffee_button_on", ReferenceFrame: "coffee-claws-middle", PauseSec: 15, LinearConstraint: defaultApproachConstraint}
+	if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 		return fmt.Errorf("turn_coffee_button_on: %w", err)
 	}
 	return nil
 }
 
 func (s *beanjaminCoffee) turnCoffeeButtonOff(ctx, cancelCtx context.Context) error {
-	step := Step{PoseName: "coffee_button_off", LinearConstraint: defaultApproachConstraint}
-	if err := s.executeStep(ctx, cancelCtx, s.clawsSw, step); err != nil {
+	step := Step{PoseName: "coffee_button_off", ReferenceFrame: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint}
+	if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 		return fmt.Errorf("turn_coffee_button_off: %w", err)
 	}
 	return nil
@@ -290,7 +288,7 @@ func (s *beanjaminCoffee) pressCoffeeButton(ctx, cancelCtx context.Context) erro
 	return nil
 }
 
-func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, sw toggleswitch.Switch, step Step) error {
+func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step) error {
 	select {
 	case <-ctx.Done():
 		return fmt.Errorf("cancelled before %q: %w", step.PoseName, ctx.Err())
@@ -301,12 +299,12 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, sw toggles
 
 	if step.PivotFromPose != "" {
 		s.logger.Infof("pivoting from %q to %q", step.PivotFromPose, step.PoseName)
-		if err := s.executePivot(ctx, cancelCtx, sw, step); err != nil {
+		if err := s.executePivot(ctx, cancelCtx, step); err != nil {
 			return err
 		}
 	} else {
 		s.logger.Infof("moving to %q", step.PoseName)
-		if err := s.moveToPose(ctx, sw, step); err != nil {
+		if err := s.moveToPose(ctx, step); err != nil {
 			return err
 		}
 	}
