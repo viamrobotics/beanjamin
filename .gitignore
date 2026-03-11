@@ -29,4 +29,6 @@ go.work.sum
 bin
 *tar.gz
 
+# Claude Code
 .claude/worktrees
+.claude/settings.local.json
