@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.viam.com/rdk/components/arm"
+	"go.viam.com/rdk/components/gripper"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
@@ -54,6 +55,7 @@ type Config struct {
 	ArmName           string            `json:"arm_name"`
 	Sequences         map[string][]Step `json:"sequences"`
 	SpeechServiceName string            `json:"speech_service_name,omitempty"`
+	GripperName string `json:"gripper_name,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -87,6 +89,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.SpeechServiceName != "" {
 		optDeps = append(optDeps, generic.Named(cfg.SpeechServiceName).String())
 	}
+	if cfg.GripperName != "" {
+		optDeps = append(optDeps, gripper.Named(cfg.GripperName).String())
+	}
 	return reqDeps, optDeps, nil
 }
 
@@ -101,6 +106,7 @@ type beanjaminCoffee struct {
 	fsSvc     framesystem.Service
 	cachedFS  *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
 	speech    resource.Resource           // nil when speech_service_name is not configured
+	gripper   gripper.Gripper             // nil when gripper_name is not configured
 	sequences map[string][]Step
 
 	mu         sync.Mutex
@@ -184,6 +190,17 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		}
 	}
 
+	var gripperComp gripper.Gripper
+	if conf.GripperName != "" {
+		var err error
+		gripperComp, err = gripper.FromProvider(deps, conf.GripperName)
+		if err != nil {
+			logger.Warnf("gripper %q configured but not available: %v", conf.GripperName, err)
+		} else {
+			logger.Infof("gripper %q connected", conf.GripperName)
+		}
+	}
+
 	s := &beanjaminCoffee{
 		name:       name,
 		logger:     logger,
@@ -193,6 +210,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		fsSvc:      fsSvc,
 		cachedFS:   cachedFS,
 		speech:     speech,
+		gripper:    gripperComp,
 		sequences:  conf.Sequences,
 		cancelCtx:  cancelCtx,
 		cancelFunc: cancelFunc,

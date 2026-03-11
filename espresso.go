@@ -19,6 +19,8 @@ func (s *beanjaminCoffee) say(ctx context.Context, text string) error {
 	return err
 }
 
+const espressoBrewSecs = 25
+
 var coffeeBrewingCollisions = []AllowedCollision{
 	{Frame1: "filter", Frame2: "coffee-machine-actuation-area"},
 	{Frame1: "portafilter-handle", Frame2: "coffee-machine-actuation-area"},
@@ -83,10 +85,15 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}
 
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
-		"grind_coffee":        s.grindCoffee,
-		"tamp_ground":         s.tampGround,
-		"lock_portafilter":   s.lockPortaFilter,
-		"unlock_portafilter": s.unlockPortaFilter,
+		"grind_coffee":           s.grindCoffee,
+		"tamp_ground":            s.tampGround,
+		"lock_portafilter":       s.lockPortaFilter,
+		"unlock_portafilter":     s.unlockPortaFilter,
+		"release_filter":         s.releaseFilter,
+		"grab_filter":            s.grabFilter,
+		"turn_coffee_button_on":  s.turnCoffeeButtonOn,
+		"turn_coffee_button_off": s.turnCoffeeButtonOff,
+		"press_coffee_button":    s.pressCoffeeButton,
 	}
 
 	action, ok := actions[name]
@@ -203,6 +210,101 @@ func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) erro
 			return fmt.Errorf("unlock_portafilter: %w", err)
 		}
 	}
+	return nil
+}
+
+// releaseFilter opens the gripper and moves coffee-claws-middle to filter_released.
+// Must be called after lockPortaFilter (portafilter is fixed in the machine; arm operates
+// from the coffee-claws-middle frame of reference).
+func (s *beanjaminCoffee) releaseFilter(ctx, cancelCtx context.Context) error {
+	if s.gripper == nil {
+		return fmt.Errorf("release_filter: no gripper configured")
+	}
+	if err := s.gripper.Open(ctx, nil); err != nil {
+		return fmt.Errorf("release_filter: open gripper: %w", err)
+	}
+	steps := []Step{
+		{PoseName: "filter_released", LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
+	}
+	for _, step := range steps {
+		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+			return fmt.Errorf("release_filter: %w", err)
+		}
+	}
+	return nil
+}
+
+// grabFilter moves coffee-claws-middle to filter_released (gripper open), then to
+// coffee_locked_final, and grips. Both moves use a linear constraint.
+// Must be called while the portafilter is locked (arm in coffee-claws-middle frame).
+func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
+	if s.gripper == nil {
+		return fmt.Errorf("grab_filter: no gripper configured")
+	}
+	if err := s.gripper.Open(ctx, nil); err != nil {
+		return fmt.Errorf("grab_filter: open gripper: %w", err)
+	}
+	steps := []Step{
+		{PoseName: "filter_released", LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
+		{PoseName: "coffee_locked_final", LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
+	}
+	for _, step := range steps {
+		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+			return fmt.Errorf("grab_filter: %w", err)
+		}
+	}
+	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		return fmt.Errorf("grab_filter: grab gripper: %w", err)
+	}
+	return nil
+}
+
+func (s *beanjaminCoffee) turnCoffeeButtonOn(ctx, cancelCtx context.Context) error {
+	steps := []Step{
+		{PoseName: "coffee_button_on", LinearConstraint: defaultApproachConstraint},
+	}
+	for _, step := range steps {
+		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+			return fmt.Errorf("turn_coffee_button_on: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *beanjaminCoffee) turnCoffeeButtonOff(ctx, cancelCtx context.Context) error {
+	steps := []Step{
+		{PoseName: "coffee_button_off", LinearConstraint: defaultApproachConstraint},
+	}
+	for _, step := range steps {
+		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+			return fmt.Errorf("turn_coffee_button_off: %w", err)
+		}
+	}
+	return nil
+}
+
+// pressCoffeeButton moves to the coffee_button_on pose, waits for the espresso to brew
+// (cfg.EspressoBrewSecs, default 25s), then moves to the coffee_button_off pose.
+func (s *beanjaminCoffee) pressCoffeeButton(ctx, cancelCtx context.Context) error {
+	if err := s.turnCoffeeButtonOn(ctx, cancelCtx); err != nil {
+		return fmt.Errorf("press_coffee_button: %w", err)
+	}
+	s.logger.Infof("coffee button on, waiting for brew")
+
+	brewDur := time.Duration(espressoBrewSecs * float64(time.Second))
+
+	select {
+	case <-time.After(brewDur):
+	case <-ctx.Done():
+		return fmt.Errorf("press_coffee_button: cancelled during brew: %w", ctx.Err())
+	case <-cancelCtx.Done():
+		return fmt.Errorf("press_coffee_button: cancelled during brew")
+	}
+
+	if err := s.turnCoffeeButtonOff(ctx, cancelCtx); err != nil {
+		return fmt.Errorf("press_coffee_button: %w", err)
+	}
+	s.logger.Infof("brew complete, coffee button off")
 	return nil
 }
 
