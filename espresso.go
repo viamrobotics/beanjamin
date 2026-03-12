@@ -240,6 +240,9 @@ func (s *beanjaminCoffee) releaseFilter(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 		return fmt.Errorf("release_filter: %w", err)
 	}
+	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		return fmt.Errorf("release_filter: grab gripper: %w", err)
+	}
 	return nil
 }
 
