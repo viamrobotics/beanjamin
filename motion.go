@@ -40,7 +40,7 @@ type poseData struct {
 
 // fetchPose retrieves a named pose from the switch determined by component.
 func (s *beanjaminCoffee) fetchPose(ctx context.Context, component, poseName string) (*poseData, error) {
-	sw, err := s.switchForFrame(component)
+	sw, err := s.switchForComponent(component)
 	if err != nil {
 		return nil, err
 	}
@@ -275,14 +275,14 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	return s.arm.MoveThroughJointPositions(ctx, positions, nil, nil)
 }
 
-func (s *beanjaminCoffee) switchForFrame(componentName string) (toggleswitch.Switch, error) {
+func (s *beanjaminCoffee) switchForComponent(componentName string) (toggleswitch.Switch, error) {
 	switch componentName {
 	case "filter":
 		return s.filterSw, nil
 	case "coffee-claws-middle":
 		return s.clawsSw, nil
 	default:
-		return nil, fmt.Errorf("unknown reference frame %q", referenceFrame)
+		return nil, fmt.Errorf("unknown reference frame %q", componentName)
 	}
 }
 
