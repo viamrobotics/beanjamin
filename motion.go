@@ -125,21 +125,23 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	}
 	worldPose := tf.(*referenceframe.PoseInFrame).Pose()
 
-	// 2. Get the filter's geometry from the frame system config.
-	cfg, err := s.fsSvc.FrameSystemConfig(ctx)
+	// 2. Get the filter's geometry from the origin frame in the cached frame system.
+	//    The RDK places part geometry on the "<name>_origin" frame, not on the model
+	//    frame itself, so we must read it from there.
+	filterOriginFrameName := filterFrameName + "_origin"
+	originFrame := s.cachedFS.Frame(filterOriginFrameName)
+	if originFrame == nil {
+		return fmt.Errorf("frame %q not found in frame system", filterOriginFrameName)
+	}
+	originGeos, err := originFrame.Geometries([]referenceframe.Input{})
 	if err != nil {
-		return fmt.Errorf("get frame system config: %w", err)
+		return fmt.Errorf("get geometries from %q: %w", filterOriginFrameName, err)
 	}
-	var geom spatialmath.Geometry
-	for _, part := range cfg.Parts {
-		if part.FrameConfig.Name() == filterFrameName {
-			geom = part.FrameConfig.Geometry()
-			break
-		}
+	geos := originGeos.Geometries()
+	if len(geos) == 0 {
+		return fmt.Errorf("no geometry found on frame %q", filterOriginFrameName)
 	}
-	if geom == nil {
-		return fmt.Errorf("no geometry found for frame %q", filterFrameName)
-	}
+	geom := geos[0]
 
 	// 3. Collect filter's descendants in BFS order before removal.
 	descendants := collectDescendants(s.cachedFS, filterFrameName)
@@ -149,13 +151,17 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	//    for every part — it carries the collision geometry and must not remain
 	//    attached to the arm.
 	s.cachedFS.RemoveFrame(filterFrame)
-	originFrameName := filterFrameName + "_origin"
-	if originFrame := s.cachedFS.Frame(originFrameName); originFrame != nil {
-		s.cachedFS.RemoveFrame(originFrame)
+	if filterOriginFrame := s.cachedFS.Frame(filterOriginFrameName); filterOriginFrame != nil {
+		s.cachedFS.RemoveFrame(filterOriginFrame)
 	}
 
 	// 5. Re-add filter as a static frame parented to world at the locked position.
-	newFrame, err := referenceframe.NewStaticFrameWithGeometry(filterFrameName, worldPose, geom)
+	//    The RDK planner skips a frame's own transform when computing geometry
+	//    positions (it only applies the parent-to-world transform). Since the new
+	//    frame's parent is world, the parent-to-world transform is identity, so
+	//    we must pre-transform the geometry to worldPose ourselves.
+	worldGeom := geom.Transform(worldPose)
+	newFrame, err := referenceframe.NewStaticFrameWithGeometry(filterFrameName, worldPose, worldGeom)
 	if err != nil {
 		return fmt.Errorf("create static filter frame: %w", err)
 	}
