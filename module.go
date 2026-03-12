@@ -91,7 +91,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 	}
 
-	reqDeps := []string{cfg.PoseSwitcherName, cfg.ClawsPoseSwitcherName, framesystem.PublicServiceName.String(), arm.Named(cfg.ArmName).String()}
+	reqDeps := []string{cfg.PoseSwitcherName, cfg.ClawsPoseSwitcherName, framesystem.PublicServiceName.String(), arm.Named(cfg.ArmName).String(), gripper.Named(cfg.GripperName).String()}
 
 	var optDeps []string
 	if cfg.SpeechServiceName != "" {
