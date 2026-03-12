@@ -68,10 +68,12 @@ func (s *beanjaminCoffee) fetchPose(ctx context.Context, poseName string) (*pose
 
 // currentInputs returns the cached frame system and fresh joint inputs.
 func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.FrameSystem, referenceframe.FrameSystemInputs, error) {
-	fsInputs, err := s.fsSvc.CurrentInputs(ctx)
+	fsInputs := referenceframe.NewZeroInputs(s.cachedFS)
+	armInputs, err := s.arm.CurrentInputs(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get current inputs: %w", err)
 	}
+	fsInputs[s.arm.Name().Name] = armInputs
 	return s.cachedFS, fsInputs, nil
 }
 
@@ -82,9 +84,9 @@ func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.Fr
 func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	const filterFrameName = "filter"
 
-	fsInputs, err := s.fsSvc.CurrentInputs(ctx)
+	_, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
-		return fmt.Errorf("get current inputs: %w", err)
+		return err
 	}
 
 	filterFrame := s.cachedFS.Frame(filterFrameName)
