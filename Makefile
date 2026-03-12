@@ -36,8 +36,13 @@ web-app-install:
 web-app-build: web-app-install
 	cd web-app && npm run build
 
-web-app-module: web-app-build
-	cd web-app && tar czf module.tar.gz out meta.json script.sh
+WEB_APP_BINARY := web-app/beanjamin-app
+
+$(WEB_APP_BINARY): cmd/web-app/main.go
+	go build -o $@ ./cmd/web-app/
+
+web-app-module: web-app-build $(WEB_APP_BINARY)
+	cd web-app && tar czf module.tar.gz out beanjamin-app meta.json
 
 all: test module.tar.gz web-app-module
 
