@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	viz "github.com/viam-labs/motion-tools/client/client"
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/gripper"
 	toggleswitch "go.viam.com/rdk/components/switch"
@@ -58,6 +59,7 @@ type Config struct {
 	GripperName           string            `json:"gripper_name"`
 	Sequences             map[string][]Step `json:"sequences"`
 	SpeechServiceName     string            `json:"speech_service_name,omitempty"`
+	VizURL                string            `json:"viz_url,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -111,8 +113,9 @@ type beanjaminCoffee struct {
 	clawsSw   toggleswitch.Switch
 	arm       arm.Arm
 	fsSvc     framesystem.Service
-	cachedFS  *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
-	speech    resource.Resource           // nil when speech_service_name is not configured
+	cachedFS   *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
+	speech     resource.Resource           // nil when speech_service_name is not configured
+	vizEnabled bool                        // true when viz_url is configured
 	gripper   gripper.Gripper
 	sequences map[string][]Step
 
@@ -214,6 +217,13 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		}
 	}
 
+	vizEnabled := false
+	if conf.VizURL != "" {
+		viz.SetURL(conf.VizURL)
+		vizEnabled = true
+		logger.Infof("viz client configured at %s", conf.VizURL)
+	}
+
 	s := &beanjaminCoffee{
 		name:       name,
 		logger:     logger,
@@ -226,6 +236,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		speech:     speech,
 		gripper:    gripperComp,
 		sequences:  conf.Sequences,
+		vizEnabled: vizEnabled,
 		cancelCtx:  cancelCtx,
 		cancelFunc: cancelFunc,
 	}
