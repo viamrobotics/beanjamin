@@ -38,9 +38,9 @@ type poseData struct {
 	componentName string
 }
 
-// fetchPose retrieves a named pose from the switch determined by referenceFrame.
-func (s *beanjaminCoffee) fetchPose(ctx context.Context, referenceFrame, poseName string) (*poseData, error) {
-	sw, err := s.switchForFrame(referenceFrame)
+// fetchPose retrieves a named pose from the switch determined by component.
+func (s *beanjaminCoffee) fetchPose(ctx context.Context, component, poseName string) (*poseData, error) {
+	sw, err := s.switchForFrame(component)
 	if err != nil {
 		return nil, err
 	}
