@@ -70,7 +70,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.ArmName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "arm_name")
 	}
-	if cfg.GripperName != "" {
+	if cfg.GripperName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "gripper_name")
 	}
 	if len(cfg.Sequences) == 0 {
