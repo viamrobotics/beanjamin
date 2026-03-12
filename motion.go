@@ -145,7 +145,14 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	descendants := collectDescendants(s.cachedFS, filterFrameName)
 
 	// 4. Remove filter (and all descendants) from the arm subtree.
+	//    Also remove the companion "filter_origin" frame that the RDK creates
+	//    for every part — it carries the collision geometry and must not remain
+	//    attached to the arm.
 	s.cachedFS.RemoveFrame(filterFrame)
+	originFrameName := filterFrameName + "_origin"
+	if originFrame := s.cachedFS.Frame(originFrameName); originFrame != nil {
+		s.cachedFS.RemoveFrame(originFrame)
+	}
 
 	// 5. Re-add filter as a static frame parented to world at the locked position.
 	newFrame, err := referenceframe.NewStaticFrameWithGeometry(filterFrameName, worldPose, geom)
