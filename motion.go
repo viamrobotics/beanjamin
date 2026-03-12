@@ -74,15 +74,15 @@ func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.Fr
 	fsInputs := referenceframe.NewZeroInputs(s.cachedFS)
 
 	// Get current joint positions directly from the arm.
-	jp, err := s.arm.JointPositions(ctx, nil)
+	armInputs, err := s.arm.CurrentInputs(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get current inputs: %w", err)
 	}
 
 	// Use the config arm name as the key — this matches the frame name in the cached
 	// frame system built from FrameSystemConfig.
-	s.logger.Debugf("currentInputs: arm=%q, jpLen=%d", s.cfg.ArmName, len(jp))
-	fsInputs[s.cfg.ArmName] = jp
+	s.logger.Debugf("currentInputs: arm=%q, armInputsLen=%d", s.cfg.ArmName, len(armInputs))
+	fsInputs[s.cfg.ArmName] = armInputs
 	return s.cachedFS, fsInputs, nil
 }
 
