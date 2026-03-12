@@ -67,13 +67,22 @@ func (s *beanjaminCoffee) fetchPose(ctx context.Context, poseName string) (*pose
 }
 
 // currentInputs returns the cached frame system and fresh joint inputs.
+// We build the inputs directly from the arm rather than calling fsSvc.CurrentInputs,
+// which iterates all resources and can fail on modular arms whose kinematics
+// proto round-trip produces KINEMATICS_FILE_FORMAT_UNSPECIFIED.
 func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.FrameSystem, referenceframe.FrameSystemInputs, error) {
 	fsInputs := referenceframe.NewZeroInputs(s.cachedFS)
-	armInputs, err := s.arm.CurrentInputs(ctx)
+
+	// Get current joint positions directly from the arm.
+	jp, err := s.arm.JointPositions(ctx, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get current inputs: %w", err)
 	}
-	fsInputs[s.arm.Name().Name] = armInputs
+
+	// Use the config arm name as the key — this matches the frame name in the cached
+	// frame system built from FrameSystemConfig.
+	s.logger.Debugf("currentInputs: arm=%q, frameNames=%v, jpLen=%d", s.cfg.ArmName, s.cachedFS.FrameNames(), len(jp))
+	fsInputs[s.cfg.ArmName] = jp
 	return s.cachedFS, fsInputs, nil
 }
 
