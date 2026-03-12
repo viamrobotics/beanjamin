@@ -11,6 +11,8 @@ import (
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/robot/framesystem"
 	"go.viam.com/rdk/spatialmath"
+
+	toggleswitch "go.viam.com/rdk/components/switch"
 )
 
 var defaultApproachConstraint = &StepLinearConstraint{
@@ -18,9 +20,9 @@ var defaultApproachConstraint = &StepLinearConstraint{
 	OrientationToleranceDegs: 2,
 }
 
-// moveToPose fetches a named pose from the switch and moves to it.
+// moveToPose fetches a named pose and moves to it.
 func (s *beanjaminCoffee) moveToPose(ctx context.Context, step Step) error {
-	pd, err := s.fetchPose(ctx, step.PoseName)
+	pd, err := s.fetchPose(ctx, step.Component, step.PoseName)
 	if err != nil {
 		return err
 	}
@@ -36,9 +38,13 @@ type poseData struct {
 	componentName string
 }
 
-// fetchPose retrieves a named pose from the switch.
-func (s *beanjaminCoffee) fetchPose(ctx context.Context, poseName string) (*poseData, error) {
-	resp, err := s.sw.DoCommand(ctx, map[string]interface{}{
+// fetchPose retrieves a named pose from the switch determined by component.
+func (s *beanjaminCoffee) fetchPose(ctx context.Context, component, poseName string) (*poseData, error) {
+	sw, err := s.switchForFrame(component)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := sw.DoCommand(ctx, map[string]interface{}{
 		"get_pose_by_name": poseName,
 	})
 	if err != nil {
@@ -269,6 +275,17 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	return s.arm.MoveThroughJointPositions(ctx, positions, nil, nil)
 }
 
+func (s *beanjaminCoffee) switchForFrame(componentName string) (toggleswitch.Switch, error) {
+	switch componentName {
+	case "filter":
+		return s.filterSw, nil
+	case "coffee-claws-middle":
+		return s.clawsSw, nil
+	default:
+		return nil, fmt.Errorf("unknown reference frame %q", referenceFrame)
+	}
+}
+
 // executePivot fetches start and end poses, computes interpolated waypoints,
 // plans a single multi-goal trajectory through all of them, and executes it
 // in one MoveThroughJointPositions call.
@@ -279,11 +296,11 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	defer stop()
 	defer cancel()
 
-	startPD, err := s.fetchPose(ctx, step.PivotFromPose)
+	startPD, err := s.fetchPose(ctx, step.Component, step.PivotFromPose)
 	if err != nil {
 		return fmt.Errorf("pivot start: %w", err)
 	}
-	endPD, err := s.fetchPose(ctx, step.PoseName)
+	endPD, err := s.fetchPose(ctx, step.Component, step.PoseName)
 	if err != nil {
 		return fmt.Errorf("pivot end: %w", err)
 	}

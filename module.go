@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.viam.com/rdk/components/arm"
+	"go.viam.com/rdk/components/gripper"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
@@ -47,21 +48,30 @@ type Step struct {
 	AllowedCollisions   []AllowedCollision    `json:"allowed_collisions,omitempty"`
 	PivotFromPose       string                `json:"pivot_from_pose,omitempty"`
 	PivotDegreesPerStep float64               `json:"pivot_degrees_per_step,omitempty"`
+	Component           string                `json:"component,omitempty"`
 }
 
 type Config struct {
-	PoseSwitcherName  string            `json:"pose_switcher_name"`
-	ArmName           string            `json:"arm_name"`
-	Sequences         map[string][]Step `json:"sequences"`
-	SpeechServiceName string            `json:"speech_service_name,omitempty"`
+	PoseSwitcherName      string            `json:"pose_switcher_name"`
+	ClawsPoseSwitcherName string            `json:"claws_pose_switcher_name"`
+	ArmName               string            `json:"arm_name"`
+	GripperName           string            `json:"gripper_name"`
+	Sequences             map[string][]Step `json:"sequences"`
+	SpeechServiceName     string            `json:"speech_service_name,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.PoseSwitcherName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "pose_switcher_name")
 	}
+	if cfg.ClawsPoseSwitcherName == "" {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "claws_pose_switcher_name")
+	}
 	if cfg.ArmName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "arm_name")
+	}
+	if cfg.GripperName != "" {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "gripper_name")
 	}
 	if len(cfg.Sequences) == 0 {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "sequences")
@@ -81,12 +91,13 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 	}
 
-	reqDeps := []string{cfg.PoseSwitcherName, framesystem.PublicServiceName.String(), arm.Named(cfg.ArmName).String()}
+	reqDeps := []string{cfg.PoseSwitcherName, cfg.ClawsPoseSwitcherName, framesystem.PublicServiceName.String(), arm.Named(cfg.ArmName).String()}
 
 	var optDeps []string
 	if cfg.SpeechServiceName != "" {
 		optDeps = append(optDeps, generic.Named(cfg.SpeechServiceName).String())
 	}
+
 	return reqDeps, optDeps, nil
 }
 
@@ -96,11 +107,13 @@ type beanjaminCoffee struct {
 	name      resource.Name
 	logger    logging.Logger
 	cfg       *Config
-	sw        toggleswitch.Switch
+	filterSw  toggleswitch.Switch
+	clawsSw   toggleswitch.Switch
 	arm       arm.Arm
 	fsSvc     framesystem.Service
 	cachedFS  *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
 	speech    resource.Resource           // nil when speech_service_name is not configured
+	gripper   gripper.Gripper
 	sequences map[string][]Step
 
 	mu         sync.Mutex
@@ -125,16 +138,33 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		cancelFunc()
 		return nil, fmt.Errorf("switch %q not found in dependencies", conf.PoseSwitcherName)
 	}
-	sw, ok := switchRes.(toggleswitch.Switch)
+	filterSw, ok := switchRes.(toggleswitch.Switch)
 	if !ok {
 		cancelFunc()
 		return nil, fmt.Errorf("resource %q is not a switch", conf.PoseSwitcherName)
+	}
+
+	clawSwRes, ok := deps[toggleswitch.Named(conf.ClawsPoseSwitcherName)]
+	if !ok {
+		cancelFunc()
+		return nil, fmt.Errorf("claws switch %q not found in dependencies", conf.ClawsPoseSwitcherName)
+	}
+	clawSw, ok := clawSwRes.(toggleswitch.Switch)
+	if !ok {
+		cancelFunc()
+		return nil, fmt.Errorf("resource %q is not a switch", conf.ClawsPoseSwitcherName)
 	}
 
 	armComp, err := arm.FromProvider(deps, conf.ArmName)
 	if err != nil {
 		cancelFunc()
 		return nil, fmt.Errorf("arm %q not found in dependencies: %w", conf.ArmName, err)
+	}
+
+	gripperComp, err := gripper.FromProvider(deps, conf.GripperName)
+	if err != nil {
+		cancelFunc()
+		return nil, fmt.Errorf("gripper %q not found in dependencies: %w", conf.GripperName, err)
 	}
 
 	fsSvc, err := framesystem.FromDependencies(deps)
@@ -149,7 +179,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, fmt.Errorf("build initial frame system: %w", err)
 	}
 
-	_, validPoses, err := sw.GetNumberOfPositions(ctx, nil)
+	_, validPoses, err := filterSw.GetNumberOfPositions(ctx, nil)
 	if err != nil {
 		cancelFunc()
 		return nil, fmt.Errorf("failed to get positions from switch: %w", err)
@@ -188,11 +218,13 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		name:       name,
 		logger:     logger,
 		cfg:        conf,
-		sw:         sw,
+		filterSw:   filterSw,
+		clawsSw:    clawSw,
 		arm:        armComp,
 		fsSvc:      fsSvc,
 		cachedFS:   cachedFS,
 		speech:     speech,
+		gripper:    gripperComp,
 		sequences:  conf.Sequences,
 		cancelCtx:  cancelCtx,
 		cancelFunc: cancelFunc,
@@ -274,7 +306,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 }
 
 func (s *beanjaminCoffee) checkPosition(ctx context.Context, expected string) error {
-	resp, err := s.sw.DoCommand(ctx, map[string]interface{}{
+	resp, err := s.filterSw.DoCommand(ctx, map[string]interface{}{
 		"get_current_position_name": true,
 	})
 	if err != nil {
