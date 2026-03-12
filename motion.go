@@ -81,7 +81,7 @@ func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.Fr
 
 	// Use the config arm name as the key — this matches the frame name in the cached
 	// frame system built from FrameSystemConfig.
-	s.logger.Debugf("currentInputs: arm=%q, frameNames=%v, jpLen=%d", s.cfg.ArmName, s.cachedFS.FrameNames(), len(jp))
+	s.logger.Infof("currentInputs: arm=%q, frameNames=%v, jpLen=%d", s.cfg.ArmName, s.cachedFS.FrameNames(), len(jp))
 	fsInputs[s.cfg.ArmName] = jp
 	return s.cachedFS, fsInputs, nil
 }
