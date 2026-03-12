@@ -22,7 +22,7 @@ var defaultApproachConstraint = &StepLinearConstraint{
 
 // moveToPose fetches a named pose and moves to it.
 func (s *beanjaminCoffee) moveToPose(ctx context.Context, step Step) error {
-	pd, err := s.fetchPose(ctx, step.ReferenceFrame, step.PoseName)
+	pd, err := s.fetchPose(ctx, step.Component, step.PoseName)
 	if err != nil {
 		return err
 	}
@@ -266,7 +266,7 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 func (s *beanjaminCoffee) switchForFrame(referenceFrame string) (toggleswitch.Switch, error) {
 	switch referenceFrame {
 	case "filter":
-		return s.sw, nil
+		return s.filterSw, nil
 	case "coffee-claws-middle":
 		return s.clawsSw, nil
 	default:
@@ -284,11 +284,11 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	defer stop()
 	defer cancel()
 
-	startPD, err := s.fetchPose(ctx, step.ReferenceFrame, step.PivotFromPose)
+	startPD, err := s.fetchPose(ctx, step.Component, step.PivotFromPose)
 	if err != nil {
 		return fmt.Errorf("pivot start: %w", err)
 	}
-	endPD, err := s.fetchPose(ctx, step.ReferenceFrame, step.PoseName)
+	endPD, err := s.fetchPose(ctx, step.Component, step.PoseName)
 	if err != nil {
 		return fmt.Errorf("pivot end: %w", err)
 	}

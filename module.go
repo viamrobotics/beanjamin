@@ -48,7 +48,7 @@ type Step struct {
 	AllowedCollisions   []AllowedCollision    `json:"allowed_collisions,omitempty"`
 	PivotFromPose       string                `json:"pivot_from_pose,omitempty"`
 	PivotDegreesPerStep float64               `json:"pivot_degrees_per_step,omitempty"`
-	ReferenceFrame      string                `json:"reference_frame,omitempty"`
+	Component           string                `json:"component,omitempty"`
 }
 
 type Config struct {
@@ -107,7 +107,7 @@ type beanjaminCoffee struct {
 	name      resource.Name
 	logger    logging.Logger
 	cfg       *Config
-	sw        toggleswitch.Switch
+	filterSw  toggleswitch.Switch
 	clawsSw   toggleswitch.Switch
 	arm       arm.Arm
 	fsSvc     framesystem.Service
@@ -138,7 +138,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		cancelFunc()
 		return nil, fmt.Errorf("switch %q not found in dependencies", conf.PoseSwitcherName)
 	}
-	sw, ok := switchRes.(toggleswitch.Switch)
+	filterSw, ok := switchRes.(toggleswitch.Switch)
 	if !ok {
 		cancelFunc()
 		return nil, fmt.Errorf("resource %q is not a switch", conf.PoseSwitcherName)
@@ -149,7 +149,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		cancelFunc()
 		return nil, fmt.Errorf("claws switch %q not found in dependencies", conf.ClawsPoseSwitcherName)
 	}
-	clawsSw, ok := clawSwRes.(toggleswitch.Switch)
+	clawSw, ok := clawSwRes.(toggleswitch.Switch)
 	if !ok {
 		cancelFunc()
 		return nil, fmt.Errorf("resource %q is not a switch", conf.ClawsPoseSwitcherName)
@@ -179,7 +179,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, fmt.Errorf("build initial frame system: %w", err)
 	}
 
-	_, validPoses, err := sw.GetNumberOfPositions(ctx, nil)
+	_, validPoses, err := filterSw.GetNumberOfPositions(ctx, nil)
 	if err != nil {
 		cancelFunc()
 		return nil, fmt.Errorf("failed to get positions from switch: %w", err)
@@ -218,8 +218,8 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		name:       name,
 		logger:     logger,
 		cfg:        conf,
-		sw:         sw,
-		clawsSw:    clawsSw,
+		filterSw:   filterSw,
+		clawsSw:    clawSw,
 		arm:        armComp,
 		fsSvc:      fsSvc,
 		cachedFS:   cachedFS,
@@ -306,7 +306,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 }
 
 func (s *beanjaminCoffee) checkPosition(ctx context.Context, expected string) error {
-	resp, err := s.sw.DoCommand(ctx, map[string]interface{}{
+	resp, err := s.filterSw.DoCommand(ctx, map[string]interface{}{
 		"get_current_position_name": true,
 	})
 	if err != nil {
