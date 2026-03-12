@@ -263,8 +263,8 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	return s.arm.MoveThroughJointPositions(ctx, positions, nil, nil)
 }
 
-func (s *beanjaminCoffee) switchForFrame(referenceFrame string) (toggleswitch.Switch, error) {
-	switch referenceFrame {
+func (s *beanjaminCoffee) switchForFrame(componentName string) (toggleswitch.Switch, error) {
+	switch componentName {
 	case "filter":
 		return s.filterSw, nil
 	case "coffee-claws-middle":
