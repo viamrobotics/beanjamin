@@ -81,7 +81,12 @@ func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.Fr
 
 	// Use the config arm name as the key — this matches the frame name in the cached
 	// frame system built from FrameSystemConfig.
-	s.logger.Infof("currentInputs: arm=%q, frameNames=%v, jpLen=%d", s.cfg.ArmName, s.cachedFS.FrameNames(), len(jp))
+	armFrame := s.cachedFS.Frame(s.cfg.ArmName)
+	armDoF := 0
+	if armFrame != nil {
+		armDoF = len(armFrame.DoF())
+	}
+	s.logger.Infof("currentInputs: arm=%q, armDoF=%d, jpLen=%d", s.cfg.ArmName, armDoF, len(jp))
 	fsInputs[s.cfg.ArmName] = jp
 	return s.cachedFS, fsInputs, nil
 }
@@ -232,7 +237,10 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 
 	// Transform destination to world frame.
 	destination := referenceframe.NewPoseInFrame(pd.refFrame, pd.pose)
-	tf, err := fs.Transform(fsInputs.ToLinearInputs(), destination, referenceframe.World)
+	linearInputs := fsInputs.ToLinearInputs()
+	s.logger.Infof("moveToRawPose: refFrame=%q, linearInputs.Len=%d, armInput=%v",
+		pd.refFrame, linearInputs.Len(), linearInputs.Get(s.cfg.ArmName) != nil)
+	tf, err := fs.Transform(linearInputs, destination, referenceframe.World)
 	if err != nil {
 		return fmt.Errorf("transform destination to world: %w", err)
 	}
