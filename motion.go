@@ -125,9 +125,12 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	}
 	worldPose := tf.(*referenceframe.PoseInFrame).Pose()
 
-	// 2. Get the filter's geometry from the origin frame in the cached frame system.
-	//    The RDK places part geometry on the "<name>_origin" frame, not on the model
-	//    frame itself, so we must read it from there.
+	// 2. Get the filter's geometry in world coordinates.
+	//    The RDK places part geometry on the "<name>_origin" frame (a
+	//    tailGeometryStaticFrame), not on the model frame. We read it from there
+	//    and use the frame system's Transform to convert it to world coordinates,
+	//    which correctly applies only the parent-to-world transform (the RDK
+	//    skips the frame's own transform for GeometriesInFrame objects).
 	filterOriginFrameName := filterFrameName + "_origin"
 	originFrame := s.cachedFS.Frame(filterOriginFrameName)
 	if originFrame == nil {
@@ -141,7 +144,24 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	if len(geos) == 0 {
 		return fmt.Errorf("no geometry found on frame %q", filterOriginFrameName)
 	}
-	geom := geos[0]
+	// Transform the geometry to world coordinates via the frame system so that
+	// the parent-to-world transform is applied correctly.  We cannot simply call
+	// geom.Transform(worldPose) because Geometries() on a tailGeometryStaticFrame
+	// already pre-applies the origin offset — composing worldPose on top would
+	// double-count it.
+	worldGeoTF, err := s.cachedFS.Transform(
+		fsInputs.ToLinearInputs(),
+		referenceframe.NewGeometriesInFrame(filterOriginFrameName, geos),
+		referenceframe.World,
+	)
+	if err != nil {
+		return fmt.Errorf("transform filter geometry to world: %w", err)
+	}
+	worldGeos := worldGeoTF.(*referenceframe.GeometriesInFrame).Geometries()
+	if len(worldGeos) == 0 {
+		return fmt.Errorf("no geometry after transforming %q to world", filterOriginFrameName)
+	}
+	worldGeom := worldGeos[0]
 
 	// 3. Collect filter's descendants in BFS order before removal.
 	descendants := collectDescendants(s.cachedFS, filterFrameName)
@@ -156,11 +176,9 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	}
 
 	// 5. Re-add filter as a static frame parented to world at the locked position.
-	//    The RDK planner skips a frame's own transform when computing geometry
-	//    positions (it only applies the parent-to-world transform). Since the new
-	//    frame's parent is world, the parent-to-world transform is identity, so
-	//    we must pre-transform the geometry to worldPose ourselves.
-	worldGeom := geom.Transform(worldPose)
+	//    The geometry is already in world coordinates (from step 2). Since the
+	//    planner uses the parent-to-world transform for geometry positioning and
+	//    the parent is world (identity), this places the collision volume correctly.
 	newFrame, err := referenceframe.NewStaticFrameWithGeometry(filterFrameName, worldPose, worldGeom)
 	if err != nil {
 		return fmt.Errorf("create static filter frame: %w", err)
