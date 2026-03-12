@@ -74,20 +74,15 @@ func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.Fr
 	fsInputs := referenceframe.NewZeroInputs(s.cachedFS)
 
 	// Get current joint positions directly from the arm.
-	jp, err := s.arm.JointPositions(ctx, nil)
+	armInputs, err := s.arm.CurrentInputs(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get current inputs: %w", err)
 	}
 
 	// Use the config arm name as the key — this matches the frame name in the cached
 	// frame system built from FrameSystemConfig.
-	armFrame := s.cachedFS.Frame(s.cfg.ArmName)
-	armDoF := 0
-	if armFrame != nil {
-		armDoF = len(armFrame.DoF())
-	}
-	s.logger.Infof("currentInputs: arm=%q, armDoF=%d, jpLen=%d", s.cfg.ArmName, armDoF, len(jp))
-	fsInputs[s.cfg.ArmName] = jp
+	s.logger.Debugf("currentInputs: arm=%q, armInputsLen=%d", s.cfg.ArmName, len(armInputs))
+	fsInputs[s.cfg.ArmName] = armInputs
 	return s.cachedFS, fsInputs, nil
 }
 
@@ -237,10 +232,7 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 
 	// Transform destination to world frame.
 	destination := referenceframe.NewPoseInFrame(pd.refFrame, pd.pose)
-	linearInputs := fsInputs.ToLinearInputs()
-	s.logger.Infof("moveToRawPose: refFrame=%q, linearInputs.Len=%d, armInput=%v",
-		pd.refFrame, linearInputs.Len(), linearInputs.Get(s.cfg.ArmName) != nil)
-	tf, err := fs.Transform(linearInputs, destination, referenceframe.World)
+	tf, err := fs.Transform(fsInputs.ToLinearInputs(), destination, referenceframe.World)
 	if err != nil {
 		return fmt.Errorf("transform destination to world: %w", err)
 	}
@@ -268,8 +260,9 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 		return fmt.Errorf("plan motion: %w", err)
 	}
 
-	// Execute — extract joint positions and send to arm.
-	positions, err := plan.Trajectory().GetFrameInputs(pd.componentName)
+	// Execute — extract joint positions for the arm frame (not the end-effector
+	// component name used for the goal pose) and send to arm.
+	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
 	if err != nil {
 		return fmt.Errorf("get frame inputs from plan: %w", err)
 	}
@@ -343,8 +336,9 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 		return fmt.Errorf("plan pivot motion: %w", err)
 	}
 
-	// Execute the full trajectory in one call.
-	positions, err := plan.Trajectory().GetFrameInputs(startPD.componentName)
+	// Execute the full trajectory in one call — extract joint positions for the
+	// arm frame, not the end-effector component name used for goal poses.
+	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
 	if err != nil {
 		return fmt.Errorf("get frame inputs from pivot plan: %w", err)
 	}
