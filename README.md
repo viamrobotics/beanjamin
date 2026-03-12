@@ -132,6 +132,9 @@ Runs named sequences of poses on a `multi-poses-execution-switch` component. Sup
   // string (optional) — name of a text-to-speech generic service for spoken greetings
   "speech_service_name": "speech",
 
+  // string (optional) — URL of a motion-tools viz server for frame system visualization
+  "viz_url": "http://localhost:8080",
+
   // map[string][]Step (required) — named sequences of steps
   // each step has a pose_name, optional pause_secs, and optional linear_constraint
   "sequences": {
@@ -153,6 +156,18 @@ Runs named sequences of poses on a `multi-poses-execution-switch` component. Sup
   }
 }
 ```
+
+**Top-level fields:**
+
+| Name                    | Type   | Required | Description                                                                                                   |
+| ----------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------- |
+| `pose_switcher_name`    | string | Yes      | Name of the multi-poses-execution-switch component.                                                           |
+| `claws_pose_switcher_name` | string | Yes   | Name of the claws pose switcher component.                                                                    |
+| `arm_name`              | string | Yes      | Name of the arm component used for motion planning and execution.                                             |
+| `gripper_name`          | string | Yes      | Name of the gripper component.                                                                                |
+| `sequences`             | object | Yes      | Named sequences of steps (see below).                                                                         |
+| `speech_service_name`   | string | No       | Name of a text-to-speech generic service for spoken greetings.                                                |
+| `viz_url`               | string | No       | URL of a [motion-tools](https://github.com/viam-labs/motion-tools) viz server. When set, the frame system is drawn before each motion plan, useful for debugging collisions and frame placement. |
 
 **Step fields:**
 

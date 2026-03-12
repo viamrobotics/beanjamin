@@ -6,6 +6,7 @@ import (
 	"math"
 
 	"github.com/golang/geo/r3"
+	viz "github.com/viam-labs/motion-tools/client/client"
 	"go.viam.com/rdk/motionplan"
 	"go.viam.com/rdk/motionplan/armplanning"
 	"go.viam.com/rdk/referenceframe"
@@ -89,6 +90,13 @@ func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.Fr
 	// frame system built from FrameSystemConfig.
 	s.logger.Debugf("currentInputs: arm=%q, armInputsLen=%d", s.cfg.ArmName, len(armInputs))
 	fsInputs[s.cfg.ArmName] = armInputs
+
+	if s.vizEnabled {
+		if err := viz.DrawFrameSystem(s.cachedFS, fsInputs); err != nil {
+			s.logger.Warnf("viz: failed to draw frame system: %v", err)
+		}
+	}
+
 	return s.cachedFS, fsInputs, nil
 }
 

@@ -5,6 +5,7 @@ go 1.25.1
 require (
 	cloud.google.com/go/texttospeech v1.16.0
 	github.com/golang/geo v0.0.0-20230421003525-6adc56603217
+	github.com/viam-labs/motion-tools v1.13.1
 	go.viam.com/rdk v0.115.0
 	go.viam.com/utils v0.4.3
 	google.golang.org/api v0.247.0
@@ -23,6 +24,7 @@ require (
 	codeberg.org/go-fonts/liberation v0.5.0 // indirect
 	codeberg.org/go-latex/latex v0.1.0 // indirect
 	codeberg.org/go-pdf/fpdf v0.10.0 // indirect
+	connectrpc.com/connect v1.19.1 // indirect
 	git.sr.ht/~sbinet/gg v0.6.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.29.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.50.0 // indirect
