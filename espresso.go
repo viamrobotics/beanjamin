@@ -35,6 +35,7 @@ var filterGrabCollisions = []AllowedCollision{
 var cleaningCollisions = []AllowedCollision{
 	{Frame1: "filter", Frame2: "cleaner-top"},
 	{Frame1: "portafilter-handle", Frame2: "cleaner-top"},
+	{Frame1: "coffee-claws-middle", Frame2: "cleaner-top"},
 }
 
 var clawCoffeeButtonCollisions = []AllowedCollision{
