@@ -326,13 +326,13 @@ func (s *beanjaminCoffee) brewCoffee(ctx, cancelCtx context.Context) error {
 func (s *beanjaminCoffee) cleanPortafilter(ctx, cancelCtx context.Context) error {
 	steps := []Step{
 		{PoseName: "close_to_cleaning", Component: "filter"},
-		{PoseName: "approach_to_cleaning_scrapper", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions},
-		{PoseName: "cleaning_scrapper_active", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions},
-		{PoseName: "approach_to_cleaning_scrapper", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions},
-		{PoseName: "approach_to_cleaning_brush", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions},
-		{PoseName: "cleaning_brush_active", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions},
-		{PoseName: "approach_to_cleaning_brush", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions},
-		{PoseName: "close_to_cleaning", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions},
+		{PoseName: "approach_to_cleaning_scrapper", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.5},
+		{PoseName: "cleaning_scrapper_active", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 2},
+		{PoseName: "approach_to_cleaning_scrapper", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.5},
+		{PoseName: "approach_to_cleaning_brush", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.5},
+		{PoseName: "cleaning_brush_active", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 2},
+		{PoseName: "approach_to_cleaning_brush", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.5},
+		{PoseName: "close_to_cleaning", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.5},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
