@@ -255,7 +255,7 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("grab_filter: no gripper configured")
 	}
 
-	approachStep := Step{PoseName: "filter_released", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterGrabCollisions}
+	approachStep := Step{PoseName: "filter_released", Component: "coffee-claws-middle", AllowedCollisions: filterGrabCollisions}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("grab_filter: %w", err)
 	}
@@ -305,9 +305,13 @@ func (s *beanjaminCoffee) brewCoffee(ctx, cancelCtx context.Context) error {
 	if err := s.turnCoffeeButtonOn(ctx, cancelCtx); err != nil {
 		return fmt.Errorf("brew_coffee: %w", err)
 	}
-	s.logger.Infof("waiting 8 seconds for espresso to brew")
+	brewTime := 8 * time.Second
+	if s.cfg.BrewTimeSec > 0 {
+		brewTime = time.Duration(s.cfg.BrewTimeSec * float64(time.Second))
+	}
+	s.logger.Infof("waiting %s for espresso to brew", brewTime)
 	select {
-	case <-time.After(8 * time.Second):
+	case <-time.After(brewTime):
 	case <-ctx.Done():
 		return fmt.Errorf("brew_coffee: cancelled during brew wait: %w", ctx.Err())
 	case <-cancelCtx.Done():
