@@ -60,6 +60,7 @@ type Config struct {
 	Sequences             map[string][]Step `json:"sequences"`
 	SpeechServiceName     string            `json:"speech_service_name,omitempty"`
 	VizURL                string            `json:"viz_url,omitempty"`
+	BrewTimeSec           float64           `json:"brew_time_sec,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
