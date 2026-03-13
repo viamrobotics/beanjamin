@@ -117,7 +117,7 @@ Returns:
 
 **API:** `rdk:service:generic`
 
-Runs named sequences of poses on a `multi-poses-execution-switch` component. Supports multiple sequences, forward/reverse execution, and optional position enforcement.
+Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` component. Supports preparing espresso orders, executing individual actions, and cancellation.
 
 ### Configuration
 
@@ -133,27 +133,7 @@ Runs named sequences of poses on a `multi-poses-execution-switch` component. Sup
   "speech_service_name": "speech",
 
   // string (optional) — URL of a motion-tools viz server for frame system visualization
-  "viz_url": "http://localhost:8080",
-
-  // map[string][]Step (required) — named sequences of steps
-  // each step has a pose_name, optional pause_secs, and optional linear_constraint
-  "sequences": {
-    "brew": [
-      {"pose_name": "grinder_approach"},
-      {"pose_name": "grinder_activate", "pause_secs": 10},
-      {"pose_name": "grinder_approach", "pause_secs": 5},
-      {"pose_name": "tamper_approach"},
-      {"pose_name": "tamper_activate", "pause_secs": 3},
-      {"pose_name": "coffee_approach", "linear_constraint": {"line_tolerance_mm": 1, "orientation_tolerance_degs": 2}},
-      {"pose_name": "coffee_in"},
-      {"pose_name": "coffee_locked_mid"},
-      {"pose_name": "coffee_locked_final", "pause_secs": 25}
-    ],
-    "clean": [
-      {"pose_name": "grinder_approach"},
-      {"pose_name": "tamper_approach"}
-    ]
-  }
+  "viz_url": "http://localhost:8080"
 }
 ```
 
@@ -165,32 +145,10 @@ Runs named sequences of poses on a `multi-poses-execution-switch` component. Sup
 | `claws_pose_switcher_name` | string | Yes   | Name of the claws pose switcher component.                                                                    |
 | `arm_name`              | string | Yes      | Name of the arm component used for motion planning and execution.                                             |
 | `gripper_name`          | string | Yes      | Name of the gripper component.                                                                                |
-| `sequences`             | object | Yes      | Named sequences of steps (see below).                                                                         |
 | `speech_service_name`   | string | No       | Name of a text-to-speech generic service for spoken greetings.                                                |
 | `viz_url`               | string | No       | URL of a [motion-tools](https://github.com/viam-labs/motion-tools) viz server. When set, the frame system is drawn before each motion plan, useful for debugging collisions and frame placement. |
 
-**Step fields:**
-
-| Name                | Type   | Required | Description                                                                                                                         |
-| ------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `pose_name`         | string | Yes      | Name of the target pose (must exist on the switch).                                                                                 |
-| `pause_secs`        | float  | No       | Seconds to pause after reaching the pose.                                                                                           |
-| `linear_constraint` | object | No       | If set, the motion planner uses a straight-line path. Fields: `line_tolerance_mm` (max deviation) and `orientation_tolerance_degs`. |
-
 ### DoCommand
-
-**`run`** - Run a named sequence forward. Only one sequence can run at a time. Optionally pass `enforce_start` to check that the switch is at the first step before running.
-
-```json
-{"run": "brew"}
-{"run": "brew", "enforce_start": true}
-```
-
-**`rewind`** - Run a named sequence in reverse. Only allowed when the switch is at the last step of that sequence.
-
-```json
-{"rewind": "brew"}
-```
 
 **`prepare_order`** - Prepare a drink order with optional speech greetings. Currently only supports espresso.
 
@@ -205,7 +163,7 @@ Runs named sequences of poses on a `multi-poses-execution-switch` component. Sup
 }
 ```
 
-Only `drink` is required. If `initial_greeting` is omitted, a random greeting is generated. If `customer_name` is provided, it personalizes the greeting and completion messages. Runs the full espresso sequence: grind, tamp, and lock porta filter.
+Only `drink` is required. If `initial_greeting` is omitted, a random greeting is generated. If `customer_name` is provided, it personalizes the greeting and completion messages. Runs the full espresso preparation: grind, tamp, lock porta filter, and brew.
 
 **`execute_action`** - Run a single coffee-making action by name. Available actions: `grind_coffee`, `tamp_ground`, `lock_portafilter`, `unlock_portafilter`.
 
@@ -213,20 +171,13 @@ Only `drink` is required. If `initial_greeting` is omitted, a random greeting is
 {"execute_action": "grind_coffee"}
 ```
 
-**`cancel`** - Cancel whatever sequence or action is currently running.
+**`cancel`** - Cancel whatever action is currently running.
 
 ```json
 {"cancel": true}
 ```
 
 All commands return `{"status": "complete"}` on success or `{"status": "cancelled"}` for cancel.
-
-### Behavior
-
-- The `sequences` map defines named sequences of poses. Each can be run or rewound independently.
-- Poses can be repeated with different pauses at each occurrence.
-- `enforce_start` on `run` checks the switch is at the first step. `rewind` always checks the switch is at the last step.
-- All execution is cancellation-aware — cancel stops the sequence between steps.
 
 ---
 
