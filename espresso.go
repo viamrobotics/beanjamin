@@ -32,7 +32,7 @@ var filterGrabCollisions = []AllowedCollision{
 	{Frame1: "gripper:case-gripper", Frame2: "portafilter-handle"},
 }
 
-var clawOnOffCollisions = []AllowedCollision{
+var clawCoffeeButtonCollisions = []AllowedCollision{
 	{Frame1: "coffee-claws-middle", Frame2: "coffee-machine-buffer-front"},
 }
 
@@ -278,7 +278,7 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 func (s *beanjaminCoffee) turnCoffeeButtonOn(ctx, cancelCtx context.Context) error {
 	steps := []Step{
 		{PoseName: "coffee_button_approach", Component: "coffee-claws-middle"},
-		{PoseName: "coffee_button_on", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawOnOffCollisions},
+		{PoseName: "coffee_button_on", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
@@ -290,8 +290,8 @@ func (s *beanjaminCoffee) turnCoffeeButtonOn(ctx, cancelCtx context.Context) err
 
 func (s *beanjaminCoffee) turnCoffeeButtonOff(ctx, cancelCtx context.Context) error {
 	steps := []Step{
-		{PoseName: "coffee_button_off", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawOnOffCollisions},
-		{PoseName: "coffee_button_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawOnOffCollisions}},
+		{PoseName: "coffee_button_off", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
+		{PoseName: "coffee_button_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions}},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
