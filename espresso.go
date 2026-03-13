@@ -255,7 +255,7 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("grab_filter: no gripper configured")
 	}
 
-	approachStep := Step{PoseName: "filter_released", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterGrabCollisions}
+	approachStep := Step{PoseName: "filter_released", Component: "coffee-claws-middle", AllowedCollisions: filterGrabCollisions}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("grab_filter: %w", err)
 	}
@@ -291,7 +291,7 @@ func (s *beanjaminCoffee) turnCoffeeButtonOn(ctx, cancelCtx context.Context) err
 func (s *beanjaminCoffee) turnCoffeeButtonOff(ctx, cancelCtx context.Context) error {
 	steps := []Step{
 		{PoseName: "coffee_button_off", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
-		{PoseName: "coffee_button_approach", Component: "coffee-claws-middle", AllowedCollisions: clawCoffeeButtonCollisions},
+		{PoseName: "coffee_button_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
