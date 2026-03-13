@@ -162,9 +162,6 @@ func (s *beanjaminCoffee) prepareEspresso(ctx context.Context) error {
 	if err := s.grabFilter(ctx, cancelCtx); err != nil {
 		return err
 	}
-	if err := s.unlockPortaFilter(ctx, cancelCtx); err != nil {
-		return err
-	}
 
 	s.logger.Infof("espresso preparation complete")
 	return nil
