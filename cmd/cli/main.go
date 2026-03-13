@@ -1,16 +1,21 @@
+// Capability 6 demo: module deployment and update.
+//
+// Usage:
+//
+//	go run main.go --host <machine-address>
+//	go run main.go --host <machine-address> --cmd <command>
 package main
 
 import (
+	"beanjamin"
 	"context"
 	"flag"
 	"fmt"
 	"os"
 
+	"github.com/erh/vmodutils"
 	"go.viam.com/rdk/logging"
-	"go.viam.com/rdk/robot"
-	"go.viam.com/rdk/robot/client"
-	generic "go.viam.com/rdk/services/generic"
-	"go.viam.com/utils/rpc"
+	"go.viam.com/rdk/services/generic"
 )
 
 func main() {
@@ -21,107 +26,72 @@ func main() {
 }
 
 func realMain() error {
-	if len(os.Args) < 2 {
-		printUsage()
-		return fmt.Errorf("no command specified")
-	}
-
-	switch os.Args[1] {
-	case "say":
-		return runSay(os.Args[2:])
-	default:
-		printUsage()
-		return fmt.Errorf("unknown command: %s", os.Args[1])
-	}
-}
-
-func printUsage() {
-	fmt.Println("Usage: beanjamin-cli <command> [flags]")
-	fmt.Println()
-	fmt.Println("Commands:")
-	fmt.Println("  say         Say text aloud via the speech service")
-}
-
-// connFlags holds the shared connection flags used by all commands.
-type connFlags struct {
-	address  *string
-	apiKey   *string
-	apiKeyID *string
-}
-
-func addConnFlags(flagSet *flag.FlagSet) connFlags {
-	return connFlags{
-		address:  flagSet.String("address", "", "Machine gRPC address (required)"),
-		apiKey:   flagSet.String("api-key", os.Getenv("VIAM_API_KEY"), "API key (or set VIAM_API_KEY env var)"),
-		apiKeyID: flagSet.String("api-key-id", os.Getenv("VIAM_API_KEY_ID"), "API key ID (or set VIAM_API_KEY_ID env var)"),
-	}
-}
-
-func (c connFlags) validate() error {
-	if *c.address == "" {
-		return fmt.Errorf("--address is required")
-	}
-	if *c.apiKey == "" || *c.apiKeyID == "" {
-		return fmt.Errorf("--api-key and --api-key-id are required (or set VIAM_API_KEY / VIAM_API_KEY_ID)")
-	}
-	return nil
-}
-
-func runSay(args []string) error {
-	flagSet := flag.NewFlagSet("say", flag.ExitOnError)
-	conn := addConnFlags(flagSet)
-
-	serviceName := flagSet.String("service", "speech-1", "Name of the speech service")
-
-	if err := flagSet.Parse(args); err != nil {
-		return err
-	}
-	if err := conn.validate(); err != nil {
-		return err
-	}
-
-	text := flagSet.Arg(0)
-	if text == "" {
-		return fmt.Errorf("usage: beanjamin-cli say [flags] \"text to speak\"")
-	}
-
 	ctx := context.Background()
 	logger := logging.NewLogger("cli")
 
-	machine, err := conn.connect(ctx, logger)
+	host := flag.String("host", "", "Machine address (required — get from Viam app → Connect tab)")
+	cmd := flag.String("cmd", "", "command to execute (move, go, reset, wipe, skill, etc..)")
+	flag.Parse()
+
+	if *host == "" {
+		return fmt.Errorf("--host is required")
+	}
+
+	machine, err := vmodutils.ConnectToHostFromCLIToken(ctx, *host, logger)
 	if err != nil {
-		return err
+		return fmt.Errorf("connecting to machine: %w", err)
 	}
 	defer machine.Close(ctx)
 
-	speechSvc, err := generic.FromRobot(machine, *serviceName)
+	deps, err := vmodutils.MachineToDependencies(machine)
 	if err != nil {
-		return fmt.Errorf("getting speech service %q: %w", *serviceName, err)
+		return err
 	}
 
-	resp, err := speechSvc.DoCommand(ctx, map[string]interface{}{
-		"say": text,
-	})
-	if err != nil {
-		return fmt.Errorf("say failed: %w", err)
+	cfg := &beanjamin.Config{
+		PoseSwitcherName:      "multi-pose-execution-switch",
+		ClawsPoseSwitcherName: "claws-position-switch",
+		ArmName:               "arm",
+		GripperName:           "gripper",
+		SpeechServiceName:     "speech",
+		VizURL:                "",
+		Sequences: map[string][]beanjamin.Step{
+			"brew": {
+				{PoseName: "grinder_approach", PauseSec: 1},
+				{PoseName: "grinder_activate", PauseSec: 1},
+				{PoseName: "grinder_approach", PauseSec: 5},
+				{PoseName: "tamper_approach", PauseSec: 1},
+				{PoseName: "tamper_activate", PauseSec: 2},
+				{PoseName: "tamper_approach", PauseSec: 1},
+				{PoseName: "coffee_approach", PauseSec: 1},
+				{PoseName: "coffee_in", PauseSec: 1},
+				{PoseName: "coffee_locked_final", PauseSec: 5},
+			},
+		},
 	}
 
-	if t, ok := resp["text"].(string); ok && t != "" {
-		fmt.Println(t)
+	_, _, err = cfg.Validate("")
+	if err != nil {
+		return err
 	}
-	return nil
+
+	coffee, err := beanjamin.NewCoffee(ctx, deps, generic.Named("coffee"), cfg, logger)
+	if err != nil {
+		return fmt.Errorf("getting coffee service: %w", err)
+	}
+
+	switch *cmd {
+	case "grind_coffee":
+		res, err := coffee.DoCommand(ctx, map[string]interface{}{
+			"execute_action": "grind_coffee",
+		})
+		if err != nil {
+			return err
+		}
+		logger.Infof("res: %v", res)
+		return nil
+	
+	default:
+		return fmt.Errorf("unknown command [%s]", *cmd)
+	}
 }
-
-func (c connFlags) connect(ctx context.Context, logger logging.Logger) (robot.Robot, error) {
-	machine, err := client.New(ctx, *c.address, logger,
-		client.WithDialOptions(rpc.WithEntityCredentials(
-			*c.apiKeyID,
-			rpc.Credentials{Type: rpc.CredentialsTypeAPIKey, Payload: *c.apiKey},
-		)),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("connecting to machine: %w", err)
-	}
-	return machine, nil
-}
-
