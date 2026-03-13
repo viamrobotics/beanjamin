@@ -165,6 +165,7 @@ func (s *beanjaminCoffee) prepareEspresso(ctx context.Context) error {
 }
 
 func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
+	s.say(ctx, "Grinding fresh coffee!!")
 	steps := []Step{
 		{PoseName: "grinder_approach", Component: "filter", PauseSec: 1},
 		{PoseName: "grinder_activate", Component: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
@@ -175,6 +176,7 @@ func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 			return fmt.Errorf("grind_coffee: %w", err)
 		}
 	}
+	s.say(ctx, "Finished! Ready to tamp!")
 	return nil
 }
 
