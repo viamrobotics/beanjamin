@@ -291,7 +291,7 @@ func (s *beanjaminCoffee) turnCoffeeButtonOn(ctx, cancelCtx context.Context) err
 func (s *beanjaminCoffee) turnCoffeeButtonOff(ctx, cancelCtx context.Context) error {
 	steps := []Step{
 		{PoseName: "coffee_button_off", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
-		{PoseName: "coffee_button_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
+		{PoseName: "coffee_button_approach", Component: "coffee-claws-middle", AllowedCollisions: clawCoffeeButtonCollisions},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
