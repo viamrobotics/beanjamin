@@ -36,6 +36,11 @@ var clawCoffeeButtonCollisions = []AllowedCollision{
 	{Frame1: "coffee-claws-middle", Frame2: "coffee-machine-buffer-front"},
 }
 
+var cupGrabCollisions = []AllowedCollision{
+	{Frame1: "coffee-claws-middle", Frame2: "empty-cup"},
+	{Frame1: "gripper:claws", Frame2: "empty-cup"},
+}
+
 func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}) (map[string]interface{}, error) {
 	order, ok := orderRaw.(map[string]interface{})
 	if !ok {
@@ -102,6 +107,7 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 		"turn_coffee_button_on":  s.turnCoffeeButtonOn,
 		"turn_coffee_button_off": s.turnCoffeeButtonOff,
 		"brew_coffee":            s.brewCoffee,
+		"set_cup_for_coffee":     s.setCupForCoffee,
 	}
 
 	action, ok := actions[name]
@@ -265,6 +271,43 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("grab_filter: grab gripper: %w", err)
+	}
+	return nil
+}
+
+func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error {
+	if s.gripper == nil {
+		return fmt.Errorf("set_cup_for_coffee: no gripper configured")
+	}
+
+	// Approach the empty cup.
+	approachStep := Step{PoseName: "empty_cup_approach", Component: "coffee-claws-middle", PauseSec: 0.5}
+	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
+		return fmt.Errorf("set_cup_for_coffee: %w", err)
+	}
+
+	// Move down to the cup and grab it.
+	grabStep := Step{PoseName: "empty_cup", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, PauseSec: 0.5}
+	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
+		return fmt.Errorf("set_cup_for_coffee: %w", err)
+	}
+	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		return fmt.Errorf("set_cup_for_coffee: grab gripper: %w", err)
+	}
+
+	// Retreat and move to the coffee position.
+	retreatStep := Step{PoseName: "empty_cup_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, PauseSec: 0.5}
+	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
+		return fmt.Errorf("set_cup_for_coffee: %w", err)
+	}
+	readyStep := Step{PoseName: "cup_ready_for_coffee", Component: "coffee-claws-middle", PauseSec: 0.5}
+	if err := s.executeStep(ctx, cancelCtx, readyStep); err != nil {
+		return fmt.Errorf("set_cup_for_coffee: %w", err)
+	}
+
+	// Release the cup.
+	if err := s.gripper.Open(ctx, nil); err != nil {
+		return fmt.Errorf("set_cup_for_coffee: open gripper: %w", err)
 	}
 	return nil
 }
