@@ -32,6 +32,12 @@ var filterGrabCollisions = []AllowedCollision{
 	{Frame1: "gripper:case-gripper", Frame2: "portafilter-handle"},
 }
 
+var cleaningCollisions = []AllowedCollision{
+	{Frame1: "filter", Frame2: "cleaner-top"},
+	{Frame1: "portafilter-handle", Frame2: "cleaner-top"},
+	{Frame1: "coffee-claws-middle", Frame2: "cleaner-top"},
+}
+
 var clawCoffeeButtonCollisions = []AllowedCollision{
 	{Frame1: "coffee-claws-middle", Frame2: "coffee-machine-buffer-front"},
 }
@@ -102,6 +108,7 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 		"turn_coffee_button_on":  s.turnCoffeeButtonOn,
 		"turn_coffee_button_off": s.turnCoffeeButtonOff,
 		"brew_coffee":            s.brewCoffee,
+		"clean_portafilter":      s.cleanPortafilter,
 	}
 
 	action, ok := actions[name]
@@ -313,6 +320,25 @@ func (s *beanjaminCoffee) brewCoffee(ctx, cancelCtx context.Context) error {
 	}
 	if err := s.turnCoffeeButtonOff(ctx, cancelCtx); err != nil {
 		return fmt.Errorf("brew_coffee: %w", err)
+	}
+	return nil
+}
+
+func (s *beanjaminCoffee) cleanPortafilter(ctx, cancelCtx context.Context) error {
+	steps := []Step{
+		{PoseName: "close_to_cleaning", Component: "filter"},
+		{PoseName: "approach_to_cleaning_scrapper", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.5},
+		{PoseName: "cleaning_scrapper_active", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 2},
+		{PoseName: "approach_to_cleaning_scrapper", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.5},
+		{PoseName: "approach_to_cleaning_brush", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.5},
+		{PoseName: "cleaning_brush_active", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 2},
+		{PoseName: "approach_to_cleaning_brush", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.5},
+		{PoseName: "close_to_cleaning", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.5},
+	}
+	for _, step := range steps {
+		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+			return fmt.Errorf("clean_portafilter: %w", err)
+		}
 	}
 	return nil
 }
