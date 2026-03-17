@@ -14,7 +14,7 @@
     "@viamrobotics/sdk": "^0.40.1",
     "geist": "^1.7.0",
     "js-cookie": "^3.0.5",
-    "next": "16.1.6",
+    "next": "16.1.7",
     "react": "19.2.3",
     "react-dom": "19.2.3"
   },
