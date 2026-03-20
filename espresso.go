@@ -262,7 +262,7 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("grab_filter: no gripper configured")
 	}
 
-	approachStep := Step{PoseName: "filter_released", Component: "coffee-claws-middle", AllowedCollisions: filterGrabCollisions}
+	approachStep := Step{PoseName: "filter_released", Component: "coffee-claws-middle"}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("grab_filter: %w", err)
 	}
