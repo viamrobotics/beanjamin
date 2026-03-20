@@ -297,6 +297,8 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: open gripper: %w", err)
 	}
+	// Give time for the gripper to open
+	time.Sleep(500 * time.Millisecond)
 
 	// Move down to the cup and grab it.
 	grabStep := Step{PoseName: "empty_cup", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, PauseSec: 0.5}
