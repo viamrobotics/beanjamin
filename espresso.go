@@ -40,6 +40,7 @@ var cleaningCollisions = []AllowedCollision{
 
 var clawCoffeeButtonCollisions = []AllowedCollision{
 	{Frame1: "coffee-claws-middle", Frame2: "coffee-machine-buffer-front"},
+	{Frame1: "gripper:claws", Frame2: "coffee-machine-buffer-front"},
 }
 
 var cupGrabCollisions = []AllowedCollision{
