@@ -281,6 +281,7 @@ func (s *beanjaminCoffee) releaseFilter(ctx, cancelCtx context.Context) error {
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("release_filter: grab gripper: %w", err)
 	}
+	time.Sleep(500 * time.Millisecond)
 	return nil
 }
 
@@ -306,6 +307,7 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("grab_filter: grab gripper: %w", err)
 	}
+	time.Sleep(500 * time.Millisecond)
 	return nil
 }
 
@@ -335,14 +337,15 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: grab gripper: %w", err)
 	}
+	time.Sleep(500 * time.Millisecond)
 
 	// Retreat and move to the coffee position.
 	retreatStep := Step{PoseName: "empty_cup_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, PauseSec: 0.5}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
-	cupExitBeforeStep := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", PauseSec: 0.5}
-	if err := s.executeStep(ctx, cancelCtx, cupExitBeforeStep); err != nil {
+	cupPlacementApproach := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", PauseSec: 0.5}
+	if err := s.executeStep(ctx, cancelCtx, cupPlacementApproach); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
 	readyStep := Step{PoseName: "cup_ready_for_coffee", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, PauseSec: 0.1}
@@ -390,6 +393,7 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: grab gripper: %w", err)
 	}
+	time.Sleep(500 * time.Millisecond)
 
 	// Retreat from the machine.
 	retreatStep := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, PauseSec: 0.5}
