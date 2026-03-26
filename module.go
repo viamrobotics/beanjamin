@@ -59,6 +59,8 @@ type Config struct {
 	SpeechServiceName     string            `json:"speech_service_name,omitempty"`
 	VizURL                string            `json:"viz_url,omitempty"`
 	BrewTimeSec           float64           `json:"brew_time_sec,omitempty"`
+	PlaceCup              bool              `json:"place_cup,omitempty"`
+	CleanAfterUse         bool              `json:"clean_after_use,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
