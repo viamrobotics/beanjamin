@@ -315,7 +315,11 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
-	readyStep := Step{PoseName: "cup_ready_for_coffee", Component: "coffee-claws-middle", PauseSec: 0.5}
+	cupExitBeforeStep := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", PauseSec: 0.5}
+	if err := s.executeStep(ctx, cancelCtx, cupExitBeforeStep); err != nil {
+		return fmt.Errorf("set_cup_for_coffee: %w", err)
+	}
+	readyStep := Step{PoseName: "cup_ready_for_coffee", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, PauseSec: 0.1}
 	if err := s.executeStep(ctx, cancelCtx, readyStep); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
@@ -323,6 +327,14 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	// Release the cup.
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: open gripper: %w", err)
+	}
+	// Give time for the gripper to open
+	time.Sleep(500 * time.Millisecond)
+
+	// Move away from the cup.
+	exitStep := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, PauseSec: 0.1}
+	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
+		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
 	return nil
 }
