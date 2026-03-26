@@ -24,9 +24,11 @@ Moves an arm (or any movable component) between a list of named poses via the Mo
   "poses": [
     {
       "pose_name": "<string>",
-      "x": <float>, "y": <float>, "z": <float>,
-      "o_x": <float>, "o_y": <float>, "o_z": <float>,
-      "theta_degrees": <float>
+      "pose_value": {
+        "x": <float>, "y": <float>, "z": <float>,
+        "o_x": <float>, "o_y": <float>, "o_z": <float>,
+        "theta": <float>
+      }
     }
   ]
 }
@@ -37,9 +39,9 @@ Moves an arm (or any movable component) between a list of named poses via the Mo
 | `component_name`  | string | Yes      | Name of the arm component to move.                                                      |
 | `motion`          | string | Yes      | Name of the motion service (typically `"builtin"`).                                     |
 | `reference_frame` | string | No       | Reference frame for poses. Defaults to `"world"`.                                       |
-| `poses`           | array  | Yes      | One or more named poses. Each pose needs a `pose_name` and position/orientation fields. |
+| `poses`           | array  | Yes      | One or more named poses. Each pose needs a `pose_name` and a `pose_value` object.       |
 
-**Pose fields:** `x`, `y`, `z` are in millimeters. `o_x`, `o_y`, `o_z` define the orientation axis, `theta_degrees` is the rotation angle in degrees.
+**Pose value fields:** `x`, `y`, `z` are in millimeters. `o_x`, `o_y`, `o_z` define the orientation axis, `theta` is the rotation angle in degrees.
 
 ### Example Configuration
 
@@ -51,15 +53,19 @@ Moves an arm (or any movable component) between a list of named poses via the Mo
   "poses": [
     {
       "pose_name": "home",
-      "x": 0, "y": 0, "z": 500,
-      "o_x": 0, "o_y": 0, "o_z": 1,
-      "theta_degrees": 0
+      "pose_value": {
+        "x": 0, "y": 0, "z": 500,
+        "o_x": 0, "o_y": 0, "o_z": 1,
+        "theta": 0
+      }
     },
     {
       "pose_name": "pour",
-      "x": 200, "y": 100, "z": 350,
-      "o_x": 0, "o_y": 1, "o_z": 0,
-      "theta_degrees": 90
+      "pose_value": {
+        "x": 200, "y": 100, "z": 350,
+        "o_x": 0, "o_y": 1, "o_z": 0,
+        "theta": 90
+      }
     }
   ]
 }
@@ -105,7 +111,7 @@ Returns:
 {
   "x": 0, "y": 0, "z": 500,
   "o_x": 0, "o_y": 0, "o_z": 1,
-  "theta_degrees": 0,
+  "theta": 0,
   "reference_frame": "world",
   "component_name": "my-arm"
 }

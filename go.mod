@@ -5,7 +5,7 @@ go 1.25.1
 require (
 	cloud.google.com/go/texttospeech v1.16.0
 	github.com/golang/geo v0.0.0-20230421003525-6adc56603217
-	github.com/viam-labs/motion-tools v1.13.1
+	github.com/viam-labs/motion-tools v1.15.1
 	go.viam.com/rdk v0.115.0
 	go.viam.com/utils v0.4.3
 	google.golang.org/api v0.247.0
