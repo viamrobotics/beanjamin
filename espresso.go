@@ -157,47 +157,64 @@ func (s *beanjaminCoffee) prepareEspresso(ctx context.Context) error {
 	cancelCtx := s.cancelCtx
 	s.mu.Unlock()
 
-	s.logger.Infof("starting espresso preparation")
+	s.logger.Infof("starting espresso preparation (place_cup=%t, clean_after_use=%t, brew_time_sec=%v)",
+		s.cfg.PlaceCup, s.cfg.CleanAfterUse, s.cfg.BrewTimeSec)
 
+	s.logger.Infof("step 1/7: grinding coffee")
 	if err := s.grindCoffee(ctx, cancelCtx); err != nil {
 		return err
 	}
+	s.logger.Infof("step 2/7: tamping ground")
 	if err := s.tampGround(ctx, cancelCtx); err != nil {
 		return err
 	}
+	s.logger.Infof("step 3/7: locking portafilter")
 	if err := s.lockPortaFilter(ctx, cancelCtx); err != nil {
 		return err
 	}
+	s.logger.Infof("step 4/7: releasing filter")
 	if err := s.releaseFilter(ctx, cancelCtx); err != nil {
 		return err
 	}
 	if s.cfg.PlaceCup {
+		s.logger.Infof("step 5/7: placing cup (place_cup=true)")
 		if err := s.setCupForCoffee(ctx, cancelCtx); err != nil {
 			return err
 		}
+	} else {
+		s.logger.Infof("step 5/7: skipping cup placement (place_cup=false)")
 	}
+	s.logger.Infof("step 6/7: brewing coffee")
 	if err := s.brewCoffee(ctx, cancelCtx); err != nil {
 		return err
 	}
 
 	if s.cfg.PlaceCup {
+		s.logger.Infof("step 6b/7: giving full cup to customer (place_cup=true)")
 		if err := s.giveFullCupToCustomer(ctx, cancelCtx); err != nil {
 			return err
 		}
+	} else {
+		s.logger.Infof("step 6b/7: skipping cup handoff (place_cup=false)")
 	}
 
+	s.logger.Infof("step 7/7: grabbing filter")
 	if err := s.grabFilter(ctx, cancelCtx); err != nil {
 		return err
 	}
 
 	if s.cfg.CleanAfterUse {
+		s.logger.Infof("post: cleaning portafilter (clean_after_use=true)")
 		if !s.cfg.PlaceCup {
+			s.logger.Infof("post: waiting for manual cup removal (place_cup=false)")
 			s.say(ctx, "Please remove the cup before we start the cleaning process!")
 			time.Sleep(10 * time.Second)
 		}
 		if err := s.cleanPortafilter(ctx, cancelCtx); err != nil {
 			return err
 		}
+	} else {
+		s.logger.Infof("post: skipping cleaning (clean_after_use=false)")
 	}
 
 	s.logger.Infof("espresso preparation complete")
