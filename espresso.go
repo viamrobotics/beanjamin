@@ -178,12 +178,11 @@ func (s *beanjaminCoffee) prepareEspresso(ctx context.Context, customerName stri
 		s.logger.Infof("step 5/7: skipping cup placement (place_cup=false)")
 	}
 	s.logger.Infof("step 6/7: brewing coffee")
-	if err := s.brewCoffee(ctx, cancelCtx); err != nil {
-		return err
-	}
-
 	if err := s.say(ctx, pickAlmostReady()); err != nil {
 		s.logger.Warnf("failed to say almost-ready: %v", err)
+	}
+	if err := s.brewCoffee(ctx, cancelCtx); err != nil {
+		return err
 	}
 
 	if s.cfg.PlaceCup {
