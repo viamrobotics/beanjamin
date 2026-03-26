@@ -53,19 +53,19 @@ type Step struct {
 }
 
 type Config struct {
-	PoseSwitcherName      string            `json:"pose_switcher_name"`
-	ClawsPoseSwitcherName string            `json:"claws_pose_switcher_name"`
-	ArmName               string            `json:"arm_name"`
-	GripperName           string            `json:"gripper_name"`
-	SpeechServiceName     string            `json:"speech_service_name,omitempty"`
-	VizURL                string            `json:"viz_url,omitempty"`
-	BrewTimeSec           float64           `json:"brew_time_sec,omitempty"`
-	PlaceCup              bool              `json:"place_cup,omitempty"`
-	CleanAfterUse         bool              `json:"clean_after_use,omitempty"`
-	DialMoveXMM           float64           `json:"dial_move_x_mm,omitempty"`
-	DialMoveYMM           float64           `json:"dial_move_y_mm,omitempty"`
-	DialMoveZMM           float64           `json:"dial_move_z_mm,omitempty"`
-	DialMaxPosition       float64           `json:"dial_max_position,omitempty"`
+	PoseSwitcherName      string  `json:"pose_switcher_name"`
+	ClawsPoseSwitcherName string  `json:"claws_pose_switcher_name"`
+	ArmName               string  `json:"arm_name"`
+	GripperName           string  `json:"gripper_name"`
+	SpeechServiceName     string  `json:"speech_service_name,omitempty"`
+	VizURL                string  `json:"viz_url,omitempty"`
+	BrewTimeSec           float64 `json:"brew_time_sec,omitempty"`
+	PlaceCup              bool    `json:"place_cup,omitempty"`
+	CleanAfterUse         bool    `json:"clean_after_use,omitempty"`
+	DialMoveXMM           float64 `json:"dial_move_x_mm,omitempty"`
+	DialMoveYMM           float64 `json:"dial_move_y_mm,omitempty"`
+	DialMoveZMM           float64 `json:"dial_move_z_mm,omitempty"`
+	DialMaxPosition       float64 `json:"dial_max_position,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -94,21 +94,22 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 type beanjaminCoffee struct {
 	resource.AlwaysRebuild
 
-	name      resource.Name
-	logger    logging.Logger
-	cfg       *Config
-	filterSw  toggleswitch.Switch
-	clawsSw   toggleswitch.Switch
-	arm       arm.Arm
-	fsSvc     framesystem.Service
-	cachedFS   *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
-	speech     resource.Resource           // nil when speech_service_name is not configured
-	vizEnabled bool                        // true when viz_url is configured
-	gripper   gripper.Gripper
-	mu         sync.Mutex
-	cancelCtx  context.Context
-	cancelFunc func()
-	running    atomic.Bool
+	name                   resource.Name
+	logger                 logging.Logger
+	cfg                    *Config
+	filterSw               toggleswitch.Switch
+	clawsSw                toggleswitch.Switch
+	arm                    arm.Arm
+	fsSvc                  framesystem.Service
+	cachedFS               *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
+	speech                 resource.Resource           // nil when speech_service_name is not configured
+	vizEnabled             bool                        // true when viz_url is configured
+	vizConsecutiveFailures int                         // auto-disables viz after repeated failures
+	gripper                gripper.Gripper
+	mu                     sync.Mutex
+	cancelCtx              context.Context
+	cancelFunc             func()
+	running                atomic.Bool
 
 	// Last known absolute dial positions and directions for direction detection
 	lastDialX    *float64
