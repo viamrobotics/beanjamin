@@ -382,6 +382,12 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
+
+	// Close the gripper after moving away.
+	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		return fmt.Errorf("set_cup_for_coffee: close gripper: %w", err)
+	}
+	time.Sleep(500 * time.Millisecond)
 	return nil
 }
 
@@ -439,6 +445,12 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: %w", err)
 	}
+
+	// Close the gripper after moving away.
+	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		return fmt.Errorf("give_full_cup_to_customer: close gripper: %w", err)
+	}
+	time.Sleep(500 * time.Millisecond)
 	return nil
 }
 
