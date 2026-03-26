@@ -105,17 +105,18 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}
 
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
-		"grind_coffee":           s.grindCoffee,
-		"tamp_ground":            s.tampGround,
-		"lock_portafilter":       s.lockPortaFilter,
-		"unlock_portafilter":     s.unlockPortaFilter,
-		"release_filter":         s.releaseFilter,
-		"grab_filter":            s.grabFilter,
-		"turn_coffee_button_on":  s.turnCoffeeButtonOn,
-		"turn_coffee_button_off": s.turnCoffeeButtonOff,
-		"brew_coffee":            s.brewCoffee,
-		"set_cup_for_coffee":     s.setCupForCoffee,
-		"clean_portafilter":      s.cleanPortafilter,
+		"grind_coffee":              s.grindCoffee,
+		"tamp_ground":               s.tampGround,
+		"lock_portafilter":          s.lockPortaFilter,
+		"unlock_portafilter":        s.unlockPortaFilter,
+		"release_filter":            s.releaseFilter,
+		"grab_filter":               s.grabFilter,
+		"turn_coffee_button_on":     s.turnCoffeeButtonOn,
+		"turn_coffee_button_off":    s.turnCoffeeButtonOff,
+		"brew_coffee":               s.brewCoffee,
+		"set_cup_for_coffee":        s.setCupForCoffee,
+		"give_full_cup_to_customer": s.giveFullCupToCustomer,
+		"clean_portafilter":         s.cleanPortafilter,
 	}
 
 	action, ok := actions[name]
@@ -170,8 +171,33 @@ func (s *beanjaminCoffee) prepareEspresso(ctx context.Context) error {
 	if err := s.releaseFilter(ctx, cancelCtx); err != nil {
 		return err
 	}
+	if s.cfg.PlaceCup {
+		if err := s.setCupForCoffee(ctx, cancelCtx); err != nil {
+			return err
+		}
+	}
 	if err := s.brewCoffee(ctx, cancelCtx); err != nil {
 		return err
+	}
+
+	if s.cfg.PlaceCup {
+		if err := s.giveFullCupToCustomer(ctx, cancelCtx); err != nil {
+			return err
+		}
+	}
+
+	if err := s.grabFilter(ctx, cancelCtx); err != nil {
+		return err
+	}
+
+	if s.cfg.CleanAfterUse {
+		if !s.cfg.PlaceCup {
+			s.say(ctx, "Please remove the cup before we start the cleaning process!")
+			time.Sleep(10 * time.Second)
+		}
+		if err := s.cleanPortafilter(ctx, cancelCtx); err != nil {
+			return err
+		}
 	}
 
 	s.logger.Infof("espresso preparation complete")
@@ -335,6 +361,62 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	exitStep := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, PauseSec: 0.1}
 	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
+	}
+	return nil
+}
+
+func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) error {
+	if s.gripper == nil {
+		return fmt.Errorf("give_full_cup_to_customer: no gripper configured")
+	}
+
+	// Approach the cup under the machine.
+	approachStep := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", PauseSec: 0.5}
+	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
+		return fmt.Errorf("give_full_cup_to_customer: %w", err)
+	}
+
+	// Open gripper to prepare for grabbing.
+	if err := s.gripper.Open(ctx, nil); err != nil {
+		return fmt.Errorf("give_full_cup_to_customer: open gripper: %w", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	// Move down to the cup and grab it.
+	grabStep := Step{PoseName: "cup_ready_for_coffee", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, PauseSec: 0.5}
+	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
+		return fmt.Errorf("give_full_cup_to_customer: %w", err)
+	}
+	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		return fmt.Errorf("give_full_cup_to_customer: grab gripper: %w", err)
+	}
+
+	// Retreat from the machine.
+	retreatStep := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, PauseSec: 0.5}
+	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
+		return fmt.Errorf("give_full_cup_to_customer: %w", err)
+	}
+
+	// Move to the customer cup position.
+	customerApproachStep := Step{PoseName: "empty_cup_approach", Component: "coffee-claws-middle", PauseSec: 0.5}
+	if err := s.executeStep(ctx, cancelCtx, customerApproachStep); err != nil {
+		return fmt.Errorf("give_full_cup_to_customer: %w", err)
+	}
+	placeStep := Step{PoseName: "empty_cup", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, PauseSec: 0.5}
+	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
+		return fmt.Errorf("give_full_cup_to_customer: %w", err)
+	}
+
+	// Release the cup.
+	if err := s.gripper.Open(ctx, nil); err != nil {
+		return fmt.Errorf("give_full_cup_to_customer: open gripper: %w", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	// Move away from the cup.
+	exitStep := Step{PoseName: "empty_cup_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, PauseSec: 0.1}
+	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
+		return fmt.Errorf("give_full_cup_to_customer: %w", err)
 	}
 	return nil
 }
