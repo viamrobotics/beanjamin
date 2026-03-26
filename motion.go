@@ -58,7 +58,7 @@ func (s *beanjaminCoffee) fetchPose(ctx context.Context, component, poseName str
 	oX, _ := resp["o_x"].(float64)
 	oY, _ := resp["o_y"].(float64)
 	oZ, _ := resp["o_z"].(float64)
-	theta, _ := resp["theta_degrees"].(float64)
+	theta, _ := resp["theta"].(float64)
 	refFrame, _ := resp["reference_frame"].(string)
 	if refFrame == "" {
 		refFrame = referenceframe.World

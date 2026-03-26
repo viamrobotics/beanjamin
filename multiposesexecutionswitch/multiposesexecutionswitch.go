@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/golang/geo/r3"
+	commonpb "go.viam.com/api/common/v1"
 
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
@@ -37,14 +38,8 @@ type Config struct {
 }
 
 type PoseConf struct {
-	PoseName     string  `json:"pose_name"`
-	X            float64 `json:"x"`
-	Y            float64 `json:"y"`
-	Z            float64 `json:"z"`
-	OX           float64 `json:"o_x"`
-	OY           float64 `json:"o_y"`
-	OZ           float64 `json:"o_z"`
-	ThetaDegrees float64 `json:"theta_degrees"`
+	PoseName  string      `json:"pose_name"`
+	PoseValue commonpb.Pose `json:"pose_value"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -149,13 +144,13 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 		for _, pc := range s.cfg.Poses {
 			if pc.PoseName == name {
 				return map[string]interface{}{
-					"x":               pc.X,
-					"y":               pc.Y,
-					"z":               pc.Z,
-					"o_x":             pc.OX,
-					"o_y":             pc.OY,
-					"o_z":             pc.OZ,
-					"theta_degrees":   pc.ThetaDegrees,
+					"x":               pc.PoseValue.X,
+					"y":               pc.PoseValue.Y,
+					"z":               pc.PoseValue.Z,
+					"o_x":             pc.PoseValue.OX,
+					"o_y":             pc.PoseValue.OY,
+					"o_z":             pc.PoseValue.OZ,
+					"theta":           pc.PoseValue.Theta,
 					"reference_frame": s.cfg.ReferenceFrame,
 					"component_name":  s.cfg.ComponentName,
 				}, nil
@@ -200,8 +195,8 @@ func (s *multiPosesExecutionSwitch) goToPosition(ctx context.Context, position u
 	s.logger.Infof("moving %s to pose %q (index %d)", s.cfg.ComponentName, pc.PoseName, position)
 
 	pose := spatialmath.NewPose(
-		r3.Vector{X: pc.X, Y: pc.Y, Z: pc.Z},
-		&spatialmath.OrientationVectorDegrees{OX: pc.OX, OY: pc.OY, OZ: pc.OZ, Theta: pc.ThetaDegrees},
+		r3.Vector{X: pc.PoseValue.X, Y: pc.PoseValue.Y, Z: pc.PoseValue.Z},
+		&spatialmath.OrientationVectorDegrees{OX: pc.PoseValue.OX, OY: pc.PoseValue.OY, OZ: pc.PoseValue.OZ, Theta: pc.PoseValue.Theta},
 	)
 	destination := referenceframe.NewPoseInFrame(s.cfg.ReferenceFrame, pose)
 

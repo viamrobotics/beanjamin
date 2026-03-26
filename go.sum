@@ -786,6 +786,8 @@ github.com/urfave/cli v1.20.0/go.mod h1:70zkFmudgCuE/ngEzBv17Jvp/497gISqfk5gWijb
 github.com/urfave/cli v1.22.1/go.mod h1:Gos4lmkARVdJ6EkW0WaNv/tZAAMe9V7XWyB60NtXRu0=
 github.com/viam-labs/motion-tools v1.13.1 h1:QcGvUJEl1eIFw/4agL7fBa0oiW/X7YBQvD/73ISthoU=
 github.com/viam-labs/motion-tools v1.13.1/go.mod h1:AHsyC35BxliKaRzg8O/109dxOKJJlVebRWAXR7QqdXM=
+github.com/viam-labs/motion-tools v1.15.1 h1:Q1RVHZUL6kUkgOxGosTDJrckH7aeKhFHtKLqcrGqFFc=
+github.com/viam-labs/motion-tools v1.15.1/go.mod h1:AHsyC35BxliKaRzg8O/109dxOKJJlVebRWAXR7QqdXM=
 github.com/viamrobotics/evdev v0.1.3 h1:mR4HFafvbc5Wx4Vp1AUJp6/aITfVx9AKyXWx+rWjpfc=
 github.com/viamrobotics/evdev v0.1.3/go.mod h1:N6nuZmPz7HEIpM7esNWwLxbYzqWqLSZkfI/1Sccckqk=
 github.com/viamrobotics/ice/v2 v2.3.40 h1:H9r4ztsKkxWSn42R4fLvYlaPtpBys1Yj7/MERBtZY0k=
