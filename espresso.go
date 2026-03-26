@@ -67,7 +67,7 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}
 	completionStatement, _ := order["completion_statement"].(string)
 
 	if initialGreeting == "" {
-		initialGreeting = pickGreeting("")
+		initialGreeting = pickGreeting(customerName)
 	}
 
 	s.logger.Infof("prepare_order: %s – %s", customerName, initialGreeting)
@@ -76,21 +76,14 @@ func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}
 		s.logger.Warnf("failed to say greeting: %v", err)
 	}
 
-	if err := s.prepareEspresso(ctx); err != nil {
+	if err := s.prepareEspresso(ctx, customerName); err != nil {
 		return nil, err
 	}
 
-	msg := completionStatement
-	if msg == "" {
-		msg = pickAlmostReady()
-	}
-	if err := s.say(ctx, msg); err != nil {
-		s.logger.Warnf("failed to say almost-ready: %v", err)
-	}
-
-	callout := "Espresso for " + customerName
-	if err := s.say(ctx, callout); err != nil {
-		s.logger.Warnf("failed to say callout: %v", err)
+	if completionStatement != "" {
+		if err := s.say(ctx, completionStatement); err != nil {
+			s.logger.Warnf("failed to say completion: %v", err)
+		}
 	}
 
 	s.logger.Infof("prepare_order complete: %s – %s", customerName, completionStatement)
@@ -147,7 +140,7 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 	return map[string]interface{}{"status": "complete", "action": name}, nil
 }
 
-func (s *beanjaminCoffee) prepareEspresso(ctx context.Context) error {
+func (s *beanjaminCoffee) prepareEspresso(ctx context.Context, customerName string) error {
 	if !s.running.CompareAndSwap(false, true) {
 		return errors.New("a sequence is already running")
 	}
@@ -189,10 +182,17 @@ func (s *beanjaminCoffee) prepareEspresso(ctx context.Context) error {
 		return err
 	}
 
+	if err := s.say(ctx, pickAlmostReady()); err != nil {
+		s.logger.Warnf("failed to say almost-ready: %v", err)
+	}
+
 	if s.cfg.PlaceCup {
 		s.logger.Infof("step 6b/7: giving full cup to customer (place_cup=true)")
 		if err := s.giveFullCupToCustomer(ctx, cancelCtx); err != nil {
 			return err
+		}
+		if err := s.say(ctx, pickEspressoReady(customerName)); err != nil {
+			s.logger.Warnf("failed to say espresso-ready: %v", err)
 		}
 	} else {
 		s.logger.Infof("step 6b/7: skipping cup handoff (place_cup=false)")
