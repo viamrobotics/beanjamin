@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useState, useRef } from "react";
+import { getQueue, type ViamConnection } from "../lib/viamClient";
 
 const STAGES = [
   { label: "Grinding...", image: "./progress-grinding.png", duration: 30000 },
@@ -18,12 +19,50 @@ const PALETTES = [
   ["#E8913A", "#D94F4F", "#F5C242"],
 ];
 
-export function Progress({ onComplete }: { onComplete: () => void }) {
+const QUEUE_PALETTE = ["#8B7355", "#A0926B", "#6B5B45"];
+
+interface ProgressProps {
+  customerName: string;
+  viamConn: ViamConnection | null;
+  onComplete: () => void;
+}
+
+export function Progress({ customerName, viamConn, onComplete }: ProgressProps) {
+  const [pickedUp, setPickedUp] = useState(false);
   const [stage, setStage] = useState(0);
   const [fillKey, setFillKey] = useState(0);
   const completeCalled = useRef(false);
 
+  // Poll get_queue until the customer's name is no longer in the queue,
+  // meaning the order has been picked up and is being processed.
   useEffect(() => {
+    if (pickedUp || !viamConn) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const q = await getQueue(viamConn);
+        if (!cancelled && !q.orders.includes(customerName)) {
+          setPickedUp(true);
+        }
+      } catch {
+        // ignore polling errors
+      }
+    };
+
+    // Check immediately, then every 2 seconds.
+    poll();
+    const interval = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [pickedUp, customerName, viamConn]);
+
+  // Stage timer — only runs once the order has been picked up.
+  useEffect(() => {
+    if (!pickedUp) return;
+
     const timer = setTimeout(() => {
       if (stage < STAGES.length - 1) {
         setStage((s) => s + 1);
@@ -34,9 +73,13 @@ export function Progress({ onComplete }: { onComplete: () => void }) {
       }
     }, STAGES[stage].duration);
     return () => clearTimeout(timer);
-  }, [stage, onComplete]);
+  }, [pickedUp, stage, onComplete]);
 
-  const palette = PALETTES[stage];
+  const waiting = !pickedUp;
+  const palette = waiting ? QUEUE_PALETTE : PALETTES[stage];
+  const label = waiting ? "In queue..." : STAGES[stage].label;
+  const imageSrc = waiting ? "./beans.png" : STAGES[stage].image;
+  const imageAlt = waiting ? "Waiting in queue" : STAGES[stage].label;
 
   return (
     <main className="relative h-dvh overflow-hidden flex flex-col items-center justify-center">
@@ -67,10 +110,10 @@ export function Progress({ onComplete }: { onComplete: () => void }) {
       <div className="flex flex-col items-center gap-10 w-full max-w-md px-8">
         {/* Stage image with pop in/out */}
         <div className="relative w-[200px] h-[200px]">
-          <div key={stage} className="absolute inset-0 stage-icon-pop">
+          <div key={waiting ? "queue" : stage} className="absolute inset-0 stage-icon-pop">
             <Image
-              src={STAGES[stage].image}
-              alt={STAGES[stage].label}
+              src={imageSrc}
+              alt={imageAlt}
               width={200}
               height={200}
               priority
@@ -81,32 +124,34 @@ export function Progress({ onComplete }: { onComplete: () => void }) {
 
         {/* Status label */}
         <p
-          key={stage}
+          key={waiting ? "queue" : stage}
           className="anim-in text-xl font-mono font-semibold text-white/90 tracking-wider uppercase drop-shadow-md"
         >
-          {STAGES[stage].label}
+          {label}
         </p>
 
-        {/* Notched progress bar */}
-        <div className="flex gap-2 w-full">
-          {STAGES.map((_, i) => (
-            <div
-              key={i}
-              className="flex-1 h-2 rounded-full bg-white/20 overflow-hidden"
-            >
+        {/* Notched progress bar — hidden while waiting in queue */}
+        {!waiting && (
+          <div className="flex gap-2 w-full">
+            {STAGES.map((_, i) => (
               <div
-                key={i === stage ? fillKey : `done-${i}`}
-                className={`h-full rounded-full ${i < stage
-                  ? "w-full bg-white/80"
-                  : i === stage
-                    ? "progress-fill bg-white/80"
-                    : "w-0"
-                  }`}
-                style={i === stage ? { animationDuration: `${STAGES[i].duration}ms` } : undefined}
-              />
-            </div>
-          ))}
-        </div>
+                key={i}
+                className="flex-1 h-2 rounded-full bg-white/20 overflow-hidden"
+              >
+                <div
+                  key={i === stage ? fillKey : `done-${i}`}
+                  className={`h-full rounded-full ${i < stage
+                    ? "w-full bg-white/80"
+                    : i === stage
+                      ? "progress-fill bg-white/80"
+                      : "w-0"
+                    }`}
+                  style={i === stage ? { animationDuration: `${STAGES[i].duration}ms` } : undefined}
+                />
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </main>
   );

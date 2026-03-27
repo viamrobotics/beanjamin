@@ -196,7 +196,13 @@ export default function Home() {
 
   // --- Progress screen ---
   if (step === "progress") {
-    return <Progress onComplete={() => setStep("result")} />;
+    return (
+      <Progress
+        customerName={misspelled}
+        viamConn={viamConn.current}
+        onComplete={() => setStep("result")}
+      />
+    );
   }
 
   // --- Result screen ---
