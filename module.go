@@ -43,13 +43,14 @@ type AllowedCollision struct {
 }
 
 type Step struct {
-	PoseName            string                `json:"pose_name"`
-	PauseSec            float64               `json:"pause_secs,omitempty"`
-	LinearConstraint    *StepLinearConstraint `json:"linear_constraint,omitempty"`
-	AllowedCollisions   []AllowedCollision    `json:"allowed_collisions,omitempty"`
-	PivotFromPose       string                `json:"pivot_from_pose,omitempty"`
-	PivotDegreesPerStep float64               `json:"pivot_degrees_per_step,omitempty"`
-	Component           string                `json:"component,omitempty"`
+	PoseName                 string                `json:"pose_name"`
+	PauseSec                 float64               `json:"pause_secs,omitempty"`
+	LinearConstraint         *StepLinearConstraint `json:"linear_constraint,omitempty"`
+	OrientationToleranceDegs *float64              `json:"orientation_tolerance_degs,omitempty"`
+	AllowedCollisions        []AllowedCollision    `json:"allowed_collisions,omitempty"`
+	PivotFromPose            string                `json:"pivot_from_pose,omitempty"`
+	PivotDegreesPerStep      float64               `json:"pivot_degrees_per_step,omitempty"`
+	Component                string                `json:"component,omitempty"`
 
 	// Circular motion: move in small circles around PoseName to distribute
 	// material (e.g. coffee grounds) evenly. The motion continues until
