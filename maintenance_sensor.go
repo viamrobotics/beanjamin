@@ -44,7 +44,7 @@ type maintenanceSensor struct {
 
 	name   resource.Name
 	logger logging.Logger
-	coffee *beanjaminCoffee
+	coffee resource.Resource
 	arm    arm.Arm
 }
 
@@ -58,10 +58,6 @@ func newMaintenanceSensor(ctx context.Context, deps resource.Dependencies, rawCo
 	if !ok {
 		return nil, fmt.Errorf("coffee service %q not found in dependencies", conf.CoffeeServiceName)
 	}
-	coffee, ok := coffeeRes.(*beanjaminCoffee)
-	if !ok {
-		return nil, fmt.Errorf("resource %q is not a beanjamin coffee service", conf.CoffeeServiceName)
-	}
 
 	armComp, err := arm.FromProvider(deps, conf.ArmName)
 	if err != nil {
@@ -71,7 +67,7 @@ func newMaintenanceSensor(ctx context.Context, deps resource.Dependencies, rawCo
 	return &maintenanceSensor{
 		name:   rawConf.ResourceName(),
 		logger: logger,
-		coffee: coffee,
+		coffee: coffeeRes,
 		arm:    armComp,
 	}, nil
 }
@@ -87,14 +83,17 @@ func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]inter
 		return nil, fmt.Errorf("failed to check arm movement: %w", err)
 	}
 
-	// Check if an espresso sequence is in progress.
-	sequenceRunning := m.coffee.running.Load()
+	// Query the coffee service for queue and running state via DoCommand.
+	resp, err := m.coffee.DoCommand(ctx, map[string]interface{}{"get_queue": true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to query coffee service: %w", err)
+	}
 
-	// Check if there are orders waiting in the queue.
-	hasOrders := m.coffee.queue.Len() > 0
+	isRunning, _ := resp["is_running"].(bool)
+	queueCount, _ := resp["count"].(float64)
 
 	return map[string]interface{}{
-		"is_safe": !armMoving && !sequenceRunning && !hasOrders,
+		"is_safe": !armMoving && !isRunning && queueCount == 0,
 	}, nil
 }
 

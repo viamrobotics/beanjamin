@@ -302,9 +302,10 @@ func (s *beanjaminCoffee) getQueue() (map[string]interface{}, error) {
 		names[i] = o.CustomerName
 	}
 	return map[string]interface{}{
-		"count":     len(orders),
-		"orders":    names,
-		"is_paused": s.paused.Load(),
+		"count":      len(orders),
+		"orders":     names,
+		"is_paused":  s.paused.Load(),
+		"is_running": s.running.Load(),
 	}, nil
 }
 
