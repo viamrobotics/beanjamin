@@ -126,19 +126,25 @@ func (s *beanjaminCoffee) processQueue() {
 		for {
 			order, ok := s.queue.Peek()
 			if !ok {
+				s.logger.Debugf("queue empty, waiting for new orders")
 				break
 			}
 
-			s.executeQueuedOrder(order)
+			remaining := s.queue.Len() - 1 // excluding the one about to run
+			s.logger.Infof("processing order %s for %s (%s) — %d order(s) waiting behind it",
+				order.ID, order.CustomerName, order.Drink, remaining)
+
+			s.safeExecuteOrder(order)
 			s.queue.Dequeue()
 
-			// If cleanup is not automatic, always pause after an order
-			// so the operator can clean up before the next one starts.
+			// If cleanup is not automatic, pause
+			// so the operator can clean up before the next order starts.
 			if !s.cfg.CleanAfterUse {
-				s.logger.Infof("pausing for manual cleanup — send 'proceed' to continue")
+				s.logger.Infof("queue drained — pausing for manual cleanup, send 'proceed' to continue")
 				s.paused.Store(true)
 				select {
 				case <-s.queue.proceed:
+					s.logger.Infof("received 'proceed', resuming queue processing")
 					s.paused.Store(false)
 				case <-s.queueStop:
 					s.paused.Store(false)
@@ -149,9 +155,24 @@ func (s *beanjaminCoffee) processQueue() {
 	}
 }
 
+// safeExecuteOrder wraps executeQueuedOrder with panic recovery so that a
+// single failing order cannot kill the queue-processing goroutine and strand
+// every order behind it.
+func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Errorf("panic while processing order %s for %s: %v — skipping order",
+				order.ID, order.CustomerName, r)
+		}
+	}()
+	s.executeQueuedOrder(order)
+}
+
 // executeQueuedOrder runs a single order: says greeting, brews, says completion.
 func (s *beanjaminCoffee) executeQueuedOrder(order Order) {
-	s.logger.Infof("starting order %s for %s (%s)", order.ID, order.CustomerName, order.Drink)
+	waitTime := time.Since(order.EnqueuedAt).Round(time.Second)
+	s.logger.Infof("starting order %s for %s (%s) — waited %s in queue",
+		order.ID, order.CustomerName, order.Drink, waitTime)
 
 	ctx := context.Background()
 
@@ -162,7 +183,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(order Order) {
 	}
 
 	if err := s.prepareEspresso(ctx, order.CustomerName); err != nil {
-		s.logger.Warnf("order %s failed: %v", order.ID, err)
+		s.logger.Errorf("order %s for %s failed: %v", order.ID, order.CustomerName, err)
 		return
 	}
 
@@ -178,13 +199,20 @@ func (s *beanjaminCoffee) executeQueuedOrder(order Order) {
 // enqueueOrder validates the order and adds it to the queue.
 // It returns immediately with the queue position.
 func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}) (map[string]interface{}, error) {
+	s.logger.Infof("received order request")
+
 	order, ok := orderRaw.(map[string]interface{})
 	if !ok {
+		s.logger.Warnf("rejected order: invalid payload type %T", orderRaw)
 		return nil, fmt.Errorf("prepare_order value must be an object with keys: drink, customer_name, initial_greeting, completion_statement")
 	}
 
 	drink, _ := order["drink"].(string)
+	customerName, _ := order["customer_name"].(string)
+	s.logger.Infof("order request: drink=%q customer=%q", drink, customerName)
+
 	if drink != "espresso" {
+		s.logger.Infof("rejected order for unsupported drink %q from %s", drink, customerName)
 		msg := pickUnsupportedDrink(drink)
 		if err := s.say(ctx, msg); err != nil {
 			s.logger.Warnf("failed to say rejection: %v", err)
@@ -192,7 +220,6 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}
 		return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
 	}
 
-	customerName, _ := order["customer_name"].(string)
 	initialGreeting, _ := order["initial_greeting"].(string)
 	completionStatement, _ := order["completion_statement"].(string)
 
@@ -203,7 +230,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}
 	o := NewOrder(drink, customerName, initialGreeting, completionStatement)
 	pos := s.queue.Enqueue(o)
 
-	s.logger.Infof("order %s queued at position %d for %s", o.ID, pos, customerName)
+	s.logger.Infof("order %s queued at position %d for %s (queue depth: %d)", o.ID, pos, customerName, pos)
 
 	return map[string]interface{}{
 		"status":         "queued",

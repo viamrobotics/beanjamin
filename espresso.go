@@ -190,7 +190,7 @@ func (s *beanjaminCoffee) prepareEspresso(ctx context.Context, customerName stri
 
 func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 	steps := []Step{
-		{PoseName: "grinder_approach", Component: "filter", PauseSec: 1, OrientationToleranceDegs: &defaultOrientationToleranceDegrees},
+		{PoseName: "grinder_approach", Component: "filter", PauseSec: 1},
 		{PoseName: "grinder_activate", Component: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
 		{PoseName: "grinder_approach", Component: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
 		// Circle under the grinder chute to distribute grounds evenly while the grinder dispenses.
