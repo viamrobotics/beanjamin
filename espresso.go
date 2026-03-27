@@ -19,8 +19,6 @@ func (s *beanjaminCoffee) say(ctx context.Context, text string) error {
 	return err
 }
 
-var defaultOrientationToleranceDegrees = float64(25)
-
 var coffeeBrewingCollisions = []AllowedCollision{
 	{Frame1: "filter", Frame2: "coffee-machine-actuation-area"},
 	{Frame1: "portafilter-handle", Frame2: "coffee-machine-actuation-area"},
@@ -208,7 +206,7 @@ func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 
 func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
 	steps := []Step{
-		{PoseName: "tamper_approach", Component: "filter", PauseSec: 1, OrientationToleranceDegs: &defaultOrientationToleranceDegrees},
+		{PoseName: "tamper_approach", Component: "filter", PauseSec: 1},
 		{PoseName: "tamper_activate", Component: "filter", PauseSec: 5, LinearConstraint: defaultApproachConstraint},
 		{PoseName: "tamper_approach", Component: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
 	}
@@ -222,7 +220,7 @@ func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
 
 func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error {
 	steps := []Step{
-		{PoseName: "coffee_approach", Component: "filter", PauseSec: 1, OrientationToleranceDegs: &defaultOrientationToleranceDegrees},
+		{PoseName: "coffee_approach", Component: "filter", PauseSec: 1},
 		{PoseName: "coffee_in", Component: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
 		{PoseName: "coffee_locked_final", Component: "filter", PivotFromPose: "coffee_in", PivotDegreesPerStep: 5,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
@@ -396,7 +394,7 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 	}
 
 	// Move to the customer cup position.
-	customerApproachStep := Step{PoseName: "empty_cup_approach", Component: "coffee-claws-middle", OrientationToleranceDegs: &defaultOrientationToleranceDegrees, PauseSec: 0.5}
+	customerApproachStep := Step{PoseName: "empty_cup_approach", Component: "coffee-claws-middle", PauseSec: 0.5}
 	if err := s.executeStep(ctx, cancelCtx, customerApproachStep); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: %w", err)
 	}

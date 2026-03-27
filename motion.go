@@ -28,7 +28,7 @@ func (s *beanjaminCoffee) moveToPose(ctx context.Context, step Step) error {
 	if err != nil {
 		return err
 	}
-	if err := s.moveToRawPose(ctx, pd, step.LinearConstraint, step.OrientationToleranceDegs, step.AllowedCollisions); err != nil {
+	if err := s.moveToRawPose(ctx, pd, step.LinearConstraint, step.AllowedCollisions); err != nil {
 		return fmt.Errorf("move to %q failed: %w", step.PoseName, err)
 	}
 	return nil
@@ -272,10 +272,10 @@ func collectDescendants(fs *referenceframe.FrameSystem, rootName string) []desce
 	return descendants
 }
 
-// buildConstraints converts step-level linear constraints, orientation constraints,
-// and allowed collisions into the motionplan.Constraints structure used by armplanning.
-func buildConstraints(lc *StepLinearConstraint, orientTolDegs *float64, allowedCollisions []AllowedCollision) *motionplan.Constraints {
-	if lc == nil && orientTolDegs == nil && len(allowedCollisions) == 0 {
+// buildConstraints converts step-level linear constraints and allowed collisions
+// into the motionplan.Constraints structure used by armplanning.
+func buildConstraints(lc *StepLinearConstraint, allowedCollisions []AllowedCollision) *motionplan.Constraints {
+	if lc == nil && len(allowedCollisions) == 0 {
 		return nil
 	}
 	constraints := &motionplan.Constraints{}
@@ -285,11 +285,6 @@ func buildConstraints(lc *StepLinearConstraint, orientTolDegs *float64, allowedC
 				LineToleranceMm:          lc.LineToleranceMm,
 				OrientationToleranceDegs: lc.OrientationToleranceDegs,
 			},
-		}
-	}
-	if orientTolDegs != nil {
-		constraints.OrientationConstraint = []motionplan.OrientationConstraint{
-			{OrientationToleranceDegs: *orientTolDegs},
 		}
 	}
 	if len(allowedCollisions) > 0 {
@@ -308,7 +303,7 @@ func buildConstraints(lc *StepLinearConstraint, orientTolDegs *float64, allowedC
 }
 
 // moveToRawPose plans a motion using armplanning and executes it on the arm.
-func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, orientTolDegs *float64, allowedCollisions []AllowedCollision) error {
+func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision) error {
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return err
@@ -322,7 +317,7 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	}
 	goalPose := tf.(*referenceframe.PoseInFrame)
 
-	constraints := buildConstraints(lc, orientTolDegs, allowedCollisions)
+	constraints := buildConstraints(lc, allowedCollisions)
 	if lc != nil {
 		s.logger.Infof("applying linear constraint (line=%.1fmm, orient=%.1f°)",
 			lc.LineToleranceMm, lc.OrientationToleranceDegs)
@@ -418,7 +413,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	}
 
 	// Build constraints.
-	constraints := buildConstraints(step.LinearConstraint, step.OrientationToleranceDegs, step.AllowedCollisions)
+	constraints := buildConstraints(step.LinearConstraint, step.AllowedCollisions)
 
 	// Plan all waypoints in a single call.
 	plan, _, err := armplanning.PlanMotion(ctx, s.logger, &armplanning.PlanRequest{
@@ -499,7 +494,7 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 		))
 	}
 
-	constraints := buildConstraints(step.LinearConstraint, step.OrientationToleranceDegs, step.AllowedCollisions)
+	constraints := buildConstraints(step.LinearConstraint, step.AllowedCollisions)
 
 	plan, _, err := armplanning.PlanMotion(ctx, s.logger, &armplanning.PlanRequest{
 		FrameSystem: fs,
