@@ -11,6 +11,7 @@ import {
   connectToViam,
   getMachineMetadataKey,
   prepareOrder,
+  getQueue,
   type ViamConnection,
 } from "./lib/viamClient";
 import { misspellName } from "./lib/misspell";
@@ -23,7 +24,7 @@ export default function Home() {
   const [selectedDrink, setSelectedDrink] = useState<string | null>(null);
   const [misspelled, setMisspelled] = useState("");
   const [loading, setLoading] = useState(false);
-  const [queueCount, setQueueCount] = useState(1);
+  const [queueCount, setQueueCount] = useState(0);
   const [drinkRejection, setDrinkRejection] = useState<string | null>(null);
 
   // Viam connection state
@@ -31,9 +32,15 @@ export default function Home() {
   const anthropicKey = useRef<string>("");
   const [viamError, setViamError] = useState<string | null>(null);
 
-  useEffect(() => {
-    setQueueCount(Math.floor(Math.random() * 5) + 1);
-  }, []);
+  async function refreshQueueCount() {
+    if (!viamConn.current) return;
+    try {
+      const q = await getQueue(viamConn.current);
+      setQueueCount(q.count);
+    } catch {
+      // ignore polling errors
+    }
+  }
 
   // Connect to Viam on mount and fetch Anthropic API key from machine metadata
   useEffect(() => {
@@ -53,6 +60,9 @@ export default function Home() {
           return;
         }
         anthropicKey.current = key;
+
+        // Fetch real queue count after connecting
+        refreshQueueCount();
       } catch (err) {
         if (cancelled) return;
         console.error("Viam connection failed:", err);
@@ -116,8 +126,7 @@ export default function Home() {
       setMisspelled(result.misspelled || name);
       setStep("progress");
 
-      // Fire-and-forget: tell the robot to make coffee + announce via speech.
-      // This runs in parallel with the progress animation.
+      // Enqueue the order — returns immediately with queue position.
       if (viamConn.current) {
         const drink = DRINKS.find((d) => d.id === selectedDrink);
         prepareOrder(viamConn.current, {
@@ -125,7 +134,13 @@ export default function Home() {
           drinkLabel: drink?.label ?? selectedDrink,
           customerName: result.misspelled || name,
           pronunciation: result.pronunciation,
-        }).catch((err) => console.error("prepare_order failed:", err));
+        })
+          .then((res) => {
+            if (res.queue_position != null) {
+              setQueueCount(res.queue_position);
+            }
+          })
+          .catch((err) => console.error("prepare_order failed:", err));
       }
     } catch (err) {
       console.error("Misspell error:", err);
@@ -197,7 +212,7 @@ export default function Home() {
           setStep("welcome");
           setName("");
           setSelectedDrink(null);
-          setQueueCount(Math.floor(Math.random() * 5) + 1);
+          refreshQueueCount();
         }}
       />
     );
