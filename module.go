@@ -74,6 +74,7 @@ type Config struct {
 	DialMoveYMM           float64 `json:"dial_move_y_mm,omitempty"`
 	DialMoveZMM           float64 `json:"dial_move_z_mm,omitempty"`
 	DialMaxPosition       float64 `json:"dial_max_position,omitempty"`
+	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
