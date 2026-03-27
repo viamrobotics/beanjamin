@@ -115,12 +115,14 @@ type beanjaminCoffee struct {
 	paused                 atomic.Bool
 
 	// Last known absolute dial positions and directions for direction detection
-	lastDialX    *float64
-	lastDialY    *float64
-	lastDialZ    *float64
-	lastDialDirX float64
-	lastDialDirY float64
-	lastDialDirZ float64
+	lastDialX     *float64
+	lastDialY     *float64
+	lastDialZ     *float64
+	lastDialSpeed *float64
+	lastDialDirX  float64
+	lastDialDirY  float64
+	lastDialDirZ  float64
+	lastDialDirSpeed float64
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -266,6 +268,9 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 	if v, ok := cmd["dial_move_z"]; ok {
 		return s.handleDialMove(ctx, "z", v)
 	}
+	if v, ok := cmd["dial_move_speed"]; ok {
+		return s.handleDialSpeedMove(ctx, v)
+	}
 	// Stream deck key commands
 	if action, ok := cmd["action"].(string); ok {
 		switch action {
@@ -277,7 +282,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 			return nil, fmt.Errorf("unknown action %q", action)
 		}
 	}
-	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, dial_move_x/y/z, action")
+	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, dial_move_x/y/z/speed, action")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }
@@ -406,6 +411,64 @@ func (s *beanjaminCoffee) handleDialMove(ctx context.Context, axis string, dialV
 		**last = dialVal
 	}
 	return s.handleMoveArm(ctx, axis, mm)
+}
+
+func (s *beanjaminCoffee) handleDialSpeedMove(_ context.Context, dialValue interface{}) (map[string]interface{}, error) {
+	const speedStepMM = 1.0
+	const minSpeedMM = 0.5
+
+	dialVal, ok := toFloat64(dialValue)
+	if !ok {
+		return nil, fmt.Errorf("dial_move_speed: invalid value %v", dialValue)
+	}
+
+	if s.lastDialSpeed == nil {
+		s.lastDialSpeed = &dialVal
+		return map[string]interface{}{"status": "dial_initialized", "axis": "speed", "position": dialVal}, nil
+	}
+
+	maxPos := s.cfg.DialMaxPosition
+	if maxPos == 0 {
+		maxPos = 100
+	}
+	delta := dialVal - *s.lastDialSpeed
+	if delta > maxPos/2 {
+		delta -= maxPos + 1
+	} else if delta < -maxPos/2 {
+		delta += maxPos + 1
+	}
+
+	var direction float64
+	if *s.lastDialSpeed == 0 && s.lastDialDirSpeed != 0 {
+		direction = s.lastDialDirSpeed
+	} else if delta < 0 {
+		direction = -1
+	} else {
+		direction = 1
+	}
+	s.lastDialDirSpeed = direction
+	*s.lastDialSpeed = dialVal
+
+	step := speedStepMM * direction
+	applyStep := func(current float64) float64 {
+		if current == 0 {
+			current = 1
+		}
+		if v := current + step; v >= minSpeedMM {
+			return v
+		}
+		return minSpeedMM
+	}
+	s.cfg.DialMoveXMM = applyStep(s.cfg.DialMoveXMM)
+	s.cfg.DialMoveYMM = applyStep(s.cfg.DialMoveYMM)
+	s.cfg.DialMoveZMM = applyStep(s.cfg.DialMoveZMM)
+
+	return map[string]interface{}{
+		"status":          "speed_updated",
+		"dial_move_x_mm": s.cfg.DialMoveXMM,
+		"dial_move_y_mm": s.cfg.DialMoveYMM,
+		"dial_move_z_mm": s.cfg.DialMoveZMM,
+	}, nil
 }
 
 func (s *beanjaminCoffee) handleOpenGripper(ctx context.Context) (map[string]interface{}, error) {
