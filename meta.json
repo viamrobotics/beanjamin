@@ -22,6 +22,11 @@
       "model": "viam:beanjamin:text-to-speech",
       "short_description": "Text-to-speech service using Google Cloud TTS API with audioout playback.",
       "markdown_link": "README.md#model-viambeanjamintext-to-speech"
+    },
+    {
+      "api": "rdk:component:sensor",
+      "model": "viam:beanjamin:maintenance-sensor",
+      "short_description": "Sensor that reports safe=false when the arm is moving or orders are queued."
     }
   ],
   "entrypoint": "bin/beanjamin",
