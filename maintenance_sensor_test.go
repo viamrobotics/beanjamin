@@ -89,6 +89,22 @@ func TestReadings_Unsafe_WhenBothActive(t *testing.T) {
 	}
 }
 
+func TestReadings_Unsafe_WhenQueueHasOrders(t *testing.T) {
+	s, _ := setupMaintenanceSensor(t, false, false)
+
+	// Enqueue an order so the queue is non-empty.
+	ms := s.(*maintenanceSensor)
+	ms.coffee.queue.Enqueue(Order{CustomerName: "test"})
+
+	readings, err := s.Readings(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if safe, ok := readings["is_safe"].(bool); !ok || safe {
+		t.Errorf("expected is_safe=false when queue has orders, got %v", readings["is_safe"])
+	}
+}
+
 func TestReadings_Error_WhenArmFails(t *testing.T) {
 	s, fakeArm := setupMaintenanceSensor(t, false, false)
 	fakeArm.IsMovingFunc = func(ctx context.Context) (bool, error) {

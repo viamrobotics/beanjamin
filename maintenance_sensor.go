@@ -90,8 +90,11 @@ func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]inter
 	// Check if an espresso sequence is in progress.
 	sequenceRunning := m.coffee.running.Load()
 
+	// Check if there are orders waiting in the queue.
+	hasOrders := m.coffee.queue.Len() > 0
+
 	return map[string]interface{}{
-		"is_safe": !armMoving && !sequenceRunning,
+		"is_safe": !armMoving && !sequenceRunning && !hasOrders,
 	}, nil
 }
 
