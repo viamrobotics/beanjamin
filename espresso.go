@@ -188,12 +188,12 @@ func (s *beanjaminCoffee) prepareEspresso(ctx context.Context, customerName stri
 
 func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 	steps := []Step{
-		{PoseName: "grinder_approach", Component: "filter", PauseSec: 1},
-		{PoseName: "grinder_activate", Component: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
-		{PoseName: "grinder_approach", Component: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
+		{PoseName: "grinder_approach", Component: "filter", PauseSec: 0.25},
+		{PoseName: "grinder_activate", Component: "filter", PauseSec: 0.25, LinearConstraint: defaultApproachConstraint},
+		{PoseName: "grinder_approach", Component: "filter", PauseSec: 0.5, LinearConstraint: defaultApproachConstraint},
 		// Circle under the grinder chute to distribute grounds evenly while the grinder dispenses.
 		{PoseName: "grinder_approach", Component: "filter",
-			CircularRadiusMm: 6, CircularDurationSec: 10, CircularPointsPerRev: 8,
+			CircularRadiusMm: 8, CircularDurationSec: 7.5, CircularPointsPerRev: 8,
 			LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
@@ -206,9 +206,9 @@ func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 
 func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
 	steps := []Step{
-		{PoseName: "tamper_approach", Component: "filter", PauseSec: 1},
+		{PoseName: "tamper_approach", Component: "filter", PauseSec: 0.5},
 		{PoseName: "tamper_activate", Component: "filter", PauseSec: 5, LinearConstraint: defaultApproachConstraint},
-		{PoseName: "tamper_approach", Component: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
+		{PoseName: "tamper_approach", Component: "filter", PauseSec: 0.5, LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
@@ -220,8 +220,8 @@ func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
 
 func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error {
 	steps := []Step{
-		{PoseName: "coffee_approach", Component: "filter", PauseSec: 1},
-		{PoseName: "coffee_in", Component: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
+		{PoseName: "coffee_approach", Component: "filter", PauseSec: 0.5},
+		{PoseName: "coffee_in", Component: "filter", PauseSec: 0.5, LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
 		{PoseName: "coffee_locked_final", Component: "filter", PivotFromPose: "coffee_in", PivotDegreesPerStep: 5,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
 	}
@@ -243,7 +243,7 @@ func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) erro
 	steps := []Step{
 		{PoseName: "coffee_in", Component: "filter", PivotFromPose: "coffee_locked_final", PivotDegreesPerStep: 5,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
-		{PoseName: "coffee_approach", Component: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
+		{PoseName: "coffee_approach", Component: "filter", PauseSec: 0.5, LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
@@ -303,7 +303,7 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	}
 
 	// Approach the empty cup.
-	approachStep := Step{PoseName: "empty_cup_approach", Component: "coffee-claws-middle", PauseSec: 0.5}
+	approachStep := Step{PoseName: "empty_cup_approach", Component: "coffee-claws-middle", PauseSec: 0.25}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
@@ -316,7 +316,7 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	time.Sleep(500 * time.Millisecond)
 
 	// Move down to the cup and grab it.
-	grabStep := Step{PoseName: "empty_cup", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, PauseSec: 0.5}
+	grabStep := Step{PoseName: "empty_cup", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, PauseSec: 0.25}
 	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
@@ -326,11 +326,11 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	time.Sleep(500 * time.Millisecond)
 
 	// Retreat and move to the coffee position.
-	retreatStep := Step{PoseName: "empty_cup_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, PauseSec: 0.5}
+	retreatStep := Step{PoseName: "empty_cup_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, PauseSec: 0.25}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
-	cupPlacementApproach := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", PauseSec: 0.5}
+	cupPlacementApproach := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", PauseSec: 0.25}
 	if err := s.executeStep(ctx, cancelCtx, cupPlacementApproach); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
@@ -366,7 +366,7 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 	}
 
 	// Approach the cup under the machine.
-	approachStep := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", PauseSec: 0.5}
+	approachStep := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", PauseSec: 0.25}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: %w", err)
 	}
@@ -378,7 +378,7 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 	time.Sleep(500 * time.Millisecond)
 
 	// Move down to the cup and grab it.
-	grabStep := Step{PoseName: "cup_ready_for_coffee", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, PauseSec: 0.5}
+	grabStep := Step{PoseName: "cup_ready_for_coffee", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, PauseSec: 0.25}
 	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: %w", err)
 	}
@@ -388,17 +388,17 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 	time.Sleep(500 * time.Millisecond)
 
 	// Retreat from the machine.
-	retreatStep := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, PauseSec: 0.5}
+	retreatStep := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, PauseSec: 0.25}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: %w", err)
 	}
 
 	// Move to the customer cup position.
-	customerApproachStep := Step{PoseName: "empty_cup_approach", Component: "coffee-claws-middle", PauseSec: 0.5}
+	customerApproachStep := Step{PoseName: "empty_cup_approach", Component: "coffee-claws-middle", PauseSec: 0.25}
 	if err := s.executeStep(ctx, cancelCtx, customerApproachStep); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: %w", err)
 	}
-	placeStep := Step{PoseName: "empty_cup", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, PauseSec: 0.5}
+	placeStep := Step{PoseName: "empty_cup", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, PauseSec: 0.25}
 	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: %w", err)
 	}
@@ -474,13 +474,14 @@ func (s *beanjaminCoffee) brewCoffee(ctx, cancelCtx context.Context) error {
 func (s *beanjaminCoffee) cleanPortafilter(ctx, cancelCtx context.Context) error {
 	steps := []Step{
 		{PoseName: "close_to_cleaning", Component: "filter"},
-		{PoseName: "approach_to_cleaning_scrapper", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.5},
+		{PoseName: "approach_to_cleaning_scrapper", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.25},
 		{PoseName: "cleaning_scrapper_active", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 2},
 		{PoseName: "approach_to_cleaning_scrapper", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.5},
 		{PoseName: "approach_to_cleaning_brush", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.5},
 		{PoseName: "cleaning_brush_active", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 2},
-		{PoseName: "approach_to_cleaning_brush", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.5},
-		{PoseName: "close_to_cleaning", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.5},
+		{PoseName: "approach_to_cleaning_brush", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.25},
+		{PoseName: "approach_to_cleaning_scrapper", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.1},
+		{PoseName: "close_to_cleaning", Component: "filter", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, PauseSec: 0.25},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {

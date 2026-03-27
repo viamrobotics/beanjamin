@@ -1,10 +1,11 @@
 # Beanjamin Module
 
-The `viam:beanjamin` module provides three models for arm-based automation workflows:
+The `viam:beanjamin` module provides four models for arm-based automation workflows:
 
 1. **`viam:beanjamin:coffee`** - A generic service that orchestrates a full coffee brew cycle by sequentially moving through all poses on a pose switcher.
 2. **`viam:beanjamin:multi-poses-execution-switch`** - A switch component that moves an arm between predefined poses using the Motion service.
 3. **`viam:beanjamin:text-to-speech`** - A generic service that synthesises speech via Google Cloud Text-to-Speech and plays it through an audioout service.
+4. **`viam:beanjamin:maintenance-sensor`** - A sensor component that reports whether the system is safe for maintenance (arm idle, no orders running or queued).
 
 ---
 
@@ -129,30 +130,41 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
 
 ```json
 {
-  // string (required) — name of the multi-poses-execution-switch component
   "pose_switcher_name": "multi-pose-execution-switch",
-
-  // string (required) — name of the arm component used for motion planning and execution
+  "claws_pose_switcher_name": "claws-switch",
   "arm_name": "my-arm",
-
-  // string (optional) — name of a text-to-speech generic service for spoken greetings
+  "gripper_name": "my-gripper",
   "speech_service_name": "speech",
-
-  // string (optional) — URL of a motion-tools viz server for frame system visualization
-  "viz_url": "http://localhost:8080"
+  "viz_url": "http://localhost:8080",
+  "brew_time_sec": 25,
+  "place_cup": true,
+  "clean_after_use": true,
+  "dial_move_x_mm": 5,
+  "dial_move_y_mm": 5,
+  "dial_move_z_mm": 5,
+  "dial_max_position": 100,
+  "save_motion_requests_dir": "/tmp/motion-requests"
 }
 ```
 
 **Top-level fields:**
 
-| Name                    | Type   | Required | Description                                                                                                   |
-| ----------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------- |
-| `pose_switcher_name`    | string | Yes      | Name of the multi-poses-execution-switch component.                                                           |
-| `claws_pose_switcher_name` | string | Yes   | Name of the claws pose switcher component.                                                                    |
-| `arm_name`              | string | Yes      | Name of the arm component used for motion planning and execution.                                             |
-| `gripper_name`          | string | Yes      | Name of the gripper component.                                                                                |
-| `speech_service_name`   | string | No       | Name of a text-to-speech generic service for spoken greetings.                                                |
-| `viz_url`               | string | No       | URL of a [motion-tools](https://github.com/viam-labs/motion-tools) viz server. When set, the frame system is drawn before each motion plan, useful for debugging collisions and frame placement. |
+| Name                       | Type   | Required | Description                                                                                                   |
+| -------------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------- |
+| `pose_switcher_name`       | string | Yes      | Name of the multi-poses-execution-switch component.                                                           |
+| `claws_pose_switcher_name` | string | Yes      | Name of the claws pose switcher component.                                                                    |
+| `arm_name`                 | string | Yes      | Name of the arm component used for motion planning and execution.                                             |
+| `gripper_name`             | string | Yes      | Name of the gripper component.                                                                                |
+| `speech_service_name`      | string | No       | Name of a text-to-speech generic service for spoken greetings.                                                |
+| `viz_url`                  | string | No       | URL of a [motion-tools](https://github.com/viam-labs/motion-tools) viz server. When set, the frame system is drawn before each motion plan, useful for debugging collisions and frame placement. |
+| `brew_time_sec`            | float  | No       | Brew duration in seconds.                                                                                     |
+| `place_cup`                | bool   | No       | Enable cup placement step in the brew cycle.                                                                  |
+| `clean_after_use`          | bool   | No       | Enable cleaning step after each brew.                                                                         |
+| `dial_move_x_mm`           | float  | No       | Millimeters to move per dial tick on the X axis (for Stream Deck dial control).                               |
+| `dial_move_y_mm`           | float  | No       | Millimeters to move per dial tick on the Y axis.                                                              |
+| `dial_move_z_mm`           | float  | No       | Millimeters to move per dial tick on the Z axis.                                                              |
+| `dial_max_position`        | float  | No       | Maximum dial position value. Defaults to `100`.                                                               |
+| `save_motion_requests_dir` | string | No       | Directory to save motion request payloads for debugging.                                                      |
 
 ### DoCommand
 
@@ -169,7 +181,7 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
 }
 ```
 
-Only `drink` is required. If `initial_greeting` is omitted, a random greeting is generated. If `customer_name` is provided, it personalizes the greeting and completion messages. Runs the full espresso preparation: grind, tamp, lock porta filter, and brew.
+Only `drink` is required. If `initial_greeting` is omitted, a random greeting is generated. If `customer_name` is provided, it personalizes the greeting and completion messages. Orders are added to a queue and processed sequentially.
 
 **`execute_action`** - Run a single coffee-making action by name. Available actions: `grind_coffee`, `tamp_ground`, `lock_portafilter`, `unlock_portafilter`.
 
@@ -183,7 +195,57 @@ Only `drink` is required. If `initial_greeting` is omitted, a random greeting is
 {"cancel": true}
 ```
 
-All commands return `{"status": "complete"}` on success or `{"status": "cancelled"}` for cancel.
+**`get_queue`** - Get the current order queue status.
+
+```json
+{"get_queue": true}
+```
+
+Returns:
+
+```json
+{"count": 2, "orders": ["Alice", "Bob"], "is_paused": false, "is_running": true}
+```
+
+**`proceed`** - Resume queue processing after a pause between orders.
+
+```json
+{"proceed": true}
+```
+
+Returns `{"status": "resumed"}`.
+
+**`clear_queue`** - Remove all pending orders from the queue.
+
+```json
+{"clear_queue": true}
+```
+
+Returns `{"status": "cleared", "removed": 2}`.
+
+**`dial_move_x`** / **`dial_move_y`** / **`dial_move_z`** - Move the arm along an axis using a Stream Deck dial value.
+
+```json
+{"dial_move_x": 50}
+```
+
+Returns `{"status": "moved", "axis": "x", "mm": 5.0}` or `{"status": "dial_initialized", "axis": "x", "position": 50}` on first call (calibration).
+
+**`dial_move_speed`** - Adjust dial movement speed. Updates `dial_move_x_mm`, `dial_move_y_mm`, and `dial_move_z_mm` based on dial input.
+
+```json
+{"dial_move_speed": 75}
+```
+
+Returns `{"status": "speed_updated", "dial_move_x_mm": 7.5, "dial_move_y_mm": 7.5, "dial_move_z_mm": 7.5}`.
+
+**`action`** - Control the gripper. Supported values: `"open_gripper"`, `"close_gripper"`.
+
+```json
+{"action": "open_gripper"}
+```
+
+Returns `{"status": "opened"}` or `{"status": "closed", "grabbed": true}`.
 
 ---
 
@@ -250,6 +312,41 @@ Returns:
 ```json
 {"text": "Hello, your espresso is ready!"}
 ```
+
+---
+
+## Model: `viam:beanjamin:maintenance-sensor`
+
+**API:** `rdk:component:sensor`
+
+Reports whether the system is safe for maintenance. Returns `is_safe: true` only when the arm is not moving, no order is running, and the queue is empty. Useful for gating maintenance workflows or triggering alerts.
+
+### Configuration
+
+```json
+{
+  "coffee_service_name": "coffee",
+  "arm_name": "my-arm"
+}
+```
+
+| Name                 | Type   | Required | Description                              |
+| -------------------- | ------ | -------- | ---------------------------------------- |
+| `coffee_service_name`| string | Yes      | Name of the `viam:beanjamin:coffee` service to query for queue/running state. |
+| `arm_name`           | string | Yes      | Name of the arm component to check for physical movement. |
+
+### Readings
+
+Returns a single reading:
+
+```json
+{"is_safe": true}
+```
+
+`is_safe` is `false` when any of the following are true:
+- The arm is physically moving
+- An order is currently running
+- There are orders in the queue
 
 ---
 
