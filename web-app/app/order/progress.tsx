@@ -33,8 +33,9 @@ export function Progress({ customerName, viamConn, onComplete }: ProgressProps) 
   const [fillKey, setFillKey] = useState(0);
   const completeCalled = useRef(false);
 
-  // Poll get_queue until the customer's name is no longer in the queue,
-  // meaning the order has been picked up and is being processed.
+  // Poll get_queue until the customer's order is at the front of the queue
+  // (position 0), meaning it's the one currently being processed.
+  // If the name isn't in the queue at all, it's already been processed.
   useEffect(() => {
     if (pickedUp || !viamConn) return;
 
@@ -42,7 +43,10 @@ export function Progress({ customerName, viamConn, onComplete }: ProgressProps) 
     const poll = async () => {
       try {
         const q = await getQueue(viamConn);
-        if (!cancelled && !q.orders.includes(customerName)) {
+        if (cancelled) return;
+        const idx = q.orders.indexOf(customerName);
+        // Front of queue (being processed) or not in queue at all (already done).
+        if (idx === 0 || idx === -1) {
           setPickedUp(true);
         }
       } catch {
