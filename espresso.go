@@ -19,7 +19,7 @@ func (s *beanjaminCoffee) say(ctx context.Context, text string) error {
 	return err
 }
 
-var defaultOrientationToleranceDegrees = float64(10)
+var defaultOrientationToleranceDegrees = float64(25)
 
 var coffeeBrewingCollisions = []AllowedCollision{
 	{Frame1: "filter", Frame2: "coffee-machine-actuation-area"},
