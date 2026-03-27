@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/golang/geo/r3"
@@ -302,6 +304,25 @@ func buildConstraints(lc *StepLinearConstraint, allowedCollisions []AllowedColli
 	return constraints
 }
 
+// savePlanRequest persists a PlanRequest to the configured directory. It is a
+// no-op when SaveMotionRequestsDir is empty.
+func (s *beanjaminCoffee) savePlanRequest(req *armplanning.PlanRequest, label string) {
+	dir := s.cfg.SaveMotionRequestsDir
+	if dir == "" {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		s.logger.Warnf("save motion request: create dir: %v", err)
+		return
+	}
+	filename := filepath.Join(dir, fmt.Sprintf("%s_%s.json", time.Now().Format("20060102_150405.000"), label))
+	if err := req.WriteToFile(filename); err != nil {
+		s.logger.Warnf("save motion request: %v", err)
+		return
+	}
+	s.logger.Infof("saved motion request to %s", filename)
+}
+
 // moveToRawPose plans a motion using armplanning and executes it on the arm.
 func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision) error {
 	fs, fsInputs, err := s.currentInputs(ctx)
@@ -327,14 +348,16 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	}
 
 	// Plan.
-	plan, _, err := armplanning.PlanMotion(ctx, s.logger, &armplanning.PlanRequest{
+	req := &armplanning.PlanRequest{
 		FrameSystem: fs,
 		Goals: []*armplanning.PlanState{
 			armplanning.NewPlanState(referenceframe.FrameSystemPoses{pd.componentName: goalPose}, nil),
 		},
 		StartState:  armplanning.NewPlanState(nil, fsInputs),
 		Constraints: constraints,
-	})
+	}
+	s.savePlanRequest(req, "move")
+	plan, _, err := armplanning.PlanMotion(ctx, s.logger, req)
 	if err != nil {
 		return fmt.Errorf("plan motion: %w", err)
 	}
@@ -416,12 +439,14 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	constraints := buildConstraints(step.LinearConstraint, step.AllowedCollisions)
 
 	// Plan all waypoints in a single call.
-	plan, _, err := armplanning.PlanMotion(ctx, s.logger, &armplanning.PlanRequest{
+	req := &armplanning.PlanRequest{
 		FrameSystem: fs,
 		Goals:       goals,
 		StartState:  armplanning.NewPlanState(nil, fsInputs),
 		Constraints: constraints,
-	})
+	}
+	s.savePlanRequest(req, "pivot")
+	plan, _, err := armplanning.PlanMotion(ctx, s.logger, req)
 	if err != nil {
 		return fmt.Errorf("plan pivot motion: %w", err)
 	}
@@ -496,12 +521,14 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 
 	constraints := buildConstraints(step.LinearConstraint, step.AllowedCollisions)
 
-	plan, _, err := armplanning.PlanMotion(ctx, s.logger, &armplanning.PlanRequest{
+	req := &armplanning.PlanRequest{
 		FrameSystem: fs,
 		Goals:       goals,
 		StartState:  armplanning.NewPlanState(nil, fsInputs),
 		Constraints: constraints,
-	})
+	}
+	s.savePlanRequest(req, "circular")
+	plan, _, err := armplanning.PlanMotion(ctx, s.logger, req)
 	if err != nil {
 		return fmt.Errorf("plan circular motion: %w", err)
 	}
