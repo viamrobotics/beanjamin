@@ -435,6 +435,98 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	return s.arm.MoveThroughJointPositions(ctx, positions, nil, nil)
 }
 
+// computeCircularPoses generates waypoints evenly spaced around a circle in
+// the XY plane of the given center pose. Orientation is kept constant.
+// It returns pointsPerRev poses forming one full revolution (the closing
+// point at 360° equals the opening point at 0° and is omitted).
+func computeCircularPoses(centerPose spatialmath.Pose, radiusMm float64, pointsPerRev int) []spatialmath.Pose {
+	center := centerPose.Point()
+	poses := make([]spatialmath.Pose, pointsPerRev)
+	for i := range pointsPerRev {
+		angle := 2 * math.Pi * float64(i) / float64(pointsPerRev)
+		offset := r3.Vector{X: radiusMm * math.Cos(angle), Y: radiusMm * math.Sin(angle), Z: 0}
+		poses[i] = spatialmath.NewPose(center.Add(offset), centerPose.Orientation())
+	}
+	return poses
+}
+
+// executeCircularMotion fetches the center pose, computes one revolution of
+// circular waypoints, plans the trajectory once, then executes it in a loop
+// until the configured duration is exceeded.
+func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, step Step) error {
+	// Merge both contexts so cancellation from either stops planning and execution.
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(cancelCtx, func() { cancel() })
+	defer stop()
+	defer cancel()
+
+	centerPD, err := s.fetchPose(ctx, step.Component, step.PoseName)
+	if err != nil {
+		return fmt.Errorf("circular center: %w", err)
+	}
+
+	pointsPerRev := step.CircularPointsPerRev
+	if pointsPerRev < 4 {
+		pointsPerRev = 8
+	}
+
+	poses := computeCircularPoses(centerPD.pose, step.CircularRadiusMm, pointsPerRev)
+	s.logger.Infof("circular motion around %q: radius=%.1fmm, %d pts/rev",
+		step.PoseName, step.CircularRadiusMm, pointsPerRev)
+
+	fs, fsInputs, err := s.currentInputs(ctx)
+	if err != nil {
+		return err
+	}
+	linearInputs := fsInputs.ToLinearInputs()
+
+	// Build goal states for one revolution.
+	goals := make([]*armplanning.PlanState, 0, len(poses))
+	for _, pose := range poses {
+		pif := referenceframe.NewPoseInFrame(centerPD.refFrame, pose)
+		tf, err := fs.Transform(linearInputs, pif, referenceframe.World)
+		if err != nil {
+			return fmt.Errorf("transform circular waypoint to world: %w", err)
+		}
+		goalPose := tf.(*referenceframe.PoseInFrame)
+		goals = append(goals, armplanning.NewPlanState(
+			referenceframe.FrameSystemPoses{centerPD.componentName: goalPose}, nil,
+		))
+	}
+
+	constraints := buildConstraints(step.LinearConstraint, step.AllowedCollisions)
+
+	plan, _, err := armplanning.PlanMotion(ctx, s.logger, &armplanning.PlanRequest{
+		FrameSystem: fs,
+		Goals:       goals,
+		StartState:  armplanning.NewPlanState(nil, fsInputs),
+		Constraints: constraints,
+	})
+	if err != nil {
+		return fmt.Errorf("plan circular motion: %w", err)
+	}
+
+	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
+	if err != nil {
+		return fmt.Errorf("get frame inputs from circular plan: %w", err)
+	}
+
+	// Execute revolutions until the duration is exceeded.
+	deadline := time.Now().Add(time.Duration(step.CircularDurationSec * float64(time.Second)))
+	for rev := 0; time.Now().Before(deadline); rev++ {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("cancelled during circular motion: %w", ctx.Err())
+		default:
+		}
+		s.logger.Debugf("circular revolution %d", rev+1)
+		if err := s.arm.MoveThroughJointPositions(ctx, positions, nil, nil); err != nil {
+			return fmt.Errorf("execute circular revolution %d: %w", rev+1, err)
+		}
+	}
+	return nil
+}
+
 // computePivotPoses returns interpolated poses between startPose and endPose.
 // The step count is derived from the total rotation angle divided by degreesPerStep.
 func computePivotPoses(startPose, endPose spatialmath.Pose, degreesPerStep float64) []spatialmath.Pose {
