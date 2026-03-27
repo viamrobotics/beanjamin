@@ -48,52 +48,9 @@ var cupGrabCollisions = []AllowedCollision{
 	{Frame1: "gripper:claws", Frame2: "empty-cup"},
 }
 
+// prepareOrder is kept for backward compatibility but now delegates to enqueueOrder.
 func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}) (map[string]interface{}, error) {
-	order, ok := orderRaw.(map[string]interface{})
-	if !ok {
-		return nil, errors.New("prepare_order value must be an object with keys: drink, customer_name, initial_greeting, completion_statement")
-	}
-
-	drink, _ := order["drink"].(string)
-	if drink != "espresso" {
-		msg := pickUnsupportedDrink(drink)
-		if err := s.say(ctx, msg); err != nil {
-			s.logger.Warnf("failed to say rejection: %v", err)
-		}
-		return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
-	}
-	customerName, _ := order["customer_name"].(string)
-	initialGreeting, _ := order["initial_greeting"].(string)
-	completionStatement, _ := order["completion_statement"].(string)
-
-	if initialGreeting == "" {
-		initialGreeting = pickGreeting(customerName)
-	}
-
-	s.logger.Infof("prepare_order: %s – %s", customerName, initialGreeting)
-
-	if err := s.say(ctx, initialGreeting); err != nil {
-		s.logger.Warnf("failed to say greeting: %v", err)
-	}
-
-	if err := s.prepareEspresso(ctx, customerName); err != nil {
-		return nil, err
-	}
-
-	if completionStatement != "" {
-		if err := s.say(ctx, completionStatement); err != nil {
-			s.logger.Warnf("failed to say completion: %v", err)
-		}
-	}
-
-	s.logger.Infof("prepare_order complete: %s – %s", customerName, completionStatement)
-
-	return map[string]interface{}{
-		"status":               "complete",
-		"customer_name":        customerName,
-		"initial_greeting":     initialGreeting,
-		"completion_statement": completionStatement,
-	}, nil
+	return s.enqueueOrder(ctx, orderRaw)
 }
 
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {

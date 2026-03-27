@@ -110,6 +110,9 @@ type beanjaminCoffee struct {
 	cancelCtx              context.Context
 	cancelFunc             func()
 	running                atomic.Bool
+	queue                  *OrderQueue
+	queueStop              chan struct{}
+	paused                 atomic.Bool
 
 	// Last known absolute dial positions and directions for direction detection
 	lastDialX    *float64
@@ -211,7 +214,10 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		vizEnabled: vizEnabled,
 		cancelCtx:  cancelCtx,
 		cancelFunc: cancelFunc,
+		queue:      NewOrderQueue(),
+		queueStop:  make(chan struct{}),
 	}
+	go s.processQueue()
 	return s, nil
 }
 
@@ -221,7 +227,7 @@ func (s *beanjaminCoffee) Name() resource.Name {
 
 func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	if orderRaw, ok := cmd["prepare_order"]; ok {
-		res, err := s.prepareOrder(ctx, orderRaw)
+		res, err := s.enqueueOrder(ctx, orderRaw)
 		if err != nil {
 			s.logger.Errorw("DoCommand", "error", err)
 		}
@@ -240,6 +246,15 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 			s.logger.Errorw("DoCommand", "error", err)
 		}
 		return res, err
+	}
+	if _, ok := cmd["get_queue"]; ok {
+		return s.getQueue()
+	}
+	if _, ok := cmd["proceed"]; ok {
+		return s.proceedQueue()
+	}
+	if _, ok := cmd["clear_queue"]; ok {
+		return s.clearQueue()
 	}
 	// Stream deck dial commands
 	if v, ok := cmd["dial_move_x"]; ok {
@@ -262,9 +277,37 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 			return nil, fmt.Errorf("unknown action %q", action)
 		}
 	}
-	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, dial_move_x/y/z, action")
+	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, dial_move_x/y/z, action")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
+}
+
+func (s *beanjaminCoffee) getQueue() (map[string]interface{}, error) {
+	orders := s.queue.List()
+	names := make([]string, len(orders))
+	for i, o := range orders {
+		names[i] = o.CustomerName
+	}
+	return map[string]interface{}{
+		"count":     len(orders),
+		"orders":    names,
+		"is_paused": s.paused.Load(),
+	}, nil
+}
+
+func (s *beanjaminCoffee) proceedQueue() (map[string]interface{}, error) {
+	select {
+	case s.queue.proceed <- struct{}{}:
+		return map[string]interface{}{"status": "resumed"}, nil
+	default:
+		return nil, errors.New("not currently paused between orders")
+	}
+}
+
+func (s *beanjaminCoffee) clearQueue() (map[string]interface{}, error) {
+	removed := s.queue.Clear()
+	s.logger.Infof("cleared %d orders from queue", removed)
+	return map[string]interface{}{"status": "cleared", "removed": removed}, nil
 }
 
 func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
@@ -401,6 +444,7 @@ func toFloat64(v interface{}) (float64, bool) {
 }
 
 func (s *beanjaminCoffee) Close(context.Context) error {
+	close(s.queueStop)
 	s.cancelFunc()
 	return nil
 }
