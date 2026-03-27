@@ -190,7 +190,11 @@ func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 	steps := []Step{
 		{PoseName: "grinder_approach", Component: "filter", PauseSec: 1},
 		{PoseName: "grinder_activate", Component: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
-		{PoseName: "grinder_approach", Component: "filter", PauseSec: 10, LinearConstraint: defaultApproachConstraint},
+		{PoseName: "grinder_approach", Component: "filter", PauseSec: 1, LinearConstraint: defaultApproachConstraint},
+		// Circle under the grinder chute to distribute grounds evenly while the grinder dispenses.
+		{PoseName: "grinder_approach", Component: "filter",
+			CircularRadiusMm: 6, CircularDurationSec: 10, CircularPointsPerRev: 8,
+			LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
@@ -498,6 +502,11 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 	if step.PivotFromPose != "" {
 		s.logger.Infof("pivoting from %q to %q", step.PivotFromPose, step.PoseName)
 		if err := s.executePivot(ctx, cancelCtx, step); err != nil {
+			return err
+		}
+	} else if step.CircularRadiusMm > 0 {
+		s.logger.Infof("circular motion around %q", step.PoseName)
+		if err := s.executeCircularMotion(ctx, cancelCtx, step); err != nil {
 			return err
 		}
 	} else {

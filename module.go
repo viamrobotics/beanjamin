@@ -50,6 +50,13 @@ type Step struct {
 	PivotFromPose       string                `json:"pivot_from_pose,omitempty"`
 	PivotDegreesPerStep float64               `json:"pivot_degrees_per_step,omitempty"`
 	Component           string                `json:"component,omitempty"`
+
+	// Circular motion: move in small circles around PoseName to distribute
+	// material (e.g. coffee grounds) evenly. The motion continues until
+	// CircularDurationSec is exceeded.
+	CircularRadiusMm     float64 `json:"circular_radius_mm,omitempty"`
+	CircularDurationSec  float64 `json:"circular_duration_sec,omitempty"`
+	CircularPointsPerRev int     `json:"circular_points_per_rev,omitempty"`
 }
 
 type Config struct {
