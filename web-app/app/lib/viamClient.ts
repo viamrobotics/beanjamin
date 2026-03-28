@@ -68,6 +68,7 @@ export async function getMachineMetadataKey(
 }
 
 const COFFEE_SERVICE_NAME = "coffee-lifecycle";
+const CUSTOMER_DETECTOR_SERVICE_NAME = "customer-detector";
 
 /**
  * Send prepare_order DoCommand to the beanjamin coffee service.
@@ -121,3 +122,83 @@ export async function prepareOrder(
   const result = await coffeeService.doCommand(command);
   return result as unknown as { status: string };
 }
+
+// --- Customer Detector ---
+
+/** Capture a single face photo and register it for a customer. */
+export async function registerCustomerFace(
+  conn: ViamConnection,
+  name: string,
+  email: string
+): Promise<{ registered: string; name: string; image_path: string }> {
+  const svc = new GenericServiceClient(
+    conn.robotClient,
+    CUSTOMER_DETECTOR_SERVICE_NAME
+  );
+  const command = Struct.fromJson({
+    register_customer: { name, email },
+  });
+  const result = await svc.doCommand(command);
+  return result as unknown as {
+    registered: string;
+    name: string;
+    image_path: string;
+  };
+}
+
+/** Signal that face capture is complete and trigger embedding recomputation. */
+export async function finishRegistration(
+  conn: ViamConnection,
+  email: string
+): Promise<{ email: string; name: string; face_images: number }> {
+  const svc = new GenericServiceClient(
+    conn.robotClient,
+    CUSTOMER_DETECTOR_SERVICE_NAME
+  );
+  const command = Struct.fromJson({ finish_registration: email });
+  const result = await svc.doCommand(command);
+  return result as unknown as {
+    email: string;
+    name: string;
+    face_images: number;
+  };
+}
+
+/** Try to identify a customer from the camera feed. */
+export async function identifyCustomer(
+  conn: ViamConnection
+): Promise<{
+  identified: boolean;
+  name?: string;
+  email?: string;
+  confidence?: number;
+  message?: string;
+}> {
+  const svc = new GenericServiceClient(
+    conn.robotClient,
+    CUSTOMER_DETECTOR_SERVICE_NAME
+  );
+  const command = Struct.fromJson({ identify_customer: true });
+  const result = await svc.doCommand(command);
+  return result as unknown as {
+    identified: boolean;
+    name?: string;
+    email?: string;
+    confidence?: number;
+    message?: string;
+  };
+}
+
+/** Get the camera name configured on the customer-detector service. */
+export async function getCustomerDetectorInfo(
+  conn: ViamConnection
+): Promise<{ camera_name: string }> {
+  const svc = new GenericServiceClient(
+    conn.robotClient,
+    CUSTOMER_DETECTOR_SERVICE_NAME
+  );
+  const command = Struct.fromJson({ get_info: true });
+  const result = await svc.doCommand(command);
+  return result as unknown as { camera_name: string };
+}
+
