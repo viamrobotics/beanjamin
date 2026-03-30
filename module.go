@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 	"sync/atomic"
 
 	viz "github.com/viam-labs/motion-tools/client/client"
@@ -44,7 +45,7 @@ type AllowedCollision struct {
 
 type Step struct {
 	PoseName                 string                `json:"pose_name"`
-	PauseSec         float64               `json:"pause_secs,omitempty"`
+	Pause            time.Duration         `json:"pause_secs,omitempty"`
 	LinearConstraint *StepLinearConstraint `json:"linear_constraint,omitempty"`
 	AllowedCollisions []AllowedCollision   `json:"allowed_collisions,omitempty"`
 	PivotFromPose            string                `json:"pivot_from_pose,omitempty"`
