@@ -16,6 +16,7 @@ import (
 	"go.viam.com/rdk/robot/framesystem"
 	"go.viam.com/rdk/spatialmath"
 
+	"go.viam.com/rdk/components/arm"
 	toggleswitch "go.viam.com/rdk/components/switch"
 )
 
@@ -24,13 +25,17 @@ var defaultApproachConstraint = &StepLinearConstraint{
 	OrientationToleranceDegs: 2,
 }
 
+var slowMovementMoveOptions = &arm.MoveOptions{
+	MaxVelRads: 20 * math.Pi / 180.0,
+}
+
 // moveToPose fetches a named pose and moves to it.
 func (s *beanjaminCoffee) moveToPose(ctx context.Context, step Step) error {
 	pd, err := s.fetchPose(ctx, step.Component, step.PoseName)
 	if err != nil {
 		return err
 	}
-	if err := s.moveToRawPose(ctx, pd, step.LinearConstraint, step.AllowedCollisions); err != nil {
+	if err := s.moveToRawPose(ctx, pd, step.LinearConstraint, step.AllowedCollisions, step.MoveOptions); err != nil {
 		return fmt.Errorf("move to %q failed: %w", step.PoseName, err)
 	}
 	return nil
@@ -304,6 +309,17 @@ func buildConstraints(lc *StepLinearConstraint, allowedCollisions []AllowedColli
 	return constraints
 }
 
+// buildMoveOptions converts step-level move options into arm.MoveOptions.
+func buildMoveOptions(opts *StepMoveOptions) *arm.MoveOptions {
+	if opts == nil {
+		return nil
+	}
+	return &arm.MoveOptions{
+		MaxVelRads: opts.MaxVelDegsPerSec * math.Pi / 180.0,
+		MaxAccRads: opts.MaxAccDegsPerSec2 * math.Pi / 180.0,
+	}
+}
+
 // savePlanRequest persists a PlanRequest to the configured directory. It is a
 // no-op when SaveMotionRequestsDir is empty.
 func (s *beanjaminCoffee) savePlanRequest(req *armplanning.PlanRequest, label string) {
@@ -324,7 +340,7 @@ func (s *beanjaminCoffee) savePlanRequest(req *armplanning.PlanRequest, label st
 }
 
 // moveToRawPose plans a motion using armplanning and executes it on the arm.
-func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision) error {
+func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return err
@@ -368,7 +384,11 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	if err != nil {
 		return fmt.Errorf("get frame inputs from plan: %w", err)
 	}
-	return s.arm.MoveThroughJointPositions(ctx, positions, nil, nil)
+	opts := buildMoveOptions(moveOpts)
+	if opts == nil && lc != nil {
+		opts = slowMovementMoveOptions
+	}
+	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
 }
 
 func (s *beanjaminCoffee) switchForComponent(componentName string) (toggleswitch.Switch, error) {
@@ -457,7 +477,11 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	if err != nil {
 		return fmt.Errorf("get frame inputs from pivot plan: %w", err)
 	}
-	return s.arm.MoveThroughJointPositions(ctx, positions, nil, nil)
+	opts := buildMoveOptions(step.MoveOptions)
+	if opts == nil {
+		opts = slowMovementMoveOptions
+	}
+	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
 }
 
 // computeCircularPoses generates waypoints evenly spaced around a circle in
@@ -547,7 +571,11 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 		default:
 		}
 		s.logger.Debugf("circular revolution %d", rev+1)
-		if err := s.arm.MoveThroughJointPositions(ctx, positions, nil, nil); err != nil {
+		circOpts := buildMoveOptions(step.MoveOptions)
+		if circOpts == nil {
+			circOpts = slowMovementMoveOptions
+		}
+		if err := s.arm.MoveThroughJointPositions(ctx, positions, circOpts, nil); err != nil {
 			return fmt.Errorf("execute circular revolution %d: %w", rev+1, err)
 		}
 	}

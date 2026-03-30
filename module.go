@@ -43,10 +43,16 @@ type AllowedCollision struct {
 	Frame2 string `json:"frame2"`
 }
 
+type StepMoveOptions struct {
+	MaxVelDegsPerSec  float64 `json:"max_vel_degs_per_sec,omitempty"`
+	MaxAccDegsPerSec2 float64 `json:"max_acc_degs_per_sec2,omitempty"`
+}
+
 type Step struct {
 	PoseName                 string                `json:"pose_name"`
 	Pause            time.Duration         `json:"pause_secs,omitempty"`
 	LinearConstraint *StepLinearConstraint `json:"linear_constraint,omitempty"`
+	MoveOptions      *StepMoveOptions      `json:"move_options,omitempty"`
 	AllowedCollisions []AllowedCollision   `json:"allowed_collisions,omitempty"`
 	PivotFromPose            string                `json:"pivot_from_pose,omitempty"`
 	PivotDegreesPerStep      float64               `json:"pivot_degrees_per_step,omitempty"`
