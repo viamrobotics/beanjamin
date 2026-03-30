@@ -192,7 +192,7 @@ func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 	steps := []Step{
 		{PoseName: "grinder_approach", Component: "filter", Pause: shortPause},
 		{PoseName: "grinder_activate", Component: "filter", Pause: shortPause, LinearConstraint: defaultApproachConstraint},
-		{PoseName: "grinder_approach", Component: "filter", Pause: 500 * time.Millisecond, LinearConstraint: defaultApproachConstraint},
+		{PoseName: "grinder_approach", Component: "filter", Pause: shortPause, LinearConstraint: defaultApproachConstraint},
 		// Circle under the grinder chute to distribute grounds evenly while the grinder dispenses.
 		{PoseName: "grinder_approach", Component: "filter",
 			CircularRadiusMm: 8, CircularDurationSec: 7.5, CircularPointsPerRev: 8,
