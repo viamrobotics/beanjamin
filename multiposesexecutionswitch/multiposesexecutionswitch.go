@@ -38,8 +38,31 @@ type Config struct {
 }
 
 type PoseConf struct {
-	PoseName  string      `json:"pose_name"`
-	PoseValue commonpb.Pose `json:"pose_value"`
+	PoseName    string         `json:"pose_name"`
+	PoseValue   *commonpb.Pose `json:"pose_value,omitempty"`
+	Baseline    string         `json:"baseline,omitempty"`
+	Translation *Translation   `json:"translation,omitempty"`
+	Orientation *Orientation   `json:"orientation,omitempty"`
+}
+
+type Translation struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+}
+
+type Orientation struct {
+	OX    float64 `json:"o_x"`
+	OY    float64 `json:"o_y"`
+	OZ    float64 `json:"o_z"`
+	Theta float64 `json:"theta"`
+}
+
+// poseValues holds the resolved absolute coordinates for a pose.
+type poseValues struct {
+	X, Y, Z    float64
+	OX, OY, OZ float64
+	Theta      float64
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -55,9 +78,51 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if len(cfg.Poses) == 0 {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "poses")
 	}
+	// First pass: collect all names and check for duplicates.
+	allNames := make(map[string]bool, len(cfg.Poses))
 	for i, p := range cfg.Poses {
 		if p.PoseName == "" {
 			return nil, nil, fmt.Errorf("%s: poses[%d] is missing required field \"pose_name\"", path, i)
+		}
+		if allNames[p.PoseName] {
+			return nil, nil, fmt.Errorf("%s: poses[%d] has duplicate pose_name %q", path, i, p.PoseName)
+		}
+		allNames[p.PoseName] = true
+	}
+
+	// Second pass: validate fields and baseline references.
+	baselineOf := make(map[string]string, len(cfg.Poses))
+	for i, p := range cfg.Poses {
+		hasPoseValue := p.PoseValue != nil
+		hasBaseline := p.Baseline != ""
+
+		if hasPoseValue && hasBaseline {
+			return nil, nil, fmt.Errorf("%s: poses[%d] (%q) cannot have both \"pose_value\" and \"baseline\"", path, i, p.PoseName)
+		}
+		if !hasPoseValue && !hasBaseline {
+			return nil, nil, fmt.Errorf("%s: poses[%d] (%q) must have either \"pose_value\" or \"baseline\"", path, i, p.PoseName)
+		}
+
+		if !hasBaseline && (p.Translation != nil || p.Orientation != nil) {
+			return nil, nil, fmt.Errorf("%s: poses[%d] (%q) \"translation\" and \"orientation\" require \"baseline\"", path, i, p.PoseName)
+		}
+
+		if hasBaseline {
+			if !allNames[p.Baseline] {
+				return nil, nil, fmt.Errorf("%s: poses[%d] (%q) baseline %q not found in poses", path, i, p.PoseName, p.Baseline)
+			}
+			baselineOf[p.PoseName] = p.Baseline
+		}
+	}
+
+	// Third pass: detect cycles in baseline references.
+	for start, base := range baselineOf {
+		visited := map[string]bool{start: true}
+		for cur := base; cur != ""; cur = baselineOf[cur] {
+			if visited[cur] {
+				return nil, nil, fmt.Errorf("%s: baseline cycle detected involving pose %q", path, cur)
+			}
+			visited[cur] = true
 		}
 	}
 
@@ -75,11 +140,12 @@ type multiPosesExecutionSwitch struct {
 	resource.AlwaysRebuild
 	resource.TriviallyCloseable
 
-	name      resource.Name
-	logger    logging.Logger
-	cfg       *Config
-	motion    motion.Service
-	poseNames []string
+	name          resource.Name
+	logger        logging.Logger
+	cfg           *Config
+	motion        motion.Service
+	poseNames     []string
+	resolvedPoses []poseValues
 
 	mu        sync.Mutex
 	position  uint32
@@ -102,13 +168,68 @@ func newMultiPosesExecutionSwitch(ctx context.Context, deps resource.Dependencie
 		poseNames[i] = p.PoseName
 	}
 
+	resolvedPoses := resolvePoses(conf.Poses)
+
 	return &multiPosesExecutionSwitch{
-		name:      rawConf.ResourceName(),
-		logger:    logger,
-		cfg:       conf,
-		motion:    motionSvc,
-		poseNames: poseNames,
+		name:          rawConf.ResourceName(),
+		logger:        logger,
+		cfg:           conf,
+		motion:        motionSvc,
+		poseNames:     poseNames,
+		resolvedPoses: resolvedPoses,
 	}, nil
+}
+
+// resolvePoses resolves all poses to absolute values by applying baseline
+// translations and orientation overrides. Baselines may appear in any order;
+// cycles must be rejected by Validate before calling this function.
+func resolvePoses(poses []PoseConf) []poseValues {
+	resolved := make([]poseValues, len(poses))
+	done := make([]bool, len(poses))
+	nameToIdx := make(map[string]int, len(poses))
+	for i, p := range poses {
+		nameToIdx[p.PoseName] = i
+	}
+
+	var resolve func(i int)
+	resolve = func(i int) {
+		if done[i] {
+			return
+		}
+		p := poses[i]
+		if p.PoseValue != nil {
+			resolved[i] = poseValues{
+				X: p.PoseValue.X, Y: p.PoseValue.Y, Z: p.PoseValue.Z,
+				OX: p.PoseValue.OX, OY: p.PoseValue.OY, OZ: p.PoseValue.OZ, Theta: p.PoseValue.Theta,
+			}
+		} else {
+			baseIdx := nameToIdx[p.Baseline]
+			resolve(baseIdx)
+			base := resolved[baseIdx]
+
+			if p.Translation != nil {
+				base.X += p.Translation.X
+				base.Y += p.Translation.Y
+				base.Z += p.Translation.Z
+			}
+
+			if p.Orientation != nil {
+				base.OX = p.Orientation.OX
+				base.OY = p.Orientation.OY
+				base.OZ = p.Orientation.OZ
+				base.Theta = p.Orientation.Theta
+			}
+
+			resolved[i] = base
+		}
+		done[i] = true
+	}
+
+	for i := range poses {
+		resolve(i)
+	}
+
+	return resolved
 }
 
 func (s *multiPosesExecutionSwitch) Name() resource.Name {
@@ -141,16 +262,17 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 	}
 
 	if name, ok := cmd["get_pose_by_name"].(string); ok {
-		for _, pc := range s.cfg.Poses {
-			if pc.PoseName == name {
+		for i, pn := range s.poseNames {
+			if pn == name {
+				rp := s.resolvedPoses[i]
 				return map[string]interface{}{
-					"x":               pc.PoseValue.X,
-					"y":               pc.PoseValue.Y,
-					"z":               pc.PoseValue.Z,
-					"o_x":             pc.PoseValue.OX,
-					"o_y":             pc.PoseValue.OY,
-					"o_z":             pc.PoseValue.OZ,
-					"theta":           pc.PoseValue.Theta,
+					"x":               rp.X,
+					"y":               rp.Y,
+					"z":               rp.Z,
+					"o_x":             rp.OX,
+					"o_y":             rp.OY,
+					"o_z":             rp.OZ,
+					"theta":           rp.Theta,
 					"reference_frame": s.cfg.ReferenceFrame,
 					"component_name":  s.cfg.ComponentName,
 				}, nil
@@ -190,13 +312,13 @@ func (s *multiPosesExecutionSwitch) goToPosition(ctx context.Context, position u
 	}
 	defer s.executing.Store(false)
 
-	pc := s.cfg.Poses[position]
+	rp := s.resolvedPoses[position]
 
-	s.logger.Infof("moving %s to pose %q (index %d)", s.cfg.ComponentName, pc.PoseName, position)
+	s.logger.Infof("moving %s to pose %q (index %d)", s.cfg.ComponentName, s.poseNames[position], position)
 
 	pose := spatialmath.NewPose(
-		r3.Vector{X: pc.PoseValue.X, Y: pc.PoseValue.Y, Z: pc.PoseValue.Z},
-		&spatialmath.OrientationVectorDegrees{OX: pc.PoseValue.OX, OY: pc.PoseValue.OY, OZ: pc.PoseValue.OZ, Theta: pc.PoseValue.Theta},
+		r3.Vector{X: rp.X, Y: rp.Y, Z: rp.Z},
+		&spatialmath.OrientationVectorDegrees{OX: rp.OX, OY: rp.OY, OZ: rp.OZ, Theta: rp.Theta},
 	)
 	destination := referenceframe.NewPoseInFrame(s.cfg.ReferenceFrame, pose)
 
@@ -205,7 +327,7 @@ func (s *multiPosesExecutionSwitch) goToPosition(ctx context.Context, position u
 		Destination:   destination,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to move to pose %q: %w", pc.PoseName, err)
+		return fmt.Errorf("failed to move to pose %q: %w", s.poseNames[position], err)
 	}
 
 	s.mu.Lock()
