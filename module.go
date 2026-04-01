@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
-	"time"
 	"sync/atomic"
+	"time"
 
 	viz "github.com/viam-labs/motion-tools/client/client"
 	"go.viam.com/rdk/components/arm"
@@ -49,14 +50,14 @@ type StepMoveOptions struct {
 }
 
 type Step struct {
-	PoseName                 string                `json:"pose_name"`
-	Pause            time.Duration         `json:"pause_secs,omitempty"`
-	LinearConstraint *StepLinearConstraint `json:"linear_constraint,omitempty"`
-	MoveOptions      *StepMoveOptions      `json:"move_options,omitempty"`
-	AllowedCollisions []AllowedCollision   `json:"allowed_collisions,omitempty"`
-	PivotFromPose            string                `json:"pivot_from_pose,omitempty"`
-	PivotDegreesPerStep      float64               `json:"pivot_degrees_per_step,omitempty"`
-	Component                string                `json:"component,omitempty"`
+	PoseName            string                `json:"pose_name"`
+	Pause               time.Duration         `json:"pause_secs,omitempty"`
+	LinearConstraint    *StepLinearConstraint `json:"linear_constraint,omitempty"`
+	MoveOptions         *StepMoveOptions      `json:"move_options,omitempty"`
+	AllowedCollisions   []AllowedCollision    `json:"allowed_collisions,omitempty"`
+	PivotFromPose       string                `json:"pivot_from_pose,omitempty"`
+	PivotDegreesPerStep float64               `json:"pivot_degrees_per_step,omitempty"`
+	Component           string                `json:"component,omitempty"`
 
 	// Circular motion: move in small circles around PoseName to distribute
 	// material (e.g. coffee grounds) evenly. The motion continues until
@@ -79,6 +80,7 @@ type Config struct {
 	DialMoveXMM           float64 `json:"dial_move_x_mm,omitempty"`
 	DialMoveYMM           float64 `json:"dial_move_y_mm,omitempty"`
 	DialMoveZMM           float64 `json:"dial_move_z_mm,omitempty"`
+	DialMoveOrientationMM float64 `json:"dial_move_orientation_mm,omitempty"`
 	DialMaxPosition       float64 `json:"dial_max_position,omitempty"`
 	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
 }
@@ -130,14 +132,16 @@ type beanjaminCoffee struct {
 	paused                 atomic.Bool
 
 	// Last known absolute dial positions and directions for direction detection
-	lastDialX     *float64
-	lastDialY     *float64
-	lastDialZ     *float64
-	lastDialSpeed *float64
-	lastDialDirX  float64
-	lastDialDirY  float64
-	lastDialDirZ  float64
-	lastDialDirSpeed float64
+	lastDialX              *float64
+	lastDialY              *float64
+	lastDialZ              *float64
+	lastDialSpeed          *float64
+	lastDialDirX           float64
+	lastDialDirY           float64
+	lastDialDirZ           float64
+	lastDialOrientation    *float64
+	lastDialDirOrientation float64
+	lastDialDirSpeed       float64
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -283,6 +287,9 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 	if v, ok := cmd["dial_move_z"]; ok {
 		return s.handleDialMove(ctx, "z", v)
 	}
+	if v, ok := cmd["dial_move_orientation"]; ok {
+		return s.handleDialMove(ctx, "orientation", v)
+	}
 	if v, ok := cmd["dial_move_speed"]; ok {
 		return s.handleDialSpeedMove(ctx, v)
 	}
@@ -297,7 +304,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 			return nil, fmt.Errorf("unknown action %q", action)
 		}
 	}
-	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, dial_move_x/y/z/speed, action")
+	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, dial_move_x/y/z/orientation/speed, action")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }
@@ -356,6 +363,15 @@ func (s *beanjaminCoffee) handleMoveArm(ctx context.Context, axis string, mm flo
 		pt.Y += mm
 	case "z":
 		pt.Z += mm
+	case "orientation":
+		ov := currentPose.Orientation().OrientationVectorDegrees()
+		// Normalize the orientation direction vector
+		norm := math.Sqrt(ov.OX*ov.OX + ov.OY*ov.OY + ov.OZ*ov.OZ)
+		if norm > 0 {
+			pt.X += mm * ov.OX / norm
+			pt.Y += mm * ov.OY / norm
+			pt.Z += mm * ov.OZ / norm
+		}
 	}
 	newPose := spatialmath.NewPose(pt, currentPose.Orientation())
 	if err := s.arm.MoveToPosition(ctx, newPose, map[string]interface{}{}); err != nil {
@@ -376,6 +392,8 @@ func (s *beanjaminCoffee) handleDialMove(ctx context.Context, axis string, dialV
 		mm = s.cfg.DialMoveYMM
 	case "z":
 		mm = s.cfg.DialMoveZMM
+	case "orientation":
+		mm = s.cfg.DialMoveOrientationMM
 	}
 	if mm == 0 {
 		mm = 1
@@ -393,6 +411,9 @@ func (s *beanjaminCoffee) handleDialMove(ctx context.Context, axis string, dialV
 		case "z":
 			last = &s.lastDialZ
 			lastDir = &s.lastDialDirZ
+		case "orientation":
+			last = &s.lastDialOrientation
+			lastDir = &s.lastDialDirOrientation
 		}
 		if *last == nil {
 			// First reading — store position and skip move (no direction yet)
@@ -478,12 +499,14 @@ func (s *beanjaminCoffee) handleDialSpeedMove(_ context.Context, dialValue inter
 	s.cfg.DialMoveXMM = applyStep(s.cfg.DialMoveXMM)
 	s.cfg.DialMoveYMM = applyStep(s.cfg.DialMoveYMM)
 	s.cfg.DialMoveZMM = applyStep(s.cfg.DialMoveZMM)
+	s.cfg.DialMoveOrientationMM = applyStep(s.cfg.DialMoveOrientationMM)
 
 	return map[string]interface{}{
-		"status":          "speed_updated",
-		"dial_move_x_mm": s.cfg.DialMoveXMM,
-		"dial_move_y_mm": s.cfg.DialMoveYMM,
-		"dial_move_z_mm": s.cfg.DialMoveZMM,
+		"status":                   "speed_updated",
+		"dial_move_x_mm":           s.cfg.DialMoveXMM,
+		"dial_move_y_mm":           s.cfg.DialMoveYMM,
+		"dial_move_z_mm":           s.cfg.DialMoveZMM,
+		"dial_move_orientation_mm": s.cfg.DialMoveOrientationMM,
 	}, nil
 }
 
