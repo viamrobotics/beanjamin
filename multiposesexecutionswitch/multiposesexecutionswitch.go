@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -116,14 +117,31 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 
 	// Third pass: detect cycles in baseline references.
-	for start, base := range baselineOf {
-		visited := map[string]bool{start: true}
-		for cur := base; cur != ""; cur = baselineOf[cur] {
+	// A pose is "in a cycle" if following its baseline chain leads back to itself.
+	// We collect all such poses (in config order) and report them together.
+	inCycle := make(map[string]bool)
+	for _, p := range cfg.Poses {
+		if _, ok := baselineOf[p.PoseName]; !ok {
+			continue
+		}
+		visited := map[string]bool{p.PoseName: true}
+		for cur := baselineOf[p.PoseName]; cur != ""; cur = baselineOf[cur] {
 			if visited[cur] {
-				return nil, nil, fmt.Errorf("%s: baseline cycle detected involving pose %q", path, cur)
+				inCycle[p.PoseName] = true
+				break
 			}
 			visited[cur] = true
 		}
+	}
+	if len(inCycle) > 0 {
+		var cycleNames []string
+		for _, p := range cfg.Poses {
+			if inCycle[p.PoseName] {
+				cycleNames = append(cycleNames, fmt.Sprintf("%q", p.PoseName))
+			}
+		}
+		return nil, nil, fmt.Errorf("%s: baseline cycle detected involving poses: %s",
+			path, strings.Join(cycleNames, ", "))
 	}
 
 	reqDeps := []string{cfg.ComponentName}

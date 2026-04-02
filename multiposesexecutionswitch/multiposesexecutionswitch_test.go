@@ -1,6 +1,7 @@
 package multiposesexecutionswitch
 
 import (
+	"strings"
 	"testing"
 
 	commonpb "go.viam.com/api/common/v1"
@@ -105,7 +106,7 @@ func TestValidate(t *testing.T) {
 					{PoseName: "a", Baseline: "a"},
 				},
 			},
-			wantErr: "cycle",
+			wantErr: `cycle detected involving poses: "a"`,
 		},
 		{
 			name: "baseline cycle (two poses)",
@@ -116,7 +117,7 @@ func TestValidate(t *testing.T) {
 					{PoseName: "b", Baseline: "a"},
 				},
 			},
-			wantErr: "cycle",
+			wantErr: `cycle detected involving poses: "a", "b"`,
 		},
 		{
 			name: "baseline cycle (three poses)",
@@ -128,7 +129,7 @@ func TestValidate(t *testing.T) {
 					{PoseName: "c", Baseline: "b"},
 				},
 			},
-			wantErr: "cycle",
+			wantErr: `cycle detected involving poses: "a", "b", "c"`,
 		},
 		{
 			name: "valid absolute pose",
@@ -223,7 +224,7 @@ func TestValidate(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
-			if got := err.Error(); !contains(got, tt.wantErr) {
+			if got := err.Error(); !strings.Contains(got, tt.wantErr) {
 				t.Fatalf("error %q does not contain %q", got, tt.wantErr)
 			}
 		})
@@ -311,15 +312,3 @@ func assertPoseEqual(t *testing.T, got, want poseValues) {
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
-}
-
-func searchString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
