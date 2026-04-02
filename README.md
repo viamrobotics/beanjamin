@@ -25,11 +25,7 @@ Moves an arm (or any movable component) between a list of named poses via the Mo
   "poses": [
     {
       "pose_name": "<string>",
-      "pose_value": {
-        "x": <float>, "y": <float>, "z": <float>,
-        "o_x": <float>, "o_y": <float>, "o_z": <float>,
-        "theta": <float>
-      }
+      "pose_value": { ... }
     }
   ]
 }
@@ -40,9 +36,54 @@ Moves an arm (or any movable component) between a list of named poses via the Mo
 | `component_name`  | string | Yes      | Name of the arm component to move.                                                      |
 | `motion`          | string | Yes      | Name of the motion service (typically `"builtin"`).                                     |
 | `reference_frame` | string | No       | Reference frame for poses. Defaults to `"world"`.                                       |
-| `poses`           | array  | Yes      | One or more named poses. Each pose needs a `pose_name` and a `pose_value` object.       |
+| `poses`           | array  | Yes      | One or more named poses. Pose names must be unique.                                     |
+
+### Defining poses
+
+Each pose in the `poses` array must have a `pose_name` and **exactly one** of two definition styles:
+
+#### Absolute pose (`pose_value`)
+
+Define the pose directly with position and orientation coordinates:
+
+```json
+{
+  "pose_name": "home",
+  "pose_value": {
+    "x": 0, "y": 0, "z": 500,
+    "o_x": 0, "o_y": 0, "o_z": 1,
+    "theta": 0
+  }
+}
+```
 
 **Pose value fields:** `x`, `y`, `z` are in millimeters. `o_x`, `o_y`, `o_z` define the orientation axis, `theta` is the rotation angle in degrees.
+
+#### Relative pose (`baseline`)
+
+Define a pose relative to another pose in the same `poses` array. Optionally add a `translation` (offset added to the baseline position) and/or an `orientation` (replaces the baseline orientation entirely). The baseline can appear anywhere in the array — before or after the pose that references it.
+
+```json
+{
+  "pose_name": "left-of-home",
+  "baseline": "home",
+  "translation": { "x": -100 }
+}
+```
+
+| Field         | Type   | Required            | Description                                                                                      |
+| ------------- | ------ | ------------------- | ------------------------------------------------------------------------------------------------ |
+| `baseline`    | string | Yes (instead of `pose_value`) | Name of another pose in the `poses` array.                                            |
+| `translation` | object | No                  | Position offset added to the baseline. Fields: `x`, `y`, `z` (millimeters, default `0`).         |
+| `orientation` | object | No                  | Orientation that **replaces** the baseline orientation. Fields: `o_x`, `o_y`, `o_z`, `theta`.    |
+
+Baselines can be chained — a relative pose can itself be used as a baseline for another pose. Multiple poses can share the same baseline.
+
+**Validation rules:**
+- A pose must have either `pose_value` or `baseline`, not both.
+- `translation` and `orientation` are only allowed with `baseline`.
+- The `baseline` must reference an existing `pose_name` in the `poses` array.
+- Circular baseline references are not allowed (e.g. A → B → A).
 
 ### Example Configuration
 
@@ -61,16 +102,24 @@ Moves an arm (or any movable component) between a list of named poses via the Mo
       }
     },
     {
+      "pose_name": "above-home",
+      "baseline": "home",
+      "translation": { "z": 100 }
+    },
+    {
       "pose_name": "pour",
-      "pose_value": {
-        "x": 200, "y": 100, "z": 350,
-        "o_x": 0, "o_y": 1, "o_z": 0,
-        "theta": 90
-      }
+      "baseline": "home",
+      "translation": { "x": 200, "y": 100, "z": -150 },
+      "orientation": { "o_x": 0, "o_y": 1, "o_z": 0, "theta": 90 }
     }
   ]
 }
 ```
+
+In this example:
+- **home** is defined absolutely at `(0, 0, 500)` with orientation `(0, 0, 1, 0°)`.
+- **above-home** inherits home's position and orientation, then adds `z: +100` → final position `(0, 0, 600)`.
+- **pour** inherits home's position, adds a translation → `(200, 100, 350)`, and overrides the orientation to `(0, 1, 0, 90°)`.
 
 ### Switch Interface
 
