@@ -2,6 +2,7 @@ package beanjamin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -339,6 +340,37 @@ func (s *beanjaminCoffee) savePlanRequest(req *armplanning.PlanRequest, label st
 	s.logger.Infof("saved motion request to %s", filename)
 }
 
+// savePlanResponse persists a Plan's path and trajectory to the configured
+// directory. It is a no-op when SaveMotionRequestsDir is empty.
+func (s *beanjaminCoffee) savePlanResponse(plan motionplan.Plan, label string) {
+	dir := s.cfg.SaveMotionRequestsDir
+	if dir == "" {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		s.logger.Warnf("save motion response: create dir: %v", err)
+		return
+	}
+	resp := struct {
+		Path       motionplan.Path       `json:"path"`
+		Trajectory motionplan.Trajectory `json:"trajectory"`
+	}{
+		Path:       plan.Path(),
+		Trajectory: plan.Trajectory(),
+	}
+	data, err := json.MarshalIndent(resp, "", "  ")
+	if err != nil {
+		s.logger.Warnf("save motion response: marshal: %v", err)
+		return
+	}
+	filename := filepath.Join(dir, fmt.Sprintf("%s_%s_response.json", time.Now().Format("20060102_150405.000"), label))
+	if err := os.WriteFile(filename, data, 0o600); err != nil {
+		s.logger.Warnf("save motion response: %v", err)
+		return
+	}
+	s.logger.Infof("saved motion response to %s", filename)
+}
+
 // moveToRawPose plans a motion using armplanning and executes it on the arm.
 func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
 	fs, fsInputs, err := s.currentInputs(ctx)
@@ -377,6 +409,7 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	if err != nil {
 		return fmt.Errorf("plan motion: %w", err)
 	}
+	s.savePlanResponse(plan, "move")
 
 	// Execute — extract joint positions for the arm frame (not the end-effector
 	// component name used for the goal pose) and send to arm.
@@ -470,6 +503,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	if err != nil {
 		return fmt.Errorf("plan pivot motion: %w", err)
 	}
+	s.savePlanResponse(plan, "pivot")
 
 	// Execute the full trajectory in one call — extract joint positions for the
 	// arm frame, not the end-effector component name used for goal poses.
@@ -556,6 +590,7 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 	if err != nil {
 		return fmt.Errorf("plan circular motion: %w", err)
 	}
+	s.savePlanResponse(plan, "circular")
 
 	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
 	if err != nil {
