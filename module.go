@@ -246,6 +246,10 @@ func (s *beanjaminCoffee) Name() resource.Name {
 	return s.name
 }
 
+func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, error) {
+	return map[string]interface{}{}, nil
+}
+
 func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	if orderRaw, ok := cmd["prepare_order"]; ok {
 		res, err := s.enqueueOrder(ctx, orderRaw)
