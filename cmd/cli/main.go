@@ -92,9 +92,13 @@ func runSay(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer machine.Close(ctx)
+	defer func() {
+		if err := machine.Close(ctx); err != nil {
+			logger.Warnf("closing machine: %v", err)
+		}
+	}()
 
-	speechSvc, err := generic.FromRobot(machine, *serviceName)
+	speechSvc, err := generic.FromProvider(machine, *serviceName)
 	if err != nil {
 		return fmt.Errorf("getting speech service %q: %w", *serviceName, err)
 	}

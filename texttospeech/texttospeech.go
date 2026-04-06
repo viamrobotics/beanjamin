@@ -119,7 +119,7 @@ func (s *ttsService) Say(ctx context.Context, text string) (string, error) {
 		AudioConfig: &texttospeechpb.AudioConfig{AudioEncoding: texttospeechpb.AudioEncoding_LINEAR16},
 	})
 	if err != nil {
-		return "", fmt.Errorf("Google TTS synthesis failed: %w", err)
+		return "", fmt.Errorf("google TTS synthesis failed: %w", err)
 	}
 
 	stereo := monoToStereo(resp.AudioContent)
