@@ -254,6 +254,10 @@ func (s *multiPosesExecutionSwitch) Name() resource.Name {
 	return s.name
 }
 
+func (s *multiPosesExecutionSwitch) Status(ctx context.Context) (map[string]interface{}, error) {
+	return map[string]interface{}{}, nil
+}
+
 func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	if name, ok := cmd["set_position_by_name"].(string); ok {
 		for i, pn := range s.poseNames {

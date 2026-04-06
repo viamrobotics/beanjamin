@@ -22,6 +22,10 @@ type placeholder struct {
 
 func (p *placeholder) Name() resource.Name { return p.name }
 
+func (p *placeholder) Status(_ context.Context) (map[string]interface{}, error) {
+	return map[string]interface{}{}, nil
+}
+
 func (p *placeholder) DoCommand(_ context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
 	return map[string]interface{}{}, nil
 }

@@ -157,6 +157,10 @@ func monoToStereo(mono []byte) []byte {
 	return stereo
 }
 
+func (s *ttsService) Status(ctx context.Context) (map[string]interface{}, error) {
+	return map[string]interface{}{}, nil
+}
+
 func (s *ttsService) Close(ctx context.Context) error {
 	if s.ttsClient != nil {
 		return s.ttsClient.Close()

@@ -76,6 +76,10 @@ func (m *maintenanceSensor) Name() resource.Name {
 	return m.name
 }
 
+func (m *maintenanceSensor) Status(ctx context.Context) (map[string]interface{}, error) {
+	return map[string]interface{}{}, nil
+}
+
 func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]interface{}) (map[string]interface{}, error) {
 	// Check if the arm is physically moving.
 	armMoving, err := m.arm.IsMoving(ctx)
