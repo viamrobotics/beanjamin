@@ -14,6 +14,7 @@ $(MODULE_BINARY): Makefile go.mod *.go cmd/module/*.go
 
 lint:
 	gofmt -s -w .
+	golangci-lint run
 
 update:
 	go get go.viam.com/rdk@latest
