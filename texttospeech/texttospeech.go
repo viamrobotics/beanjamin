@@ -74,7 +74,7 @@ func newTextToSpeech(ctx context.Context, deps resource.Dependencies, rawConf re
 
 	credBytes, err := json.Marshal(conf.GoogleCredJSON)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal google credentials: %w", err)
+		return nil, fmt.Errorf("failed to marshal Google credentials: %w", err)
 	}
 
 	ttsClient, err := texttospeech.NewClient(ctx,

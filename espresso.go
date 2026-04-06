@@ -50,11 +50,6 @@ var cupGrabCollisions = []AllowedCollision{
 	{Frame1: "gripper:claws", Frame2: "empty-cup"},
 }
 
-// prepareOrder is kept for backward compatibility but now delegates to enqueueOrder.
-func (s *beanjaminCoffee) prepareOrder(ctx context.Context, orderRaw interface{}) (map[string]interface{}, error) {
-	return s.enqueueOrder(ctx, orderRaw)
-}
-
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
 		"grind_coffee":              s.grindCoffee,
@@ -168,7 +163,9 @@ func (s *beanjaminCoffee) prepareEspresso(ctx context.Context, customerName stri
 		s.logger.Infof("post: cleaning portafilter (clean_after_use=true)")
 		if !s.cfg.PlaceCup {
 			s.logger.Infof("post: waiting for manual cup removal (place_cup=false)")
-			s.say(ctx, "Please remove the cup before we start the cleaning process!")
+			if err := s.say(ctx, "Please remove the cup before we start the cleaning process!"); err != nil {
+				s.logger.Warnf("failed to say cup-removal prompt: %v", err)
+			}
 			time.Sleep(10 * time.Second)
 		}
 		if err := s.cleanPortafilter(ctx, cancelCtx); err != nil {
