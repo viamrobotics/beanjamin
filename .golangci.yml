@@ -1,5 +1,8 @@
-linters-settings:
-  staticcheck:
-    checks:
-      - "all"
-      - "-ST1005"
+version: "2"
+
+linters:
+  settings:
+    staticcheck:
+      checks:
+        - "all"
+        - "-ST1005"
