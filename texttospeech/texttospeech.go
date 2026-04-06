@@ -74,7 +74,7 @@ func newTextToSpeech(ctx context.Context, deps resource.Dependencies, rawConf re
 
 	credBytes, err := json.Marshal(conf.GoogleCredJSON)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal google credentials: %w", err)
+		return nil, fmt.Errorf("failed to marshal Google credentials: %w", err)
 	}
 
 	ttsClient, err := texttospeech.NewClient(ctx,
@@ -119,7 +119,7 @@ func (s *ttsService) Say(ctx context.Context, text string) (string, error) {
 		AudioConfig: &texttospeechpb.AudioConfig{AudioEncoding: texttospeechpb.AudioEncoding_LINEAR16},
 	})
 	if err != nil {
-		return "", fmt.Errorf("google TTS synthesis failed: %w", err)
+		return "", fmt.Errorf("Google TTS synthesis failed: %w", err)
 	}
 
 	stereo := monoToStereo(resp.AudioContent)
