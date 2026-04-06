@@ -3,6 +3,15 @@ version: "2"
 linters:
   settings:
     staticcheck:
+      # Mirror golangci-lint's default disabled stylechecks, plus disable
+      # ST1005 so that proper nouns (e.g. "Google") are allowed at the start
+      # of error strings.
       checks:
         - "all"
+        - "-ST1000"
+        - "-ST1003"
         - "-ST1005"
+        - "-ST1016"
+        - "-ST1020"
+        - "-ST1021"
+        - "-ST1022"
