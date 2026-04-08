@@ -9,14 +9,16 @@ import (
 
 const shortPause = 100 * time.Millisecond
 
-// say sends text to the speech service via DoCommand. It is a no-op when
-// no speech service is configured.
+// say queues text for the speech service via the non-blocking say_async
+// DoCommand. It returns as soon as the text is accepted by the speech
+// service's async queue; the audio will be played once any in-flight
+// speech has finished. It is a no-op when no speech service is configured.
 func (s *beanjaminCoffee) say(ctx context.Context, text string) error {
 	if s.speech == nil {
 		return nil
 	}
 	_, err := s.speech.DoCommand(ctx, map[string]interface{}{
-		"say": text,
+		"say_async": text,
 	})
 	return err
 }

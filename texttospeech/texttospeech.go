@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1"
 	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
@@ -22,6 +23,9 @@ import (
 
 // Google Cloud TTS returns LINEAR16 audio at 24 kHz mono by default.
 const defaultSampleRateHz = 24000
+
+// asyncQueueSize caps how many pending say_async requests can be buffered.
+const asyncQueueSize = 64
 
 var Model = resource.NewModel("viam", "beanjamin", "text-to-speech")
 
@@ -59,6 +63,18 @@ type ttsService struct {
 	ttsClient    *texttospeech.Client
 	languageCode string
 	voiceName    string
+
+	// playMu serializes audio playback so async speech waits whenever any
+	// other speech (sync or async) is currently being played.
+	playMu sync.Mutex
+
+	// asyncQueue buffers pending say_async requests for the background worker.
+	asyncQueue chan string
+	// workerCtx/workerCancel control the lifetime of the async worker
+	// goroutine and any in-flight synthesis/playback it is running.
+	workerCtx    context.Context
+	workerCancel context.CancelFunc
+	workerWG     sync.WaitGroup
 }
 
 func newTextToSpeech(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -89,14 +105,22 @@ func newTextToSpeech(ctx context.Context, deps resource.Dependencies, rawConf re
 		lang = "en-US"
 	}
 
-	return &ttsService{
+	svc := &ttsService{
 		name:         rawConf.ResourceName(),
 		logger:       logger,
 		audioOut:     ao,
 		ttsClient:    ttsClient,
 		languageCode: lang,
 		voiceName:    conf.VoiceName,
-	}, nil
+		asyncQueue:   make(chan string, asyncQueueSize),
+	}
+	// The worker must outlive the constructor's ctx, so derive from Background
+	// and tear down explicitly in Close.
+	svc.workerCtx, svc.workerCancel = context.WithCancel(context.Background())
+	svc.workerWG.Add(1)
+	go svc.asyncWorker()
+
+	return svc, nil
 }
 
 func (s *ttsService) Name() resource.Name {
@@ -104,6 +128,17 @@ func (s *ttsService) Name() resource.Name {
 }
 
 func (s *ttsService) Say(ctx context.Context, text string) (string, error) {
+	if err := s.synthesizeAndPlay(ctx, text); err != nil {
+		return "", err
+	}
+	return text, nil
+}
+
+// synthesizeAndPlay synthesizes text via Google TTS and plays the resulting
+// audio through the speaker, serialized behind playMu so no two playbacks
+// overlap. Synthesis happens outside the mutex so queued requests can be
+// prepared while another playback is still in progress.
+func (s *ttsService) synthesizeAndPlay(ctx context.Context, text string) error {
 	s.logger.Infof("synthesising: %q", text)
 
 	voice := &texttospeechpb.VoiceSelectionParams{
@@ -119,20 +154,47 @@ func (s *ttsService) Say(ctx context.Context, text string) (string, error) {
 		AudioConfig: &texttospeechpb.AudioConfig{AudioEncoding: texttospeechpb.AudioEncoding_LINEAR16},
 	})
 	if err != nil {
-		return "", fmt.Errorf("Google TTS synthesis failed: %w", err)
+		return fmt.Errorf("Google TTS synthesis failed: %w", err)
 	}
 
 	stereo := monoToStereo(resp.AudioContent)
-	err = s.audioOut.Play(ctx, stereo, &utils.AudioInfo{
+
+	s.playMu.Lock()
+	defer s.playMu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	if err := s.audioOut.Play(ctx, stereo, &utils.AudioInfo{
 		Codec:        utils.CodecPCM16,
 		SampleRateHz: defaultSampleRateHz,
 		NumChannels:  2,
-	}, nil)
-	if err != nil {
-		return "", fmt.Errorf("audio_out play failed: %w", err)
+	}, nil); err != nil {
+		return fmt.Errorf("audio_out play failed: %w", err)
 	}
+	return nil
+}
 
-	return text, nil
+// asyncWorker drains the async queue one item at a time, synthesizing and
+// playing each text sequentially. Because it pulls a single item at a time
+// and playback is serialized behind playMu, a queued say_async will only
+// reach the speaker once any prior speech (sync or async) has finished.
+func (s *ttsService) asyncWorker() {
+	defer s.workerWG.Done()
+	for {
+		select {
+		case <-s.workerCtx.Done():
+			return
+		case text := <-s.asyncQueue:
+			if err := s.synthesizeAndPlay(s.workerCtx, text); err != nil {
+				if s.workerCtx.Err() != nil {
+					return
+				}
+				s.logger.Errorf("async say failed for %q: %v", text, err)
+			}
+		}
+	}
 }
 
 func (s *ttsService) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
@@ -143,7 +205,15 @@ func (s *ttsService) DoCommand(ctx context.Context, cmd map[string]interface{}) 
 		}
 		return map[string]interface{}{"text": result}, nil
 	}
-	return nil, fmt.Errorf("unknown command, supported commands: say")
+	if text, ok := cmd["say_async"].(string); ok {
+		select {
+		case s.asyncQueue <- text:
+			return map[string]interface{}{"queued": text}, nil
+		default:
+			return nil, fmt.Errorf("async speech queue is full (capacity %d)", asyncQueueSize)
+		}
+	}
+	return nil, fmt.Errorf("unknown command, supported commands: say, say_async")
 }
 
 // monoToStereo duplicates each LINEAR16 sample so mono PCM becomes stereo.
@@ -162,6 +232,10 @@ func (s *ttsService) Status(ctx context.Context) (map[string]interface{}, error)
 }
 
 func (s *ttsService) Close(ctx context.Context) error {
+	if s.workerCancel != nil {
+		s.workerCancel()
+	}
+	s.workerWG.Wait()
 	if s.ttsClient != nil {
 		return s.ttsClient.Close()
 	}
