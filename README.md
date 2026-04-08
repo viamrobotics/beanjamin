@@ -362,6 +362,18 @@ Returns:
 {"text": "Hello, your espresso is ready!"}
 ```
 
+**`say_async`** — Queue text for playback and return immediately without waiting for synthesis or playback to finish. A background worker drains the queue and plays items sequentially. Audio is only sent to the speaker when no other speech (sync or async) is currently playing, so queued messages will never overlap with an in-flight `say` call. Returns an error if the async queue is full (capacity 64).
+
+```json
+{"say_async": "Hello, your espresso is ready!"}
+```
+
+Returns:
+
+```json
+{"queued": "Hello, your espresso is ready!"}
+```
+
 ---
 
 ## Model: `viam:beanjamin:maintenance-sensor`
