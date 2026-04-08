@@ -1,11 +1,12 @@
 # Beanjamin Module
 
-The `viam:beanjamin` module provides four models for arm-based automation workflows:
+The `viam:beanjamin` module provides five models for arm-based automation workflows:
 
 1. **`viam:beanjamin:coffee`** - A generic service that orchestrates a full coffee brew cycle by sequentially moving through all poses on a pose switcher.
 2. **`viam:beanjamin:multi-poses-execution-switch`** - A switch component that moves an arm between predefined poses using the Motion service.
 3. **`viam:beanjamin:text-to-speech`** - A generic service that synthesises speech via Google Cloud Text-to-Speech and plays it through an audioout service.
 4. **`viam:beanjamin:maintenance-sensor`** - A sensor component that reports whether the system is safe for maintenance (arm idle, no orders running or queued).
+5. **`viam:beanjamin:dial-control-motion`** - A generic service that translates Stream Deck dial inputs into relative arm motions.
 
 ---
 
@@ -188,10 +189,6 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
   "brew_time_sec": 25,
   "place_cup": true,
   "clean_after_use": true,
-  "dial_move_x_mm": 5,
-  "dial_move_y_mm": 5,
-  "dial_move_z_mm": 5,
-  "dial_max_position": 100,
   "save_motion_requests_dir": "/tmp/motion-requests"
 }
 ```
@@ -209,10 +206,6 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
 | `brew_time_sec`            | float  | No       | Brew duration in seconds.                                                                                     |
 | `place_cup`                | bool   | No       | Enable cup placement step in the brew cycle.                                                                  |
 | `clean_after_use`          | bool   | No       | Enable cleaning step after each brew.                                                                         |
-| `dial_move_x_mm`           | float  | No       | Millimeters to move per dial tick on the X axis (for Stream Deck dial control).                               |
-| `dial_move_y_mm`           | float  | No       | Millimeters to move per dial tick on the Y axis.                                                              |
-| `dial_move_z_mm`           | float  | No       | Millimeters to move per dial tick on the Z axis.                                                              |
-| `dial_max_position`        | float  | No       | Maximum dial position value. Defaults to `100`.                                                               |
 | `save_motion_requests_dir` | string | No       | Directory to save motion request payloads for debugging.                                                      |
 
 ### DoCommand
@@ -272,22 +265,6 @@ Returns `{"status": "resumed"}`.
 
 Returns `{"status": "cleared", "removed": 2}`.
 
-**`dial_move_x`** / **`dial_move_y`** / **`dial_move_z`** - Move the arm along an axis using a Stream Deck dial value.
-
-```json
-{"dial_move_x": 50}
-```
-
-Returns `{"status": "moved", "axis": "x", "mm": 5.0}` or `{"status": "dial_initialized", "axis": "x", "position": 50}` on first call (calibration).
-
-**`dial_move_speed`** - Adjust dial movement speed. Updates `dial_move_x_mm`, `dial_move_y_mm`, and `dial_move_z_mm` based on dial input.
-
-```json
-{"dial_move_speed": 75}
-```
-
-Returns `{"status": "speed_updated", "dial_move_x_mm": 7.5, "dial_move_y_mm": 7.5, "dial_move_z_mm": 7.5}`.
-
 **`action`** - Control the gripper. Supported values: `"open_gripper"`, `"close_gripper"`.
 
 ```json
@@ -295,6 +272,60 @@ Returns `{"status": "speed_updated", "dial_move_x_mm": 7.5, "dial_move_y_mm": 7.
 ```
 
 Returns `{"status": "opened"}` or `{"status": "closed", "grabbed": true}`.
+
+---
+
+## Model: `viam:beanjamin:dial-control-motion`
+
+**API:** `rdk:service:generic`
+
+Translates Stream Deck dial inputs into relative arm motions. Each dial tick moves the arm by a configurable number of millimeters along the X, Y, or Z axis, or along the tool's orientation vector. The service tracks the absolute dial position between calls to determine direction (handling rollover at the dial range boundaries).
+
+### Configuration
+
+```json
+{
+  "arm_name": "my-arm",
+  "dial_move_x_mm": 5,
+  "dial_move_y_mm": 5,
+  "dial_move_z_mm": 5,
+  "dial_move_orientation_mm": 5,
+  "dial_max_position": 100
+}
+```
+
+| Name                       | Type   | Required | Description                                                                                    |
+| -------------------------- | ------ | -------- | ---------------------------------------------------------------------------------------------- |
+| `arm_name`                 | string | Yes      | Name of the arm component to move.                                                             |
+| `dial_move_x_mm`           | float  | No       | Millimeters to move per dial tick on the X axis. Defaults to `1`.                              |
+| `dial_move_y_mm`           | float  | No       | Millimeters to move per dial tick on the Y axis. Defaults to `1`.                              |
+| `dial_move_z_mm`           | float  | No       | Millimeters to move per dial tick on the Z axis. Defaults to `1`.                              |
+| `dial_move_orientation_mm` | float  | No       | Millimeters to move per dial tick along the tool's orientation vector. Defaults to `1`.        |
+| `dial_max_position`        | float  | No       | Maximum dial position value, used for rollover detection. Defaults to `100`.                   |
+
+### DoCommand
+
+**`dial_move_x`** / **`dial_move_y`** / **`dial_move_z`** - Move the arm along an axis using a Stream Deck dial value. The first call for a given axis calibrates the dial position and does not move the arm.
+
+```json
+{"dial_move_x": 50}
+```
+
+Returns `{"status": "moved", "axis": "x", "mm": 5.0}` or `{"status": "dial_initialized", "axis": "x", "position": 50}` on first call (calibration).
+
+**`dial_move_orientation`** - Move the arm along its current tool orientation vector.
+
+```json
+{"dial_move_orientation": 50}
+```
+
+**`dial_move_speed`** - Adjust dial movement speed. Updates `dial_move_x_mm`, `dial_move_y_mm`, `dial_move_z_mm`, and `dial_move_orientation_mm` based on dial input.
+
+```json
+{"dial_move_speed": 75}
+```
+
+Returns `{"status": "speed_updated", "dial_move_x_mm": 7.5, "dial_move_y_mm": 7.5, "dial_move_z_mm": 7.5, "dial_move_orientation_mm": 7.5}`.
 
 ---
 

@@ -27,6 +27,12 @@
       "api": "rdk:component:sensor",
       "model": "viam:beanjamin:maintenance-sensor",
       "short_description": "Sensor that reports safe=false when the arm is moving or orders are queued."
+    },
+    {
+      "api": "rdk:service:generic",
+      "model": "viam:beanjamin:dial-control-motion",
+      "short_description": "Translates Stream Deck dial inputs into relative arm motions along the X/Y/Z axes or the tool's orientation vector.",
+      "markdown_link": "README.md#model-viambeanjamindial-control-motion"
     }
   ],
   "entrypoint": "bin/beanjamin",
