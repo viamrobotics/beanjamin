@@ -190,9 +190,12 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
   "brew_time_sec": 25,
   "place_cup": true,
   "clean_after_use": true,
-  "save_motion_requests_dir": "/tmp/motion-requests"
+  "save_motion_requests_dir": "/tmp/motion-requests",
+  "zoo_cam_name": "video-store"
 }
 ```
+
+Configure a [`viam:video:storage`](https://github.com/viam-modules/video-store) camera on the machine. After each successful order, the coffee service issues an async `save` DoCommand so the clip covering the order is uploaded. The save request includes a `tags` entry with the order UUID (for cloud data filtering) and JSON `metadata` with order and customer fields. Clips are queued after every attempt, including failed brews or panics; failures set `order_status` to `failed` and include an `error` string.
 
 **Top-level fields:**
 
@@ -208,6 +211,7 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
 | `place_cup`                | bool   | No       | Enable cup placement step in the brew cycle.                                                                  |
 | `clean_after_use`          | bool   | No       | Enable cleaning step after each brew.                                                                         |
 | `save_motion_requests_dir` | string | No       | Directory to save motion request payloads for debugging.                                                      |
+| `zoo_cam_name`             | string | No       | Name of the “zoo” camera ([`viam:video:storage`](https://github.com/viam-modules/video-store) or compatible); when set, uploads a clip per successful order (async `save`). |
 
 ### DoCommand
 
