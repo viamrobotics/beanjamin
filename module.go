@@ -228,7 +228,17 @@ func (s *beanjaminCoffee) Name() resource.Name {
 }
 
 func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, error) {
-	return map[string]interface{}{}, nil
+	orders := s.queue.List()
+	names := make([]string, len(orders))
+	for i, o := range orders {
+		names[i] = o.CustomerName
+	}
+	return map[string]interface{}{
+		"count":      len(orders),
+		"orders":     names,
+		"is_paused":  s.paused.Load(),
+		"is_running": s.running.Load(),
+	}, nil
 }
 
 func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
@@ -279,17 +289,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 }
 
 func (s *beanjaminCoffee) getQueue() (map[string]interface{}, error) {
-	orders := s.queue.List()
-	names := make([]string, len(orders))
-	for i, o := range orders {
-		names[i] = o.CustomerName
-	}
-	return map[string]interface{}{
-		"count":      len(orders),
-		"orders":     names,
-		"is_paused":  s.paused.Load(),
-		"is_running": s.running.Load(),
-	}, nil
+	return s.Status(context.Background())
 }
 
 func (s *beanjaminCoffee) proceedQueue() (map[string]interface{}, error) {
