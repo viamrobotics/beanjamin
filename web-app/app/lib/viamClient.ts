@@ -67,6 +67,14 @@ export async function getMachineMetadataKey(
   return typeof value === "string" ? value : undefined;
 }
 
+/** Get the human-readable machine name from the Viam app. */
+export async function getMachineName(
+  conn: ViamConnection
+): Promise<string> {
+  const robot = await conn.viamClient.appClient.getRobot(conn.machineId);
+  return robot?.name ?? "";
+}
+
 const COFFEE_SERVICE_NAME = "coffee-lifecycle";
 const CUSTOMER_DETECTOR_SERVICE_NAME = "customer-detector";
 

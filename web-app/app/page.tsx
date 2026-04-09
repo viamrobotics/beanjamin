@@ -11,6 +11,7 @@ import { OrderResult } from "./order/order-result";
 import {
   connectToViam,
   getMachineMetadataKey,
+  getMachineName,
   prepareOrder,
   getQueue,
   identifyCustomer,
@@ -30,6 +31,7 @@ export default function Home() {
   const [queueCount, setQueueCount] = useState(0);
   const [drinkRejection, setDrinkRejection] = useState<string | null>(null);
   const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
+  const [machineName, setMachineName] = useState("Beanjamin");
 
   // Viam connection state
   const viamConn = useRef<ViamConnection | null>(null);
@@ -56,6 +58,13 @@ export default function Home() {
         if (cancelled) return;
         viamConn.current = conn;
         console.log("[app] connected to Viam");
+
+        try {
+          const name = await getMachineName(conn);
+          if (!cancelled && name) setMachineName(name);
+        } catch (err) {
+          console.log("[app] failed to fetch machine name:", err);
+        }
 
         const key = await getMachineMetadataKey(conn, "anthropic_api_key");
         if (cancelled) return;
@@ -204,7 +213,7 @@ export default function Home() {
           className="anim-in-hero text-4xl font-mono font-bold text-neutral-900 mb-4"
           style={{ animationDelay: "500ms" }}
         >
-          Hi, I&apos;m Cappuccina
+          Hi, I&apos;m {machineName}
         </h1>
         <p
           className="anim-in-hero text-neutral-500 text-center mb-10 text-lg"
