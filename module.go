@@ -230,13 +230,18 @@ func (s *beanjaminCoffee) Name() resource.Name {
 
 func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, error) {
 	orders := s.queue.List()
-	names := make([]string, len(orders))
+	orderMaps := make([]map[string]interface{}, len(orders))
 	for i, o := range orders {
-		names[i] = o.CustomerName
+		orderMaps[i] = map[string]interface{}{
+			"id":            o.ID,
+			"drink":         o.Drink,
+			"customer_name": o.CustomerName,
+			"enqueued_at":   o.EnqueuedAt.Format(time.RFC3339),
+		}
 	}
 	return map[string]interface{}{
 		"count":      len(orders),
-		"orders":     names,
+		"orders":     orderMaps,
 		"is_paused":  s.paused.Load(),
 		"is_running": s.running.Load(),
 	}, nil

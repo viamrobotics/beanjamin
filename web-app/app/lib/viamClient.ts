@@ -130,11 +130,33 @@ export async function getMachineMetadataKey(
   return typeof value === "string" ? value : undefined;
 }
 
-export async function getQueue(
-  conn: ViamConnection
-): Promise<{ count: number; orders: string[]; is_paused: boolean }> {
+export interface QueueOrder {
+  id: string;
+  drink: string;
+  customer_name: string;
+  enqueued_at: string;
+}
+
+export interface QueueStatus {
+  count: number;
+  orders: QueueOrder[];
+  is_paused: boolean;
+  is_running: boolean;
+}
+
+export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
   if (isDevMode()) {
-    return { count: devQueue.length, orders: [...devQueue], is_paused: false };
+    return {
+      count: devQueue.length,
+      orders: devQueue.map((name, i) => ({
+        id: `dev-${i}`,
+        drink: "espresso",
+        customer_name: name,
+        enqueued_at: new Date().toISOString(),
+      })),
+      is_paused: false,
+      is_running: devQueue.length > 0,
+    };
   }
 
   const sdk = await loadSDK();
@@ -142,13 +164,8 @@ export async function getQueue(
     conn.robotClient,
     COFFEE_SERVICE_NAME
   );
-  const command = sdk.Struct.fromJson({ get_queue: {} });
-  const result = await coffeeService.doCommand(command);
-  return result as unknown as {
-    count: number;
-    orders: string[];
-    is_paused: boolean;
-  };
+  const result = await coffeeService.getStatus();
+  return result as unknown as QueueStatus;
 }
 
 export async function prepareOrder(
