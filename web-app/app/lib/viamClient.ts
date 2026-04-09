@@ -18,7 +18,10 @@ function isDevMode(): boolean {
   );
 }
 
-// Simulated queue: orders are "processed" every 10 seconds
+// Simulated queue: each order takes DEV_ORDER_DURATION_MS to process
+const DEV_ORDER_DURATION_MS = 15_000;
+const DEV_STEPS = ["Grinding", "Tamping", "Locking portafilter", "Brewing", "Serving"];
+
 interface DevOrder {
   id: string;
   name: string;
@@ -26,10 +29,12 @@ interface DevOrder {
 const devQueue: DevOrder[] = [];
 let devOrderCounter = 0;
 let devProcessing = false;
+let devProcessingStartedAt = 0;
 
 function startDevProcessing() {
   if (devProcessing) return;
   devProcessing = true;
+  devProcessingStartedAt = Date.now();
   const tick = () => {
     if (devQueue.length === 0) {
       devProcessing = false;
@@ -37,10 +42,23 @@ function startDevProcessing() {
     }
     setTimeout(() => {
       devQueue.shift();
+      // Start timing the next order
+      devProcessingStartedAt = Date.now();
       tick();
-    }, 10_000);
+    }, DEV_ORDER_DURATION_MS);
   };
   tick();
+}
+
+function getDevStep(): string {
+  if (!devProcessing || devQueue.length === 0) return "";
+  const elapsed = Date.now() - devProcessingStartedAt;
+  const stepDuration = DEV_ORDER_DURATION_MS / DEV_STEPS.length;
+  const stepIndex = Math.min(
+    Math.floor(elapsed / stepDuration),
+    DEV_STEPS.length - 1
+  );
+  return DEV_STEPS[stepIndex];
 }
 
 // --------------- Lazy SDK loader ---------------
@@ -150,13 +168,8 @@ export interface QueueStatus {
   current_step: string;
 }
 
-const DEV_STEPS = ["Grinding", "Tamping", "Brewing", "Serving", "Cleaning"];
-
 export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
   if (isDevMode()) {
-    const step = devQueue.length > 0
-      ? DEV_STEPS[Math.floor(Date.now() / 3000) % DEV_STEPS.length]
-      : "";
     return {
       count: devQueue.length,
       orders: devQueue.map((o) => ({
@@ -167,7 +180,7 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
       })),
       is_paused: false,
       is_running: devQueue.length > 0,
-      current_step: step,
+      current_step: getDevStep(),
     };
   }
 

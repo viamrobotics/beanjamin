@@ -146,7 +146,7 @@
 
 .anim-fade-out {
   animation: fade-out 500ms ease forwards;
-  animation-delay: 4500ms;
+  animation-delay: 14500ms;
 }
 
 /* Order tracker: pulse for "making" status dot */
