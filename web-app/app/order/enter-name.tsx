@@ -1,10 +1,7 @@
-import { QueueIndicator } from "./queue-indicator";
-
 export function EnterName({
   name,
   email,
   loading,
-  queueCount,
   onNameChange,
   onEmailChange,
   onSubmit,
@@ -12,14 +9,12 @@ export function EnterName({
   name: string;
   email: string;
   loading: boolean;
-  queueCount: number;
   onNameChange: (name: string) => void;
   onEmailChange: (email: string) => void;
   onSubmit: () => void;
 }) {
   return (
-    <main className="relative h-dvh bg-white flex flex-col items-center justify-center p-8 font-sans">
-      <QueueIndicator count={queueCount} />
+    <main className="relative h-full bg-white flex flex-col items-center justify-center p-8 font-sans">
       <div className="w-full max-w-[512px] flex flex-col gap-10">
         <h1 className="anim-in text-2xl font-semibold text-neutral-900 text-center">
           What&apos;s your name?

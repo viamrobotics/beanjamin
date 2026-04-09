@@ -2,24 +2,20 @@
 
 import Image from "next/image";
 import { DRINKS } from "./drinks";
-import { QueueIndicator } from "./queue-indicator";
 
 export function ChooseDrink({
   selectedDrink,
-  queueCount,
   rejection,
   onSelect,
   onNext,
 }: {
   selectedDrink: string | null;
-  queueCount: number;
   rejection: string | null;
   onSelect: (id: string) => void;
   onNext: () => void;
 }) {
   return (
-    <main className="relative h-dvh bg-white flex flex-col items-center justify-center p-8 font-sans">
-      <QueueIndicator count={queueCount} />
+    <main className="relative h-full bg-white flex flex-col items-center justify-center p-8 font-sans">
       <div className="flex flex-col gap-10 w-full max-w-[512px]">
         <h1 className="anim-in text-2xl font-semibold text-[#0a0a0a] text-center">
           Choose your drink
