@@ -53,10 +53,10 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "data_dir")
 	}
 	return []string{
-		camera.Named(cfg.CameraName).String(),
-	}, []string{
-		vision.Named(cfg.VisionServiceName).String(),
-	}, nil
+			camera.Named(cfg.CameraName).String(),
+		}, []string{
+			vision.Named(cfg.VisionServiceName).String(),
+		}, nil
 }
 
 // customerRecord stores metadata about a registered customer.
@@ -69,16 +69,16 @@ type customerRecord struct {
 type customerDetector struct {
 	resource.AlwaysRebuild
 
-	name            resource.Name
-	logger          logging.Logger
-	camera          camera.Camera
-	dataDir         string
-	threshold       float64
-	visionName      string
+	name       resource.Name
+	logger     logging.Logger
+	camera     camera.Camera
+	dataDir    string
+	threshold  float64
+	visionName string
 
-	mu              sync.RWMutex
-	customers       map[string]*customerRecord // keyed by email
-	vision          vision.Service // lazily resolved; may be nil at startup
+	mu        sync.RWMutex
+	customers map[string]*customerRecord // keyed by email
+	vision    vision.Service             // lazily resolved; may be nil at startup
 }
 
 func newCustomerDetector(
@@ -204,10 +204,12 @@ func (cd *customerDetector) registerCustomer(ctx context.Context, name, email st
 		return nil, fmt.Errorf("failed to create face image file: %w", err)
 	}
 	if err := jpeg.Encode(f, img, &jpeg.Options{Quality: 90}); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("failed to encode face image: %w", err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("failed to write face image: %w", err)
+	}
 
 	cd.logger.Infof("saved face image for %q at %s", email, imgPath)
 
@@ -292,8 +294,8 @@ func (cd *customerDetector) identifyCustomer(ctx context.Context) (map[string]in
 
 	if bestLabel == "" {
 		return map[string]interface{}{
-			"identified":    false,
-			"message":       "no known customer detected",
+			"identified":     false,
+			"message":        "no known customer detected",
 			"num_detections": len(detections),
 		}, nil
 	}
