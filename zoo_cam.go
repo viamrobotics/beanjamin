@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+// Fixed clip padding around each order (not configurable). Pre-roll is limited by the camera ring buffer;
+// trail waits before save so post-order seconds are still recorded (blocks the next queued order briefly).
+const (
+	zooCamClipLead  = 5 * time.Second
+	zooCamClipTrail = 5 * time.Second
+)
+
 // formatClipTimestampUTC formats t for video-store save/fetch DoCommand (UTC, ...Z).
 func formatClipTimestampUTC(t time.Time) string {
 	return t.UTC().Format("2006-01-02_15-04-05") + "Z"
@@ -34,10 +41,18 @@ func (s *beanjaminCoffee) saveOrderVideo(ctx context.Context, order Order, from 
 		s.logger.Warnf("zoo cam: skip save for order %s: metadata: %v", order.ID, err)
 		return
 	}
+	clipFrom := from.Add(-zooCamClipLead)
+	s.mu.Lock()
+	trailCtx := s.cancelCtx
+	s.mu.Unlock()
+	if err := sleepUntil(trailCtx, zooCamClipTrail); err != nil {
+		s.logger.Warnf("zoo cam: trail wait interrupted for order %s: %v", order.ID, err)
+		return
+	}
 	to := time.Now().UTC()
 	cmd := map[string]interface{}{
 		"command":  "save",
-		"from":     formatClipTimestampUTC(from),
+		"from":     formatClipTimestampUTC(clipFrom),
 		"to":       formatClipTimestampUTC(to),
 		"metadata": string(meta),
 		"tags":     []string{order.ID},
@@ -49,4 +64,17 @@ func (s *beanjaminCoffee) saveOrderVideo(ctx context.Context, order Order, from 
 		return
 	}
 	s.logger.Infof("zoo cam: queued upload for order %s (response: %+v)", order.ID, resp)
+}
+
+// sleepUntil waits for d unless ctx is cancelled first. It uses time.NewTimer (not time.After) so a
+// cancelled context does not leave a timer running until d elapses.
+func sleepUntil(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
