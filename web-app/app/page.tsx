@@ -5,7 +5,8 @@ import Image from "next/image";
 import { DRINKS } from "./order/drinks";
 import { ChooseDrink } from "./order/choose-drink";
 import { EnterName } from "./order/enter-name";
-import { FaceRegister } from "./order/face-register";
+import dynamic from "next/dynamic";
+const FaceRegister = dynamic(() => import("./order/face-register").then(m => ({ default: m.FaceRegister })), { ssr: false });
 import { OrderConfirmation } from "./order/order-confirmation";
 import { OrderTracker } from "./order/order-tracker";
 import {
