@@ -121,6 +121,7 @@ type beanjaminCoffee struct {
 	cancelCtx              context.Context
 	cancelFunc             func()
 	running                atomic.Bool
+	currentStep            atomic.Value // string: current step label for the active order
 	queue                  *OrderQueue
 	queueStop              chan struct{}
 	paused                 atomic.Bool
@@ -228,6 +229,10 @@ func (s *beanjaminCoffee) Name() resource.Name {
 	return s.name
 }
 
+func (s *beanjaminCoffee) setStep(step string) {
+	s.currentStep.Store(step)
+}
+
 func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, error) {
 	orders := s.queue.List()
 	orderMaps := make([]map[string]interface{}, len(orders))
@@ -239,11 +244,13 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 			"enqueued_at":   o.EnqueuedAt.Format(time.RFC3339),
 		}
 	}
+	step, _ := s.currentStep.Load().(string)
 	return map[string]interface{}{
-		"count":      len(orders),
-		"orders":     orderMaps,
-		"is_paused":  s.paused.Load(),
-		"is_running": s.running.Load(),
+		"count":        len(orders),
+		"orders":       orderMaps,
+		"is_paused":    s.paused.Load(),
+		"is_running":   s.running.Load(),
+		"current_step": step,
 	}, nil
 }
 

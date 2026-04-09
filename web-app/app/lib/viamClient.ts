@@ -19,7 +19,12 @@ function isDevMode(): boolean {
 }
 
 // Simulated queue: orders are "processed" every 10 seconds
-const devQueue: string[] = [];
+interface DevOrder {
+  id: string;
+  name: string;
+}
+const devQueue: DevOrder[] = [];
+let devOrderCounter = 0;
 let devProcessing = false;
 
 function startDevProcessing() {
@@ -142,20 +147,27 @@ export interface QueueStatus {
   orders: QueueOrder[];
   is_paused: boolean;
   is_running: boolean;
+  current_step: string;
 }
+
+const DEV_STEPS = ["Grinding", "Tamping", "Brewing", "Serving", "Cleaning"];
 
 export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
   if (isDevMode()) {
+    const step = devQueue.length > 0
+      ? DEV_STEPS[Math.floor(Date.now() / 3000) % DEV_STEPS.length]
+      : "";
     return {
       count: devQueue.length,
-      orders: devQueue.map((name, i) => ({
-        id: `dev-${i}`,
+      orders: devQueue.map((o) => ({
+        id: o.id,
         drink: "espresso",
-        customer_name: name,
+        customer_name: o.name,
         enqueued_at: new Date().toISOString(),
       })),
       is_paused: false,
       is_running: devQueue.length > 0,
+      current_step: step,
     };
   }
 
@@ -179,13 +191,14 @@ export async function prepareOrder(
 ): Promise<{ status: string; queue_position?: number; order_id?: string }> {
   if (isDevMode()) {
     if (opts.customerName) {
-      devQueue.push(opts.customerName);
+      const id = `dev-${++devOrderCounter}`;
+      devQueue.push({ id, name: opts.customerName });
       startDevProcessing();
-      console.log("[dev] order queued:", opts.customerName, "queue:", [...devQueue]);
+      console.log("[dev] order queued:", opts.customerName, "id:", id, "queue:", devQueue.map((o) => o.name));
     }
     return {
       status: "queued",
-      order_id: `dev-${Date.now()}`,
+      order_id: `dev-${devOrderCounter}`,
       queue_position: devQueue.length,
     };
   }

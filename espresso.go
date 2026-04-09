@@ -111,23 +111,28 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 	s.logger.Infof("starting %s preparation (place_cup=%t, clean_after_use=%t, brew_time=%v)",
 		drink, s.cfg.PlaceCup, s.cfg.CleanAfterUse, brewTime)
 
+	s.setStep("Grinding")
 	s.logger.Infof("step 1/9: grinding coffee")
 	if err := s.grindCoffee(ctx, cancelCtx); err != nil {
 		return err
 	}
+	s.setStep("Tamping")
 	s.logger.Infof("step 2/9: tamping ground")
 	if err := s.tampGround(ctx, cancelCtx); err != nil {
 		return err
 	}
+	s.setStep("Locking portafilter")
 	s.logger.Infof("step 3/9: locking portafilter")
 	if err := s.lockPortaFilter(ctx, cancelCtx); err != nil {
 		return err
 	}
+	s.setStep("Releasing filter")
 	s.logger.Infof("step 4/9: releasing filter")
 	if err := s.releaseFilter(ctx, cancelCtx); err != nil {
 		return err
 	}
 	if s.cfg.PlaceCup {
+		s.setStep("Placing cup")
 		s.logger.Infof("step 5/9: placing cup (place_cup=true)")
 		if err := s.setCupForCoffee(ctx, cancelCtx); err != nil {
 			return err
@@ -135,6 +140,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 	} else {
 		s.logger.Infof("step 5/9: skipping cup placement (place_cup=false)")
 	}
+	s.setStep("Brewing")
 	s.logger.Infof("step 6/9: brewing %s", drink)
 	if err := s.say(ctx, pickAlmostReady()); err != nil {
 		s.logger.Warnf("failed to say almost-ready: %v", err)
@@ -144,6 +150,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 	}
 
 	if s.cfg.PlaceCup {
+		s.setStep("Serving")
 		s.logger.Infof("step 6b/9: giving full cup to customer (place_cup=true)")
 		if err := s.giveFullCupToCustomer(ctx, cancelCtx); err != nil {
 			return err
@@ -155,15 +162,18 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		s.logger.Infof("step 6b/9: skipping cup handoff (place_cup=false)")
 	}
 
+	s.setStep("Grabbing filter")
 	s.logger.Infof("step 7/9: grabbing filter")
 	if err := s.grabFilter(ctx, cancelCtx); err != nil {
 		return err
 	}
+	s.setStep("Unlocking portafilter")
 	s.logger.Infof("step 8/9: unlocking portafilter")
 	if err := s.unlockPortaFilter(ctx, cancelCtx); err != nil {
 		return err
 	}
 	if s.cfg.CleanAfterUse {
+		s.setStep("Cleaning")
 		s.logger.Infof("post: cleaning portafilter (clean_after_use=true)")
 		if !s.cfg.PlaceCup {
 			s.logger.Infof("post: waiting for manual cup removal (place_cup=false)")
@@ -179,6 +189,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		s.logger.Infof("post: skipping cleaning (clean_after_use=false)")
 	}
 
+	s.setStep("Finishing up")
 	s.logger.Infof("step 9/9: moving to home pose")
 	homeStep := Step{PoseName: "home", Component: "filter"}
 	if err := s.executeStep(ctx, cancelCtx, homeStep); err != nil {

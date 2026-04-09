@@ -16,6 +16,7 @@ interface OrderTrackerProps {
 export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
   const [queueOrders, setQueueOrders] = useState<QueueOrder[]>([]);
   const [doneOrders, setDoneOrders] = useState<DoneOrder[]>([]);
+  const [currentStep, setCurrentStep] = useState("");
   const prevOrderIds = useRef<string[]>([]);
   const prevOrderMap = useRef<Map<string, QueueOrder>>(new Map());
   const hasPolled = useRef(false);
@@ -42,6 +43,7 @@ export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
       prevOrderIds.current = currentIds;
       prevOrderMap.current = new Map(current.map((o) => [o.id, o]));
       setQueueOrders(current);
+      setCurrentStep(q.current_step || "");
       hasPolled.current = true;
     } catch {
       // ignore polling errors
@@ -107,7 +109,7 @@ export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
               <div className="flex items-center gap-2 mt-1">
                 <span className="pulse-making inline-block w-2 h-2 rounded-full bg-amber-500" />
                 <span className="text-xs font-mono font-medium text-amber-600 uppercase tracking-wider">
-                  Making...
+                  {currentStep || "Making..."}
                 </span>
               </div>
             ) : (
