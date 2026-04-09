@@ -182,7 +182,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(order Order) {
 		}
 	}
 
-	if err := s.prepareEspresso(ctx, order.CustomerName); err != nil {
+	if err := s.prepareDrink(ctx, order.Drink, order.CustomerName); err != nil {
 		s.logger.Errorf("order %s for %s failed: %v", order.ID, order.CustomerName, err)
 		return
 	}
@@ -211,7 +211,9 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}
 	customerName, _ := order["customer_name"].(string)
 	s.logger.Infof("order request: drink=%q customer=%q", drink, customerName)
 
-	if drink != "espresso" {
+	switch drink {
+	case "espresso", "lungo":
+	default:
 		s.logger.Infof("rejected order for unsupported drink %q from %s", drink, customerName)
 		msg := pickUnsupportedDrink(drink)
 		if err := s.say(ctx, msg); err != nil {
@@ -224,7 +226,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}
 	completionStatement, _ := order["completion_statement"].(string)
 
 	if initialGreeting == "" {
-		initialGreeting = pickGreeting(customerName)
+		initialGreeting = pickGreeting(drink, customerName)
 	}
 
 	o := NewOrder(drink, customerName, initialGreeting, completionStatement)

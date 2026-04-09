@@ -5,73 +5,74 @@ import (
 	"math/rand"
 )
 
+// Greeting templates use indexed format verbs: %[1]s = drink name, %[2]s = customer name.
 var greetingsAnonymous = []string{
-	"One espresso coming right up!",
-	"Great choice! Let me prepare your espresso.",
-	"Espresso time! Let's get brewing.",
-	"Coming right up! One freshly made espresso.",
-	"Let me whip up an espresso for you!",
+	"One %[1]s coming right up!",
+	"Great choice! Let me prepare your %[1]s.",
+	"It's %[1]s time! Let's get brewing.",
+	"Coming right up! One freshly made %[1]s.",
+	"Let me whip up your %[1]s!",
 }
 
 var greetingsNamed = []string{
-	"Hey %s! One espresso coming right up!",
-	"Great choice, %s! Let me prepare your espresso.",
-	"%s, espresso time! Let's get brewing.",
-	"Coming right up, %s! One freshly made espresso.",
-	"Let me whip up an espresso for you, %s!",
+	"Hey %[2]s! One %[1]s coming right up!",
+	"Great choice, %[2]s! Let me prepare your %[1]s.",
+	"%[2]s, it's %[1]s time! Let's get brewing.",
+	"Coming right up, %[2]s! One freshly made %[1]s.",
+	"Let me whip up your %[1]s, %[2]s!",
 }
 
 var almostReadyAnonymous = []string{
-	"Your espresso is almost ready!",
+	"Your coffee is almost ready!",
 	"Almost there! Just a moment.",
-	"Hang tight, your espresso is nearly done!",
-	"Just putting the finishing touches on your espresso.",
-	"Your espresso is coming together!",
+	"Hang tight, it's nearly done!",
+	"Just putting the finishing touches on your drink.",
+	"Your coffee is coming together!",
 }
 
-var espressoReadyAnonymous = []string{
-	"Your espresso is ready!",
-	"Here you go, one fresh espresso!",
-	"Espresso is served!",
+var drinkReadyAnonymous = []string{
+	"Your %[1]s is ready!",
+	"Here you go, one fresh %[1]s!",
+	"Your %[1]s is served!",
 }
 
-var espressoReadyNamed = []string{
-	"%s, your espresso is ready!",
-	"Here you go %s, one fresh espresso!",
-	"Espresso for %s is served!",
+var drinkReadyNamed = []string{
+	"%[2]s, your %[1]s is ready!",
+	"Here you go %[2]s, one fresh %[1]s!",
+	"%[1]s for %[2]s is served!",
 }
 
 var unsupportedDrink = []string{
 	// polite
-	"I'm sorry, I cannot make a %s at the moment. May I offer you an espresso instead?",
-	"Unfortunately, %s isn't on the menu yet. How about a nice espresso?",
+	"I'm sorry, I cannot make a %s at the moment. May I offer you an espresso or a lungo instead?",
+	"Unfortunately, %s isn't on the menu yet. How about a nice espresso or lungo?",
 	// cheeky
-	"A %s? Bold request. I only do espresso, and I do it well.",
-	"Look, I'm a one-trick pony and that trick is espresso. %s is not in my repertoire.",
+	"A %s? Bold request. I do espresso and lungo, and I do them well.",
+	"Look, I'm a focused machine. Espresso or lungo. %s is not in my repertoire.",
 	// sassy
-	"Oh, you wanted a %s? That's cute. I make espresso. Period.",
-	"%s? Do I look like a vending machine? Espresso. That's the deal.",
+	"Oh, you wanted a %s? That's cute. Espresso or lungo. Pick one.",
+	"%s? Do I look like a vending machine? Espresso or lungo. That's the deal.",
 	// unhinged
-	"A %s?! In THIS economy?! You're getting an espresso and you'll like it.",
-	"Did you just ask me for a %s? I have one arm and zero patience. Espresso or nothing.",
+	"A %s?! In THIS economy?! You're getting an espresso or a lungo and you'll like it.",
+	"Did you just ask me for a %s? I have one arm and zero patience. Espresso, lungo, or nothing.",
 }
 
-func pickGreeting(customerName string) string {
+func pickGreeting(drink, customerName string) string {
 	if customerName != "" {
-		return fmt.Sprintf(greetingsNamed[rand.Intn(len(greetingsNamed))], customerName)
+		return fmt.Sprintf(greetingsNamed[rand.Intn(len(greetingsNamed))], drink, customerName)
 	}
-	return greetingsAnonymous[rand.Intn(len(greetingsAnonymous))]
+	return fmt.Sprintf(greetingsAnonymous[rand.Intn(len(greetingsAnonymous))], drink)
 }
 
 func pickAlmostReady() string {
 	return almostReadyAnonymous[rand.Intn(len(almostReadyAnonymous))]
 }
 
-func pickEspressoReady(customerName string) string {
+func pickDrinkReady(drink, customerName string) string {
 	if customerName != "" {
-		return fmt.Sprintf(espressoReadyNamed[rand.Intn(len(espressoReadyNamed))], customerName)
+		return fmt.Sprintf(drinkReadyNamed[rand.Intn(len(drinkReadyNamed))], drink, customerName)
 	}
-	return espressoReadyAnonymous[rand.Intn(len(espressoReadyAnonymous))]
+	return fmt.Sprintf(drinkReadyAnonymous[rand.Intn(len(drinkReadyAnonymous))], drink)
 }
 
 func pickUnsupportedDrink(drink string) string {

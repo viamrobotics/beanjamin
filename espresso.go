@@ -96,7 +96,7 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 	return map[string]interface{}{"status": "complete", "action": name}, nil
 }
 
-func (s *beanjaminCoffee) prepareEspresso(ctx context.Context, customerName string) error {
+func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName string) error {
 	if !s.running.CompareAndSwap(false, true) {
 		return errors.New("a sequence is already running")
 	}
@@ -106,8 +106,10 @@ func (s *beanjaminCoffee) prepareEspresso(ctx context.Context, customerName stri
 	cancelCtx := s.cancelCtx
 	s.mu.Unlock()
 
-	s.logger.Infof("starting espresso preparation (place_cup=%t, clean_after_use=%t, brew_time_sec=%v)",
-		s.cfg.PlaceCup, s.cfg.CleanAfterUse, s.cfg.BrewTimeSec)
+	brewTime := s.drinkBrewTime(drink)
+
+	s.logger.Infof("starting %s preparation (place_cup=%t, clean_after_use=%t, brew_time=%v)",
+		drink, s.cfg.PlaceCup, s.cfg.CleanAfterUse, brewTime)
 
 	s.logger.Infof("step 1/9: grinding coffee")
 	if err := s.grindCoffee(ctx, cancelCtx); err != nil {
@@ -133,11 +135,11 @@ func (s *beanjaminCoffee) prepareEspresso(ctx context.Context, customerName stri
 	} else {
 		s.logger.Infof("step 5/9: skipping cup placement (place_cup=false)")
 	}
-	s.logger.Infof("step 6/9: brewing coffee")
+	s.logger.Infof("step 6/9: brewing %s", drink)
 	if err := s.say(ctx, pickAlmostReady()); err != nil {
 		s.logger.Warnf("failed to say almost-ready: %v", err)
 	}
-	if err := s.brewCoffee(ctx, cancelCtx); err != nil {
+	if err := s.brew(ctx, cancelCtx, brewTime); err != nil {
 		return err
 	}
 
@@ -146,8 +148,8 @@ func (s *beanjaminCoffee) prepareEspresso(ctx context.Context, customerName stri
 		if err := s.giveFullCupToCustomer(ctx, cancelCtx); err != nil {
 			return err
 		}
-		if err := s.say(ctx, pickEspressoReady(customerName)); err != nil {
-			s.logger.Warnf("failed to say espresso-ready: %v", err)
+		if err := s.say(ctx, pickDrinkReady(drink, customerName)); err != nil {
+			s.logger.Warnf("failed to say drink-ready: %v", err)
 		}
 	} else {
 		s.logger.Infof("step 6b/9: skipping cup handoff (place_cup=false)")
@@ -183,7 +185,7 @@ func (s *beanjaminCoffee) prepareEspresso(ctx context.Context, customerName stri
 		return err
 	}
 
-	s.logger.Infof("espresso preparation complete")
+	s.logger.Infof("%s preparation complete", drink)
 	return nil
 }
 
@@ -450,15 +452,17 @@ func (s *beanjaminCoffee) turnCoffeeButtonOff(ctx, cancelCtx context.Context) er
 	return nil
 }
 
+// brewCoffee is the execute_action entry point — uses the espresso default brew time.
 func (s *beanjaminCoffee) brewCoffee(ctx, cancelCtx context.Context) error {
+	return s.brew(ctx, cancelCtx, s.drinkBrewTime("espresso"))
+}
+
+// brew presses the coffee button, waits for the given duration, then releases.
+func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, brewTime time.Duration) error {
 	if err := s.turnCoffeeButtonOn(ctx, cancelCtx); err != nil {
 		return fmt.Errorf("brew_coffee: %w", err)
 	}
-	brewTime := 8 * time.Second
-	if s.cfg.BrewTimeSec > 0 {
-		brewTime = time.Duration(s.cfg.BrewTimeSec * float64(time.Second))
-	}
-	s.logger.Infof("waiting %s for espresso to brew", brewTime)
+	s.logger.Infof("waiting %s for coffee to brew", brewTime)
 	select {
 	case <-time.After(brewTime):
 	case <-ctx.Done():
@@ -470,6 +474,27 @@ func (s *beanjaminCoffee) brewCoffee(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("brew_coffee: %w", err)
 	}
 	return nil
+}
+
+const (
+	defaultEspressoBrewTime = 8 * time.Second
+	defaultLungoBrewTime    = 15 * time.Second
+)
+
+// drinkBrewTime returns the configured or default brew duration for the given drink.
+func (s *beanjaminCoffee) drinkBrewTime(drink string) time.Duration {
+	switch drink {
+	case "lungo":
+		if s.cfg.LungoBrewTimeSec > 0 {
+			return time.Duration(s.cfg.LungoBrewTimeSec * float64(time.Second))
+		}
+		return defaultLungoBrewTime
+	default:
+		if s.cfg.BrewTimeSec > 0 {
+			return time.Duration(s.cfg.BrewTimeSec * float64(time.Second))
+		}
+		return defaultEspressoBrewTime
+	}
 }
 
 func (s *beanjaminCoffee) cleanPortafilter(ctx, cancelCtx context.Context) error {
