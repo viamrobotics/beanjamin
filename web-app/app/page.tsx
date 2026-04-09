@@ -30,6 +30,7 @@ export default function Home() {
   const [drinkRejection, setDrinkRejection] = useState<string | null>(null);
   const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
   const [showTracker, setShowTracker] = useState(false);
+  const orderIds = useRef<Record<string, string>>({});
 
   // Viam connection state
   const viamConn = useRef<ViamConnection | null>(null);
@@ -134,7 +135,13 @@ export default function Home() {
         drinkLabel: drink?.label ?? selectedDrink!,
         customerName: misspelledName,
         pronunciation: undefined,
-      }).catch((err) => console.error("prepare_order failed:", err));
+      })
+        .then((res) => {
+          if (res.order_id) {
+            orderIds.current[misspelledName] = res.order_id;
+          }
+        })
+        .catch((err) => console.error("prepare_order failed:", err));
     }
   }
 
@@ -306,6 +313,7 @@ export default function Home() {
         <div className="w-[340px] shrink-0 border-l border-neutral-200">
           <OrderTracker
             viamConn={viamConn.current}
+            orderIds={orderIds.current}
             onEmpty={handleTrackerEmpty}
           />
         </div>

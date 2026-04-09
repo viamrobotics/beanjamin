@@ -10,13 +10,15 @@ interface DoneOrder {
 
 interface OrderTrackerProps {
   viamConn: ViamConnection | null;
+  orderIds: Record<string, string>;
   onEmpty: () => void;
 }
 
-export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
+export function OrderTracker({ viamConn, orderIds, onEmpty }: OrderTrackerProps) {
   const [queueOrders, setQueueOrders] = useState<string[]>([]);
   const [doneOrders, setDoneOrders] = useState<DoneOrder[]>([]);
   const prevOrders = useRef<string[]>([]);
+  const hasPolled = useRef(false);
 
   const poll = useCallback(async () => {
     if (!viamConn) return;
@@ -35,6 +37,7 @@ export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
 
       prevOrders.current = current;
       setQueueOrders(current);
+      hasPolled.current = true;
     } catch {
       // ignore polling errors
     }
@@ -58,9 +61,9 @@ export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
     return () => clearInterval(timer);
   }, [doneOrders.length]);
 
-  // Notify parent when queue and done list are both empty
+  // Notify parent when queue and done list are both empty (but only after first poll)
   useEffect(() => {
-    if (queueOrders.length === 0 && doneOrders.length === 0) {
+    if (hasPolled.current && queueOrders.length === 0 && doneOrders.length === 0) {
       onEmpty();
     }
   }, [queueOrders.length, doneOrders.length, onEmpty]);
@@ -79,52 +82,72 @@ export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
 
       <div className="flex-1 overflow-y-auto space-y-3">
         {/* Active queue orders */}
-        {queueOrders.map((name, i) => (
-          <div
-            key={`q-${name}-${i}`}
-            className="anim-slide-in rounded-2xl bg-white border border-neutral-200 px-5 py-4"
-          >
-            <p
-              className="text-lg text-neutral-900 truncate"
-              style={{ fontFamily: "var(--font-just-me), cursive" }}
+        {queueOrders.map((name, i) => {
+          const orderId = orderIds[name];
+          return (
+            <div
+              key={`q-${name}-${i}`}
+              className="anim-slide-in rounded-2xl bg-white border border-neutral-200 px-5 py-4"
             >
-              {name}
-            </p>
-            {i === 0 ? (
-              <div className="flex items-center gap-2 mt-1">
-                <span className="pulse-making inline-block w-2 h-2 rounded-full bg-amber-500" />
-                <span className="text-xs font-mono font-medium text-amber-600 uppercase tracking-wider">
-                  Making...
-                </span>
+              <div className="flex items-baseline justify-between gap-2">
+                <p
+                  className="text-lg text-neutral-900 truncate"
+                  style={{ fontFamily: "var(--font-just-me), cursive" }}
+                >
+                  {name}
+                </p>
+                {orderId && (
+                  <span className="text-[10px] font-mono text-neutral-300 shrink-0">
+                    {orderId.slice(0, 8)}
+                  </span>
+                )}
               </div>
-            ) : (
-              <p className="text-xs font-mono text-neutral-400 mt-1 uppercase tracking-wider">
-                In queue &middot; #{i + 1}
-              </p>
-            )}
-          </div>
-        ))}
+              {i === 0 ? (
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="pulse-making inline-block w-2 h-2 rounded-full bg-amber-500" />
+                  <span className="text-xs font-mono font-medium text-amber-600 uppercase tracking-wider">
+                    Making...
+                  </span>
+                </div>
+              ) : (
+                <p className="text-xs font-mono text-neutral-400 mt-1 uppercase tracking-wider">
+                  In queue &middot; #{i + 1}
+                </p>
+              )}
+            </div>
+          );
+        })}
 
         {/* Done orders (fading out) */}
-        {doneOrders.map((order) => (
-          <div
-            key={`done-${order.name}-${order.removedAt}`}
-            className="anim-fade-out rounded-2xl bg-white border border-emerald-200 px-5 py-4"
-          >
-            <p
-              className="text-lg text-neutral-900 truncate"
-              style={{ fontFamily: "var(--font-just-me), cursive" }}
+        {doneOrders.map((order) => {
+          const orderId = orderIds[order.name];
+          return (
+            <div
+              key={`done-${order.name}-${order.removedAt}`}
+              className="anim-fade-out rounded-2xl bg-white border border-emerald-200 px-5 py-4"
             >
-              {order.name}
-            </p>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-emerald-500 text-sm">&#10003;</span>
-              <span className="text-xs font-mono font-medium text-emerald-600 uppercase tracking-wider">
-                Ready!
-              </span>
+              <div className="flex items-baseline justify-between gap-2">
+                <p
+                  className="text-lg text-neutral-900 truncate"
+                  style={{ fontFamily: "var(--font-just-me), cursive" }}
+                >
+                  {order.name}
+                </p>
+                {orderId && (
+                  <span className="text-[10px] font-mono text-neutral-300 shrink-0">
+                    {orderId.slice(0, 8)}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-emerald-500 text-sm">&#10003;</span>
+                <span className="text-xs font-mono font-medium text-emerald-600 uppercase tracking-wider">
+                  Ready!
+                </span>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
