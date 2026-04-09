@@ -23,6 +23,9 @@ import (
 // Model is the full model triplet for this service.
 var Model = resource.NewModel("viam", "beanjamin", "customer-detector")
 
+// knownFacesDir is the subdirectory under DataDir where face images are stored.
+const knownFacesDir = "known_faces"
+
 func init() {
 	resource.RegisterService(generic.API, Model,
 		resource.Registration[resource.Resource, *Config]{
@@ -33,8 +36,8 @@ func init() {
 
 // Config describes the required and optional attributes for the customer-detector.
 type Config struct {
-	CameraName        string  `json:"camera_name"`
-	VisionServiceName string  `json:"vision_service_name"`
+	CameraName          string  `json:"camera_name"`
+	VisionServiceName   string  `json:"vision_service_name"`
 	DataDir             string  `json:"data_dir"`
 	ConfidenceThreshold float64 `json:"confidence_threshold,omitempty"`
 }
@@ -96,7 +99,7 @@ func newCustomerDetector(
 
 	// Ensure data directories exist before the face-identification module
 	// starts — it crashes if picture_directory is missing.
-	facesDir := filepath.Join(conf.DataDir, "known_faces")
+	facesDir := filepath.Join(conf.DataDir, knownFacesDir)
 	if err := os.MkdirAll(facesDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create known_faces directory: %w", err)
 	}
@@ -186,7 +189,7 @@ func (cd *customerDetector) registerCustomer(ctx context.Context, name, email st
 	}
 
 	// Save the image into the known_faces directory under the customer's email.
-	customerDir := filepath.Join(cd.dataDir, "known_faces", email)
+	customerDir := filepath.Join(cd.dataDir, knownFacesDir, email)
 	if err := os.MkdirAll(customerDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create customer directory: %w", err)
 	}
@@ -218,7 +221,7 @@ func (cd *customerDetector) registerCustomer(ctx context.Context, name, email st
 	cd.mu.Unlock()
 
 	if err := cd.saveCustomers(); err != nil {
-		cd.logger.Warnf("failed to persist customer records: %v", err)
+		return nil, fmt.Errorf("failed to persist customer records: %w", err)
 	}
 
 	return map[string]interface{}{
