@@ -3,7 +3,7 @@
 The `viam:beanjamin` module provides five models for arm-based automation workflows:
 
 1. **`viam:beanjamin:coffee`** - A generic service that orchestrates a full coffee brew cycle by sequentially moving through all poses on a pose switcher.
-2. **`viam:beanjamin:multi-poses-execution-switch`** - A switch component that moves an arm between predefined poses using the Motion service.
+2. **`viam:beanjamin:filter-poses-switch`** - A switch component that moves an arm between predefined poses using the Motion service.
 3. **`viam:beanjamin:text-to-speech`** - A generic service that synthesises speech via Google Cloud Text-to-Speech and plays it through an audioout service.
 4. **`viam:beanjamin:maintenance-sensor`** - A sensor component that reports whether the system is safe for maintenance (arm idle, no orders running or queued).
 5. **`viam:beanjamin:dial-control-motion`** - A generic service that translates Stream Deck dial inputs into relative arm motions.
@@ -11,7 +11,7 @@ The `viam:beanjamin` module provides five models for arm-based automation workfl
 
 ---
 
-## Model: `viam:beanjamin:multi-poses-execution-switch`
+## Model: `viam:beanjamin:filter-poses-switch`
 
 **API:** `rdk:component:switch`
 
@@ -175,7 +175,7 @@ Returns:
 
 **API:** `rdk:service:generic`
 
-Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` component. Supports preparing espresso orders, executing individual actions, and cancellation.
+Orchestrates a full coffee brew cycle using a `filter-poses-switch` component. Supports preparing espresso orders, executing individual actions, and cancellation.
 
 ### Configuration
 
@@ -198,7 +198,7 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
 
 | Name                       | Type   | Required | Description                                                                                                   |
 | -------------------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------- |
-| `pose_switcher_name`       | string | Yes      | Name of the multi-poses-execution-switch component.                                                           |
+| `pose_switcher_name`       | string | Yes      | Name of the filter-poses-switch component.                                                           |
 | `claws_pose_switcher_name` | string | Yes      | Name of the claws pose switcher component.                                                                    |
 | `arm_name`                 | string | Yes      | Name of the arm component used for motion planning and execution.                                             |
 | `gripper_name`             | string | Yes      | Name of the gripper component.                                                                                |
@@ -620,5 +620,5 @@ viam robot part motion set-pose \
 
 Note: Only the pose values specified will be modified. Example if you only set `-x 100`, it will move the component by just changing the X value of its current pose
 
-Once you've found the right poses, add them to your `multi-poses-execution-switch` configuration.
+Once you've found the right poses, add them to your `filter-poses-switch` configuration.
 

@@ -3,7 +3,7 @@
   "module_id": "viam:beanjamin",
   "visibility": "public",
   "url": "https://github.com/viamrobotics/beanjamin",
-  "description": "Beanjamin module: coffee service and multi-poses execution switch",
+  "description": "Beanjamin module: coffee service and filter-poses-switch",
   "models": [
     {
       "api": "rdk:service:generic",
@@ -13,9 +13,9 @@
     },
     {
       "api": "rdk:component:switch",
-      "model": "viam:beanjamin:multi-poses-execution-switch",
+      "model": "viam:beanjamin:filter-poses-switch",
       "short_description": "Switch that moves an arm between predefined poses via the Motion service.",
-      "markdown_link": "README.md#model-viambeanjaminmulti-poses-execution-switch"
+      "markdown_link": "README.md#model-viambeanjaminfilter-poses-switch"
     },
     {
       "api": "rdk:service:generic",

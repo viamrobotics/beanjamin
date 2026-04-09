@@ -18,7 +18,7 @@ import (
 	"go.viam.com/rdk/robot/framesystem"
 	generic "go.viam.com/rdk/services/generic"
 
-	// Register the multi-poses-execution-switch model.
+	// Register the filter-poses-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
 )
 
