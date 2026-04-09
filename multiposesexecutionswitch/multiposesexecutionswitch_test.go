@@ -311,4 +311,3 @@ func assertPoseEqual(t *testing.T, got, want poseValues) {
 		t.Errorf("pose mismatch:\n  got:  %+v\n  want: %+v", got, want)
 	}
 }
-

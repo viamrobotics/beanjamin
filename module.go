@@ -11,6 +11,7 @@ import (
 	viz "github.com/viam-labs/motion-tools/client/client"
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/gripper"
+	"go.viam.com/rdk/components/sensor"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
@@ -77,6 +78,7 @@ type Config struct {
 	PlaceCup              bool    `json:"place_cup,omitempty"`
 	CleanAfterUse         bool    `json:"clean_after_use,omitempty"`
 	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
+	OrderSensorName       string  `json:"order_sensor_name,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -97,6 +99,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	var optDeps []string
 	if cfg.SpeechServiceName != "" {
 		optDeps = append(optDeps, generic.Named(cfg.SpeechServiceName).String())
+	}
+	if cfg.OrderSensorName != "" {
+		optDeps = append(optDeps, sensor.Named(cfg.OrderSensorName).String())
 	}
 
 	return reqDeps, optDeps, nil
@@ -124,6 +129,7 @@ type beanjaminCoffee struct {
 	queue                  *OrderQueue
 	queueStop              chan struct{}
 	paused                 atomic.Bool
+	orderSink orderSensorSink // optional; nil when order_sensor_name is not set
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -203,6 +209,23 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger.Infof("viz client configured at %s", conf.VizURL)
 	}
 
+	var orderSink orderSensorSink
+	if conf.OrderSensorName != "" {
+		n := conf.OrderSensorName
+		sen, err := sensor.FromProvider(deps, n)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("order sensor %q: %w", n, err)
+		}
+		sink, ok := sen.(orderSensorSink)
+		if !ok {
+			cancelFunc()
+			return nil, fmt.Errorf("resource %q must be model viam:beanjamin:order-sensor", n)
+		}
+		orderSink = sink
+		logger.Infof("order sensor %q connected", n)
+	}
+
 	s := &beanjaminCoffee{
 		name:       name,
 		logger:     logger,
@@ -219,6 +242,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		cancelFunc: cancelFunc,
 		queue:      NewOrderQueue(),
 		queueStop:  make(chan struct{}),
+		orderSink: orderSink,
 	}
 	go s.processQueue()
 	return s, nil

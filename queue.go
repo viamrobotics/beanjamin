@@ -157,19 +157,23 @@ func (s *beanjaminCoffee) processQueue() {
 
 // safeExecuteOrder wraps executeQueuedOrder with panic recovery so that a
 // single failing order cannot kill the queue-processing goroutine and strand
-// every order behind it.
+// every order behind it. Optional order sensors receive one reading when the attempt finishes.
 func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
+	var execErr error
+	startedAt := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
+			execErr = fmt.Errorf("panic: %v", r)
 			s.logger.Errorf("panic while processing order %s for %s: %v — skipping order",
 				order.ID, order.CustomerName, r)
 		}
+		s.notifyOrderReading(order, execErr, startedAt, time.Now())
 	}()
-	s.executeQueuedOrder(order)
+	execErr = s.executeQueuedOrder(order)
 }
 
 // executeQueuedOrder runs a single order: says greeting, brews, says completion.
-func (s *beanjaminCoffee) executeQueuedOrder(order Order) {
+func (s *beanjaminCoffee) executeQueuedOrder(order Order) error {
 	waitTime := time.Since(order.EnqueuedAt).Round(time.Second)
 	s.logger.Infof("starting order %s for %s (%s) — waited %s in queue",
 		order.ID, order.CustomerName, order.Drink, waitTime)
@@ -184,7 +188,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(order Order) {
 
 	if err := s.prepareDrink(ctx, order.Drink, order.CustomerName); err != nil {
 		s.logger.Errorf("order %s for %s failed: %v", order.ID, order.CustomerName, err)
-		return
+		return err
 	}
 
 	if order.Completion != "" {
@@ -194,6 +198,13 @@ func (s *beanjaminCoffee) executeQueuedOrder(order Order) {
 	}
 
 	s.logger.Infof("order %s complete for %s", order.ID, order.CustomerName)
+	return nil
+}
+
+func (s *beanjaminCoffee) notifyOrderReading(order Order, execErr error, startedAt, endedAt time.Time) {
+	if s.orderSink != nil {
+		s.orderSink.pushOrderReading(order, execErr, startedAt, endedAt)
+	}
 }
 
 // enqueueOrder validates the order and adds it to the queue.
