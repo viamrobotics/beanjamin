@@ -129,7 +129,7 @@ type beanjaminCoffee struct {
 	queue                  *OrderQueue
 	queueStop              chan struct{}
 	paused                 atomic.Bool
-	orderSink orderSensorSink // optional; nil when order_sensor_name is not set
+	orderSensorSink orderSensorSink // optional; nil when order_sensor_name is not set
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -209,7 +209,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger.Infof("viz client configured at %s", conf.VizURL)
 	}
 
-	var orderSink orderSensorSink
+	var sink orderSensorSink
 	if conf.OrderSensorName != "" {
 		n := conf.OrderSensorName
 		sen, err := sensor.FromProvider(deps, n)
@@ -217,12 +217,12 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 			cancelFunc()
 			return nil, fmt.Errorf("order sensor %q: %w", n, err)
 		}
-		sink, ok := sen.(orderSensorSink)
+		s, ok := sen.(orderSensorSink)
 		if !ok {
 			cancelFunc()
 			return nil, fmt.Errorf("resource %q must be model viam:beanjamin:order-sensor", n)
 		}
-		orderSink = sink
+		sink = s
 		logger.Infof("order sensor %q connected", n)
 	}
 
@@ -242,7 +242,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		cancelFunc: cancelFunc,
 		queue:      NewOrderQueue(),
 		queueStop:  make(chan struct{}),
-		orderSink: orderSink,
+		orderSensorSink: sink,
 	}
 	go s.processQueue()
 	return s, nil

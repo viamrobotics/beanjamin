@@ -202,8 +202,8 @@ func (s *beanjaminCoffee) executeQueuedOrder(order Order) error {
 }
 
 func (s *beanjaminCoffee) notifyOrderReading(order Order, execErr error, startedAt, endedAt time.Time) {
-	if s.orderSink != nil {
-		s.orderSink.pushOrderReading(order, execErr, startedAt, endedAt)
+	if s.orderSensorSink != nil {
+		s.orderSensorSink.pushOrderReading(order, execErr, startedAt, endedAt)
 	}
 }
 
