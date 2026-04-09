@@ -2,6 +2,7 @@ package main
 
 import (
 	"beanjamin"
+	"beanjamin/dialcontrolmotion"
 	"beanjamin/multiposesexecutionswitch"
 	"beanjamin/texttospeech"
 
@@ -18,5 +19,6 @@ func main() {
 		resource.APIModel{API: toggleswitch.API, Model: multiposesexecutionswitch.Model},
 		resource.APIModel{API: generic.API, Model: texttospeech.Model},
 		resource.APIModel{API: sensor.API, Model: beanjamin.MaintenanceSensor},
+		resource.APIModel{API: generic.API, Model: dialcontrolmotion.Model},
 	)
 }
