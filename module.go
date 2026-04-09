@@ -77,8 +77,8 @@ type Config struct {
 	PlaceCup              bool    `json:"place_cup,omitempty"`
 	CleanAfterUse         bool    `json:"clean_after_use,omitempty"`
 	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
-	// ZooCamName is the name of the camera component (e.g. viam:video:storage) used to record and upload order clips.
-	ZooCamName string `json:"zoo_cam_name,omitempty"`
+	// ZooCamStorageName is the name of the camera component (e.g. viam:video:storage) used to record and upload order clips.
+	ZooCamStorageName string `json:"zoo_cam_storage_name,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -100,8 +100,8 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.SpeechServiceName != "" {
 		optDeps = append(optDeps, generic.Named(cfg.SpeechServiceName).String())
 	}
-	if cfg.ZooCamName != "" {
-		optDeps = append(optDeps, camera.Named(cfg.ZooCamName).String())
+	if cfg.ZooCamStorageName != "" {
+		optDeps = append(optDeps, camera.Named(cfg.ZooCamStorageName).String())
 	}
 
 	return reqDeps, optDeps, nil
@@ -122,7 +122,7 @@ type beanjaminCoffee struct {
 	vizEnabled             bool                        // true when viz_url is configured
 	vizConsecutiveFailures int                         // auto-disables viz after repeated failures
 	gripper                gripper.Gripper
-	zooCam                 camera.Camera // optional; viam:video:storage (or compatible); nil if zoo_cam_name unset
+	zooCam                 camera.Camera // optional; viam:video:storage (or compatible); nil if zoo_cam_storage_name unset
 	mu                     sync.Mutex
 	cancelCtx              context.Context
 	cancelFunc             func()
@@ -203,14 +203,14 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	}
 
 	var zooCam camera.Camera
-	if conf.ZooCamName != "" {
-		zc, err := camera.FromProvider(deps, conf.ZooCamName)
+	if conf.ZooCamStorageName != "" {
+		zc, err := camera.FromProvider(deps, conf.ZooCamStorageName)
 		if err != nil {
 			cancelFunc()
-			return nil, fmt.Errorf("zoo cam %q: %w", conf.ZooCamName, err)
+			return nil, fmt.Errorf("zoo cam storage %q: %w", conf.ZooCamStorageName, err)
 		}
 		zooCam = zc
-		logger.Infof("zoo cam %q connected", conf.ZooCamName)
+		logger.Infof("zoo cam storage %q connected", conf.ZooCamStorageName)
 	}
 
 	vizEnabled := false

@@ -42,9 +42,8 @@ func (s *beanjaminCoffee) saveOrderVideo(ctx context.Context, order Order, from 
 		return
 	}
 	clipFrom := from.Add(-zooCamClipLead)
-	s.mu.Lock()
-	trailCtx := s.cancelCtx
-	s.mu.Unlock()
+	trailCtx, trailCancel := context.WithCancel(s.cancelCtx)
+	defer trailCancel()
 	if err := sleepUntil(trailCtx, zooCamClipTrail); err != nil {
 		s.logger.Warnf("zoo cam: trail wait interrupted for order %s: %v", order.ID, err)
 		return
