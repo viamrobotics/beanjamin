@@ -264,7 +264,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		return res, err
 	}
 	if _, ok := cmd["get_queue"]; ok {
-		return s.getQueue()
+		return s.Status(ctx)
 	}
 	if _, ok := cmd["proceed"]; ok {
 		return s.proceedQueue()
@@ -286,10 +286,6 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, action")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
-}
-
-func (s *beanjaminCoffee) getQueue() (map[string]interface{}, error) {
-	return s.Status(context.Background())
 }
 
 func (s *beanjaminCoffee) proceedQueue() (map[string]interface{}, error) {
