@@ -31,7 +31,7 @@
     {
       "api": "rdk:service:generic",
       "model": "viam:beanjamin:dial-control-motion",
-      "short_description": "Translates Stream Deck dial inputs into relative arm motions along the X/Y/Z axes or the tool's orientation vector.",
+      "short_description": "Translates dial inputs into relative arm motions along the X/Y/Z axes or orientation vector.",
       "markdown_link": "README.md#model-viambeanjamindial-control-motion"
     }
   ],
