@@ -5,6 +5,7 @@ import Image from "next/image";
 import { DRINKS } from "./order/drinks";
 import { ChooseDrink } from "./order/choose-drink";
 import { EnterName } from "./order/enter-name";
+import { FaceRegister } from "./order/face-register";
 import { Progress } from "./order/progress";
 import { OrderResult } from "./order/order-result";
 import {
@@ -12,20 +13,23 @@ import {
   getMachineMetadataKey,
   prepareOrder,
   getQueue,
+  identifyCustomer,
   type ViamConnection,
 } from "./lib/viamClient";
 import { misspellName } from "./lib/misspell";
 
-type Step = "welcome" | "drink" | "name" | "progress" | "result";
+type Step = "welcome" | "drink" | "name" | "face-register" | "progress" | "result";
 
 export default function Home() {
   const [step, setStep] = useState<Step>("welcome");
   const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [selectedDrink, setSelectedDrink] = useState<string | null>(null);
   const [misspelled, setMisspelled] = useState("");
   const [loading, setLoading] = useState(false);
   const [queueCount, setQueueCount] = useState(0);
   const [drinkRejection, setDrinkRejection] = useState<string | null>(null);
+  const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
 
   // Viam connection state
   const viamConn = useRef<ViamConnection | null>(null);
@@ -47,9 +51,11 @@ export default function Home() {
     let cancelled = false;
     async function init() {
       try {
+        console.log("[app] connecting to Viam...");
         const conn = await connectToViam();
         if (cancelled) return;
         viamConn.current = conn;
+        console.log("[app] connected to Viam");
 
         const key = await getMachineMetadataKey(conn, "anthropic_api_key");
         if (cancelled) return;
@@ -63,6 +69,21 @@ export default function Home() {
 
         // Fetch real queue count after connecting
         refreshQueueCount();
+
+        // Try to identify a returning customer
+        try {
+          console.log("[app] attempting to identify returning customer...");
+          const id = await identifyCustomer(conn);
+          console.log("[app] identify result:", id);
+          if (!cancelled && id.identified && id.name) {
+            setName(id.name);
+            setEmail(id.email ?? "");
+            setWelcomeBack(id.name);
+            console.log("[app] welcome back:", id.name);
+          }
+        } catch (err) {
+          console.log("[app] identify skipped:", err);
+        }
       } catch (err) {
         if (cancelled) return;
         console.error("Viam connection failed:", err);
@@ -114,6 +135,29 @@ export default function Home() {
     }
   }
 
+  function proceedToProgress(misspelledName: string) {
+    console.log("[app] proceeding to progress for:", misspelledName);
+    setMisspelled(misspelledName);
+    setStep("progress");
+
+    // Enqueue the order — returns immediately with queue position.
+    if (viamConn.current) {
+      const drink = DRINKS.find((d) => d.id === selectedDrink);
+      prepareOrder(viamConn.current, {
+        drink: selectedDrink!,
+        drinkLabel: drink?.label ?? selectedDrink!,
+        customerName: misspelledName,
+        pronunciation: undefined,
+      })
+        .then((res) => {
+          if (res.queue_position != null) {
+            setQueueCount(res.queue_position);
+          }
+        })
+        .catch((err) => console.error("prepare_order failed:", err));
+    }
+  }
+
   async function handleSubmit() {
     if (!name.trim() || !selectedDrink) return;
     setLoading(true);
@@ -124,28 +168,20 @@ export default function Home() {
       }
       const result = await misspellName(name.trim(), anthropicKey.current);
       setMisspelled(result.misspelled || name);
-      setStep("progress");
 
-      // Enqueue the order — returns immediately with queue position.
-      if (viamConn.current) {
-        const drink = DRINKS.find((d) => d.id === selectedDrink);
-        prepareOrder(viamConn.current, {
-          drink: selectedDrink,
-          drinkLabel: drink?.label ?? selectedDrink,
-          customerName: result.misspelled || name,
-          pronunciation: result.pronunciation,
-        })
-          .then((res) => {
-            if (res.queue_position != null) {
-              setQueueCount(res.queue_position);
-            }
-          })
-          .catch((err) => console.error("prepare_order failed:", err));
+      // If the customer provided an email and wasn't already identified,
+      // offer face registration before proceeding to the order.
+      console.log("[app] handleSubmit:", { email: email.trim(), welcomeBack, name });
+      if (email.trim() && !welcomeBack) {
+        console.log("[app] routing to face-register");
+        setStep("face-register");
+      } else {
+        console.log("[app] skipping face-register:", !email.trim() ? "no email" : "returning customer");
+        proceedToProgress(result.misspelled || name);
       }
     } catch (err) {
       console.error("Misspell error:", err);
-      setMisspelled(name);
-      setStep("progress");
+      proceedToProgress(name);
     } finally {
       setLoading(false);
     }
@@ -177,6 +213,26 @@ export default function Home() {
           Freshly brewed coffee, questionable spelling
         </p>
 
+        {welcomeBack && (
+          <div
+            className="anim-in-hero w-full max-w-sm bg-neutral-50 border-2 border-neutral-200 rounded-2xl px-6 py-5 text-center mb-8"
+            style={{ animationDelay: "1000ms" }}
+          >
+            <p className="text-2xl font-semibold text-neutral-900">
+              Welcome back, {welcomeBack}! 👋
+            </p>
+            <p className="text-neutral-500 text-sm mt-1">
+              {[
+                "Nice to see you again ☕",
+                "Couldn't stay away, huh? ☕",
+                "Back so soon? We're flattered ☕",
+                "Oh look who it is! Your usual? 👀",
+                "At this point, we should charge rent 💅",
+              ][Math.floor(Math.random() * 5)]}
+            </p>
+          </div>
+        )}
+
         {viamError && (
           <p className="text-red-500 text-sm text-center mb-4 max-w-md">
             {viamError}
@@ -186,11 +242,24 @@ export default function Home() {
         <button
           onClick={() => setStep("drink")}
           className="anim-in-hero press px-20 py-4 text-lg font-medium bg-neutral-900 text-white rounded-full transition-colors hover:bg-neutral-800"
-          style={{ animationDelay: "1200ms" }}
+          style={{ animationDelay: welcomeBack ? "1400ms" : "1200ms" }}
         >
           Place an order
         </button>
       </main>
+    );
+  }
+
+  // --- Face registration screen ---
+  if (step === "face-register") {
+    return (
+      <FaceRegister
+        name={name}
+        email={email}
+        viamConn={viamConn.current}
+        onComplete={() => proceedToProgress(misspelled)}
+        onSkip={() => proceedToProgress(misspelled)}
+      />
     );
   }
 
@@ -217,7 +286,9 @@ export default function Home() {
         onReset={() => {
           setStep("welcome");
           setName("");
+          setEmail("");
           setSelectedDrink(null);
+          setWelcomeBack(null);
           refreshQueueCount();
         }}
       />
@@ -229,9 +300,11 @@ export default function Home() {
     return (
       <EnterName
         name={name}
+        email={email}
         loading={loading}
         queueCount={queueCount}
         onNameChange={setName}
+        onEmailChange={setEmail}
         onSubmit={handleSubmit}
       />
     );

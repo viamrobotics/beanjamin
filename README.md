@@ -7,6 +7,7 @@ The `viam:beanjamin` module provides five models for arm-based automation workfl
 3. **`viam:beanjamin:text-to-speech`** - A generic service that synthesises speech via Google Cloud Text-to-Speech and plays it through an audioout service.
 4. **`viam:beanjamin:maintenance-sensor`** - A sensor component that reports whether the system is safe for maintenance (arm idle, no orders running or queued).
 5. **`viam:beanjamin:dial-control-motion`** - A generic service that translates Stream Deck dial inputs into relative arm motions.
+6. **`viam:beanjamin:customer-detector`** - A generic service that identifies return customers via facial recognition using the [`viam:vision:face-identification`](https://github.com/viam-modules/viam-face-identification) vision service.
 
 ---
 
@@ -439,6 +440,141 @@ Returns a single reading:
 - The arm is physically moving
 - An order is currently running
 - There are orders in the queue
+
+---
+
+## Model: `viam:beanjamin:customer-detector`
+
+**API:** `rdk:service:generic`
+
+Identifies return customers using facial recognition. Wraps the [`viam:vision:face-identification`](https://github.com/viam-modules/viam-face-identification) vision service to register customer faces (associated with a name and email) and later identify them when they return.
+
+### Prerequisites
+
+- A configured camera component.
+- The [`viam:vision:face-identification`](https://app.viam.com/module/viam/face-identification) module added as a vision service, with its `picture_directory` pointing to `<data_dir>/known_faces`.
+
+### Configuration
+
+```json
+{
+  "camera_name": "<string>",
+  "vision_service_name": "<string>",
+  "data_dir": "<string>",
+  "confidence_threshold": <float>
+}
+```
+
+| Name                   | Type   | Required | Description                                                                                     |
+| ---------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------- |
+| `camera_name`          | string | Yes      | Name of the camera component used to capture customer photos.                                   |
+| `vision_service_name`  | string | Yes      | Name of the `face-identification` vision service dependency.                                    |
+| `data_dir`             | string | Yes      | Directory for storing known face images and customer records. Must match the vision service's `picture_directory` parent (i.e. the vision service's `picture_directory` should be `<data_dir>/known_faces`). |
+| `confidence_threshold` | float  | No       | Minimum confidence score to consider a face match. Defaults to `0.5`.                           |
+
+### Example Configuration
+
+```json
+{
+  "camera_name": "customer-cam",
+  "vision_service_name": "face-detector",
+  "data_dir": "/data/customers",
+  "confidence_threshold": 0.6
+}
+```
+
+The face-identification vision service should be configured with `picture_directory` set to `/data/customers/known_faces` (matching the `data_dir` above). Both modules must share this path so the customer-detector can write face images that the vision service reads.
+
+### DoCommand
+
+**`register_customer`** — Capture a single photo from the camera, save it as a known face, and associate it with the customer's name and email. Call this multiple times during a registration session to capture different angles (front, left, right, etc.). Does **not** trigger embedding recomputation — call `finish_registration` when done.
+
+```json
+{
+  "register_customer": {
+    "name": "Alice Smith",
+    "email": "alice@example.com"
+  }
+}
+```
+
+Returns:
+
+```json
+{
+  "registered": "alice@example.com",
+  "name": "Alice Smith",
+  "image_path": "/data/customers/known_faces/alice@example.com/face_1.jpeg"
+}
+```
+
+**`finish_registration`** — Call after capturing all face images for a customer. Triggers the vision service to recompute its embeddings so the new faces become recognisable.
+
+```json
+{"finish_registration": "alice@example.com"}
+```
+
+Returns:
+
+```json
+{"email": "alice@example.com", "name": "Alice Smith", "face_images": 5}
+```
+
+**`identify_customer`** — Capture a photo and attempt to match the face against registered customers.
+
+```json
+{"identify_customer": true}
+```
+
+Returns (match found):
+
+```json
+{
+  "identified": true,
+  "name": "Alice Smith",
+  "email": "alice@example.com",
+  "confidence": 0.87,
+  "is_registered": true
+}
+```
+
+Returns (no match):
+
+```json
+{
+  "identified": false,
+  "message": "no known customer detected",
+  "num_detections": 0
+}
+```
+
+**`list_customers`** — List all registered customer emails.
+
+```json
+{"list_customers": true}
+```
+
+Returns:
+
+```json
+{"customers": ["alice@example.com", "bob@example.com"], "count": 2}
+```
+
+**`remove_customer`** — Remove a customer and their face images.
+
+```json
+{"remove_customer": "alice@example.com"}
+```
+
+Returns:
+
+```json
+{"removed": "alice@example.com"}
+```
+
+### Storage
+
+Customer records (name, email, image directory) are persisted to `<data_dir>/customers.json`. Face images are stored under `<data_dir>/known_faces/<email>/` — one subdirectory per customer, which is the directory structure the face-identification vision service expects. Registering the same customer multiple times adds additional face samples, improving recognition accuracy.
 
 ---
 
