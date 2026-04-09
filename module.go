@@ -228,7 +228,17 @@ func (s *beanjaminCoffee) Name() resource.Name {
 }
 
 func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, error) {
-	return map[string]interface{}{}, nil
+	orders := s.queue.List()
+	names := make([]string, len(orders))
+	for i, o := range orders {
+		names[i] = o.CustomerName
+	}
+	return map[string]interface{}{
+		"count":      len(orders),
+		"orders":     names,
+		"is_paused":  s.paused.Load(),
+		"is_running": s.running.Load(),
+	}, nil
 }
 
 func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
@@ -254,7 +264,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		return res, err
 	}
 	if _, ok := cmd["get_queue"]; ok {
-		return s.getQueue()
+		return s.Status(ctx)
 	}
 	if _, ok := cmd["proceed"]; ok {
 		return s.proceedQueue()
@@ -276,20 +286,6 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, action")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
-}
-
-func (s *beanjaminCoffee) getQueue() (map[string]interface{}, error) {
-	orders := s.queue.List()
-	names := make([]string, len(orders))
-	for i, o := range orders {
-		names[i] = o.CustomerName
-	}
-	return map[string]interface{}{
-		"count":      len(orders),
-		"orders":     names,
-		"is_paused":  s.paused.Load(),
-		"is_running": s.running.Load(),
-	}, nil
 }
 
 func (s *beanjaminCoffee) proceedQueue() (map[string]interface{}, error) {
