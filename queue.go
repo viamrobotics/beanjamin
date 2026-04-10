@@ -157,24 +157,28 @@ func (s *beanjaminCoffee) processQueue() {
 
 // safeExecuteOrder wraps executeQueuedOrder with panic recovery so that a
 // single failing order cannot kill the queue-processing goroutine and strand
-// every order behind it.
+// every order behind it. It always queues a zoo-cam clip for the attempt (success, error, or panic).
 func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
+	ctx := context.Background()
+	videoFrom := time.Now().UTC()
+	var execErr error
 	defer func() {
 		if r := recover(); r != nil {
-			s.logger.Errorf("panic while processing order %s for %s: %v — skipping order",
+			execErr = fmt.Errorf("panic: %v", r)
+			s.logger.Errorf("panic while processing order %s for %s: %v — queue will still save video",
 				order.ID, order.CustomerName, r)
 		}
+		s.saveOrderVideo(order, videoFrom, execErr)
 	}()
-	s.executeQueuedOrder(order)
+	execErr = s.executeQueuedOrder(ctx, order)
 }
 
 // executeQueuedOrder runs a single order: says greeting, brews, says completion.
-func (s *beanjaminCoffee) executeQueuedOrder(order Order) {
+// A non-nil return means the brew sequence failed; the caller still saves video via safeExecuteOrder.
+func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) error {
 	waitTime := time.Since(order.EnqueuedAt).Round(time.Second)
 	s.logger.Infof("starting order %s for %s (%s) — waited %s in queue",
 		order.ID, order.CustomerName, order.Drink, waitTime)
-
-	ctx := context.Background()
 
 	if order.Greeting != "" {
 		if err := s.say(ctx, order.Greeting); err != nil {
@@ -184,7 +188,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(order Order) {
 
 	if err := s.prepareDrink(ctx, order.Drink, order.CustomerName); err != nil {
 		s.logger.Errorf("order %s for %s failed: %v", order.ID, order.CustomerName, err)
-		return
+		return err
 	}
 
 	if order.Completion != "" {
@@ -194,6 +198,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(order Order) {
 	}
 
 	s.logger.Infof("order %s complete for %s", order.ID, order.CustomerName)
+	return nil
 }
 
 // enqueueOrder validates the order and adds it to the queue.
