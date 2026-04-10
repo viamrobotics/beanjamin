@@ -77,6 +77,7 @@ type Config struct {
 	LungoBrewTimeSec      float64 `json:"lungo_brew_time_sec,omitempty"`
 	PlaceCup              bool    `json:"place_cup,omitempty"`
 	CleanAfterUse         bool    `json:"clean_after_use,omitempty"`
+	PortafilterTaps       int     `json:"portafilter_taps,omitempty"`
 	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
 	// ZooCamStorageName is the name of the camera component (e.g. viam:video:storage) used to record and upload order clips.
 	ZooCamStorageName string `json:"zoo_cam_storage_name,omitempty"`
