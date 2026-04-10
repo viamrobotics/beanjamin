@@ -243,6 +243,21 @@ func (s *beanjaminCoffee) processQueue() {
 			// debugging.
 			s.currentStep.Store("")
 
+			// If the operator cancelled the running order, pause so no new
+			// orders start until they explicitly send 'proceed'.
+			if s.paused.Swap(false) {
+				s.logger.Infof("order cancelled — queue paused, send 'proceed' to resume")
+				s.paused.Store(true)
+				select {
+				case <-s.queue.proceed:
+					s.logger.Infof("received 'proceed', resuming queue processing")
+					s.paused.Store(false)
+				case <-s.queueStop:
+					s.paused.Store(false)
+					return
+				}
+			}
+
 			// If cleanup is not automatic, pause
 			// so the operator can clean up before the next order starts.
 			if !s.cfg.CleanAfterUse {

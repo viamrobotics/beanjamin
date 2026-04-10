@@ -396,12 +396,13 @@ func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
 	if !s.running.Load() {
 		return nil, errors.New("no sequence in progress")
 	}
+	s.paused.Store(true)
 	s.mu.Lock()
 	s.cancelFunc()
 	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
 	s.mu.Unlock()
-	s.logger.Infof("sequence cancelled")
-	return map[string]interface{}{"status": "cancelled"}, nil
+	s.logger.Infof("sequence cancelled — queue paused, send 'proceed' to resume")
+	return map[string]interface{}{"status": "cancelled", "queue": "paused"}, nil
 }
 
 func (s *beanjaminCoffee) handleOpenGripper(ctx context.Context) (map[string]interface{}, error) {
