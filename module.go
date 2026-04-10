@@ -211,20 +211,19 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 
 	var sink orderSensorSink
 	if conf.OrderSensorName != "" {
-		n := conf.OrderSensorName
 		// Same component instance as elsewhere on the robot (not a copy).
-		sen, err := sensor.FromProvider(deps, n)
+		sen, err := sensor.FromProvider(deps, conf.OrderSensorName)
 		if err != nil {
 			cancelFunc()
-			return nil, fmt.Errorf("order sensor %q: %w", n, err)
+			return nil, fmt.Errorf("order sensor %q: %w", conf.OrderSensorName, err)
 		}
 		s, ok := sen.(orderSensorSink)
 		if !ok {
 			cancelFunc()
-			return nil, fmt.Errorf("resource %q must be model viam:beanjamin:order-sensor", n)
+			return nil, fmt.Errorf("resource %q must be model viam:beanjamin:order-sensor", conf.OrderSensorName)
 		}
 		sink = s
-		logger.Infof("order sensor %q connected", n)
+		logger.Infof("order sensor %q connected", conf.OrderSensorName)
 	}
 
 	s := &beanjaminCoffee{
