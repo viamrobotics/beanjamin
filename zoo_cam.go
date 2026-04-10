@@ -9,8 +9,8 @@ import (
 // Fixed clip padding around each order (not configurable). Pre-roll is limited by the camera ring buffer;
 // trail waits before save so post-order seconds are still recorded (blocks the next queued order briefly).
 const (
-	zooCamClipLead  = 5 * time.Second
-	zooCamClipTrail = 5 * time.Second
+	zooCamClipLead  = 15 * time.Second
+	zooCamClipTrail = 15 * time.Second
 )
 
 // formatClipTimestampUTC formats t for video-store save/fetch DoCommand (UTC, ...Z).

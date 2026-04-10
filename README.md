@@ -195,7 +195,7 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
 }
 ```
 
-Configure a [`viam:video:storage`](https://github.com/viam-modules/video-store) camera on the machine. After each order attempt, the coffee service issues an async `save` DoCommand. Each clip includes a fixed **5 seconds** of pre-roll (ring-buffer permitting) and **5 seconds** of post-roll; the short post-roll wait means the next queued order starts slightly after the prior one fully finishes.
+Configure a [`viam:video:storage`](https://github.com/viam-modules/video-store) camera on the machine. After each order attempt, the coffee service issues an async `save` DoCommand. Each clip includes a fixed **N seconds** of pre-roll (ring-buffer permitting) and **N seconds** of post-roll; the short post-roll wait means the next queued order starts slightly after the prior one fully finishes.
 
 The save request includes a `tags` entry with the order UUID (for cloud data filtering) and JSON `metadata` with order and customer fields. Clips are queued after every attempt, including failed brews or panics; failures set `order_status` to `failed` and include an `error` string.
 
