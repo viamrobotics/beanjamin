@@ -308,7 +308,13 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 	}
 	step, _ := s.currentStep.Load().(string)
 	return map[string]interface{}{
-		"count":        len(orders),
+		// count is returned as float64 so in-process callers (e.g. the
+		// maintenance sensor in this same module) see the same type as
+		// gRPC callers — structpb forces all numbers to double on the
+		// wire, but the in-process path bypasses that conversion.
+		// Without the cast, an in-process .(float64) assertion silently
+		// fails and the caller reads 0.
+		"count":        float64(len(orders)),
 		"orders":       orderMaps,
 		"is_paused":    s.paused.Load(),
 		"is_busy":      s.running.Load(),
