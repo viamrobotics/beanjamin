@@ -50,7 +50,17 @@ interface DevOrder {
   id: string;
   name: string;
 }
+// Mirrors the backend's recent buffer in dev mode so the frontend can poll
+// a single shape regardless of which environment it's running in.
+interface DevRecentOrder {
+  id: string;
+  name: string;
+  rawStep: string;
+  completedAt: number; // ms epoch
+}
+const DEV_RECENT_DISPLAY_MS = 15_000;
 const devQueue: DevOrder[] = [];
+const devRecent: DevRecentOrder[] = [];
 let devOrderCounter = 0;
 let devProcessing = false;
 let devProcessingStartedAt = 0;
@@ -65,13 +75,28 @@ function startDevProcessing() {
       return;
     }
     setTimeout(() => {
-      devQueue.shift();
+      const finished = devQueue.shift();
+      if (finished) {
+        devRecent.push({
+          id: finished.id,
+          name: finished.name,
+          rawStep: DEV_STEPS[DEV_STEPS.length - 1],
+          completedAt: Date.now(),
+        });
+      }
       // Start timing the next order
       devProcessingStartedAt = Date.now();
       tick();
     }, DEV_ORDER_DURATION_MS);
   };
   tick();
+}
+
+function pruneDevRecent() {
+  const cutoff = Date.now() - DEV_RECENT_DISPLAY_MS;
+  while (devRecent.length > 0 && devRecent[0].completedAt < cutoff) {
+    devRecent.shift();
+  }
 }
 
 function getDevStep(): string {
@@ -194,6 +219,13 @@ export interface QueueOrder {
   enqueued_at: string;
   raw_step: string;
   step_history: StepEntry[];
+  /**
+   * RFC3339 timestamp set by the backend when the espresso routine for this
+   * order finished. Empty string means the order is still pending. The
+   * backend keeps completed orders visible for ~15s after this timestamp,
+   * then prunes them automatically.
+   */
+  completed_at: string;
 }
 
 export interface QueueStatus {
@@ -206,21 +238,36 @@ export interface QueueStatus {
 
 export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
   if (isDevMode()) {
+    pruneDevRecent();
     const devStep = getDevStep();
+    // Recent first (most-recent-first), then pending — same shape as the
+    // real backend's List() / Status() output.
+    const recentOrders: QueueOrder[] = [...devRecent]
+      .reverse()
+      .map((r) => ({
+        id: r.id,
+        drink: "espresso",
+        customer_name: r.name,
+        enqueued_at: new Date(r.completedAt).toISOString(),
+        raw_step: r.rawStep,
+        step_history: [],
+        completed_at: new Date(r.completedAt).toISOString(),
+      }));
+    const pendingOrders: QueueOrder[] = devQueue.map((o, i) => ({
+      id: o.id,
+      drink: "espresso",
+      customer_name: o.name,
+      enqueued_at: new Date().toISOString(),
+      raw_step: i === 0 ? devStep : "",
+      step_history:
+        i === 0 && devStep
+          ? [{ step: devStep, started_at: new Date().toISOString() }]
+          : [],
+      completed_at: "",
+    }));
     return {
       count: devQueue.length,
-      orders: devQueue.map((o, i) => ({
-        id: o.id,
-        drink: "espresso",
-        customer_name: o.name,
-        enqueued_at: new Date().toISOString(),
-        // Only the front-of-queue order is being processed; others are queued.
-        raw_step: i === 0 ? devStep : "",
-        step_history:
-          i === 0 && devStep
-            ? [{ step: devStep, started_at: new Date().toISOString() }]
-            : [],
-      })),
+      orders: [...recentOrders, ...pendingOrders],
       is_paused: false,
       is_busy: devQueue.length > 0,
       current_step: devStep,
