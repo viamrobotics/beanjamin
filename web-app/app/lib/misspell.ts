@@ -1,4 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
+// Lazy-loaded to avoid blocking React hydration in dev mode
+let AnthropicClient: typeof import("@anthropic-ai/sdk").default | null = null;
 
 const SYSTEM_PROMPT = `You are a barista name misspelling generator for a fun coffee shop app. Given a customer's name, return a plausibly wrong version — the kind of misspelling you'd see scrawled on a coffee cup by a barista who half-heard the name in a noisy café.
 
@@ -88,11 +89,57 @@ export interface MisspellResult {
   strategy: string;
 }
 
+function isDevMode(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1")
+  );
+}
+
+function devMisspell(name: string): string {
+  const swaps: Record<string, string> = {
+    a: "u",
+    e: "i",
+    i: "ee",
+    o: "aw",
+    u: "o",
+  };
+  let result = "";
+  let swapped = false;
+  for (const ch of name) {
+    const lower = ch.toLowerCase();
+    if (!swapped && swaps[lower]) {
+      result += ch === lower ? swaps[lower] : swaps[lower].toUpperCase();
+      swapped = true;
+    } else {
+      result += ch;
+    }
+  }
+  return result || name;
+}
+
 export async function misspellName(
   name: string,
   anthropicApiKey: string
 ): Promise<MisspellResult> {
-  const client = new Anthropic({
+  if (isDevMode()) {
+    const misspelled = devMisspell(name.trim().substring(0, 50));
+    return {
+      original: name,
+      misspelled,
+      pronunciation: misspelled.toUpperCase(),
+      chaos: "medium",
+      strategy: "dev mode vowel swap",
+    };
+  }
+
+  if (!AnthropicClient) {
+    const mod = await import("@anthropic-ai/sdk");
+    AnthropicClient = mod.default;
+  }
+
+  const client = new AnthropicClient({
     apiKey: anthropicApiKey,
     dangerouslyAllowBrowser: true,
   });

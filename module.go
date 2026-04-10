@@ -10,7 +10,9 @@ import (
 
 	viz "github.com/viam-labs/motion-tools/client/client"
 	"go.viam.com/rdk/components/arm"
+	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/components/gripper"
+	"go.viam.com/rdk/components/sensor"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
@@ -73,9 +75,14 @@ type Config struct {
 	SpeechServiceName     string  `json:"speech_service_name,omitempty"`
 	VizURL                string  `json:"viz_url,omitempty"`
 	BrewTimeSec           float64 `json:"brew_time_sec,omitempty"`
+	LungoBrewTimeSec      float64 `json:"lungo_brew_time_sec,omitempty"`
 	PlaceCup              bool    `json:"place_cup,omitempty"`
 	CleanAfterUse         bool    `json:"clean_after_use,omitempty"`
+	PortafilterTaps       int     `json:"portafilter_taps,omitempty"`
 	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
+	OrderSensorName       string  `json:"order_sensor_name,omitempty"`
+
+	ZooCamStorageName string `json:"zoo_cam_storage_name,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -97,6 +104,12 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.SpeechServiceName != "" {
 		optDeps = append(optDeps, generic.Named(cfg.SpeechServiceName).String())
 	}
+	if cfg.OrderSensorName != "" {
+		optDeps = append(optDeps, sensor.Named(cfg.OrderSensorName).String())
+	}
+	if cfg.ZooCamStorageName != "" {
+		optDeps = append(optDeps, camera.Named(cfg.ZooCamStorageName).String())
+	}
 
 	return reqDeps, optDeps, nil
 }
@@ -116,13 +129,17 @@ type beanjaminCoffee struct {
 	vizEnabled             bool                        // true when viz_url is configured
 	vizConsecutiveFailures int                         // auto-disables viz after repeated failures
 	gripper                gripper.Gripper
+	zooCam                 camera.Camera // optional; viam:video:storage (or compatible); nil if zoo_cam_storage_name unset
 	mu                     sync.Mutex
 	cancelCtx              context.Context
 	cancelFunc             func()
 	running                atomic.Bool
+	currentStep            atomic.Value // string: current step label for the active order (debug)
+	currentOrderID         atomic.Value // string: ID of the order currently being processed; "" when idle
 	queue                  *OrderQueue
 	queueStop              chan struct{}
 	paused                 atomic.Bool
+	orderSensorSink        orderSensorSink // optional; named order-sensor from deps, nil if unset
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -195,6 +212,17 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		}
 	}
 
+	var zooCam camera.Camera
+	if conf.ZooCamStorageName != "" {
+		zc, err := camera.FromProvider(deps, conf.ZooCamStorageName)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("zoo cam storage %q: %w", conf.ZooCamStorageName, err)
+		}
+		zooCam = zc
+		logger.Infof("zoo cam storage %q connected", conf.ZooCamStorageName)
+	}
+
 	vizEnabled := false
 	if conf.VizURL != "" {
 		viz.SetURL(conf.VizURL)
@@ -202,22 +230,41 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger.Infof("viz client configured at %s", conf.VizURL)
 	}
 
+	var sink orderSensorSink
+	if conf.OrderSensorName != "" {
+		// Same component instance as elsewhere on the robot (not a copy).
+		sen, err := sensor.FromProvider(deps, conf.OrderSensorName)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("order sensor %q: %w", conf.OrderSensorName, err)
+		}
+		s, ok := sen.(orderSensorSink)
+		if !ok {
+			cancelFunc()
+			return nil, fmt.Errorf("resource %q must be model viam:beanjamin:order-sensor", conf.OrderSensorName)
+		}
+		sink = s
+		logger.Infof("order sensor %q connected", conf.OrderSensorName)
+	}
+
 	s := &beanjaminCoffee{
-		name:       name,
-		logger:     logger,
-		cfg:        conf,
-		filterSw:   filterSw,
-		clawsSw:    clawSw,
-		arm:        armComp,
-		fsSvc:      fsSvc,
-		cachedFS:   cachedFS,
-		speech:     speech,
-		gripper:    gripperComp,
-		vizEnabled: vizEnabled,
-		cancelCtx:  cancelCtx,
-		cancelFunc: cancelFunc,
-		queue:      NewOrderQueue(),
-		queueStop:  make(chan struct{}),
+		name:            name,
+		logger:          logger,
+		cfg:             conf,
+		filterSw:        filterSw,
+		clawsSw:         clawSw,
+		arm:             armComp,
+		fsSvc:           fsSvc,
+		cachedFS:        cachedFS,
+		speech:          speech,
+		zooCam:          zooCam,
+		gripper:         gripperComp,
+		vizEnabled:      vizEnabled,
+		cancelCtx:       cancelCtx,
+		cancelFunc:      cancelFunc,
+		queue:           NewOrderQueue(),
+		queueStop:       make(chan struct{}),
+		orderSensorSink: sink,
 	}
 	go s.processQueue()
 	return s, nil
@@ -227,8 +274,46 @@ func (s *beanjaminCoffee) Name() resource.Name {
 	return s.name
 }
 
+func (s *beanjaminCoffee) setStep(step string) {
+	s.currentStep.Store(step)
+	if id, ok := s.currentOrderID.Load().(string); ok && id != "" {
+		s.queue.SetStep(id, step)
+	}
+}
+
 func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, error) {
-	return map[string]interface{}{}, nil
+	orders := s.queue.List()
+	// structpb.NewStruct (used by RDK to serialize Status over the wire) only
+	// accepts []interface{} for list values, not []map[string]interface{}, so
+	// the slice element type must be interface{}.
+	orderMaps := make([]interface{}, len(orders))
+	for i, o := range orders {
+		// structpb.NewStruct rejects []map[string]interface{} as list values,
+		// so step_history must also be []interface{}.
+		history := make([]interface{}, len(o.StepHistory))
+		for j, e := range o.StepHistory {
+			history[j] = map[string]interface{}{
+				"step":       e.Step,
+				"started_at": e.StartedAt.Format(time.RFC3339),
+			}
+		}
+		orderMaps[i] = map[string]interface{}{
+			"id":            o.ID,
+			"drink":         o.Drink,
+			"customer_name": o.CustomerName,
+			"enqueued_at":   o.EnqueuedAt.Format(time.RFC3339),
+			"raw_step":      o.RawStep,
+			"step_history":  history,
+		}
+	}
+	step, _ := s.currentStep.Load().(string)
+	return map[string]interface{}{
+		"count":        len(orders),
+		"orders":       orderMaps,
+		"is_paused":    s.paused.Load(),
+		"is_busy":      s.running.Load(),
+		"current_step": step,
+	}, nil
 }
 
 func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
@@ -254,7 +339,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		return res, err
 	}
 	if _, ok := cmd["get_queue"]; ok {
-		return s.getQueue()
+		return s.Status(ctx)
 	}
 	if _, ok := cmd["proceed"]; ok {
 		return s.proceedQueue()
@@ -276,20 +361,6 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, action")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
-}
-
-func (s *beanjaminCoffee) getQueue() (map[string]interface{}, error) {
-	orders := s.queue.List()
-	names := make([]string, len(orders))
-	for i, o := range orders {
-		names[i] = o.CustomerName
-	}
-	return map[string]interface{}{
-		"count":      len(orders),
-		"orders":     names,
-		"is_paused":  s.paused.Load(),
-		"is_running": s.running.Load(),
-	}, nil
 }
 
 func (s *beanjaminCoffee) proceedQueue() (map[string]interface{}, error) {

@@ -9,7 +9,18 @@ import (
 	"github.com/google/uuid"
 )
 
+// StepEntry records the start of a single processing step for an order.
+type StepEntry struct {
+	Step      string    `json:"step"`
+	StartedAt time.Time `json:"started_at"`
+}
+
 // Order represents a customer coffee order in the queue.
+//
+// The first six fields are set at construction time and never change.
+// RawStep and StepHistory are mutated as the order moves through the
+// espresso routine; both are guarded by OrderQueue.mu and must only be
+// updated through OrderQueue.SetStep.
 type Order struct {
 	ID           string    `json:"id"`
 	Drink        string    `json:"drink"`
@@ -17,6 +28,9 @@ type Order struct {
 	Greeting     string    `json:"greeting"`
 	Completion   string    `json:"completion"`
 	EnqueuedAt   time.Time `json:"enqueued_at"`
+
+	RawStep     string      `json:"raw_step"`
+	StepHistory []StepEntry `json:"step_history"`
 }
 
 // OrderQueue is a thread-safe FIFO order queue.
@@ -80,13 +94,40 @@ func (q *OrderQueue) Len() int {
 	return len(q.orders)
 }
 
-// List returns a copy of all orders in the queue.
+// List returns a copy of all orders in the queue. StepHistory is deep-copied
+// so callers can read the snapshot without racing against concurrent SetStep
+// updates from the espresso goroutine.
 func (q *OrderQueue) List() []Order {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	out := make([]Order, len(q.orders))
-	copy(out, q.orders)
+	for i, o := range q.orders {
+		out[i] = o
+		if o.StepHistory != nil {
+			out[i].StepHistory = make([]StepEntry, len(o.StepHistory))
+			copy(out[i].StepHistory, o.StepHistory)
+		}
+	}
 	return out
+}
+
+// SetStep records a step transition for the order matching id. It updates
+// RawStep and appends to StepHistory. No-op if no order matches (the order
+// may have already been dequeued).
+func (q *OrderQueue) SetStep(id, rawStep string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i := range q.orders {
+		if q.orders[i].ID != id {
+			continue
+		}
+		q.orders[i].RawStep = rawStep
+		q.orders[i].StepHistory = append(q.orders[i].StepHistory, StepEntry{
+			Step:      rawStep,
+			StartedAt: time.Now(),
+		})
+		return
+	}
 }
 
 // Clear removes all orders from the queue and returns how many were removed.
@@ -134,7 +175,9 @@ func (s *beanjaminCoffee) processQueue() {
 			s.logger.Infof("processing order %s for %s (%s) — %d order(s) waiting behind it",
 				order.ID, order.CustomerName, order.Drink, remaining)
 
+			s.currentOrderID.Store(order.ID)
 			s.safeExecuteOrder(order)
+			s.currentOrderID.Store("")
 			s.queue.Dequeue()
 
 			// If cleanup is not automatic, pause
@@ -157,24 +200,30 @@ func (s *beanjaminCoffee) processQueue() {
 
 // safeExecuteOrder wraps executeQueuedOrder with panic recovery so that a
 // single failing order cannot kill the queue-processing goroutine and strand
-// every order behind it.
+// every order behind it. Notifies the optional order sensor and queues a zoo-cam clip when configured.
 func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
+	ctx := context.Background()
+	videoFrom := time.Now().UTC()
+	var execErr error
+	startedAt := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
-			s.logger.Errorf("panic while processing order %s for %s: %v — skipping order",
+			execErr = fmt.Errorf("panic: %v", r)
+			s.logger.Errorf("panic while processing order %s for %s: %v — queue will still save video and order reading",
 				order.ID, order.CustomerName, r)
 		}
+		s.notifyOrderReading(order, execErr, startedAt, time.Now())
+		s.saveOrderVideo(order, videoFrom, execErr)
 	}()
-	s.executeQueuedOrder(order)
+	execErr = s.executeQueuedOrder(ctx, order)
 }
 
 // executeQueuedOrder runs a single order: says greeting, brews, says completion.
-func (s *beanjaminCoffee) executeQueuedOrder(order Order) {
+// A non-nil return means the brew sequence failed; the caller still notifies the sensor and saves video via safeExecuteOrder.
+func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) error {
 	waitTime := time.Since(order.EnqueuedAt).Round(time.Second)
 	s.logger.Infof("starting order %s for %s (%s) — waited %s in queue",
 		order.ID, order.CustomerName, order.Drink, waitTime)
-
-	ctx := context.Background()
 
 	if order.Greeting != "" {
 		if err := s.say(ctx, order.Greeting); err != nil {
@@ -182,9 +231,9 @@ func (s *beanjaminCoffee) executeQueuedOrder(order Order) {
 		}
 	}
 
-	if err := s.prepareEspresso(ctx, order.CustomerName); err != nil {
+	if err := s.prepareDrink(ctx, order.Drink, order.CustomerName); err != nil {
 		s.logger.Errorf("order %s for %s failed: %v", order.ID, order.CustomerName, err)
-		return
+		return err
 	}
 
 	if order.Completion != "" {
@@ -193,7 +242,15 @@ func (s *beanjaminCoffee) executeQueuedOrder(order Order) {
 		}
 	}
 
+	s.setStep("")
 	s.logger.Infof("order %s complete for %s", order.ID, order.CustomerName)
+	return nil
+}
+
+func (s *beanjaminCoffee) notifyOrderReading(order Order, execErr error, startedAt, endedAt time.Time) {
+	if s.orderSensorSink != nil {
+		s.orderSensorSink.pushOrderReading(order, execErr, startedAt, endedAt)
+	}
 }
 
 // enqueueOrder validates the order and adds it to the queue.
@@ -211,7 +268,9 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}
 	customerName, _ := order["customer_name"].(string)
 	s.logger.Infof("order request: drink=%q customer=%q", drink, customerName)
 
-	if drink != "espresso" {
+	switch drink {
+	case "espresso", "lungo":
+	default:
 		s.logger.Infof("rejected order for unsupported drink %q from %s", drink, customerName)
 		msg := pickUnsupportedDrink(drink)
 		if err := s.say(ctx, msg); err != nil {
@@ -224,7 +283,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}
 	completionStatement, _ := order["completion_statement"].(string)
 
 	if initialGreeting == "" {
-		initialGreeting = pickGreeting(customerName)
+		initialGreeting = pickGreeting(drink, customerName)
 	}
 
 	o := NewOrder(drink, customerName, initialGreeting, completionStatement)

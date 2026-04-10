@@ -1,6 +1,7 @@
+"use client";
+
 import Image from "next/image";
-import { useState } from "react";
-import { QueueIndicator } from "./queue-indicator";
+import { useState, useEffect, useRef } from "react";
 
 const HEARTS = [
   { src: "./heart1.svg", width: 168, height: 180 },
@@ -10,19 +11,29 @@ const HEARTS = [
   { src: "./heart5.svg", width: 175, height: 180 },
 ];
 
-export function OrderResult({
-  misspelled,
-  actualName,
-  drinkLabel,
-  queueCount,
-  onReset,
-}: {
+interface OrderConfirmationProps {
   misspelled: string;
   actualName: string;
   drinkLabel: string;
-  queueCount: number;
-  onReset: () => void;
-}) {
+  onDismiss: () => void;
+}
+
+export function OrderConfirmation({
+  misspelled,
+  actualName,
+  drinkLabel,
+  onDismiss,
+}: OrderConfirmationProps) {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-dismiss after 4 seconds
+  useEffect(() => {
+    timerRef.current = setTimeout(onDismiss, 4000);
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [onDismiss]);
+
   const maxVw = 90;
   const charsPerLine = misspelled.length;
   const fontSize = `min(400px, ${maxVw / Math.max(charsPerLine * 0.55, 1)}vw)`;
@@ -35,9 +46,9 @@ export function OrderResult({
       offsetY: Math.floor(Math.random() * 161) - 80,
     };
   });
+
   return (
-    <main className="relative h-dvh bg-white flex flex-col items-center justify-center p-8 font-sans">
-      <QueueIndicator count={queueCount} />
+    <main className="relative h-full bg-white flex flex-col items-center justify-center p-8 font-sans">
       <div className="flex flex-col items-center">
         <p className="anim-in text-neutral-400 text-lg uppercase tracking-widest font-mono">
           {drinkLabel} for
@@ -63,11 +74,24 @@ export function OrderResult({
           </div>
         </div>
         <p
-          className="anim-in text-neutral-400 uppercase tracking-widest font-mono text-md mb-12"
+          className="anim-in text-neutral-400 uppercase tracking-widest font-mono text-md mb-8"
           style={{ animationDelay: "300ms" }}
         >
           (AKA {actualName})
         </p>
+        <p
+          className="anim-in text-neutral-500 text-sm text-center mb-10"
+          style={{ animationDelay: "500ms" }}
+        >
+          Your order is in! Watch the board &rarr;
+        </p>
+        <button
+          onClick={onDismiss}
+          className="anim-in press px-16 py-4 text-base font-medium bg-neutral-900 text-white rounded-full transition-colors hover:bg-neutral-800"
+          style={{ animationDelay: "700ms" }}
+        >
+          Place another order
+        </button>
       </div>
     </main>
   );
