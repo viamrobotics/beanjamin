@@ -193,11 +193,16 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
   "place_cup": true,
   "clean_after_use": true,
   "save_motion_requests_dir": "/tmp/motion-requests",
-  "order_sensor_name": "order-events"
+  "order_sensor_name": "order-events",
+  "zoo_cam_storage_name": "video-store"
 }
 ```
 
 Add a **`viam:beanjamin:order-sensor`** component to the machine, put it in the coffee service **depends_on**, and set `order_sensor_name` to that component’s name. When an order attempt finishes, one reading is queued with `start_time`, `end_time`, `order_ok`, `duration_ms`, and `error_message` (if applicable).
+
+Configure a [`viam:video:storage`](https://github.com/viam-modules/video-store) camera on the machine. After each order attempt, the coffee service issues an async `save` DoCommand. Each clip includes a fixed **N seconds** of pre-roll (ring-buffer permitting) and **N seconds** of post-roll; the short post-roll wait means the next queued order starts slightly after the prior one fully finishes.
+
+The save request includes a `tags` entry with the order UUID (for cloud data filtering) and JSON `metadata` with order and customer fields. Clips are queued after every attempt, including failed brews or panics; failures set `order_status` to `failed` and include an `error` string.
 
 **Top-level fields:**
 
@@ -214,7 +219,8 @@ Add a **`viam:beanjamin:order-sensor`** component to the machine, put it in the 
 | `place_cup`                | bool   | No       | Enable cup placement step in the brew cycle.                                                                  |
 | `clean_after_use`          | bool   | No       | Enable cleaning step after each brew.                                                                         |
 | `save_motion_requests_dir` | string | No       | Directory to save motion request payloads for debugging.                                                      |
-| `order_sensor_name`  | string | No       | Name of a `viam:beanjamin:order-sensor` sensor to notify when each order attempt completes (must appear in **depends_on**). |
+| `order_sensor_name`        | string | No       | Name of a `viam:beanjamin:order-sensor` sensor to notify when each order attempt completes (must appear in **depends_on**). |
+| `zoo_cam_storage_name`     | string | No       | Name of the “zoo” camera storage ([`viam:video:storage`](https://github.com/viam-modules/video-store) or compatible); when set, uploads a clip per order attempt (async `save`), with fixed 5s pre-roll and 5s post-roll. |
 
 ### DoCommand
 

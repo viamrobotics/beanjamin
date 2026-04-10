@@ -157,28 +157,30 @@ func (s *beanjaminCoffee) processQueue() {
 
 // safeExecuteOrder wraps executeQueuedOrder with panic recovery so that a
 // single failing order cannot kill the queue-processing goroutine and strand
-// every order behind it. Optional order sensors receive one reading when the attempt finishes.
+// every order behind it. Notifies the optional order sensor and queues a zoo-cam clip when configured.
 func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
+	ctx := context.Background()
+	videoFrom := time.Now().UTC()
 	var execErr error
 	startedAt := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
 			execErr = fmt.Errorf("panic: %v", r)
-			s.logger.Errorf("panic while processing order %s for %s: %v — skipping order",
+			s.logger.Errorf("panic while processing order %s for %s: %v — queue will still save video and order reading",
 				order.ID, order.CustomerName, r)
 		}
 		s.notifyOrderReading(order, execErr, startedAt, time.Now())
+		s.saveOrderVideo(order, videoFrom, execErr)
 	}()
-	execErr = s.executeQueuedOrder(order)
+	execErr = s.executeQueuedOrder(ctx, order)
 }
 
 // executeQueuedOrder runs a single order: says greeting, brews, says completion.
-func (s *beanjaminCoffee) executeQueuedOrder(order Order) error {
+// A non-nil return means the brew sequence failed; the caller still notifies the sensor and saves video via safeExecuteOrder.
+func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) error {
 	waitTime := time.Since(order.EnqueuedAt).Round(time.Second)
 	s.logger.Infof("starting order %s for %s (%s) — waited %s in queue",
 		order.ID, order.CustomerName, order.Drink, waitTime)
-
-	ctx := context.Background()
 
 	if order.Greeting != "" {
 		if err := s.say(ctx, order.Greeting); err != nil {
