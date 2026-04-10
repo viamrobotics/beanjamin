@@ -100,7 +100,8 @@ export default function Home() {
     if (!selectedDrink) return;
     setDrinkRejection(null);
 
-    if (selectedDrink === "espresso") {
+    const supportedDrinks = new Set(["espresso", "lungo"]);
+    if (supportedDrinks.has(selectedDrink)) {
       setStep("name");
       return;
     }
@@ -198,6 +199,7 @@ export default function Home() {
           name={name}
           email={email}
           viamConn={viamConn.current}
+          onBack={() => setStep("name")}
           onComplete={() => placeOrder(misspelled)}
           onSkip={() => placeOrder(misspelled)}
         />
@@ -224,6 +226,7 @@ export default function Home() {
           loading={loading}
           onNameChange={setName}
           onEmailChange={setEmail}
+          onBack={() => setStep("drink")}
           onSubmit={handleSubmit}
         />
       );
@@ -238,6 +241,7 @@ export default function Home() {
             setDrinkRejection(null);
             setSelectedDrink(id);
           }}
+          onBack={() => setStep("welcome")}
           onNext={handleDrinkNext}
         />
       );

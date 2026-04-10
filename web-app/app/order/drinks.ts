@@ -15,6 +15,13 @@ export const DRINKS: Drink[] = [
     available: true,
   },
   {
+    id: "lungo",
+    label: "Lungo",
+    description: "Long pull, smooth finish",
+    image: "./espresso.png",
+    available: true,
+  },
+  {
     id: "americano",
     label: "Americano",
     description: "Espresso + hot water",
