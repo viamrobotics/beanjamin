@@ -5,43 +5,34 @@ import { getQueue, type ViamConnection, type QueueOrder } from "../lib/viamClien
 
 const DONE_DISPLAY_MS = 15_000;
 
-// --- Customer-facing phase mapping --------------------------------
+// --- Step display rules -------------------------------------------------
 //
-// The Go module records raw espresso step labels (e.g. "Grinding", "Cleaning")
-// per order. The webapp owns the translation from raw step → customer-friendly
-// phase + label + styling. Cleanup steps after "Serving" all collapse to the
-// "ready" phase, which renders as a green "Ready to pick up" card identical
-// in styling to the post-Dequeue done card. Adding a new espresso step on the
-// Go side requires updating this map; unknown labels fall back to "prep" so
-// raw labels never leak to customers.
+// The Go module records the raw espresso step label per order. We show the
+// raw label verbatim for prep/brew/serve so customers see what the robot is
+// actually doing ("Grinding", "Tamping", "Brewing", ...). The only steps we
+// hide are the cleanup steps that run after the espresso is in the cup —
+// from the customer's perspective the drink is ready as soon as cleanup
+// starts, so we collapse all cleanup labels into a single "Ready to pick up"
+// state rendered with the same green card as the post-Dequeue confirmation.
 
-type CustomerPhase = "queued" | "prep" | "brewing" | "serving" | "ready";
+const READY_RAW_STEPS = new Set<string>([
+  "Grabbing filter",
+  "Unlocking portafilter",
+  "Cleaning",
+  "Finishing up",
+  "Ready", // terminal step set by the Go side after the espresso routine
+]);
 
-const PHASE_BY_RAW_STEP: Record<string, CustomerPhase> = {
-  "Grinding": "prep",
-  "Tamping": "prep",
-  "Locking portafilter": "prep",
-  "Releasing filter": "prep",
-  "Placing cup": "prep",
-  "Brewing": "brewing",
-  "Serving": "serving",
-  "Grabbing filter": "ready",
-  "Unlocking portafilter": "ready",
-  "Cleaning": "ready",
-  "Finishing up": "ready",
-};
+const READY_LABEL = "Ready to pick up";
+const QUEUED_LABEL = "Making...";
 
-const PHASE_LABELS: Record<CustomerPhase, string> = {
-  queued: "Making...",
-  prep: "Making your espresso",
-  brewing: "Brewing",
-  serving: "Serving",
-  ready: "Ready to pick up",
-};
+function isReadyStep(rawStep: string): boolean {
+  return READY_RAW_STEPS.has(rawStep);
+}
 
-function phaseFor(order: QueueOrder): CustomerPhase {
-  if (!order.raw_step) return "queued";
-  return PHASE_BY_RAW_STEP[order.raw_step] ?? "prep";
+function frontLabelFor(order: QueueOrder): string {
+  if (!order.raw_step) return QUEUED_LABEL;
+  return order.raw_step;
 }
 
 // Shared green card classes used by both the active "Ready to pick up" card
@@ -211,9 +202,8 @@ export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
 
         {/* Active queue orders */}
         {queueOrders.map((order, i) => {
-          const phase = phaseFor(order);
           const isFront = i === 0;
-          const isReady = isFront && phase === "ready";
+          const isReady = isFront && isReadyStep(order.raw_step);
 
           if (isReady) {
             // Same green styling as the post-Dequeue card so the transition
@@ -223,7 +213,7 @@ export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
                 <ReadyCardBody
                   customerName={order.customer_name}
                   orderId={order.id}
-                  label={PHASE_LABELS.ready}
+                  label={READY_LABEL}
                 />
               </div>
             );
@@ -246,7 +236,7 @@ export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
                 <div className="flex items-center gap-2 mt-1">
                   <span className="pulse-making inline-block w-2 h-2 rounded-full bg-amber-500" />
                   <span className="text-xs font-mono font-medium text-amber-600 uppercase tracking-wider">
-                    {PHASE_LABELS[phase]}
+                    {frontLabelFor(order)}
                   </span>
                 </div>
               ) : (
