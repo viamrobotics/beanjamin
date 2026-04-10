@@ -29,6 +29,12 @@
       "short_description": "Sensor that reports safe=false when the arm is moving or orders are queued."
     },
     {
+      "api": "rdk:component:sensor",
+      "model": "viam:beanjamin:order-sensor",
+      "short_description": "Sensor that queues one reading per order with start/end times and outcome.",
+      "markdown_link": "README.md#model-viambeanjaminorder-sensor"
+    },
+    {
       "api": "rdk:service:generic",
       "model": "viam:beanjamin:dial-control-motion",
       "short_description": "Translates dial inputs into relative arm motions along the X/Y/Z axes or orientation vector.",

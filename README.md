@@ -1,13 +1,14 @@
 # Beanjamin Module
 
-The `viam:beanjamin` module provides five models for arm-based automation workflows:
+The `viam:beanjamin` module provides these models for arm-based automation workflows:
 
 1. **`viam:beanjamin:coffee`** - A generic service that orchestrates a full coffee brew cycle by sequentially moving through all poses on a pose switcher.
 2. **`viam:beanjamin:multi-poses-execution-switch`** - A switch component that moves an arm between predefined poses using the Motion service.
 3. **`viam:beanjamin:text-to-speech`** - A generic service that synthesises speech via Google Cloud Text-to-Speech and plays it through an audioout service.
 4. **`viam:beanjamin:maintenance-sensor`** - A sensor component that reports whether the system is safe for maintenance (arm idle, no orders running or queued).
-5. **`viam:beanjamin:dial-control-motion`** - A generic service that translates Stream Deck dial inputs into relative arm motions.
-6. **`viam:beanjamin:customer-detector`** - A generic service that identifies return customers via facial recognition using the [`viam:vision:face-identification`](https://github.com/viam-modules/viam-face-identification) vision service.
+5. **`viam:beanjamin:order-sensor`** - A sensor that yields one reading per completed order (start/end timestamps and outcome) when wired from the coffee service.
+6. **`viam:beanjamin:dial-control-motion`** - A generic service that translates Stream Deck dial inputs into relative arm motions.
+7. **`viam:beanjamin:customer-detector`** - A generic service that identifies return customers via facial recognition using the [`viam:vision:face-identification`](https://github.com/viam-modules/viam-face-identification) vision service.
 
 ---
 
@@ -192,9 +193,12 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
   "place_cup": true,
   "clean_after_use": true,
   "save_motion_requests_dir": "/tmp/motion-requests",
+  "order_sensor_name": "order-events",
   "zoo_cam_storage_name": "video-store"
 }
 ```
+
+Add a **`viam:beanjamin:order-sensor`** component to the machine, put it in the coffee service **depends_on**, and set `order_sensor_name` to that component’s name. When an order attempt finishes, one reading is queued with `start_time`, `end_time`, `order_ok`, `duration_ms`, and `error_message` (if applicable).
 
 Configure a [`viam:video:storage`](https://github.com/viam-modules/video-store) camera on the machine. After each order attempt, the coffee service issues an async `save` DoCommand. Each clip includes a fixed **N seconds** of pre-roll (ring-buffer permitting) and **N seconds** of post-roll; the short post-roll wait means the next queued order starts slightly after the prior one fully finishes.
 
@@ -215,7 +219,8 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
 | `place_cup`                | bool   | No       | Enable cup placement step in the brew cycle.                                                                  |
 | `clean_after_use`          | bool   | No       | Enable cleaning step after each brew.                                                                         |
 | `save_motion_requests_dir` | string | No       | Directory to save motion request payloads for debugging.                                                      |
-| `zoo_cam_storage_name`     | string | No       | Name of the “zoo” camera ([`viam:video:storage`](https://github.com/viam-modules/video-store) or compatible); when set, uploads a clip per order attempt (async `save`), with fixed 5s pre-roll and 5s post-roll. |
+| `order_sensor_name`        | string | No       | Name of a `viam:beanjamin:order-sensor` sensor to notify when each order attempt completes (must appear in **depends_on**). |
+| `zoo_cam_storage_name`     | string | No       | Name of the “zoo” camera storage ([`viam:video:storage`](https://github.com/viam-modules/video-store) or compatible); when set, uploads a clip per order attempt (async `save`), with fixed 5s pre-roll and 5s post-roll. |
 
 ### DoCommand
 
@@ -448,6 +453,45 @@ Returns a single reading:
 - The arm is physically moving
 - An order is currently running
 - There are orders in the queue
+
+---
+
+## Model: `viam:beanjamin:order-sensor`
+
+**API:** `rdk:component:sensor`
+
+Receives a summary of each order attempt from the `viam:beanjamin:coffee` service. Configure the coffee service with `order_sensor_name` set to this component’s name, and add this sensor under the coffee resource’s **depends_on**.
+
+**Each reading is returned at most once** from `Readings`. When there is no queued reading, `Readings` returns [`data.ErrNoCaptureToStore`](https://pkg.go.dev/go.viam.com/rdk/data#pkg-variables) (and a nil readings map), which Data Management treats as “nothing to store” until the next order completes.
+
+### Configuration
+
+```json
+{}
+```
+
+No attributes. Wire the sensor through the coffee service as described above.
+
+### Readings
+
+With nothing queued, `Readings` returns **`ErrNoCaptureToStore`** and no readings map (clients should use `data.IsNoCaptureToStoreError` in Go).
+
+After each order attempt completes (success, failure, or panic), the **next** `Readings` call returns something like:
+
+```json
+{
+  "order_id": "<uuid>",
+  "drink": "espresso",
+  "customer_name": "Alice",
+  "order_ok": true,
+  "error_message": "",
+  "start_time": "2026-04-01T12:00:00.000000000Z",
+  "end_time": "2026-04-01T12:02:05.000000000Z",
+  "duration_ms": 125000
+}
+```
+
+`start_time` and `end_time` are UTC RFC3339Nano timestamps: wall clock from when queue processing begins for that order through when the attempt finishes (greeting, drink prep, completion speech). `duration_ms` matches `end_time − start_time`. On failure, `order_ok` is `false` and `error_message` is set; panics use a `panic: ...` message. When successful, `error_message` is an empty string.
 
 ---
 

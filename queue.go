@@ -157,24 +157,26 @@ func (s *beanjaminCoffee) processQueue() {
 
 // safeExecuteOrder wraps executeQueuedOrder with panic recovery so that a
 // single failing order cannot kill the queue-processing goroutine and strand
-// every order behind it. It always queues a zoo-cam clip for the attempt (success, error, or panic).
+// every order behind it. Notifies the optional order sensor and queues a zoo-cam clip when configured.
 func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 	ctx := context.Background()
 	videoFrom := time.Now().UTC()
 	var execErr error
+	startedAt := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
 			execErr = fmt.Errorf("panic: %v", r)
-			s.logger.Errorf("panic while processing order %s for %s: %v — queue will still save video",
+			s.logger.Errorf("panic while processing order %s for %s: %v — queue will still save video and order reading",
 				order.ID, order.CustomerName, r)
 		}
+		s.notifyOrderReading(order, execErr, startedAt, time.Now())
 		s.saveOrderVideo(order, videoFrom, execErr)
 	}()
 	execErr = s.executeQueuedOrder(ctx, order)
 }
 
 // executeQueuedOrder runs a single order: says greeting, brews, says completion.
-// A non-nil return means the brew sequence failed; the caller still saves video via safeExecuteOrder.
+// A non-nil return means the brew sequence failed; the caller still notifies the sensor and saves video via safeExecuteOrder.
 func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) error {
 	waitTime := time.Since(order.EnqueuedAt).Round(time.Second)
 	s.logger.Infof("starting order %s for %s (%s) — waited %s in queue",
@@ -200,6 +202,12 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) e
 	s.setStep("")
 	s.logger.Infof("order %s complete for %s", order.ID, order.CustomerName)
 	return nil
+}
+
+func (s *beanjaminCoffee) notifyOrderReading(order Order, execErr error, startedAt, endedAt time.Time) {
+	if s.orderSensorSink != nil {
+		s.orderSensorSink.pushOrderReading(order, execErr, startedAt, endedAt)
+	}
 }
 
 // enqueueOrder validates the order and adds it to the queue.

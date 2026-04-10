@@ -128,4 +128,3 @@ func (c connFlags) connect(ctx context.Context, logger logging.Logger) (robot.Ro
 	}
 	return machine, nil
 }
-

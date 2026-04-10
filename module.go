@@ -12,6 +12,7 @@ import (
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/components/gripper"
+	"go.viam.com/rdk/components/sensor"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
@@ -79,7 +80,8 @@ type Config struct {
 	CleanAfterUse         bool    `json:"clean_after_use,omitempty"`
 	PortafilterTaps       int     `json:"portafilter_taps,omitempty"`
 	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
-	// ZooCamStorageName is the name of the camera component (e.g. viam:video:storage) used to record and upload order clips.
+	OrderSensorName       string  `json:"order_sensor_name,omitempty"`
+
 	ZooCamStorageName string `json:"zoo_cam_storage_name,omitempty"`
 }
 
@@ -101,6 +103,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	var optDeps []string
 	if cfg.SpeechServiceName != "" {
 		optDeps = append(optDeps, generic.Named(cfg.SpeechServiceName).String())
+	}
+	if cfg.OrderSensorName != "" {
+		optDeps = append(optDeps, sensor.Named(cfg.OrderSensorName).String())
 	}
 	if cfg.ZooCamStorageName != "" {
 		optDeps = append(optDeps, camera.Named(cfg.ZooCamStorageName).String())
@@ -133,6 +138,7 @@ type beanjaminCoffee struct {
 	queue                  *OrderQueue
 	queueStop              chan struct{}
 	paused                 atomic.Bool
+	orderSensorSink        orderSensorSink // optional; named order-sensor from deps, nil if unset
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -223,23 +229,41 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger.Infof("viz client configured at %s", conf.VizURL)
 	}
 
+	var sink orderSensorSink
+	if conf.OrderSensorName != "" {
+		// Same component instance as elsewhere on the robot (not a copy).
+		sen, err := sensor.FromProvider(deps, conf.OrderSensorName)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("order sensor %q: %w", conf.OrderSensorName, err)
+		}
+		s, ok := sen.(orderSensorSink)
+		if !ok {
+			cancelFunc()
+			return nil, fmt.Errorf("resource %q must be model viam:beanjamin:order-sensor", conf.OrderSensorName)
+		}
+		sink = s
+		logger.Infof("order sensor %q connected", conf.OrderSensorName)
+	}
+
 	s := &beanjaminCoffee{
-		name:       name,
-		logger:     logger,
-		cfg:        conf,
-		filterSw:   filterSw,
-		clawsSw:    clawSw,
-		arm:        armComp,
-		fsSvc:      fsSvc,
-		cachedFS:   cachedFS,
-		speech:     speech,
-		zooCam:     zooCam,
-		gripper:    gripperComp,
-		vizEnabled: vizEnabled,
-		cancelCtx:  cancelCtx,
-		cancelFunc: cancelFunc,
-		queue:      NewOrderQueue(),
-		queueStop:  make(chan struct{}),
+		name:            name,
+		logger:          logger,
+		cfg:             conf,
+		filterSw:        filterSw,
+		clawsSw:         clawSw,
+		arm:             armComp,
+		fsSvc:           fsSvc,
+		cachedFS:        cachedFS,
+		speech:          speech,
+		zooCam:          zooCam,
+		gripper:         gripperComp,
+		vizEnabled:      vizEnabled,
+		cancelCtx:       cancelCtx,
+		cancelFunc:      cancelFunc,
+		queue:           NewOrderQueue(),
+		queueStop:       make(chan struct{}),
+		orderSensorSink: sink,
 	}
 	go s.processQueue()
 	return s, nil
