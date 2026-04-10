@@ -129,7 +129,7 @@ type beanjaminCoffee struct {
 	queue                  *OrderQueue
 	queueStop              chan struct{}
 	paused                 atomic.Bool
-	orderSensorSink orderSensorSink // optional; nil when order_sensor_name is not set
+	orderSensorSink orderSensorSink // optional; named order-sensor from deps, nil if unset
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -212,6 +212,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	var sink orderSensorSink
 	if conf.OrderSensorName != "" {
 		n := conf.OrderSensorName
+		// Same component instance as elsewhere on the robot (not a copy).
 		sen, err := sensor.FromProvider(deps, n)
 		if err != nil {
 			cancelFunc()

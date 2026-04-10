@@ -29,7 +29,7 @@ func (cfg *OrderSensorConfig) Validate(string) ([]string, []string, error) {
 	return nil, nil, nil
 }
 
-// orderSensorSink is implemented only by orderSensor; the coffee service pushes when an order completes.
+// Implemented by orderSensor; coffee calls this after each order attempt.
 type orderSensorSink interface {
 	pushOrderReading(order Order, execErr error, startedAt, endedAt time.Time)
 }
