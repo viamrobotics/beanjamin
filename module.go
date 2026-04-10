@@ -297,6 +297,12 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 				"started_at": e.StartedAt.Format(time.RFC3339),
 			}
 		}
+		// Empty string when the order is still pending; the frontend uses
+		// completed_at presence as the signal to render the green ready card.
+		completedAt := ""
+		if !o.CompletedAt.IsZero() {
+			completedAt = o.CompletedAt.Format(time.RFC3339)
+		}
 		orderMaps[i] = map[string]interface{}{
 			"id":            o.ID,
 			"drink":         o.Drink,
@@ -304,22 +310,24 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 			"enqueued_at":   o.EnqueuedAt.Format(time.RFC3339),
 			"raw_step":      o.RawStep,
 			"step_history":  history,
+			"completed_at":  completedAt,
 		}
 	}
 	step, _ := s.currentStep.Load().(string)
-	return map[string]interface{}{
-		// count is returned as float64 so in-process callers (e.g. the
-		// maintenance sensor in this same module) see the same type as
-		// gRPC callers — structpb forces all numbers to double on the
-		// wire, but the in-process path bypasses that conversion.
-		// Without the cast, an in-process .(float64) assertion silently
-		// fails and the caller reads 0.
-		"count":        float64(len(orders)),
+	resp := map[string]interface{}{
+		// count reports pending depth only — orders waiting to be made.
+		// Recently-completed orders are visible in `orders` but don't add
+		// to depth. Returned as float64 so in-process callers see the
+		// same type as gRPC callers (structpb forces all numbers to
+		// double on the wire).
+		"count":        float64(s.queue.Len()),
 		"orders":       orderMaps,
 		"is_paused":    s.paused.Load(),
 		"is_busy":      s.running.Load(),
 		"current_step": step,
-	}, nil
+	}
+	s.logger.Debugw("Status", "response", resp)
+	return resp, nil
 }
 
 func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
