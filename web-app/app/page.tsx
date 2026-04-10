@@ -12,6 +12,7 @@ import { OrderTracker } from "./order/order-tracker";
 import {
   connectToViam,
   getMachineMetadataKey,
+  getMachineName,
   prepareOrder,
   identifyCustomer,
   type ViamConnection,
@@ -29,6 +30,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [drinkRejection, setDrinkRejection] = useState<string | null>(null);
   const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
+  const [machineName, setMachineName] = useState<string | null>(null);
   const [showTracker, setShowTracker] = useState(false);
 
   // Viam connection state
@@ -46,6 +48,14 @@ export default function Home() {
         if (cancelled) return;
         viamConn.current = conn;
         console.log("[app] connected to Viam");
+
+        try {
+          const name = await getMachineName(conn);
+          if (!cancelled) setMachineName(name || "Beanjamin");
+        } catch (err) {
+          console.log("[app] failed to fetch machine name:", err);
+          if (!cancelled) setMachineName("Beanjamin");
+        }
 
         const key = await getMachineMetadataKey(conn, "anthropic_api_key");
         if (cancelled) return;
@@ -74,6 +84,7 @@ export default function Home() {
       } catch (err) {
         if (cancelled) return;
         console.error("Viam connection failed:", err);
+        setMachineName("Beanjamin");
         setViamError(
           `Viam connection failed: ${err instanceof Error ? err.message : String(err)}`
         );
@@ -245,10 +256,10 @@ export default function Home() {
         />
 
         <h1
-          className="anim-in-hero text-4xl font-mono font-bold text-neutral-900 mb-4"
+          className={`anim-in-hero text-4xl font-mono font-bold text-neutral-900 mb-4 ${machineName ? "" : "invisible"}`}
           style={{ animationDelay: "500ms" }}
         >
-          Hi, I&apos;m Cappuccina
+          Hi, I&apos;m {machineName ?? "Beanjamin"}
         </h1>
         <p
           className="anim-in-hero text-neutral-500 text-center mb-10 text-lg"
