@@ -254,7 +254,7 @@ export function FaceRegister({
   // --- Review screen ---
   if (status === "review" || status === "finishing") {
     return (
-      <main className="relative h-dvh bg-white flex flex-col items-center justify-center p-8 font-sans">
+      <main className="relative h-full bg-white flex flex-col items-center justify-center p-8 font-sans">
         <div className="w-full max-w-[512px] flex flex-col items-center gap-6">
           <h1 className="anim-in text-2xl font-semibold text-neutral-900 text-center">
             Looking good?
@@ -324,7 +324,7 @@ export function FaceRegister({
 
   // --- Capture screen ---
   return (
-    <main className="relative h-dvh bg-white flex flex-col items-center justify-center p-8 font-sans">
+    <main className="relative h-full bg-white flex flex-col items-center justify-center p-8 font-sans">
       <div className="w-full max-w-[512px] flex flex-col items-center gap-8">
         <h1 className="anim-in text-2xl font-semibold text-neutral-900 text-center">
           Let&apos;s remember your face

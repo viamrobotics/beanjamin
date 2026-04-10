@@ -197,6 +197,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) e
 		}
 	}
 
+	s.setStep("")
 	s.logger.Infof("order %s complete for %s", order.ID, order.CustomerName)
 	return nil
 }

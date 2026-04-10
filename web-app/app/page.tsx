@@ -1,24 +1,24 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Image from "next/image";
 import { DRINKS } from "./order/drinks";
 import { ChooseDrink } from "./order/choose-drink";
 import { EnterName } from "./order/enter-name";
-import { FaceRegister } from "./order/face-register";
-import { Progress } from "./order/progress";
-import { OrderResult } from "./order/order-result";
+import dynamic from "next/dynamic";
+const FaceRegister = dynamic(() => import("./order/face-register").then(m => ({ default: m.FaceRegister })), { ssr: false });
+import { OrderConfirmation } from "./order/order-confirmation";
+import { OrderTracker } from "./order/order-tracker";
 import {
   connectToViam,
   getMachineMetadataKey,
   prepareOrder,
-  getQueue,
   identifyCustomer,
   type ViamConnection,
 } from "./lib/viamClient";
 import { misspellName } from "./lib/misspell";
 
-type Step = "welcome" | "drink" | "name" | "face-register" | "progress" | "result";
+type Step = "welcome" | "drink" | "name" | "face-register" | "confirmation";
 
 export default function Home() {
   const [step, setStep] = useState<Step>("welcome");
@@ -27,24 +27,14 @@ export default function Home() {
   const [selectedDrink, setSelectedDrink] = useState<string | null>(null);
   const [misspelled, setMisspelled] = useState("");
   const [loading, setLoading] = useState(false);
-  const [queueCount, setQueueCount] = useState(0);
   const [drinkRejection, setDrinkRejection] = useState<string | null>(null);
   const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
+  const [showTracker, setShowTracker] = useState(false);
 
   // Viam connection state
   const viamConn = useRef<ViamConnection | null>(null);
   const anthropicKey = useRef<string>("");
   const [viamError, setViamError] = useState<string | null>(null);
-
-  async function refreshQueueCount() {
-    if (!viamConn.current) return;
-    try {
-      const q = await getQueue(viamConn.current);
-      setQueueCount(q.count);
-    } catch {
-      // ignore polling errors
-    }
-  }
 
   // Connect to Viam on mount and fetch Anthropic API key from machine metadata
   useEffect(() => {
@@ -66,9 +56,6 @@ export default function Home() {
           return;
         }
         anthropicKey.current = key;
-
-        // Fetch real queue count after connecting
-        refreshQueueCount();
 
         // Try to identify a returning customer
         try {
@@ -124,8 +111,6 @@ export default function Home() {
           customerName: "",
         });
       } catch (err) {
-        // The error message from the Go module looks like:
-        // 'unsupported drink "latte": A latte? Bold request...'
         const msg = err instanceof Error ? err.message : String(err);
         const colonIdx = msg.indexOf(": ");
         setDrinkRejection(colonIdx >= 0 ? msg.slice(colonIdx + 2) : msg);
@@ -135,10 +120,11 @@ export default function Home() {
     }
   }
 
-  function proceedToProgress(misspelledName: string) {
-    console.log("[app] proceeding to progress for:", misspelledName);
+  function placeOrder(misspelledName: string) {
+    console.log("[app] placing order for:", misspelledName);
     setMisspelled(misspelledName);
-    setStep("progress");
+    setStep("confirmation");
+    setShowTracker(true);
 
     // Enqueue the order — returns immediately with queue position.
     if (viamConn.current) {
@@ -148,13 +134,7 @@ export default function Home() {
         drinkLabel: drink?.label ?? selectedDrink!,
         customerName: misspelledName,
         pronunciation: undefined,
-      })
-        .then((res) => {
-          if (res.queue_position != null) {
-            setQueueCount(res.queue_position);
-          }
-        })
-        .catch((err) => console.error("prepare_order failed:", err));
+      }).catch((err) => console.error("prepare_order failed:", err));
     }
   }
 
@@ -177,20 +157,84 @@ export default function Home() {
         setStep("face-register");
       } else {
         console.log("[app] skipping face-register:", !email.trim() ? "no email" : "returning customer");
-        proceedToProgress(result.misspelled || name);
+        placeOrder(result.misspelled || name);
       }
     } catch (err) {
       console.error("Misspell error:", err);
-      proceedToProgress(name);
+      placeOrder(name);
     } finally {
       setLoading(false);
     }
   }
 
-  // --- Welcome screen ---
-  if (step === "welcome") {
+  const handleConfirmationDismiss = useCallback(() => {
+    setStep("welcome");
+    setName("");
+    setEmail("");
+    setSelectedDrink(null);
+    setWelcomeBack(null);
+  }, []);
+
+  const handleTrackerEmpty = useCallback(() => {
+    setShowTracker(false);
+  }, []);
+
+  // --- Render the left panel content based on step ---
+  function renderStep() {
+    if (step === "face-register") {
+      return (
+        <FaceRegister
+          name={name}
+          email={email}
+          viamConn={viamConn.current}
+          onComplete={() => placeOrder(misspelled)}
+          onSkip={() => placeOrder(misspelled)}
+        />
+      );
+    }
+
+    if (step === "confirmation") {
+      const drink = DRINKS.find((d) => d.id === selectedDrink);
+      return (
+        <OrderConfirmation
+          misspelled={misspelled}
+          actualName={name}
+          drinkLabel={drink?.label ?? ""}
+          onDismiss={handleConfirmationDismiss}
+        />
+      );
+    }
+
+    if (step === "name") {
+      return (
+        <EnterName
+          name={name}
+          email={email}
+          loading={loading}
+          onNameChange={setName}
+          onEmailChange={setEmail}
+          onSubmit={handleSubmit}
+        />
+      );
+    }
+
+    if (step === "drink") {
+      return (
+        <ChooseDrink
+          selectedDrink={selectedDrink}
+          rejection={drinkRejection}
+          onSelect={(id) => {
+            setDrinkRejection(null);
+            setSelectedDrink(id);
+          }}
+          onNext={handleDrinkNext}
+        />
+      );
+    }
+
+    // --- Welcome screen (default) ---
     return (
-      <main className="h-dvh bg-white flex flex-col items-center justify-center p-8 font-sans">
+      <main className="h-full bg-white flex flex-col items-center justify-center p-8 font-sans">
         <Image
           src="./beans.png"
           alt="coffee beans"
@@ -250,77 +294,22 @@ export default function Home() {
     );
   }
 
-  // --- Face registration screen ---
-  if (step === "face-register") {
-    return (
-      <FaceRegister
-        name={name}
-        email={email}
-        viamConn={viamConn.current}
-        onComplete={() => proceedToProgress(misspelled)}
-        onSkip={() => proceedToProgress(misspelled)}
-      />
-    );
-  }
-
-  // --- Progress screen ---
-  if (step === "progress") {
-    return (
-      <Progress
-        customerName={misspelled}
-        viamConn={viamConn.current}
-        onComplete={() => setStep("result")}
-      />
-    );
-  }
-
-  // --- Result screen ---
-  if (step === "result") {
-    const drink = DRINKS.find((d) => d.id === selectedDrink);
-    return (
-      <OrderResult
-        misspelled={misspelled}
-        actualName={name}
-        drinkLabel={drink?.label ?? ""}
-        queueCount={queueCount}
-        onReset={() => {
-          setStep("welcome");
-          setName("");
-          setEmail("");
-          setSelectedDrink(null);
-          setWelcomeBack(null);
-          refreshQueueCount();
-        }}
-      />
-    );
-  }
-
-  // --- Enter name screen ---
-  if (step === "name") {
-    return (
-      <EnterName
-        name={name}
-        email={email}
-        loading={loading}
-        queueCount={queueCount}
-        onNameChange={setName}
-        onEmailChange={setEmail}
-        onSubmit={handleSubmit}
-      />
-    );
-  }
-
-  // --- Choose drink screen ---
   return (
-    <ChooseDrink
-      selectedDrink={selectedDrink}
-      queueCount={queueCount}
-      rejection={drinkRejection}
-      onSelect={(id) => {
-        setDrinkRejection(null);
-        setSelectedDrink(id);
-      }}
-      onNext={handleDrinkNext}
-    />
+    <div className="h-dvh flex">
+      {/* Left panel: ordering flow */}
+      <div className="flex-1 min-w-0 relative transition-all duration-500">
+        {renderStep()}
+      </div>
+
+      {/* Right panel: live order tracker */}
+      {showTracker && (
+        <div className="w-[340px] shrink-0 border-l border-neutral-200">
+          <OrderTracker
+            viamConn={viamConn.current}
+            onEmpty={handleTrackerEmpty}
+          />
+        </div>
+      )}
+    </div>
   );
 }
