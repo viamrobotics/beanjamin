@@ -22,7 +22,10 @@ export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
   const prevOrderIds = useRef<Set<string>>(new Set());
   const prevOrderMap = useRef<Map<string, QueueOrder>>(new Map());
   const doneIds = useRef<Set<string>>(new Set());
-  const hasPolled = useRef(false);
+  // Don't fire onEmpty until we've seen at least one order — otherwise the
+  // tracker dismisses itself immediately after mount because prepareOrder is
+  // fired asynchronously from placeOrder and hasn't enqueued yet.
+  const hasSeenOrders = useRef(false);
 
   const poll = useCallback(async () => {
     if (!viamConn) return;
@@ -55,17 +58,19 @@ export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
       prevOrderMap.current = new Map(current.map((o) => [o.id, o]));
       setQueueOrders(current);
       setCurrentStep(q.current_step || "");
-      hasPolled.current = true;
-    } catch {
-      // ignore polling errors
+      if (current.length > 0) {
+        hasSeenOrders.current = true;
+      }
+    } catch (err) {
+      console.error("[order-tracker] poll failed:", err);
     }
   }, [viamConn]);
 
-  // Poll every 2 seconds
+  // Poll every second
   useEffect(() => {
     if (!viamConn) return;
     poll();
-    const interval = setInterval(poll, 2000);
+    const interval = setInterval(poll, 1000);
     return () => clearInterval(interval);
   }, [viamConn, poll]);
 
@@ -89,9 +94,16 @@ export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
     return () => clearInterval(timer);
   }, [doneOrders.length]);
 
-  // Notify parent when queue and done list are both empty (but only after first poll)
+  // Notify parent when queue and done list are both empty — but only after
+  // we've actually observed at least one order, so the tracker doesn't
+  // dismiss itself during the brief window between mount and the enqueue
+  // landing on the robot.
   useEffect(() => {
-    if (hasPolled.current && queueOrders.length === 0 && doneOrders.length === 0) {
+    if (
+      hasSeenOrders.current &&
+      queueOrders.length === 0 &&
+      doneOrders.length === 0
+    ) {
       onEmpty();
     }
   }, [queueOrders.length, doneOrders.length, onEmpty]);

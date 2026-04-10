@@ -247,6 +247,7 @@ export async function prepareOrder(
       ...(greeting && { initial_greeting: greeting }),
     },
   });
+  console.log("[viamClient] prepareOrder result:", result);
   return result as unknown as { status: string };
 }
 

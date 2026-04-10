@@ -279,7 +279,10 @@ func (s *beanjaminCoffee) setStep(step string) {
 
 func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, error) {
 	orders := s.queue.List()
-	orderMaps := make([]map[string]interface{}, len(orders))
+	// structpb.NewStruct (used by RDK to serialize Status over the wire) only
+	// accepts []interface{} for list values, not []map[string]interface{}, so
+	// the slice element type must be interface{}.
+	orderMaps := make([]interface{}, len(orders))
 	for i, o := range orders {
 		orderMaps[i] = map[string]interface{}{
 			"id":            o.ID,
