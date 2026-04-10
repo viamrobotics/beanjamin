@@ -37,7 +37,14 @@ function isDevMode(): boolean {
 
 // Simulated queue: each order takes DEV_ORDER_DURATION_MS to process
 const DEV_ORDER_DURATION_MS = 15_000;
-const DEV_STEPS = ["Grinding", "Tamping", "Locking portafilter", "Brewing", "Serving"];
+const DEV_STEPS = [
+  "Grinding",
+  "Tamping",
+  "Locking portafilter",
+  "Brewing",
+  "Serving",
+  "Cleaning", // exercises the "Ready to pick up" green card in dev mode
+];
 
 interface DevOrder {
   id: string;
@@ -167,11 +174,18 @@ export async function getMachineMetadataKey(
   return typeof value === "string" ? value : undefined;
 }
 
+export interface StepEntry {
+  step: string;
+  started_at: string;
+}
+
 export interface QueueOrder {
   id: string;
   drink: string;
   customer_name: string;
   enqueued_at: string;
+  raw_step: string;
+  step_history: StepEntry[];
 }
 
 export interface QueueStatus {
@@ -184,17 +198,24 @@ export interface QueueStatus {
 
 export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
   if (isDevMode()) {
+    const devStep = getDevStep();
     return {
       count: devQueue.length,
-      orders: devQueue.map((o) => ({
+      orders: devQueue.map((o, i) => ({
         id: o.id,
         drink: "espresso",
         customer_name: o.name,
         enqueued_at: new Date().toISOString(),
+        // Only the front-of-queue order is being processed; others are queued.
+        raw_step: i === 0 ? devStep : "",
+        step_history:
+          i === 0 && devStep
+            ? [{ step: devStep, started_at: new Date().toISOString() }]
+            : [],
       })),
       is_paused: false,
       is_busy: devQueue.length > 0,
-      current_step: getDevStep(),
+      current_step: devStep,
     };
   }
 

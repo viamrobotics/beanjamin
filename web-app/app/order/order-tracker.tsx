@@ -5,6 +5,85 @@ import { getQueue, type ViamConnection, type QueueOrder } from "../lib/viamClien
 
 const DONE_DISPLAY_MS = 15_000;
 
+// --- Customer-facing phase mapping --------------------------------
+//
+// The Go module records raw espresso step labels (e.g. "Grinding", "Cleaning")
+// per order. The webapp owns the translation from raw step → customer-friendly
+// phase + label + styling. Cleanup steps after "Serving" all collapse to the
+// "ready" phase, which renders as a green "Ready to pick up" card identical
+// in styling to the post-Dequeue done card. Adding a new espresso step on the
+// Go side requires updating this map; unknown labels fall back to "prep" so
+// raw labels never leak to customers.
+
+type CustomerPhase = "queued" | "prep" | "brewing" | "serving" | "ready";
+
+const PHASE_BY_RAW_STEP: Record<string, CustomerPhase> = {
+  "Grinding": "prep",
+  "Tamping": "prep",
+  "Locking portafilter": "prep",
+  "Releasing filter": "prep",
+  "Placing cup": "prep",
+  "Brewing": "brewing",
+  "Serving": "serving",
+  "Grabbing filter": "ready",
+  "Unlocking portafilter": "ready",
+  "Cleaning": "ready",
+  "Finishing up": "ready",
+};
+
+const PHASE_LABELS: Record<CustomerPhase, string> = {
+  queued: "Making...",
+  prep: "Making your espresso",
+  brewing: "Brewing",
+  serving: "Serving",
+  ready: "Ready to pick up",
+};
+
+function phaseFor(order: QueueOrder): CustomerPhase {
+  if (!order.raw_step) return "queued";
+  return PHASE_BY_RAW_STEP[order.raw_step] ?? "prep";
+}
+
+// Shared green card classes used by both the active "Ready to pick up" card
+// and the post-Dequeue "Ready!" done card so the transition between them is
+// visually seamless.
+const GREEN_CARD_CLASSES =
+  "anim-slide-in rounded-2xl bg-white border-2 border-emerald-300 px-5 py-4";
+const NORMAL_CARD_CLASSES =
+  "anim-slide-in rounded-2xl bg-white border border-neutral-200 px-5 py-4";
+
+function ReadyCardBody({
+  customerName,
+  orderId,
+  label,
+}: {
+  customerName: string;
+  orderId: string;
+  label: string;
+}) {
+  return (
+    <>
+      <div className="flex items-baseline justify-between gap-2">
+        <p
+          className="text-lg text-neutral-900 truncate"
+          style={{ fontFamily: "var(--font-just-me), cursive" }}
+        >
+          {customerName}
+        </p>
+        <span className="text-[10px] font-mono text-neutral-300 shrink-0">
+          {orderId.slice(0, 8)}
+        </span>
+      </div>
+      <div className="flex items-center gap-2 mt-1">
+        <span className="text-emerald-500 text-sm">&#10003;</span>
+        <span className="text-xs font-mono font-medium text-emerald-600 uppercase tracking-wider">
+          {label}
+        </span>
+      </div>
+    </>
+  );
+}
+
 interface DoneOrder {
   order: QueueOrder;
   removedAt: number;
@@ -18,7 +97,6 @@ interface OrderTrackerProps {
 export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
   const [queueOrders, setQueueOrders] = useState<QueueOrder[]>([]);
   const [doneOrders, setDoneOrders] = useState<DoneOrder[]>([]);
-  const [currentStep, setCurrentStep] = useState("");
   const prevOrderIds = useRef<Set<string>>(new Set());
   const prevOrderMap = useRef<Map<string, QueueOrder>>(new Map());
   const doneIds = useRef<Set<string>>(new Set());
@@ -57,7 +135,6 @@ export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
       prevOrderIds.current = currentIdSet;
       prevOrderMap.current = new Map(current.map((o) => [o.id, o]));
       setQueueOrders(current);
-      setCurrentStep(q.current_step || "");
       if (current.length > 0) {
         hasSeenOrders.current = true;
       }
@@ -121,63 +198,65 @@ export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
       </h2>
 
       <div className="flex-1 overflow-y-auto space-y-3">
-        {/* Done orders at top */}
+        {/* Done orders at top — post-Dequeue confirmation */}
         {doneOrders.map((done) => (
-          <div
-            key={`done-${done.order.id}`}
-            className="anim-slide-in rounded-2xl bg-white border-2 border-emerald-300 px-5 py-4"
-          >
-            <div className="flex items-baseline justify-between gap-2">
-              <p
-                className="text-lg text-neutral-900 truncate"
-                style={{ fontFamily: "var(--font-just-me), cursive" }}
-              >
-                {done.order.customer_name}
-              </p>
-              <span className="text-[10px] font-mono text-neutral-300 shrink-0">
-                {done.order.id.slice(0, 8)}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-emerald-500 text-sm">&#10003;</span>
-              <span className="text-xs font-mono font-medium text-emerald-600 uppercase tracking-wider">
-                Ready!
-              </span>
-            </div>
+          <div key={`done-${done.order.id}`} className={GREEN_CARD_CLASSES}>
+            <ReadyCardBody
+              customerName={done.order.customer_name}
+              orderId={done.order.id}
+              label="Ready!"
+            />
           </div>
         ))}
 
         {/* Active queue orders */}
-        {queueOrders.map((order, i) => (
-          <div
-            key={order.id}
-            className="anim-slide-in rounded-2xl bg-white border border-neutral-200 px-5 py-4"
-          >
-            <div className="flex items-baseline justify-between gap-2">
-              <p
-                className="text-lg text-neutral-900 truncate"
-                style={{ fontFamily: "var(--font-just-me), cursive" }}
-              >
-                {order.customer_name}
-              </p>
-              <span className="text-[10px] font-mono text-neutral-300 shrink-0">
-                {order.id.slice(0, 8)}
-              </span>
-            </div>
-            {i === 0 ? (
-              <div className="flex items-center gap-2 mt-1">
-                <span className="pulse-making inline-block w-2 h-2 rounded-full bg-amber-500" />
-                <span className="text-xs font-mono font-medium text-amber-600 uppercase tracking-wider">
-                  {currentStep || "Making..."}
+        {queueOrders.map((order, i) => {
+          const phase = phaseFor(order);
+          const isFront = i === 0;
+          const isReady = isFront && phase === "ready";
+
+          if (isReady) {
+            // Same green styling as the post-Dequeue card so the transition
+            // from "Ready to pick up" → "Ready!" is just a label swap.
+            return (
+              <div key={order.id} className={GREEN_CARD_CLASSES}>
+                <ReadyCardBody
+                  customerName={order.customer_name}
+                  orderId={order.id}
+                  label={PHASE_LABELS.ready}
+                />
+              </div>
+            );
+          }
+
+          return (
+            <div key={order.id} className={NORMAL_CARD_CLASSES}>
+              <div className="flex items-baseline justify-between gap-2">
+                <p
+                  className="text-lg text-neutral-900 truncate"
+                  style={{ fontFamily: "var(--font-just-me), cursive" }}
+                >
+                  {order.customer_name}
+                </p>
+                <span className="text-[10px] font-mono text-neutral-300 shrink-0">
+                  {order.id.slice(0, 8)}
                 </span>
               </div>
-            ) : (
-              <p className="text-xs font-mono text-neutral-400 mt-1 uppercase tracking-wider">
-                In queue &middot; #{i + 1}
-              </p>
-            )}
-          </div>
-        ))}
+              {isFront ? (
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="pulse-making inline-block w-2 h-2 rounded-full bg-amber-500" />
+                  <span className="text-xs font-mono font-medium text-amber-600 uppercase tracking-wider">
+                    {PHASE_LABELS[phase]}
+                  </span>
+                </div>
+              ) : (
+                <p className="text-xs font-mono text-neutral-400 mt-1 uppercase tracking-wider">
+                  In queue &middot; #{i + 1}
+                </p>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

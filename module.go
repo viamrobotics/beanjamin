@@ -134,7 +134,8 @@ type beanjaminCoffee struct {
 	cancelCtx              context.Context
 	cancelFunc             func()
 	running                atomic.Bool
-	currentStep            atomic.Value // string: current step label for the active order
+	currentStep            atomic.Value // string: current step label for the active order (debug)
+	currentOrderID         atomic.Value // string: ID of the order currently being processed; "" when idle
 	queue                  *OrderQueue
 	queueStop              chan struct{}
 	paused                 atomic.Bool
@@ -275,6 +276,9 @@ func (s *beanjaminCoffee) Name() resource.Name {
 
 func (s *beanjaminCoffee) setStep(step string) {
 	s.currentStep.Store(step)
+	if id, ok := s.currentOrderID.Load().(string); ok && id != "" {
+		s.queue.SetStep(id, step)
+	}
 }
 
 func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, error) {
@@ -284,11 +288,22 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 	// the slice element type must be interface{}.
 	orderMaps := make([]interface{}, len(orders))
 	for i, o := range orders {
+		// structpb.NewStruct rejects []map[string]interface{} as list values,
+		// so step_history must also be []interface{}.
+		history := make([]interface{}, len(o.StepHistory))
+		for j, e := range o.StepHistory {
+			history[j] = map[string]interface{}{
+				"step":       e.Step,
+				"started_at": e.StartedAt.Format(time.RFC3339),
+			}
+		}
 		orderMaps[i] = map[string]interface{}{
 			"id":            o.ID,
 			"drink":         o.Drink,
 			"customer_name": o.CustomerName,
 			"enqueued_at":   o.EnqueuedAt.Format(time.RFC3339),
+			"raw_step":      o.RawStep,
+			"step_history":  history,
 		}
 	}
 	step, _ := s.currentStep.Load().(string)
