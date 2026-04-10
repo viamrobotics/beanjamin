@@ -9,7 +9,18 @@ import (
 	"github.com/google/uuid"
 )
 
+// StepEntry records the start of a single processing step for an order.
+type StepEntry struct {
+	Step      string    `json:"step"`
+	StartedAt time.Time `json:"started_at"`
+}
+
 // Order represents a customer coffee order in the queue.
+//
+// The first six fields are set at construction time and never change.
+// RawStep and StepHistory are mutated as the order moves through the
+// espresso routine; both are guarded by OrderQueue.mu and must only be
+// updated through OrderQueue.SetStep.
 type Order struct {
 	ID           string    `json:"id"`
 	Drink        string    `json:"drink"`
@@ -17,6 +28,9 @@ type Order struct {
 	Greeting     string    `json:"greeting"`
 	Completion   string    `json:"completion"`
 	EnqueuedAt   time.Time `json:"enqueued_at"`
+
+	RawStep     string      `json:"raw_step"`
+	StepHistory []StepEntry `json:"step_history"`
 }
 
 // OrderQueue is a thread-safe FIFO order queue.
@@ -80,13 +94,40 @@ func (q *OrderQueue) Len() int {
 	return len(q.orders)
 }
 
-// List returns a copy of all orders in the queue.
+// List returns a copy of all orders in the queue. StepHistory is deep-copied
+// so callers can read the snapshot without racing against concurrent SetStep
+// updates from the espresso goroutine.
 func (q *OrderQueue) List() []Order {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	out := make([]Order, len(q.orders))
-	copy(out, q.orders)
+	for i, o := range q.orders {
+		out[i] = o
+		if o.StepHistory != nil {
+			out[i].StepHistory = make([]StepEntry, len(o.StepHistory))
+			copy(out[i].StepHistory, o.StepHistory)
+		}
+	}
 	return out
+}
+
+// SetStep records a step transition for the order matching id. It updates
+// RawStep and appends to StepHistory. No-op if no order matches (the order
+// may have already been dequeued).
+func (q *OrderQueue) SetStep(id, rawStep string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i := range q.orders {
+		if q.orders[i].ID != id {
+			continue
+		}
+		q.orders[i].RawStep = rawStep
+		q.orders[i].StepHistory = append(q.orders[i].StepHistory, StepEntry{
+			Step:      rawStep,
+			StartedAt: time.Now(),
+		})
+		return
+	}
 }
 
 // Clear removes all orders from the queue and returns how many were removed.
@@ -134,7 +175,9 @@ func (s *beanjaminCoffee) processQueue() {
 			s.logger.Infof("processing order %s for %s (%s) — %d order(s) waiting behind it",
 				order.ID, order.CustomerName, order.Drink, remaining)
 
+			s.currentOrderID.Store(order.ID)
 			s.safeExecuteOrder(order)
+			s.currentOrderID.Store("")
 			s.queue.Dequeue()
 
 			// If cleanup is not automatic, pause
