@@ -291,7 +291,7 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 				order.ID, order.CustomerName, r)
 		}
 		s.notifyOrderReading(order, execErr, startedAt, time.Now())
-		s.saveOrderVideo(order, videoFrom, execErr)
+		s.saveOrderVideoAsync(order, videoFrom, execErr)
 	}()
 	execErr = s.executeQueuedOrder(ctx, order)
 }
