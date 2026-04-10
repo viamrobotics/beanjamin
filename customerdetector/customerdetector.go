@@ -52,9 +52,8 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.DataDir == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "data_dir")
 	}
-	return []string{
+	return nil, []string{
 			camera.Named(cfg.CameraName).String(),
-		}, []string{
 			vision.Named(cfg.VisionServiceName).String(),
 		}, nil
 }
@@ -71,7 +70,8 @@ type customerDetector struct {
 
 	name       resource.Name
 	logger     logging.Logger
-	camera     camera.Camera
+	camera     camera.Camera // may be nil if camera is unavailable
+	cameraName string
 	dataDir    string
 	threshold  float64
 	visionName string
@@ -92,10 +92,9 @@ func newCustomerDetector(
 		return nil, err
 	}
 
-	cam, err := camera.FromProvider(deps, conf.CameraName)
-	if err != nil {
-		return nil, fmt.Errorf("camera %q not found in dependencies: %w", conf.CameraName, err)
-	}
+	// Camera is optional — the service can still handle non-camera commands
+	// (list_customers, remove_customer, etc.) when the webcam is disconnected.
+	cam, _ := camera.FromProvider(deps, conf.CameraName)
 
 	// Ensure data directories exist before the face-identification module
 	// starts — it crashes if picture_directory is missing.
@@ -117,6 +116,7 @@ func newCustomerDetector(
 		name:       rawConf.ResourceName(),
 		logger:     logger,
 		camera:     cam,
+		cameraName: conf.CameraName,
 		vision:     vis,
 		visionName: conf.VisionServiceName,
 		dataDir:    conf.DataDir,
@@ -133,6 +133,13 @@ func newCustomerDetector(
 
 func (cd *customerDetector) Name() resource.Name {
 	return cd.name
+}
+
+func (cd *customerDetector) getCamera() (camera.Camera, error) {
+	if cd.camera == nil {
+		return nil, fmt.Errorf("camera %q is not available", cd.cameraName)
+	}
+	return cd.camera, nil
 }
 
 func (cd *customerDetector) getVision() (vision.Service, error) {
@@ -165,7 +172,7 @@ func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]interf
 	}
 	if _, ok := cmd["get_info"]; ok {
 		return map[string]interface{}{
-			"camera_name": cd.camera.Name().ShortName(),
+			"camera_name": cd.cameraName,
 		}, nil
 	}
 	return nil, fmt.Errorf("unknown command, supported: register_customer, finish_registration, identify_customer, list_customers, remove_customer, get_info")
@@ -183,7 +190,11 @@ func (cd *customerDetector) registerCustomer(ctx context.Context, name, email st
 	}
 
 	// Capture an image from the camera.
-	img, err := camera.DecodeImageFromCamera(ctx, cd.camera, nil, nil)
+	cam, err := cd.getCamera()
+	if err != nil {
+		return nil, err
+	}
+	img, err := camera.DecodeImageFromCamera(ctx, cam, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to capture image: %w", err)
 	}
@@ -278,7 +289,11 @@ func (cd *customerDetector) identifyCustomer(ctx context.Context) (map[string]in
 		return nil, err
 	}
 
-	detections, err := vis.DetectionsFromCamera(ctx, cd.camera.Name().ShortName(), nil)
+	cam, err := cd.getCamera()
+	if err != nil {
+		return nil, err
+	}
+	detections, err := vis.DetectionsFromCamera(ctx, cam.Name().ShortName(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get detections: %w", err)
 	}

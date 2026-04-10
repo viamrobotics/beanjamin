@@ -30,6 +30,7 @@ export default function Home() {
   const [queueCount, setQueueCount] = useState(0);
   const [drinkRejection, setDrinkRejection] = useState<string | null>(null);
   const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
+  const [cameraDown, setCameraDown] = useState(false);
 
   // Viam connection state
   const viamConn = useRef<ViamConnection | null>(null);
@@ -83,6 +84,7 @@ export default function Home() {
           }
         } catch (err) {
           console.log("[app] identify skipped:", err);
+          if (!cancelled) setCameraDown(true);
         }
       } catch (err) {
         if (cancelled) return;
@@ -236,6 +238,12 @@ export default function Home() {
         {viamError && (
           <p className="text-red-500 text-sm text-center mb-4 max-w-md">
             {viamError}
+          </p>
+        )}
+
+        {cameraDown && !viamError && (
+          <p className="text-amber-600 text-sm text-center mb-4">
+            Camera unavailable — face recognition is offline
           </p>
         )}
 
