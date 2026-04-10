@@ -93,11 +93,11 @@ func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]inter
 		return nil, fmt.Errorf("failed to query coffee service: %w", err)
 	}
 
-	isRunning, _ := resp["is_running"].(bool)
+	isBusy, _ := resp["is_busy"].(bool)
 	queueCount, _ := resp["count"].(float64)
 
 	return map[string]interface{}{
-		"is_safe": !armMoving && !isRunning && queueCount == 0,
+		"is_safe": !armMoving && !isBusy && queueCount == 0,
 	}, nil
 }
 

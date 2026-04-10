@@ -249,7 +249,7 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 		"count":        len(orders),
 		"orders":       orderMaps,
 		"is_paused":    s.paused.Load(),
-		"is_running":   s.running.Load(),
+		"is_busy":      s.running.Load(),
 		"current_step": step,
 	}, nil
 }

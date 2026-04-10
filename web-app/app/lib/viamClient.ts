@@ -164,7 +164,7 @@ export interface QueueStatus {
   count: number;
   orders: QueueOrder[];
   is_paused: boolean;
-  is_running: boolean;
+  is_busy: boolean;
   current_step: string;
 }
 
@@ -179,7 +179,7 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
         enqueued_at: new Date().toISOString(),
       })),
       is_paused: false,
-      is_running: devQueue.length > 0,
+      is_busy: devQueue.length > 0,
       current_step: getDevStep(),
     };
   }

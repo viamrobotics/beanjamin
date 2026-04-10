@@ -249,7 +249,7 @@ Only `drink` is required. If `initial_greeting` is omitted, a random greeting is
 Returns:
 
 ```json
-{"count": 2, "orders": ["Alice", "Bob"], "is_paused": false, "is_running": true}
+{"count": 2, "orders": ["Alice", "Bob"], "is_paused": false, "is_busy": true}
 ```
 
 **`proceed`** - Resume queue processing after a pause between orders.
