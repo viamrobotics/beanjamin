@@ -182,7 +182,7 @@ func (s *beanjaminCoffee) processQueue() {
 
 			// If the operator cancelled the running order, pause so no new
 			// orders start until they explicitly send 'proceed'.
-			if s.pauseAfterCancel.Swap(false) {
+			if s.paused.Swap(false) {
 				s.logger.Infof("order cancelled — queue paused, send 'proceed' to resume")
 				s.paused.Store(true)
 				select {
