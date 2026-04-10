@@ -384,6 +384,7 @@ func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
 		return nil, errors.New("no sequence in progress")
 	}
 	s.pauseAfterCancel.Store(true)
+	s.paused.Store(true)
 	s.mu.Lock()
 	s.cancelFunc()
 	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
