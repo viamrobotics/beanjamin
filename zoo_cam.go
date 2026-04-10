@@ -21,7 +21,7 @@ func formatClipTimestampUTC(t time.Time) string {
 // saveOrderVideo asks the optional zoo cam (viam:video:storage) to slice [from, now] and queue cloud upload.
 // See https://github.com/viam-modules/video-store — uses async "save" so the in-progress segment can finish.
 // execErr is nil when the order finished the brew sequence; non-nil records failure (including panic) in metadata.
-func (s *beanjaminCoffee) saveOrderVideo(ctx context.Context, order Order, from time.Time, execErr error) {
+func (s *beanjaminCoffee) saveOrderVideo(order Order, from time.Time, execErr error) {
 	if s.zooCam == nil {
 		return
 	}
@@ -42,12 +42,8 @@ func (s *beanjaminCoffee) saveOrderVideo(ctx context.Context, order Order, from 
 		return
 	}
 	clipFrom := from.Add(-zooCamClipLead)
-	trailCtx, trailCancel := context.WithCancel(s.cancelCtx)
-	defer trailCancel()
-	if err := sleepUntil(trailCtx, zooCamClipTrail); err != nil {
-		s.logger.Warnf("zoo cam: trail wait interrupted for order %s: %v", order.ID, err)
-		return
-	}
+	// Post-roll is not tied to service/caller cancellation—we still want to queue the clip.
+	time.Sleep(zooCamClipTrail)
 	to := time.Now().UTC()
 	cmd := map[string]interface{}{
 		"command":  "save",
@@ -57,23 +53,10 @@ func (s *beanjaminCoffee) saveOrderVideo(ctx context.Context, order Order, from 
 		"tags":     []string{order.ID},
 		"async":    true,
 	}
-	resp, err := s.zooCam.DoCommand(ctx, cmd)
+	resp, err := s.zooCam.DoCommand(context.Background(), cmd)
 	if err != nil {
 		s.logger.Warnf("zoo cam: save failed for order %s: %v", order.ID, err)
 		return
 	}
 	s.logger.Infof("zoo cam: queued upload for order %s (response: %+v)", order.ID, resp)
-}
-
-// sleepUntil waits for d unless ctx is cancelled first. It uses time.NewTimer (not time.After) so a
-// cancelled context does not leave a timer running until d elapses.
-func sleepUntil(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
 }

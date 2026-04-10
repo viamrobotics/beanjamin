@@ -168,7 +168,7 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 			s.logger.Errorf("panic while processing order %s for %s: %v — queue will still save video",
 				order.ID, order.CustomerName, r)
 		}
-		s.saveOrderVideo(ctx, order, videoFrom, execErr)
+		s.saveOrderVideo(order, videoFrom, execErr)
 	}()
 	execErr = s.executeQueuedOrder(ctx, order)
 }
