@@ -76,6 +76,7 @@ type Config struct {
 	LungoBrewTimeSec      float64 `json:"lungo_brew_time_sec,omitempty"`
 	PlaceCup              bool    `json:"place_cup,omitempty"`
 	CleanAfterUse         bool    `json:"clean_after_use,omitempty"`
+	PortafilterTaps       int     `json:"portafilter_taps,omitempty"`
 	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
 }
 
