@@ -66,21 +66,18 @@ function getDevStep(): string {
 let sdkCache: {
   createViamClient: typeof import("@viamrobotics/sdk").createViamClient;
   GenericServiceClient: typeof import("@viamrobotics/sdk").GenericServiceClient;
-  Struct: typeof import("@bufbuild/protobuf").Struct;
   Cookies: typeof import("js-cookie").default;
 } | null = null;
 
 async function loadSDK() {
   if (sdkCache) return sdkCache;
-  const [viamSdk, protobuf, cookies] = await Promise.all([
+  const [viamSdk, cookies] = await Promise.all([
     import("@viamrobotics/sdk"),
-    import("@bufbuild/protobuf"),
     import("js-cookie"),
   ]);
   sdkCache = {
     createViamClient: viamSdk.createViamClient,
     GenericServiceClient: viamSdk.GenericServiceClient,
-    Struct: protobuf.Struct,
     Cookies: cookies.default,
   };
   return sdkCache;
@@ -226,15 +223,13 @@ export async function prepareOrder(
     ? `One ${opts.drinkLabel} coming right up!`
     : undefined;
 
-  const command = sdk.Struct.fromJson({
+  const result = await coffeeService.doCommand({
     prepare_order: {
       drink: opts.drink,
       customer_name: opts.customerName,
       ...(greeting && { initial_greeting: greeting }),
     },
   });
-
-  const result = await coffeeService.doCommand(command);
   return result as unknown as { status: string };
 }
 
@@ -250,10 +245,9 @@ export async function registerCustomerFace(
     conn.robotClient,
     CUSTOMER_DETECTOR_SERVICE_NAME
   );
-  const command = sdk.Struct.fromJson({
+  const result = await svc.doCommand({
     register_customer: { name, email },
   });
-  const result = await svc.doCommand(command);
   return result as unknown as {
     registered: string;
     name: string;
@@ -270,8 +264,7 @@ export async function finishRegistration(
     conn.robotClient,
     CUSTOMER_DETECTOR_SERVICE_NAME
   );
-  const command = sdk.Struct.fromJson({ finish_registration: email });
-  const result = await svc.doCommand(command);
+  const result = await svc.doCommand({ finish_registration: email });
   return result as unknown as {
     email: string;
     name: string;
@@ -297,8 +290,7 @@ export async function identifyCustomer(
     conn.robotClient,
     CUSTOMER_DETECTOR_SERVICE_NAME
   );
-  const command = sdk.Struct.fromJson({ identify_customer: true });
-  const result = await svc.doCommand(command);
+  const result = await svc.doCommand({ identify_customer: true });
   return result as unknown as {
     identified: boolean;
     name?: string;
@@ -316,7 +308,6 @@ export async function getCustomerDetectorInfo(
     conn.robotClient,
     CUSTOMER_DETECTOR_SERVICE_NAME
   );
-  const command = sdk.Struct.fromJson({ get_info: true });
-  const result = await svc.doCommand(command);
+  const result = await svc.doCommand({ get_info: true });
   return result as unknown as { camera_name: string };
 }
