@@ -10,11 +10,28 @@ export interface ViamConnection {
 
 // --------------- Dev mode (localhost) ---------------
 
+// Dev mode returns mock data so the app runs without a real robot.
+//
+// Detection rules, in priority order:
+//   1. ?mock=1 query param → force dev mode
+//   2. ?mock=0 query param → force real mode
+//   3. URL path starts with /machine/<hostname>/ → real mode (this is what
+//      `viam module local-app-testing` serves, even on localhost)
+//   4. hostname is localhost or 127.0.0.1 → dev mode
+//   5. otherwise → real mode
 function isDevMode(): boolean {
+  if (typeof window === "undefined") return false;
+
+  const params = new URLSearchParams(window.location.search);
+  const mockParam = params.get("mock");
+  if (mockParam === "1" || mockParam === "true") return true;
+  if (mockParam === "0" || mockParam === "false") return false;
+
+  if (window.location.pathname.startsWith("/machine/")) return false;
+
   return (
-    typeof window !== "undefined" &&
-    (window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1")
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1"
   );
 }
 
