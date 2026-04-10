@@ -297,6 +297,12 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 				"started_at": e.StartedAt.Format(time.RFC3339),
 			}
 		}
+		// Empty string when the order is still pending; the frontend uses
+		// completed_at presence as the signal to render the green ready card.
+		completedAt := ""
+		if !o.CompletedAt.IsZero() {
+			completedAt = o.CompletedAt.Format(time.RFC3339)
+		}
 		orderMaps[i] = map[string]interface{}{
 			"id":            o.ID,
 			"drink":         o.Drink,
@@ -304,11 +310,15 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 			"enqueued_at":   o.EnqueuedAt.Format(time.RFC3339),
 			"raw_step":      o.RawStep,
 			"step_history":  history,
+			"completed_at":  completedAt,
 		}
 	}
 	step, _ := s.currentStep.Load().(string)
 	return map[string]interface{}{
-		"count":        len(orders),
+		// count reports pending depth only — orders waiting to be made.
+		// Recently-completed orders are visible in `orders` but don't add
+		// to depth.
+		"count":        s.queue.Len(),
 		"orders":       orderMaps,
 		"is_paused":    s.paused.Load(),
 		"is_busy":      s.running.Load(),
