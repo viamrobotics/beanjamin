@@ -7,7 +7,10 @@ import (
 	"time"
 )
 
-const shortPause = 100 * time.Millisecond
+const (
+	shortPause   = 100 * time.Millisecond
+	gripperPause = 650 * time.Millisecond
+)
 
 // say queues text for the speech service via the non-blocking say_async
 // DoCommand. It returns as soon as the text is accepted by the speech
@@ -293,7 +296,7 @@ func (s *beanjaminCoffee) releaseFilter(ctx, cancelCtx context.Context) error {
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("release_filter: grab gripper: %w", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(gripperPause)
 	return nil
 }
 
@@ -319,7 +322,7 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("grab_filter: grab gripper: %w", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(gripperPause)
 	return nil
 }
 
@@ -339,7 +342,7 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 		return fmt.Errorf("set_cup_for_coffee: open gripper: %w", err)
 	}
 	// Give time for the gripper to open
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(gripperPause)
 
 	// Move down to the cup and grab it.
 	grabStep := Step{PoseName: "empty_cup", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, Pause: shortPause}
@@ -349,7 +352,7 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: grab gripper: %w", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(gripperPause)
 
 	// Retreat and move to the coffee position.
 	retreatStep := Step{PoseName: "empty_cup_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, Pause: shortPause}
@@ -370,7 +373,7 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 		return fmt.Errorf("set_cup_for_coffee: open gripper: %w", err)
 	}
 	// Give time for the gripper to open
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(gripperPause)
 
 	// Move away from the cup.
 	exitStep := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, Pause: shortPause}
@@ -382,7 +385,7 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: close gripper: %w", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(gripperPause)
 	return nil
 }
 
@@ -401,7 +404,7 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: open gripper: %w", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(gripperPause)
 
 	// Move down to the cup and grab it.
 	grabStep := Step{PoseName: "cup_ready_for_coffee", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, Pause: shortPause}
@@ -411,7 +414,7 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: grab gripper: %w", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(gripperPause)
 
 	// Retreat from the machine.
 	retreatStep := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, Pause: shortPause}
@@ -433,7 +436,7 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: open gripper: %w", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(gripperPause)
 
 	// Move away from the cup.
 	exitStep := Step{PoseName: "empty_cup_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, Pause: shortPause}
@@ -445,7 +448,7 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: close gripper: %w", err)
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(gripperPause)
 	return nil
 }
 
