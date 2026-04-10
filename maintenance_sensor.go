@@ -105,12 +105,9 @@ func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]inter
 	queueCount, _ := resp["count"].(float64)
 
 	isSafe := !armMoving && !isBusy && queueCount == 0
-	m.logger.CDebugw(
-		ctx, "is_safe debugging",
-		"is_safe", isSafe,
-		"arm_moving", armMoving,
-		"is_busy", isBusy,
-		"queueCount", queueCount,
+	m.logger.CDebugf(
+		ctx, "is_safe debugging: is_safe: %v, arm_moving: %v, is_busy: %v, queue_count: %v",
+		isSafe, armMoving, isBusy, queueCount,
 	)
 
 	return map[string]interface{}{
