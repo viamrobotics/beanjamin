@@ -9,6 +9,12 @@ import (
 	"github.com/google/uuid"
 )
 
+// StepReady is the terminal raw step set on an order after the espresso
+// routine finishes but before the order is dequeued. The frontend treats it
+// as the "ready to pick up" state, matching the post-Dequeue done card so
+// the visual transition is seamless.
+const StepReady = "Ready"
+
 // StepEntry records the start of a single processing step for an order.
 type StepEntry struct {
 	Step      string    `json:"step"`
@@ -179,6 +185,8 @@ func (s *beanjaminCoffee) processQueue() {
 			s.safeExecuteOrder(order)
 			s.currentOrderID.Store("")
 			s.queue.Dequeue()
+			// Reset the service-global step now that the order is gone.
+			s.currentStep.Store("")
 
 			// If cleanup is not automatic, pause
 			// so the operator can clean up before the next order starts.
@@ -242,7 +250,12 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) e
 		}
 	}
 
-	s.setStep("")
+	// Mark the order ready with an explicit terminal step. The order is
+	// still in the queue at this point — Dequeue happens after we return —
+	// so leaving raw_step empty here would briefly show "Making..." in the
+	// tracker between cleanup and the post-Dequeue done card. The frontend
+	// treats StepReady as the "ready to pick up" state.
+	s.setStep(StepReady)
 	s.logger.Infof("order %s complete for %s", order.ID, order.CustomerName)
 	return nil
 }
