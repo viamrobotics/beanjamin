@@ -314,7 +314,7 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 		}
 	}
 	step, _ := s.currentStep.Load().(string)
-	return map[string]interface{}{
+	resp := map[string]interface{}{
 		// count reports pending depth only — orders waiting to be made.
 		// Recently-completed orders are visible in `orders` but don't add
 		// to depth. Returned as float64 so in-process callers see the
@@ -325,7 +325,9 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 		"is_paused":    s.paused.Load(),
 		"is_busy":      s.running.Load(),
 		"current_step": step,
-	}, nil
+	}
+	s.logger.Debugw("Status", "response", resp)
+	return resp, nil
 }
 
 func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
