@@ -60,6 +60,13 @@ export function FaceRegister({
   const streamClientRef = useRef<StreamClient | null>(null);
   const cancelled = useRef(false);
 
+  // Keep latest onSkip in a ref so the fetch effect doesn't refire on every
+  // parent render (onSkip is an inline arrow in page.tsx).
+  const onSkipRef = useRef(onSkip);
+  useEffect(() => {
+    onSkipRef.current = onSkip;
+  }, [onSkip]);
+
   // Fetch camera name
   useEffect(() => {
     if (!viamConn) return;
@@ -69,9 +76,13 @@ export function FaceRegister({
         console.log("[face-register] camera name:", info.camera_name);
         setCameraName(info.camera_name);
       })
-      .catch((err) =>
-        console.error("[face-register] failed to get camera name:", err)
-      );
+      .catch((err) => {
+        console.error(
+          "[face-register] failed to get camera name, skipping face registration:",
+          err
+        );
+        onSkipRef.current();
+      });
   }, [viamConn]);
 
   // Live camera stream via WebRTC
