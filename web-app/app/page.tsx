@@ -100,7 +100,7 @@ export default function Home() {
     if (!selectedDrink) return;
     setDrinkRejection(null);
 
-    const supportedDrinks = new Set(["espresso", "lungo"]);
+    const supportedDrinks = new Set(["espresso", "lungo", "decaf", "decaf_lungo"]);
     if (supportedDrinks.has(selectedDrink)) {
       setStep("name");
       return;

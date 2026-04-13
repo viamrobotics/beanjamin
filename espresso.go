@@ -58,6 +58,7 @@ var cupGrabCollisions = []AllowedCollision{
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
 		"grind_coffee":              s.grindCoffee,
+		"grind_decaf":               s.grindDecaf,
 		"tamp_ground":               s.tampGround,
 		"lock_portafilter":          s.lockPortaFilter,
 		"unlock_portafilter":        s.unlockPortaFilter,
@@ -115,9 +116,17 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		drink, s.cfg.PlaceCup, s.cfg.CleanAfterUse, brewTime)
 
 	s.setStep("Grinding")
-	s.logger.Infof("step 1/9: grinding coffee")
-	if err := s.grindCoffee(ctx, cancelCtx); err != nil {
-		return err
+	isDecaf := drink == "decaf" || drink == "decaf_lungo"
+	if isDecaf {
+		s.logger.Infof("step 1/9: grinding decaf coffee")
+		if err := s.grindDecaf(ctx, cancelCtx); err != nil {
+			return err
+		}
+	} else {
+		s.logger.Infof("step 1/9: grinding coffee")
+		if err := s.grindCoffee(ctx, cancelCtx); err != nil {
+			return err
+		}
 	}
 	s.setStep("Tamping")
 	s.logger.Infof("step 2/9: tamping ground")
@@ -216,6 +225,24 @@ func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 			return fmt.Errorf("grind_coffee: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *beanjaminCoffee) grindDecaf(ctx, cancelCtx context.Context) error {
+	steps := []Step{
+		{PoseName: "decaf_grinder_approach", Component: "filter", Pause: shortPause},
+		{PoseName: "decaf_grinder_activate", Component: "filter", Pause: shortPause, LinearConstraint: defaultApproachConstraint},
+		{PoseName: "decaf_grinder_approach", Component: "filter", Pause: shortPause, LinearConstraint: defaultApproachConstraint},
+		// Circle under the decaf grinder chute to distribute grounds evenly while the grinder dispenses.
+		{PoseName: "decaf_grinder_approach", Component: "filter",
+			CircularRadiusMm: 8, CircularDurationSec: 7.5, CircularPointsPerRev: 8,
+			LinearConstraint: defaultApproachConstraint},
+	}
+	for _, step := range steps {
+		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+			return fmt.Errorf("grind_decaf: %w", err)
 		}
 	}
 	return nil
@@ -510,7 +537,7 @@ const (
 // drinkBrewTime returns the configured or default brew duration for the given drink.
 func (s *beanjaminCoffee) drinkBrewTime(drink string) time.Duration {
 	switch drink {
-	case "lungo":
+	case "lungo", "decaf_lungo":
 		if s.cfg.LungoBrewTimeSec > 0 {
 			return time.Duration(s.cfg.LungoBrewTimeSec * float64(time.Second))
 		}
