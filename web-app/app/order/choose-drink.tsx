@@ -19,6 +19,9 @@ export function ChooseDrink({
   const firstRowDrinks = DRINKS.filter(
     (drink) => drink.id === "espresso" || drink.id === "lungo",
   );
+  const decafDrinks = DRINKS.filter(
+    (drink) => drink.id === "decaf" || drink.id === "decaf_lungo",
+  );
   const secondRowDrinks = DRINKS.filter(
     (drink) =>
       drink.id === "americano" || drink.id === "cappuccino" || drink.id === "latte",
@@ -87,9 +90,14 @@ export function ChooseDrink({
           <div className="grid grid-cols-2 gap-4">
             {firstRowDrinks.map((drink, i) => renderDrinkCard(drink, i))}
           </div>
+          <div className="grid grid-cols-2 gap-4">
+            {decafDrinks.map((drink, i) =>
+              renderDrinkCard(drink, i + firstRowDrinks.length),
+            )}
+          </div>
           <div className="grid grid-cols-3 gap-4">
             {secondRowDrinks.map((drink, i) =>
-              renderDrinkCard(drink, i + firstRowDrinks.length),
+              renderDrinkCard(drink, i + firstRowDrinks.length + decafDrinks.length),
             )}
           </div>
         </div>

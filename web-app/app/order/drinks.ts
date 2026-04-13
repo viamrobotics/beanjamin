@@ -16,8 +16,22 @@ export const DRINKS: Drink[] = [
   },
   {
     id: "lungo",
-    label: "Lungo",
+    label: "Espresso Lungo",
     description: "Long pull, smooth finish",
+    image: "./espresso.png",
+    available: true,
+  },
+  {
+    id: "decaf",
+    label: "Decaf",
+    description: "All the flavor, none of the buzz",
+    image: "./espresso.png",
+    available: true,
+  },
+  {
+    id: "decaf_lungo",
+    label: "Decaf Lungo",
+    description: "Long pull, decaf style",
     image: "./espresso.png",
     available: true,
   },
