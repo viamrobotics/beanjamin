@@ -3,7 +3,14 @@ package beanjamin
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 )
+
+// speakableDrink converts a drink id like "decaf_lungo" into a form Google TTS
+// reads naturally ("decaf lungo") rather than pronouncing the underscore.
+func speakableDrink(drink string) string {
+	return strings.ReplaceAll(drink, "_", " ")
+}
 
 // Greeting templates use indexed format verbs: %[1]s = drink name, %[2]s = customer name.
 var greetingsAnonymous = []string{
@@ -58,6 +65,7 @@ var unsupportedDrink = []string{
 }
 
 func pickGreeting(drink, customerName string) string {
+	drink = speakableDrink(drink)
 	if customerName != "" {
 		return fmt.Sprintf(greetingsNamed[rand.Intn(len(greetingsNamed))], drink, customerName)
 	}
@@ -69,6 +77,7 @@ func pickAlmostReady() string {
 }
 
 func pickDrinkReady(drink, customerName string) string {
+	drink = speakableDrink(drink)
 	if customerName != "" {
 		return fmt.Sprintf(drinkReadyNamed[rand.Intn(len(drinkReadyNamed))], drink, customerName)
 	}
@@ -76,5 +85,5 @@ func pickDrinkReady(drink, customerName string) string {
 }
 
 func pickUnsupportedDrink(drink string) string {
-	return fmt.Sprintf(unsupportedDrink[rand.Intn(len(unsupportedDrink))], drink)
+	return fmt.Sprintf(unsupportedDrink[rand.Intn(len(unsupportedDrink))], speakableDrink(drink))
 }
