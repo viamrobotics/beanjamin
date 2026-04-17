@@ -76,6 +76,7 @@ type Config struct {
 	VizURL                string  `json:"viz_url,omitempty"`
 	BrewTimeSec           float64 `json:"brew_time_sec,omitempty"`
 	LungoBrewTimeSec      float64 `json:"lungo_brew_time_sec,omitempty"`
+	GrindTimeSec          float64 `json:"grind_time_sec,omitempty"`
 	PlaceCup              bool    `json:"place_cup,omitempty"`
 	CleanAfterUse         bool    `json:"clean_after_use,omitempty"`
 	PortafilterTaps       int     `json:"portafilter_taps,omitempty"`

@@ -190,6 +190,7 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
   "viz_url": "http://localhost:8080",
   "brew_time_sec": 25,
   "lungo_brew_time_sec": 40,
+  "grind_time_sec": 7.5,
   "place_cup": true,
   "clean_after_use": true,
   "save_motion_requests_dir": "/tmp/motion-requests",
@@ -216,6 +217,7 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
 | `viz_url`                  | string | No       | URL of a [motion-tools](https://github.com/viam-labs/motion-tools) viz server. When set, the frame system is drawn before each motion plan, useful for debugging collisions and frame placement. |
 | `brew_time_sec`            | float  | No       | Espresso brew duration in seconds (default: 8).                                                               |
 | `lungo_brew_time_sec`      | float  | No       | Lungo brew duration in seconds (default: 15).                                                                 |
+| `grind_time_sec`           | float  | No       | Bean grinding duration in seconds, applied to both regular and decaf grinders (default: 7.5).                 |
 | `place_cup`                | bool   | No       | Enable cup placement step in the brew cycle.                                                                  |
 | `clean_after_use`          | bool   | No       | Enable cleaning step after each brew.                                                                         |
 | `save_motion_requests_dir` | string | No       | Directory to save motion request payloads for debugging.                                                      |
