@@ -219,7 +219,7 @@ func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 		{PoseName: "grinder_approach", Component: "filter", Pause: shortPause, LinearConstraint: defaultApproachConstraint},
 		// Circle under the grinder chute to distribute grounds evenly while the grinder dispenses.
 		{PoseName: "grinder_approach", Component: "filter",
-			CircularRadiusMm: 8, CircularDurationSec: 7.5, CircularPointsPerRev: 8,
+			CircularRadiusMm: 8, CircularDurationSec: s.grindDurationSec(), CircularPointsPerRev: 8,
 			LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
@@ -237,7 +237,7 @@ func (s *beanjaminCoffee) grindDecaf(ctx, cancelCtx context.Context) error {
 		{PoseName: "decaf_grinder_approach", Component: "filter", Pause: shortPause, LinearConstraint: defaultApproachConstraint},
 		// Circle under the decaf grinder chute to distribute grounds evenly while the grinder dispenses.
 		{PoseName: "decaf_grinder_approach", Component: "filter",
-			CircularRadiusMm: 8, CircularDurationSec: 7.5, CircularPointsPerRev: 8,
+			CircularRadiusMm: 8, CircularDurationSec: s.grindDurationSec(), CircularPointsPerRev: 8,
 			LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
@@ -532,7 +532,16 @@ func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, brewTime time.Dur
 const (
 	defaultEspressoBrewTime = 8 * time.Second
 	defaultLungoBrewTime    = 15 * time.Second
+	defaultGrindTimeSec     = 7.5
 )
+
+// grindDurationSec returns the configured or default grind duration in seconds.
+func (s *beanjaminCoffee) grindDurationSec() float64 {
+	if s.cfg.GrindTimeSec > 0 {
+		return s.cfg.GrindTimeSec
+	}
+	return defaultGrindTimeSec
+}
 
 // drinkBrewTime returns the configured or default brew duration for the given drink.
 func (s *beanjaminCoffee) drinkBrewTime(drink string) time.Duration {
