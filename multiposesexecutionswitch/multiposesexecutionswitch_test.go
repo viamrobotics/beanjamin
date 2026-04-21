@@ -303,6 +303,56 @@ func TestResolvePoses(t *testing.T) {
 		assertPoseEqual(t, resolved[1], poseValues{X: 100, Y: 200, Z: 300, OZ: 1, Theta: 45})
 		assertPoseEqual(t, resolved[2], poseValues{X: 100, Y: 200, Z: 350, OZ: 1, Theta: 45})
 	})
+
+	t.Run("baseline with along_orientation only", func(t *testing.T) {
+		resolved := resolvePoses([]PoseConf{
+			{PoseName: "a", PoseValue: basePose},
+			{PoseName: "b", Baseline: "a", Translation: &Translation{AlongOrientation: 75}},
+		})
+		// baseline OV = (0,0,1), norm=1 → add (0,0,75)
+		assertPoseEqual(t, resolved[1], poseValues{X: 100, Y: 200, Z: 375, OZ: 1, Theta: 45})
+	})
+
+	t.Run("baseline with along_orientation plus xyz translation", func(t *testing.T) {
+		resolved := resolvePoses([]PoseConf{
+			{PoseName: "a", PoseValue: basePose},
+			{PoseName: "b", Baseline: "a", Translation: &Translation{X: 10, Y: -20, Z: 5, AlongOrientation: 50}},
+		})
+		// xyz: (110, 180, 305); along OV (0,0,1)*50 → (110, 180, 355)
+		assertPoseEqual(t, resolved[1], poseValues{X: 110, Y: 180, Z: 355, OZ: 1, Theta: 45})
+	})
+
+	t.Run("along_orientation uses baseline OV, not override", func(t *testing.T) {
+		xBasePose := &commonpb.Pose{X: 100, Y: 200, Z: 300, OX: 1, OY: 0, OZ: 0, Theta: 45}
+		resolved := resolvePoses([]PoseConf{
+			{PoseName: "a", PoseValue: xBasePose},
+			{PoseName: "b", Baseline: "a",
+				Translation: &Translation{AlongOrientation: 40},
+				Orientation: &Orientation{OZ: 1, Theta: 90}},
+		})
+		// baseline OV = (1,0,0) → +40 on X; override then replaces orientation
+		assertPoseEqual(t, resolved[1], poseValues{X: 140, Y: 200, Z: 300, OZ: 1, Theta: 90})
+	})
+
+	t.Run("chained baselines with along_orientation", func(t *testing.T) {
+		resolved := resolvePoses([]PoseConf{
+			{PoseName: "a", PoseValue: basePose},
+			{PoseName: "b", Baseline: "a", Translation: &Translation{AlongOrientation: 100}},
+			{PoseName: "c", Baseline: "b", Translation: &Translation{AlongOrientation: 25}},
+		})
+		assertPoseEqual(t, resolved[1], poseValues{X: 100, Y: 200, Z: 400, OZ: 1, Theta: 45})
+		assertPoseEqual(t, resolved[2], poseValues{X: 100, Y: 200, Z: 425, OZ: 1, Theta: 45})
+	})
+
+	t.Run("along_orientation with zero-norm baseline OV is a no-op", func(t *testing.T) {
+		zeroOVPose := &commonpb.Pose{X: 100, Y: 200, Z: 300, OX: 0, OY: 0, OZ: 0, Theta: 0}
+		resolved := resolvePoses([]PoseConf{
+			{PoseName: "a", PoseValue: zeroOVPose},
+			{PoseName: "b", Baseline: "a", Translation: &Translation{X: 5, AlongOrientation: 100}},
+		})
+		// along_orientation skipped silently; X offset still applied.
+		assertPoseEqual(t, resolved[1], poseValues{X: 105, Y: 200, Z: 300})
+	})
 }
 
 func assertPoseEqual(t *testing.T, got, want poseValues) {
