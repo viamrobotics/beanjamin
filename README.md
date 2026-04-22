@@ -77,8 +77,10 @@ Define a pose relative to another pose in the same `poses` array. Optionally add
 | Field         | Type   | Required            | Description                                                                                      |
 | ------------- | ------ | ------------------- | ------------------------------------------------------------------------------------------------ |
 | `baseline`    | string | Yes (instead of `pose_value`) | Name of another pose in the `poses` array.                                            |
-| `translation` | object | No                  | Position offset added to the baseline. Fields: `x`, `y`, `z` (millimeters, default `0`).         |
+| `translation` | object | No                  | Position offset added to the baseline. Fields: `x`, `y`, `z` (millimeters along world axes, default `0`), and `along_orientation` (millimeters along the baseline's normalized orientation vector, default `0`). |
 | `orientation` | object | No                  | Orientation that **replaces** the baseline orientation. Fields: `o_x`, `o_y`, `o_z`, `theta`.    |
+
+The `along_orientation` component is projected onto the **baseline's** orientation vector, not onto any `orientation` override set on the same pose — translation is applied before the orientation replace. If the baseline's orientation vector has zero norm, the `along_orientation` offset is silently skipped.
 
 Baselines can be chained — a relative pose can itself be used as a baseline for another pose. Multiple poses can share the same baseline.
 
@@ -110,6 +112,11 @@ Baselines can be chained — a relative pose can itself be used as a baseline fo
       "translation": { "z": 100 }
     },
     {
+      "pose_name": "backed-off-home",
+      "baseline": "home",
+      "translation": { "along_orientation": -50 }
+    },
+    {
       "pose_name": "pour",
       "baseline": "home",
       "translation": { "x": 200, "y": 100, "z": -150 },
@@ -122,6 +129,7 @@ Baselines can be chained — a relative pose can itself be used as a baseline fo
 In this example:
 - **home** is defined absolutely at `(0, 0, 500)` with orientation `(0, 0, 1, 0°)`.
 - **above-home** inherits home's position and orientation, then adds `z: +100` → final position `(0, 0, 600)`.
+- **backed-off-home** inherits home's pose and translates `-50` mm along home's orientation vector `(0, 0, 1)` → final position `(0, 0, 450)`.
 - **pour** inherits home's position, adds a translation → `(200, 100, 350)`, and overrides the orientation to `(0, 1, 0, 90°)`.
 
 ### Switch Interface
