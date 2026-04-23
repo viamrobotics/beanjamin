@@ -85,6 +85,8 @@ type Config struct {
 
 	ZooCamStorageName string `json:"zoo_cam_storage_name,omitempty"`
 	CanServeDecaf     bool   `json:"can_serve_decaf,omitempty"`
+
+	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -199,6 +201,11 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	if err != nil {
 		cancelFunc()
 		return nil, fmt.Errorf("build initial frame system: %w", err)
+	}
+
+	if err := applyJointLimits(logger, cachedFS, conf.InputRangeOverride); err != nil {
+		cancelFunc()
+		return nil, fmt.Errorf("apply joint limits: %w", err)
 	}
 
 	var speech resource.Resource
@@ -322,8 +329,8 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 		// to depth. Returned as float64 so in-process callers see the
 		// same type as gRPC callers (structpb forces all numbers to
 		// double on the wire).
-		"count":        float64(s.queue.Len()),
-		"orders":       orderMaps,
+		"count":           float64(s.queue.Len()),
+		"orders":          orderMaps,
 		"is_paused":       s.paused.Load(),
 		"is_busy":         s.running.Load(),
 		"current_step":    step,

@@ -203,7 +203,12 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
   "clean_after_use": true,
   "save_motion_requests_dir": "/tmp/motion-requests",
   "order_sensor_name": "order-events",
-  "zoo_cam_storage_name": "video-store"
+  "zoo_cam_storage_name": "video-store",
+  "input_range_override": {
+    "my-arm": {
+      "5": { "min_degs": -270, "max_degs": 270 }
+    }
+  }
 }
 ```
 
@@ -231,6 +236,7 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
 | `save_motion_requests_dir` | string | No       | Directory to save motion request payloads for debugging.                                                      |
 | `order_sensor_name`        | string | No       | Name of a `viam:beanjamin:order-sensor` sensor to notify when each order attempt completes (must appear in **depends_on**). |
 | `zoo_cam_storage_name`     | string | No       | Name of the “zoo” camera storage ([`viam:video:storage`](https://github.com/viam-modules/video-store) or compatible); when set, uploads a clip per order attempt (async `save`), with fixed 5s pre-roll and 5s post-roll. |
+| `input_range_override`     | object | No       | Narrows joint limits on named frames before motion planning. Outer key is the frame name (typically the arm); inner key is either the joint name or its stringified index (e.g. `"5"` for the last joint of a 6-DoF arm). Each value is `{ "min_degs": number, "max_degs": number }`. |
 
 ### DoCommand
 
