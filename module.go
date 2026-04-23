@@ -322,8 +322,8 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 		// to depth. Returned as float64 so in-process callers see the
 		// same type as gRPC callers (structpb forces all numbers to
 		// double on the wire).
-		"count":          float64(s.queue.Len()),
-		"orders":         orderMaps,
+		"count":         float64(s.queue.Len()),
+		"orders":        orderMaps,
 		"is_paused":       s.paused.Load(),
 		"is_busy":         s.running.Load(),
 		"current_step":    step,
