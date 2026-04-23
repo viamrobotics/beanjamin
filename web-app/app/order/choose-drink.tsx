@@ -34,7 +34,7 @@ export function ChooseDrink({
         key={drink.id}
         onClick={() => onSelect(drink.id)}
         style={{ animationDelay: `${150 + i * 100}ms` }}
-        className={`anim-in drink-card relative w-full flex flex-col items-center justify-center gap-1 p-6 rounded-2xl transition-[background-color,border-color,transform] duration-150 ${
+        className={`anim-in drink-card relative w-full flex flex-col items-center justify-center gap-1 p-3 rounded-2xl transition-[background-color,border-color,transform] duration-150 ${
           isSelected
             ? "bg-[#ebebeb] border-2 border-black scale-[1.02]"
             : "bg-neutral-100 border-2 border-transparent scale-100"
@@ -46,7 +46,7 @@ export function ChooseDrink({
             alt={drink.label}
             width={140}
             height={140}
-            className="object-contain"
+            className="object-contain h-[min(140px,14vh)] w-auto"
           />
           <p className="font-mono font-semibold text-base text-black uppercase tracking-wider leading-tight">
             {drink.label}
@@ -60,7 +60,7 @@ export function ChooseDrink({
   };
 
   return (
-    <main className="relative h-full bg-white flex flex-col items-center justify-center p-8 font-sans">
+    <main className="relative h-full bg-white flex flex-col items-center justify-center p-4 font-sans">
       <button
         type="button"
         onClick={onBack}
@@ -81,21 +81,21 @@ export function ChooseDrink({
           <path d="M15 18l-6-6 6-6" />
         </svg>
       </button>
-      <div className="flex flex-col gap-10 w-full max-w-[720px]">
+      <div className="flex flex-col gap-4 w-full max-w-[720px]">
         <h1 className="anim-in text-2xl font-semibold text-[#0a0a0a] text-center">
           Choose your drink
         </h1>
 
-        <div className="flex flex-col gap-4">
-          <div className="grid grid-cols-2 gap-4">
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-3">
             {firstRowDrinks.map((drink, i) => renderDrinkCard(drink, i))}
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-3">
             {decafDrinks.map((drink, i) =>
               renderDrinkCard(drink, i + firstRowDrinks.length),
             )}
           </div>
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-3 gap-3">
             {secondRowDrinks.map((drink, i) =>
               renderDrinkCard(drink, i + firstRowDrinks.length + decafDrinks.length),
             )}
@@ -103,7 +103,7 @@ export function ChooseDrink({
         </div>
 
         {rejection && (
-          <p className="anim-in text-neutral-500 text-center text-sm -mt-4">
+          <p className="anim-in text-neutral-500 text-center text-sm -mt-2">
             {rejection}
           </p>
         )}
@@ -111,7 +111,7 @@ export function ChooseDrink({
         <button
           onClick={onNext}
           disabled={!selectedDrink}
-          className="anim-in press w-full py-5 text-base font-medium bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
+          className="anim-in press w-full py-3 text-base font-medium bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
           style={{ animationDelay: "600ms" }}
         >
           Next
