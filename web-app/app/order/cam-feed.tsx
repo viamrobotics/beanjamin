@@ -4,9 +4,16 @@ import { useEffect, useRef, useState } from "react";
 import { StreamClient } from "@viamrobotics/sdk";
 import type { ViamConnection } from "../lib/viamClient";
 
-const ZOO_CAM_NAME = "zoo-cam-live";
+const DEFAULT_CAM_NAME = "cam";
 
-export function ZooCamFeed({ viamConn }: { viamConn: ViamConnection | null }) {
+export function CamFeed({
+  viamConn,
+  cameraName,
+}: {
+  viamConn: ViamConnection | null;
+  cameraName?: string;
+}) {
+  const name = cameraName || DEFAULT_CAM_NAME;
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamClientRef = useRef<StreamClient | null>(null);
   const [ready, setReady] = useState(false);
@@ -24,7 +31,7 @@ export function ZooCamFeed({ viamConn }: { viamConn: ViamConnection | null }) {
       try {
         const sc = new StreamClient(viamConn!.robotClient);
         streamClientRef.current = sc;
-        const mediaStream = await sc.getStream(ZOO_CAM_NAME);
+        const mediaStream = await sc.getStream(name);
         if (stopped) return;
         if (video) {
           video.srcObject = mediaStream;
@@ -32,7 +39,7 @@ export function ZooCamFeed({ viamConn }: { viamConn: ViamConnection | null }) {
           setReady(true);
         }
       } catch (err) {
-        console.error("[zoo-cam-feed] stream error:", err);
+        console.error("[cam-feed] stream error:", err);
         setFailed(true);
       }
     }
@@ -42,7 +49,7 @@ export function ZooCamFeed({ viamConn }: { viamConn: ViamConnection | null }) {
     return () => {
       stopped = true;
       if (streamClientRef.current) {
-        streamClientRef.current.remove(ZOO_CAM_NAME).catch(() => {});
+        streamClientRef.current.remove(name).catch(() => {});
         streamClientRef.current = null;
       }
       if (video) {
@@ -50,7 +57,7 @@ export function ZooCamFeed({ viamConn }: { viamConn: ViamConnection | null }) {
       }
       setReady(false);
     };
-  }, [viamConn, unavailable]);
+  }, [viamConn, unavailable, name]);
 
   if (unavailable || failed) return null;
 
