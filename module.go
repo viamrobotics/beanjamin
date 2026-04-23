@@ -76,6 +76,7 @@ type Config struct {
 	VizURL                string  `json:"viz_url,omitempty"`
 	BrewTimeSec           float64 `json:"brew_time_sec,omitempty"`
 	LungoBrewTimeSec      float64 `json:"lungo_brew_time_sec,omitempty"`
+	GrindTimeSec          float64 `json:"grind_time_sec,omitempty"`
 	PlaceCup              bool    `json:"place_cup,omitempty"`
 	CleanAfterUse         bool    `json:"clean_after_use,omitempty"`
 	PortafilterTaps       int     `json:"portafilter_taps,omitempty"`
@@ -83,6 +84,7 @@ type Config struct {
 	OrderSensorName       string  `json:"order_sensor_name,omitempty"`
 
 	ZooCamStorageName string `json:"zoo_cam_storage_name,omitempty"`
+	CanServeDecaf     bool   `json:"can_serve_decaf,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -322,9 +324,10 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 		// double on the wire).
 		"count":        float64(s.queue.Len()),
 		"orders":       orderMaps,
-		"is_paused":    s.paused.Load(),
-		"is_busy":      s.running.Load(),
-		"current_step": step,
+		"is_paused":       s.paused.Load(),
+		"is_busy":         s.running.Load(),
+		"current_step":    step,
+		"can_serve_decaf": s.cfg.CanServeDecaf,
 	}
 	s.logger.Debugw("Status", "response", resp)
 	return resp, nil
@@ -396,12 +399,13 @@ func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
 	if !s.running.Load() {
 		return nil, errors.New("no sequence in progress")
 	}
+	s.paused.Store(true)
 	s.mu.Lock()
 	s.cancelFunc()
 	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
 	s.mu.Unlock()
-	s.logger.Infof("sequence cancelled")
-	return map[string]interface{}{"status": "cancelled"}, nil
+	s.logger.Infof("sequence cancelled — queue paused, send 'proceed' to resume")
+	return map[string]interface{}{"status": "cancelled", "queue": "paused"}, nil
 }
 
 func (s *beanjaminCoffee) handleOpenGripper(ctx context.Context) (map[string]interface{}, error) {

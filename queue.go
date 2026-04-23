@@ -243,6 +243,21 @@ func (s *beanjaminCoffee) processQueue() {
 			// debugging.
 			s.currentStep.Store("")
 
+			// If the operator cancelled the running order, pause so no new
+			// orders start until they explicitly send 'proceed'.
+			if s.paused.Swap(false) {
+				s.logger.Infof("order cancelled — queue paused, send 'proceed' to resume")
+				s.paused.Store(true)
+				select {
+				case <-s.queue.proceed:
+					s.logger.Infof("received 'proceed', resuming queue processing")
+					s.paused.Store(false)
+				case <-s.queueStop:
+					s.paused.Store(false)
+					return
+				}
+			}
+
 			// If cleanup is not automatic, pause
 			// so the operator can clean up before the next order starts.
 			if !s.cfg.CleanAfterUse {
@@ -276,7 +291,7 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 				order.ID, order.CustomerName, r)
 		}
 		s.notifyOrderReading(order, execErr, startedAt, time.Now())
-		s.saveOrderVideo(order, videoFrom, execErr)
+		s.saveOrderVideoAsync(order, videoFrom, execErr)
 	}()
 	execErr = s.executeQueuedOrder(ctx, order)
 }
@@ -337,6 +352,15 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}
 
 	switch drink {
 	case "espresso", "lungo":
+	case "decaf", "decaf_lungo":
+		if !s.cfg.CanServeDecaf {
+			s.logger.Infof("rejected decaf order %q from %s (can_serve_decaf=false)", drink, customerName)
+			msg := pickUnsupportedDrink(drink)
+			if err := s.say(ctx, msg); err != nil {
+				s.logger.Warnf("failed to say rejection: %v", err)
+			}
+			return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
+		}
 	default:
 		s.logger.Infof("rejected order for unsupported drink %q from %s", drink, customerName)
 		msg := pickUnsupportedDrink(drink)

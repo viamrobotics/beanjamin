@@ -36,12 +36,14 @@ export function FaceRegister({
   name,
   email,
   viamConn,
+  onBack,
   onComplete,
   onSkip,
 }: {
   name: string;
   email: string;
   viamConn: ViamConnection | null;
+  onBack: () => void;
   onComplete: () => void;
   onSkip: () => void;
 }) {
@@ -266,6 +268,25 @@ export function FaceRegister({
   if (status === "review" || status === "finishing") {
     return (
       <main className="relative h-full bg-white flex flex-col items-center justify-center p-8 font-sans">
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Go back"
+          className="anim-in absolute left-6 top-6 h-11 w-11 rounded-full border border-neutral-200 bg-white text-neutral-900 transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400"
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+            className="mx-auto h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
         <div className="w-full max-w-[512px] flex flex-col items-center gap-6">
           <h1 className="anim-in text-2xl font-semibold text-neutral-900 text-center">
             Looking good?
@@ -336,6 +357,25 @@ export function FaceRegister({
   // --- Capture screen ---
   return (
     <main className="relative h-full bg-white flex flex-col items-center justify-center p-8 font-sans">
+      <button
+        type="button"
+        onClick={onBack}
+        aria-label="Go back"
+        className="anim-in absolute left-6 top-6 h-11 w-11 rounded-full border border-neutral-200 bg-white text-neutral-900 transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400"
+      >
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          className="mx-auto h-5 w-5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M15 18l-6-6 6-6" />
+        </svg>
+      </button>
       <div className="w-full max-w-[512px] flex flex-col items-center gap-8">
         <h1 className="anim-in text-2xl font-semibold text-neutral-900 text-center">
           Let&apos;s remember your face

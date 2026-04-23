@@ -157,7 +157,8 @@ func (s *ttsService) synthesizeAndPlay(ctx context.Context, text string) error {
 		return fmt.Errorf("Google TTS synthesis failed: %w", err)
 	}
 
-	stereo := monoToStereo(resp.AudioContent)
+	pcm := stripWAVHeader(resp.AudioContent)
+	stereo := monoToStereo(pcm)
 
 	s.playMu.Lock()
 	defer s.playMu.Unlock()
@@ -214,6 +215,14 @@ func (s *ttsService) DoCommand(ctx context.Context, cmd map[string]interface{}) 
 		}
 	}
 	return nil, fmt.Errorf("unknown command, supported commands: say, say_async")
+}
+
+// stripWAVHeader removes a WAV/RIFF header if present, returning raw PCM data.
+func stripWAVHeader(data []byte) []byte {
+	if len(data) > 44 && string(data[:4]) == "RIFF" {
+		return data[44:]
+	}
+	return data
 }
 
 // monoToStereo duplicates each LINEAR16 sample so mono PCM becomes stereo.

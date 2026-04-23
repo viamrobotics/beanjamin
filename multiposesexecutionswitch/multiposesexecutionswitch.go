@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,9 +48,10 @@ type PoseConf struct {
 }
 
 type Translation struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
-	Z float64 `json:"z"`
+	X                float64 `json:"x"`
+	Y                float64 `json:"y"`
+	Z                float64 `json:"z"`
+	AlongOrientation float64 `json:"along_orientation,omitempty"`
 }
 
 type Orientation struct {
@@ -229,6 +231,14 @@ func resolvePoses(poses []PoseConf) []poseValues {
 				base.X += p.Translation.X
 				base.Y += p.Translation.Y
 				base.Z += p.Translation.Z
+				if p.Translation.AlongOrientation != 0 {
+					norm := math.Sqrt(base.OX*base.OX + base.OY*base.OY + base.OZ*base.OZ)
+					if norm > 0 {
+						base.X += p.Translation.AlongOrientation * base.OX / norm
+						base.Y += p.Translation.AlongOrientation * base.OY / norm
+						base.Z += p.Translation.AlongOrientation * base.OZ / norm
+					}
+				}
 			}
 
 			if p.Orientation != nil {
