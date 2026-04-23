@@ -79,7 +79,7 @@ type Config struct {
 	GrindTimeSec          float64 `json:"grind_time_sec,omitempty"`
 	PlaceCup              bool    `json:"place_cup,omitempty"`
 	CleanAfterUse         bool    `json:"clean_after_use,omitempty"`
-	PortafilterTaps       int     `json:"portafilter_taps,omitempty"`
+	PortafilterShakeSec   float64 `json:"portafilter_shake_sec,omitempty"`
 	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
 	OrderSensorName       string  `json:"order_sensor_name,omitempty"`
 
@@ -322,8 +322,8 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 		// to depth. Returned as float64 so in-process callers see the
 		// same type as gRPC callers (structpb forces all numbers to
 		// double on the wire).
-		"count":        float64(s.queue.Len()),
-		"orders":       orderMaps,
+		"count":           float64(s.queue.Len()),
+		"orders":          orderMaps,
 		"is_paused":       s.paused.Load(),
 		"is_busy":         s.running.Load(),
 		"current_step":    step,

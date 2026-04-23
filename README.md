@@ -201,6 +201,7 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
   "grind_time_sec": 7.5,
   "place_cup": true,
   "clean_after_use": true,
+  "portafilter_shake_sec": 2.5,
   "save_motion_requests_dir": "/tmp/motion-requests",
   "order_sensor_name": "order-events",
   "zoo_cam_storage_name": "video-store"
@@ -228,6 +229,7 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
 | `grind_time_sec`           | float  | No       | Bean grinding duration in seconds, applied to both regular and decaf grinders (default: 7.5).                 |
 | `place_cup`                | bool   | No       | Enable cup placement step in the brew cycle.                                                                  |
 | `clean_after_use`          | bool   | No       | Enable cleaning step after each brew.                                                                         |
+| `portafilter_shake_sec`    | float  | No       | Duration in seconds of a small circular shake at the `coffee_shake` pose during `unlock_portafilter`, to dislodge a stuck puck. Requires a `coffee_shake` pose in the filter pose switcher. Defaults to 0 (disabled). |
 | `save_motion_requests_dir` | string | No       | Directory to save motion request payloads for debugging.                                                      |
 | `order_sensor_name`        | string | No       | Name of a `viam:beanjamin:order-sensor` sensor to notify when each order attempt completes (must appear in **depends_on**). |
 | `zoo_cam_storage_name`     | string | No       | Name of the “zoo” camera storage ([`viam:video:storage`](https://github.com/viam-modules/video-store) or compatible); when set, uploads a clip per order attempt (async `save`), with fixed 5s pre-roll and 5s post-roll. |
