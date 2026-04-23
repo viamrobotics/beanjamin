@@ -287,6 +287,7 @@ func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) erro
 	steps := []Step{
 		{PoseName: "coffee_in", Component: "filter", PivotFromPose: "coffee_locked_final", PivotDegreesPerStep: 5,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
+		{PoseName: "coffee_shake", Component: "filter", AllowedCollisions: coffeeBrewingCollisions, LinearConstraint: defaultApproachConstraint},
 		// Shake the filter laterally to dislodge the puck.
 		{PoseName: "coffee_shake", Component: "filter",
 			CircularRadiusMm: 2, CircularDurationSec: s.cfg.PortafilterShakeSec, CircularPointsPerRev: 8,
