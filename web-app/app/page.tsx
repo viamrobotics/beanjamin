@@ -9,6 +9,7 @@ import dynamic from "next/dynamic";
 const FaceRegister = dynamic(() => import("./order/face-register").then(m => ({ default: m.FaceRegister })), { ssr: false });
 import { OrderConfirmation } from "./order/order-confirmation";
 import { OrderTracker } from "./order/order-tracker";
+import { ZooCamFeed } from "./order/zoo-cam-feed";
 import {
   connectToViam,
   getMachineMetadataKey,
@@ -316,13 +317,16 @@ export default function Home() {
         {renderStep()}
       </div>
 
-      {/* Right panel: live order tracker */}
+      {/* Right panel: live zoo-cam feed + order tracker */}
       {showTracker && (
-        <div className="w-[340px] shrink-0 border-l border-neutral-200">
-          <OrderTracker
-            viamConn={viamConn.current}
-            onEmpty={handleTrackerEmpty}
-          />
+        <div className="w-[340px] shrink-0 border-l border-neutral-200 flex flex-col">
+          <ZooCamFeed viamConn={viamConn.current} />
+          <div className="flex-1 min-h-0">
+            <OrderTracker
+              viamConn={viamConn.current}
+              onEmpty={handleTrackerEmpty}
+            />
+          </div>
         </div>
       )}
     </div>
