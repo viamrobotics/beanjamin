@@ -284,6 +284,7 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 	videoFrom := time.Now().UTC()
 	var execErr error
 	startedAt := time.Now()
+	s.writePendingSave(order, videoFrom)
 	defer func() {
 		if r := recover(); r != nil {
 			execErr = fmt.Errorf("panic: %v", r)
@@ -292,6 +293,7 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 		}
 		s.notifyOrderReading(order, execErr, startedAt, time.Now())
 		s.saveOrderVideoAsync(order, videoFrom, execErr)
+		s.clearPendingSave(order.ID)
 	}()
 	execErr = s.executeQueuedOrder(ctx, order)
 }

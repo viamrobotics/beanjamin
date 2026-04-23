@@ -238,6 +238,7 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
 | `save_motion_requests_dir` | string | No       | Directory to save motion request payloads for debugging.                                                      |
 | `order_sensor_name`        | string | No       | Name of a `viam:beanjamin:order-sensor` sensor to notify when each order attempt completes (must appear in **depends_on**). |
 | `zoo_cam_storage_name`     | string | No       | Name of the “zoo” camera storage ([`viam:video:storage`](https://github.com/viam-modules/video-store) or compatible); when set, uploads a clip per order attempt (async `save`), with fixed 5s pre-roll and 5s post-roll. |
+| `pending_order_clips_dir`  | string | No       | Directory to persist in-progress video save records. When set, a record is written when each order starts and removed when it completes; on startup any leftover records are replayed so clips are not lost if the machine restarts mid-brew. Requires `zoo_cam_storage_name`. |
 | `input_range_override`     | object | No       | Narrows joint limits on named frames before motion planning. Outer key is the frame name (typically the arm); inner key is either the joint name or its stringified index (e.g. `"5"` for the last joint of a 6-DoF arm). Each value is `{ "min_degs": number, "max_degs": number }`. |
 
 ### DoCommand
@@ -296,6 +297,14 @@ Returns `{"status": "resumed"}`.
 ```
 
 Returns `{"status": "cleared", "removed": 2}`.
+
+**`cleanup_pending_clips`** - Attempt a video save for any remaining records in `pending_order_clips_dir`, then remove them. Catches clips that could not be recovered on startup (e.g. zoo cam unavailable at boot). Intended to be invoked via a Viam scheduled job.
+
+```json
+{"cleanup_pending_clips": true}
+```
+
+Returns `{"saved": 1, "skipped": 0}`.
 
 **`action`** - Control the gripper. Supported values: `"open_gripper"`, `"close_gripper"`.
 

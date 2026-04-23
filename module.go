@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -83,8 +84,9 @@ type Config struct {
 	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
 	OrderSensorName       string  `json:"order_sensor_name,omitempty"`
 
-	ZooCamStorageName string `json:"zoo_cam_storage_name,omitempty"`
-	CanServeDecaf     bool   `json:"can_serve_decaf,omitempty"`
+	ZooCamStorageName    string `json:"zoo_cam_storage_name,omitempty"`
+	PendingOrderClipsDir string `json:"pending_order_clips_dir,omitempty"`
+	CanServeDecaf        bool   `json:"can_serve_decaf,omitempty"`
 
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
 }
@@ -134,6 +136,7 @@ type beanjaminCoffee struct {
 	vizConsecutiveFailures int                         // auto-disables viz after repeated failures
 	gripper                gripper.Gripper
 	zooCam                 camera.Camera // optional; viam:video:storage (or compatible); nil if zoo_cam_storage_name unset
+	pendingOrderClipsDir   string        // optional; directory for pending-clip records to survive restarts
 	mu                     sync.Mutex
 	cancelCtx              context.Context
 	cancelFunc             func()
@@ -232,6 +235,13 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger.Infof("zoo cam storage %q connected", conf.ZooCamStorageName)
 	}
 
+	if conf.PendingOrderClipsDir != "" {
+		if err := os.MkdirAll(conf.PendingOrderClipsDir, 0o755); err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("pending_order_clips_dir %q: %w", conf.PendingOrderClipsDir, err)
+		}
+	}
+
 	vizEnabled := false
 	if conf.VizURL != "" {
 		viz.SetURL(conf.VizURL)
@@ -257,23 +267,24 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	}
 
 	s := &beanjaminCoffee{
-		name:            name,
-		logger:          logger,
-		cfg:             conf,
-		filterSw:        filterSw,
-		clawsSw:         clawSw,
-		arm:             armComp,
-		fsSvc:           fsSvc,
-		cachedFS:        cachedFS,
-		speech:          speech,
-		zooCam:          zooCam,
-		gripper:         gripperComp,
-		vizEnabled:      vizEnabled,
-		cancelCtx:       cancelCtx,
-		cancelFunc:      cancelFunc,
-		queue:           NewOrderQueue(),
-		queueStop:       make(chan struct{}),
-		orderSensorSink: sink,
+		name:                 name,
+		logger:               logger,
+		cfg:                  conf,
+		filterSw:             filterSw,
+		clawsSw:              clawSw,
+		arm:                  armComp,
+		fsSvc:                fsSvc,
+		cachedFS:             cachedFS,
+		speech:               speech,
+		zooCam:               zooCam,
+		pendingOrderClipsDir: conf.PendingOrderClipsDir,
+		gripper:              gripperComp,
+		vizEnabled:           vizEnabled,
+		cancelCtx:            cancelCtx,
+		cancelFunc:           cancelFunc,
+		queue:                NewOrderQueue(),
+		queueStop:            make(chan struct{}),
+		orderSensorSink:      sink,
 	}
 	go s.processQueue()
 	return s, nil
@@ -371,6 +382,9 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 	if _, ok := cmd["clear_queue"]; ok {
 		return s.clearQueue()
 	}
+	if _, ok := cmd["cleanup_pending_clips"]; ok {
+		return s.cleanupPendingClips()
+	}
 	// Stream deck key commands
 	if action, ok := cmd["action"].(string); ok {
 		switch action {
@@ -382,7 +396,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 			return nil, fmt.Errorf("unknown action %q", action)
 		}
 	}
-	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, action")
+	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, action")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }
