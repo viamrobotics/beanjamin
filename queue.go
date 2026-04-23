@@ -48,8 +48,8 @@ type Order struct {
 // is fully owned by the backend.
 type OrderQueue struct {
 	mu      sync.Mutex
-	pending []Order       // active queue, FIFO
-	recent  []Order       // completed orders, append-most-recent-last
+	pending []Order // active queue, FIFO
+	recent  []Order // completed orders, append-most-recent-last
 	notify  chan struct{} // buffered(1), poked on enqueue to wake consumer
 	proceed chan struct{} // buffered(1), operator signal to resume after inter-order pause
 }
