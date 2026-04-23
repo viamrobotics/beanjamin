@@ -84,20 +84,34 @@ func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]inter
 	// Check if the arm is physically moving.
 	armMoving, err := m.arm.IsMoving(ctx)
 	if err != nil {
+		m.logger.CWarnw(
+			ctx, "is_safe debugging: failed to check arm movement",
+			"err", err,
+		)
 		return nil, fmt.Errorf("failed to check arm movement: %w", err)
 	}
 
 	// Query the coffee service for queue and running state via DoCommand.
 	resp, err := m.coffee.DoCommand(ctx, map[string]interface{}{"get_queue": true})
 	if err != nil {
+		m.logger.CWarnw(
+			ctx, "is_safe debugging: failed to query coffee service",
+			"err", err,
+		)
 		return nil, fmt.Errorf("failed to query coffee service: %w", err)
 	}
 
-	isRunning, _ := resp["is_running"].(bool)
+	isBusy, _ := resp["is_busy"].(bool)
 	queueCount, _ := resp["count"].(float64)
 
+	isSafe := !armMoving && !isBusy && queueCount == 0
+	m.logger.CDebugf(
+		ctx, "is_safe debugging: is_safe: %v, arm_moving: %v, is_busy: %v, queue_count: %v",
+		isSafe, armMoving, isBusy, queueCount,
+	)
+
 	return map[string]interface{}{
-		"is_safe": !armMoving && !isRunning && queueCount == 0,
+		"is_safe": isSafe,
 	}, nil
 }
 

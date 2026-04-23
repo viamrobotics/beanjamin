@@ -4,21 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	viz "github.com/viam-labs/motion-tools/client/client"
 	"go.viam.com/rdk/components/arm"
+	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/components/gripper"
+	"go.viam.com/rdk/components/sensor"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot/framesystem"
 	generic "go.viam.com/rdk/services/generic"
-	"go.viam.com/rdk/spatialmath"
 
 	// Register the multi-poses-execution-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
@@ -75,14 +75,16 @@ type Config struct {
 	SpeechServiceName     string  `json:"speech_service_name,omitempty"`
 	VizURL                string  `json:"viz_url,omitempty"`
 	BrewTimeSec           float64 `json:"brew_time_sec,omitempty"`
+	LungoBrewTimeSec      float64 `json:"lungo_brew_time_sec,omitempty"`
+	GrindTimeSec          float64 `json:"grind_time_sec,omitempty"`
 	PlaceCup              bool    `json:"place_cup,omitempty"`
 	CleanAfterUse         bool    `json:"clean_after_use,omitempty"`
-	DialMoveXMM           float64 `json:"dial_move_x_mm,omitempty"`
-	DialMoveYMM           float64 `json:"dial_move_y_mm,omitempty"`
-	DialMoveZMM           float64 `json:"dial_move_z_mm,omitempty"`
-	DialMoveOrientationMM float64 `json:"dial_move_orientation_mm,omitempty"`
-	DialMaxPosition       float64 `json:"dial_max_position,omitempty"`
+	PortafilterTaps       int     `json:"portafilter_taps,omitempty"`
 	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
+	OrderSensorName       string  `json:"order_sensor_name,omitempty"`
+
+	ZooCamStorageName string `json:"zoo_cam_storage_name,omitempty"`
+	CanServeDecaf     bool   `json:"can_serve_decaf,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -104,6 +106,12 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.SpeechServiceName != "" {
 		optDeps = append(optDeps, generic.Named(cfg.SpeechServiceName).String())
 	}
+	if cfg.OrderSensorName != "" {
+		optDeps = append(optDeps, sensor.Named(cfg.OrderSensorName).String())
+	}
+	if cfg.ZooCamStorageName != "" {
+		optDeps = append(optDeps, camera.Named(cfg.ZooCamStorageName).String())
+	}
 
 	return reqDeps, optDeps, nil
 }
@@ -123,25 +131,17 @@ type beanjaminCoffee struct {
 	vizEnabled             bool                        // true when viz_url is configured
 	vizConsecutiveFailures int                         // auto-disables viz after repeated failures
 	gripper                gripper.Gripper
+	zooCam                 camera.Camera // optional; viam:video:storage (or compatible); nil if zoo_cam_storage_name unset
 	mu                     sync.Mutex
 	cancelCtx              context.Context
 	cancelFunc             func()
 	running                atomic.Bool
+	currentStep            atomic.Value // string: current step label for the active order (debug)
+	currentOrderID         atomic.Value // string: ID of the order currently being processed; "" when idle
 	queue                  *OrderQueue
 	queueStop              chan struct{}
 	paused                 atomic.Bool
-
-	// Last known absolute dial positions and directions for direction detection
-	lastDialX              *float64
-	lastDialY              *float64
-	lastDialZ              *float64
-	lastDialSpeed          *float64
-	lastDialDirX           float64
-	lastDialDirY           float64
-	lastDialDirZ           float64
-	lastDialOrientation    *float64
-	lastDialDirOrientation float64
-	lastDialDirSpeed       float64
+	orderSensorSink        orderSensorSink // optional; named order-sensor from deps, nil if unset
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -214,6 +214,17 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		}
 	}
 
+	var zooCam camera.Camera
+	if conf.ZooCamStorageName != "" {
+		zc, err := camera.FromProvider(deps, conf.ZooCamStorageName)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("zoo cam storage %q: %w", conf.ZooCamStorageName, err)
+		}
+		zooCam = zc
+		logger.Infof("zoo cam storage %q connected", conf.ZooCamStorageName)
+	}
+
 	vizEnabled := false
 	if conf.VizURL != "" {
 		viz.SetURL(conf.VizURL)
@@ -221,22 +232,41 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger.Infof("viz client configured at %s", conf.VizURL)
 	}
 
+	var sink orderSensorSink
+	if conf.OrderSensorName != "" {
+		// Same component instance as elsewhere on the robot (not a copy).
+		sen, err := sensor.FromProvider(deps, conf.OrderSensorName)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("order sensor %q: %w", conf.OrderSensorName, err)
+		}
+		s, ok := sen.(orderSensorSink)
+		if !ok {
+			cancelFunc()
+			return nil, fmt.Errorf("resource %q must be model viam:beanjamin:order-sensor", conf.OrderSensorName)
+		}
+		sink = s
+		logger.Infof("order sensor %q connected", conf.OrderSensorName)
+	}
+
 	s := &beanjaminCoffee{
-		name:       name,
-		logger:     logger,
-		cfg:        conf,
-		filterSw:   filterSw,
-		clawsSw:    clawSw,
-		arm:        armComp,
-		fsSvc:      fsSvc,
-		cachedFS:   cachedFS,
-		speech:     speech,
-		gripper:    gripperComp,
-		vizEnabled: vizEnabled,
-		cancelCtx:  cancelCtx,
-		cancelFunc: cancelFunc,
-		queue:      NewOrderQueue(),
-		queueStop:  make(chan struct{}),
+		name:            name,
+		logger:          logger,
+		cfg:             conf,
+		filterSw:        filterSw,
+		clawsSw:         clawSw,
+		arm:             armComp,
+		fsSvc:           fsSvc,
+		cachedFS:        cachedFS,
+		speech:          speech,
+		zooCam:          zooCam,
+		gripper:         gripperComp,
+		vizEnabled:      vizEnabled,
+		cancelCtx:       cancelCtx,
+		cancelFunc:      cancelFunc,
+		queue:           NewOrderQueue(),
+		queueStop:       make(chan struct{}),
+		orderSensorSink: sink,
 	}
 	go s.processQueue()
 	return s, nil
@@ -246,8 +276,61 @@ func (s *beanjaminCoffee) Name() resource.Name {
 	return s.name
 }
 
+func (s *beanjaminCoffee) setStep(step string) {
+	s.currentStep.Store(step)
+	if id, ok := s.currentOrderID.Load().(string); ok && id != "" {
+		s.queue.SetStep(id, step)
+	}
+}
+
 func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, error) {
-	return map[string]interface{}{}, nil
+	orders := s.queue.List()
+	// structpb.NewStruct (used by RDK to serialize Status over the wire) only
+	// accepts []interface{} for list values, not []map[string]interface{}, so
+	// the slice element type must be interface{}.
+	orderMaps := make([]interface{}, len(orders))
+	for i, o := range orders {
+		// structpb.NewStruct rejects []map[string]interface{} as list values,
+		// so step_history must also be []interface{}.
+		history := make([]interface{}, len(o.StepHistory))
+		for j, e := range o.StepHistory {
+			history[j] = map[string]interface{}{
+				"step":       e.Step,
+				"started_at": e.StartedAt.Format(time.RFC3339),
+			}
+		}
+		// Empty string when the order is still pending; the frontend uses
+		// completed_at presence as the signal to render the green ready card.
+		completedAt := ""
+		if !o.CompletedAt.IsZero() {
+			completedAt = o.CompletedAt.Format(time.RFC3339)
+		}
+		orderMaps[i] = map[string]interface{}{
+			"id":            o.ID,
+			"drink":         o.Drink,
+			"customer_name": o.CustomerName,
+			"enqueued_at":   o.EnqueuedAt.Format(time.RFC3339),
+			"raw_step":      o.RawStep,
+			"step_history":  history,
+			"completed_at":  completedAt,
+		}
+	}
+	step, _ := s.currentStep.Load().(string)
+	resp := map[string]interface{}{
+		// count reports pending depth only — orders waiting to be made.
+		// Recently-completed orders are visible in `orders` but don't add
+		// to depth. Returned as float64 so in-process callers see the
+		// same type as gRPC callers (structpb forces all numbers to
+		// double on the wire).
+		"count":        float64(s.queue.Len()),
+		"orders":       orderMaps,
+		"is_paused":       s.paused.Load(),
+		"is_busy":         s.running.Load(),
+		"current_step":    step,
+		"can_serve_decaf": s.cfg.CanServeDecaf,
+	}
+	s.logger.Debugw("Status", "response", resp)
+	return resp, nil
 }
 
 func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
@@ -273,29 +356,13 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		return res, err
 	}
 	if _, ok := cmd["get_queue"]; ok {
-		return s.getQueue()
+		return s.Status(ctx)
 	}
 	if _, ok := cmd["proceed"]; ok {
 		return s.proceedQueue()
 	}
 	if _, ok := cmd["clear_queue"]; ok {
 		return s.clearQueue()
-	}
-	// Stream deck dial commands
-	if v, ok := cmd["dial_move_x"]; ok {
-		return s.handleDialMove(ctx, "x", v)
-	}
-	if v, ok := cmd["dial_move_y"]; ok {
-		return s.handleDialMove(ctx, "y", v)
-	}
-	if v, ok := cmd["dial_move_z"]; ok {
-		return s.handleDialMove(ctx, "z", v)
-	}
-	if v, ok := cmd["dial_move_orientation"]; ok {
-		return s.handleDialMove(ctx, "orientation", v)
-	}
-	if v, ok := cmd["dial_move_speed"]; ok {
-		return s.handleDialSpeedMove(ctx, v)
 	}
 	// Stream deck key commands
 	if action, ok := cmd["action"].(string); ok {
@@ -308,23 +375,9 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 			return nil, fmt.Errorf("unknown action %q", action)
 		}
 	}
-	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, dial_move_x/y/z/orientation/speed, action")
+	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, action")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
-}
-
-func (s *beanjaminCoffee) getQueue() (map[string]interface{}, error) {
-	orders := s.queue.List()
-	names := make([]string, len(orders))
-	for i, o := range orders {
-		names[i] = o.CustomerName
-	}
-	return map[string]interface{}{
-		"count":      len(orders),
-		"orders":     names,
-		"is_paused":  s.paused.Load(),
-		"is_running": s.running.Load(),
-	}, nil
 }
 
 func (s *beanjaminCoffee) proceedQueue() (map[string]interface{}, error) {
@@ -346,172 +399,13 @@ func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
 	if !s.running.Load() {
 		return nil, errors.New("no sequence in progress")
 	}
+	s.paused.Store(true)
 	s.mu.Lock()
 	s.cancelFunc()
 	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
 	s.mu.Unlock()
-	s.logger.Infof("sequence cancelled")
-	return map[string]interface{}{"status": "cancelled"}, nil
-}
-
-func (s *beanjaminCoffee) handleMoveArm(ctx context.Context, axis string, mm float64) (map[string]interface{}, error) {
-	currentPose, err := s.arm.EndPosition(ctx, map[string]interface{}{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current arm position: %w", err)
-	}
-	pt := currentPose.Point()
-	switch axis {
-	case "x":
-		pt.X += mm
-	case "y":
-		pt.Y += mm
-	case "z":
-		pt.Z += mm
-	case "orientation":
-		ov := currentPose.Orientation().OrientationVectorDegrees()
-		// Normalize the orientation direction vector
-		norm := math.Sqrt(ov.OX*ov.OX + ov.OY*ov.OY + ov.OZ*ov.OZ)
-		if norm > 0 {
-			pt.X += mm * ov.OX / norm
-			pt.Y += mm * ov.OY / norm
-			pt.Z += mm * ov.OZ / norm
-		}
-	}
-	newPose := spatialmath.NewPose(pt, currentPose.Orientation())
-	if err := s.arm.MoveToPosition(ctx, newPose, map[string]interface{}{}); err != nil {
-		return nil, fmt.Errorf("failed to move arm: %w", err)
-	}
-	return map[string]interface{}{"status": "moved", "axis": axis, "mm": mm}, nil
-}
-
-func (s *beanjaminCoffee) handleDialMove(ctx context.Context, axis string, dialValue interface{}) (map[string]interface{}, error) {
-	if s.arm == nil {
-		return nil, fmt.Errorf("no arm configured")
-	}
-	var mm float64
-	switch axis {
-	case "x":
-		mm = s.cfg.DialMoveXMM
-	case "y":
-		mm = s.cfg.DialMoveYMM
-	case "z":
-		mm = s.cfg.DialMoveZMM
-	case "orientation":
-		mm = s.cfg.DialMoveOrientationMM
-	}
-	if mm == 0 {
-		mm = 1
-	}
-	if dialVal, ok := toFloat64(dialValue); ok {
-		var last **float64
-		var lastDir *float64
-		switch axis {
-		case "x":
-			last = &s.lastDialX
-			lastDir = &s.lastDialDirX
-		case "y":
-			last = &s.lastDialY
-			lastDir = &s.lastDialDirY
-		case "z":
-			last = &s.lastDialZ
-			lastDir = &s.lastDialDirZ
-		case "orientation":
-			last = &s.lastDialOrientation
-			lastDir = &s.lastDialDirOrientation
-		}
-		if *last == nil {
-			// First reading — store position and skip move (no direction yet)
-			*last = &dialVal
-			return map[string]interface{}{"status": "dial_initialized", "axis": axis, "position": dialVal}, nil
-		}
-		maxPos := s.cfg.DialMaxPosition
-		if maxPos == 0 {
-			maxPos = 100
-		}
-		delta := dialVal - **last
-		// Correct for rollover: if the jump is more than half the range, it wrapped
-		if delta > maxPos/2 {
-			delta -= maxPos + 1
-		} else if delta < -maxPos/2 {
-			delta += maxPos + 1
-		}
-		var direction float64
-		if **last == 0 && *lastDir != 0 {
-			// At the zero boundary, the dial can't go lower so the value bounces
-			// back up — continue in the last known direction instead of reversing
-			direction = *lastDir
-		} else if delta < 0 {
-			direction = -1
-		} else {
-			direction = 1
-		}
-		if direction < 0 {
-			mm = -mm
-		}
-		*lastDir = direction
-		**last = dialVal
-	}
-	return s.handleMoveArm(ctx, axis, mm)
-}
-
-func (s *beanjaminCoffee) handleDialSpeedMove(_ context.Context, dialValue interface{}) (map[string]interface{}, error) {
-	const speedStepMM = 1.0
-	const minSpeedMM = 0.5
-
-	dialVal, ok := toFloat64(dialValue)
-	if !ok {
-		return nil, fmt.Errorf("dial_move_speed: invalid value %v", dialValue)
-	}
-
-	if s.lastDialSpeed == nil {
-		s.lastDialSpeed = &dialVal
-		return map[string]interface{}{"status": "dial_initialized", "axis": "speed", "position": dialVal}, nil
-	}
-
-	maxPos := s.cfg.DialMaxPosition
-	if maxPos == 0 {
-		maxPos = 100
-	}
-	delta := dialVal - *s.lastDialSpeed
-	if delta > maxPos/2 {
-		delta -= maxPos + 1
-	} else if delta < -maxPos/2 {
-		delta += maxPos + 1
-	}
-
-	var direction float64
-	if *s.lastDialSpeed == 0 && s.lastDialDirSpeed != 0 {
-		direction = s.lastDialDirSpeed
-	} else if delta < 0 {
-		direction = -1
-	} else {
-		direction = 1
-	}
-	s.lastDialDirSpeed = direction
-	*s.lastDialSpeed = dialVal
-
-	step := speedStepMM * direction
-	applyStep := func(current float64) float64 {
-		if current == 0 {
-			current = 1
-		}
-		if v := current + step; v >= minSpeedMM {
-			return v
-		}
-		return minSpeedMM
-	}
-	s.cfg.DialMoveXMM = applyStep(s.cfg.DialMoveXMM)
-	s.cfg.DialMoveYMM = applyStep(s.cfg.DialMoveYMM)
-	s.cfg.DialMoveZMM = applyStep(s.cfg.DialMoveZMM)
-	s.cfg.DialMoveOrientationMM = applyStep(s.cfg.DialMoveOrientationMM)
-
-	return map[string]interface{}{
-		"status":                   "speed_updated",
-		"dial_move_x_mm":           s.cfg.DialMoveXMM,
-		"dial_move_y_mm":           s.cfg.DialMoveYMM,
-		"dial_move_z_mm":           s.cfg.DialMoveZMM,
-		"dial_move_orientation_mm": s.cfg.DialMoveOrientationMM,
-	}, nil
+	s.logger.Infof("sequence cancelled — queue paused, send 'proceed' to resume")
+	return map[string]interface{}{"status": "cancelled", "queue": "paused"}, nil
 }
 
 func (s *beanjaminCoffee) handleOpenGripper(ctx context.Context) (map[string]interface{}, error) {
@@ -533,20 +427,6 @@ func (s *beanjaminCoffee) handleCloseGripper(ctx context.Context) (map[string]in
 		return nil, fmt.Errorf("failed to close gripper: %w", err)
 	}
 	return map[string]interface{}{"status": "closed", "grabbed": grabbed}, nil
-}
-
-func toFloat64(v interface{}) (float64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return n, true
-	case float32:
-		return float64(n), true
-	case int:
-		return float64(n), true
-	case int64:
-		return float64(n), true
-	}
-	return 0, false
 }
 
 func (s *beanjaminCoffee) Close(context.Context) error {

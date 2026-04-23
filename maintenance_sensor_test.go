@@ -16,15 +16,15 @@ type fakeCoffeeService struct {
 	resource.AlwaysRebuild
 	resource.TriviallyCloseable
 
-	isRunning  bool
+	isBusy     bool
 	queueCount float64
 }
 
 func (f *fakeCoffeeService) DoCommand(_ context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	if _, ok := cmd["get_queue"]; ok {
 		return map[string]interface{}{
-			"is_running": f.isRunning,
-			"count":      f.queueCount,
+			"is_busy": f.isBusy,
+			"count":   f.queueCount,
 		}, nil
 	}
 	return nil, errors.New("unknown command")
@@ -32,7 +32,7 @@ func (f *fakeCoffeeService) DoCommand(_ context.Context, cmd map[string]interfac
 
 type testOpts struct {
 	armMoving  bool
-	isRunning  bool
+	isBusy     bool
 	queueCount float64
 }
 
@@ -48,7 +48,7 @@ func setupMaintenanceSensor(t *testing.T, opts testOpts) (sensor.Sensor, *inject
 
 	coffee := &fakeCoffeeService{
 		Named:      resource.NewName(sensor.API, "coffee").AsNamed(),
-		isRunning:  opts.isRunning,
+		isBusy:     opts.isBusy,
 		queueCount: opts.queueCount,
 	}
 
@@ -86,7 +86,7 @@ func TestReadings_Unsafe_WhenArmMoving(t *testing.T) {
 }
 
 func TestReadings_Unsafe_WhenSequenceRunning(t *testing.T) {
-	s, _, _ := setupMaintenanceSensor(t, testOpts{isRunning: true})
+	s, _, _ := setupMaintenanceSensor(t, testOpts{isBusy: true})
 
 	readings, err := s.Readings(context.Background(), nil)
 	if err != nil {
@@ -110,7 +110,7 @@ func TestReadings_Unsafe_WhenQueueHasOrders(t *testing.T) {
 }
 
 func TestReadings_Unsafe_WhenAllActive(t *testing.T) {
-	s, _, _ := setupMaintenanceSensor(t, testOpts{armMoving: true, isRunning: true, queueCount: 1})
+	s, _, _ := setupMaintenanceSensor(t, testOpts{armMoving: true, isBusy: true, queueCount: 1})
 
 	readings, err := s.Readings(context.Background(), nil)
 	if err != nil {
