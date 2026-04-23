@@ -248,6 +248,9 @@ func (s *beanjaminCoffee) unlockFilterFrame(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("rebuild frame system: %w", err)
 	}
+	if err := applyJointLimits(s.logger, fs, s.cfg.InputRangeOverride); err != nil {
+		return fmt.Errorf("re-apply joint limits: %w", err)
+	}
 	s.cachedFS = fs
 	s.logger.Infof("unlocked filter frame, frame system restored from service")
 	return nil
