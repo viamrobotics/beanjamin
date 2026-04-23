@@ -79,7 +79,7 @@ type Config struct {
 	GrindTimeSec          float64 `json:"grind_time_sec,omitempty"`
 	PlaceCup              bool    `json:"place_cup,omitempty"`
 	CleanAfterUse         bool    `json:"clean_after_use,omitempty"`
-	PortafilterTaps       int     `json:"portafilter_taps,omitempty"`
+	PortafilterShakeSec   float64 `json:"portafilter_shake_sec,omitempty"`
 	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
 	OrderSensorName       string  `json:"order_sensor_name,omitempty"`
 

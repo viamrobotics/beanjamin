@@ -287,20 +287,12 @@ func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) erro
 	steps := []Step{
 		{PoseName: "coffee_in", Component: "filter", PivotFromPose: "coffee_locked_final", PivotDegreesPerStep: 5,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
+		// Shake the filter laterally to dislodge the puck.
+		{PoseName: "coffee_shake", Component: "filter",
+			CircularRadiusMm: 2, CircularDurationSec: s.cfg.PortafilterShakeSec, CircularPointsPerRev: 8,
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
+		{PoseName: "coffee_approach", Component: "filter", Pause: shortPause, LinearConstraint: defaultApproachConstraint},
 	}
-	// Tap the portafilter against the machine to dislodge stuck grounds.
-	for i := range s.cfg.PortafilterTaps {
-		s.logger.Infof("portafilter tap %d/%d", i+1, s.cfg.PortafilterTaps)
-		steps = append(steps,
-			Step{PoseName: "coffee_approach", Component: "filter", Pause: shortPause,
-				LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
-			Step{PoseName: "coffee_in", Component: "filter", Pause: shortPause,
-				LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
-		)
-	}
-	steps = append(steps,
-		Step{PoseName: "coffee_approach", Component: "filter", Pause: shortPause, LinearConstraint: defaultApproachConstraint},
-	)
 	for _, step := range steps {
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 			return fmt.Errorf("unlock_portafilter: %w", err)
