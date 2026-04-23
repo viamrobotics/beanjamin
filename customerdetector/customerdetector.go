@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/draw"
 	"image/jpeg"
 	"os"
 	"path/filepath"
@@ -187,6 +189,7 @@ func (cd *customerDetector) registerCustomer(ctx context.Context, name, email st
 	if err != nil {
 		return nil, fmt.Errorf("failed to capture image: %w", err)
 	}
+	img = centerCrop(img)
 
 	// Save the image into the known_faces directory under the customer's email.
 	customerDir := filepath.Join(cd.dataDir, knownFacesDir, email)
@@ -271,22 +274,52 @@ func (cd *customerDetector) finishRegistration(ctx context.Context, email string
 }
 
 // identifyCustomer captures an image and runs face detection against known
-// customers, returning the best match above the confidence threshold.
+// customers, returning the best match above the confidence threshold that
+// occupies at least 25% of the image. When multiple detections qualify, the
+// largest (by bounding-box area) wins.
 func (cd *customerDetector) identifyCustomer(ctx context.Context) (map[string]interface{}, error) {
 	vis, err := cd.getVision()
 	if err != nil {
 		return nil, err
 	}
 
-	detections, err := vis.DetectionsFromCamera(ctx, cd.camera.Name().ShortName(), nil)
+	img, err := camera.DecodeImageFromCamera(ctx, cd.camera, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to capture image: %w", err)
+	}
+
+	img = centerCrop(img)
+
+	bounds := img.Bounds()
+	imageArea := bounds.Dx() * bounds.Dy()
+	if imageArea == 0 {
+		return nil, fmt.Errorf("captured image has zero area")
+	}
+
+	detections, err := vis.Detections(ctx, img, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get detections: %w", err)
 	}
 
+	const minFaceAreaFraction = 0.25
+
 	var bestLabel string
 	var bestConf float64
+	var bestArea int
 	for _, d := range detections {
-		if d.Score() > bestConf && d.Score() >= cd.threshold {
+		if d.Score() < cd.threshold {
+			continue
+		}
+		bb := d.BoundingBox()
+		if bb == nil {
+			continue
+		}
+		area := bb.Dx() * bb.Dy()
+		if float64(area)/float64(imageArea) < minFaceAreaFraction {
+			continue
+		}
+		if area > bestArea {
+			bestArea = area
 			bestConf = d.Score()
 			bestLabel = d.Label()
 		}
@@ -402,4 +435,17 @@ func (cd *customerDetector) Status(ctx context.Context) (map[string]interface{},
 
 func (cd *customerDetector) Close(context.Context) error {
 	return nil
+}
+
+func centerCrop(img image.Image) image.Image {
+	b := img.Bounds()
+	size := b.Dx()
+	if b.Dy() < size {
+		size = b.Dy()
+	}
+	x0 := b.Min.X + (b.Dx()-size)/2
+	y0 := b.Min.Y + (b.Dy()-size)/2
+	dst := image.NewRGBA(image.Rect(0, 0, size, size))
+	draw.Draw(dst, dst.Bounds(), img, image.Pt(x0, y0), draw.Src)
+	return dst
 }
