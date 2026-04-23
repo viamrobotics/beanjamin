@@ -382,6 +382,10 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}
 
 	s.logger.Infof("order %s queued at position %d for %s (queue depth: %d)", o.ID, pos, customerName, pos)
 
+	if err := s.say(ctx, pickOrderReceived(drink, customerName)); err != nil {
+		s.logger.Warnf("failed to announce order %s: %v", o.ID, err)
+	}
+
 	return map[string]interface{}{
 		"status":         "queued",
 		"order_id":       o.ID,
