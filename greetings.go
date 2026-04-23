@@ -13,6 +13,22 @@ func speakableDrink(drink string) string {
 }
 
 // Greeting templates use indexed format verbs: %[1]s = drink name, %[2]s = customer name.
+var orderReceivedAnonymous = []string{
+	"Order received! One %[1]s in the queue.",
+	"Got it! %[1]s coming up.",
+	"Thanks! Your %[1]s is in line.",
+	"%[1]s — added to the queue.",
+	"Nice! One %[1]s, logged and queued.",
+}
+
+var orderReceivedNamed = []string{
+	"Order received, %[2]s — %[1]s in the queue.",
+	"Got it, %[2]s! %[1]s coming up.",
+	"Thanks %[2]s, your %[1]s is in line.",
+	"%[2]s, your %[1]s is on the list.",
+	"Nice one %[2]s — one %[1]s, logged and queued.",
+}
+
 var greetingsAnonymous = []string{
 	"One %[1]s coming right up!",
 	"Great choice! Let me prepare your %[1]s.",
@@ -70,6 +86,14 @@ func pickGreeting(drink, customerName string) string {
 		return fmt.Sprintf(greetingsNamed[rand.Intn(len(greetingsNamed))], drink, customerName)
 	}
 	return fmt.Sprintf(greetingsAnonymous[rand.Intn(len(greetingsAnonymous))], drink)
+}
+
+func pickOrderReceived(drink, customerName string) string {
+	drink = speakableDrink(drink)
+	if customerName != "" {
+		return fmt.Sprintf(orderReceivedNamed[rand.Intn(len(orderReceivedNamed))], drink, customerName)
+	}
+	return fmt.Sprintf(orderReceivedAnonymous[rand.Intn(len(orderReceivedAnonymous))], drink)
 }
 
 func pickAlmostReady() string {
