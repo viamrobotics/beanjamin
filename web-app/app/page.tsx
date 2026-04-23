@@ -9,7 +9,7 @@ import dynamic from "next/dynamic";
 const FaceRegister = dynamic(() => import("./order/face-register").then(m => ({ default: m.FaceRegister })), { ssr: false });
 import { OrderConfirmation } from "./order/order-confirmation";
 import { OrderTracker } from "./order/order-tracker";
-import { ZooCamFeed } from "./order/zoo-cam-feed";
+import { CamFeed } from "./order/cam-feed";
 import {
   connectToViam,
   getMachineMetadataKey,
@@ -32,6 +32,7 @@ export default function Home() {
   const [drinkRejection, setDrinkRejection] = useState<string | null>(null);
   const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
   const [machineName, setMachineName] = useState<string | null>(null);
+  const [camName, setCamName] = useState<string | undefined>(undefined);
   const [showTracker, setShowTracker] = useState(false);
 
   // Viam connection state
@@ -67,6 +68,9 @@ export default function Home() {
           return;
         }
         anthropicKey.current = key;
+
+        const configuredCam = await getMachineMetadataKey(conn, "cam_name");
+        if (!cancelled && configuredCam) setCamName(configuredCam);
 
         // Try to identify a returning customer
         try {
@@ -317,10 +321,10 @@ export default function Home() {
         {renderStep()}
       </div>
 
-      {/* Right panel: live zoo-cam feed + order tracker */}
+      {/* Right panel: live cam feed + order tracker */}
       {showTracker && (
         <div className="w-[340px] shrink-0 border-l border-neutral-200 flex flex-col">
-          <ZooCamFeed viamConn={viamConn.current} />
+          <CamFeed viamConn={viamConn.current} cameraName={camName} />
           <div className="flex-1 min-h-0">
             <OrderTracker
               viamConn={viamConn.current}
