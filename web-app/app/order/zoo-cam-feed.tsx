@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { StreamClient } from "@viamrobotics/sdk";
 import type { ViamConnection } from "../lib/viamClient";
 
-const ZOO_CAM_NAME = "zoo-cam";
+const ZOO_CAM_NAME = "zoo-cam-live";
 
 export function ZooCamFeed({ viamConn }: { viamConn: ViamConnection | null }) {
   const videoRef = useRef<HTMLVideoElement>(null);
