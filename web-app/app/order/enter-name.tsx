@@ -2,6 +2,8 @@ export function EnterName({
   name,
   email,
   loading,
+  connected,
+  error,
   onNameChange,
   onEmailChange,
   onBack,
@@ -10,13 +12,15 @@ export function EnterName({
   name: string;
   email: string;
   loading: boolean;
+  connected: boolean;
+  error: string | null;
   onNameChange: (name: string) => void;
   onEmailChange: (email: string) => void;
   onBack: () => void;
   onSubmit: () => void;
 }) {
   return (
-    <main className="relative h-full bg-white flex flex-col items-center justify-center p-8 font-sans">
+    <main className="relative h-full bg-white flex flex-col items-center justify-center p-4 font-sans">
       <button
         type="button"
         onClick={onBack}
@@ -36,12 +40,12 @@ export function EnterName({
           <path d="M15 18l-6-6 6-6" />
         </svg>
       </button>
-      <div className="w-full max-w-[512px] flex flex-col gap-10">
+      <div className="w-full max-w-[512px] flex flex-col gap-5">
         <h1 className="anim-in text-2xl font-semibold text-neutral-900 text-center">
           What&apos;s your name?
         </h1>
 
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-3">
           <input
             type="text"
             value={name}
@@ -49,7 +53,7 @@ export function EnterName({
             onKeyDown={(e) => e.key === "Enter" && onSubmit()}
             placeholder="Your name"
             autoFocus
-            className="anim-in w-full px-5 py-4 bg-neutral-50 border-2 border-neutral-200 rounded-2xl text-neutral-900 text-base outline-none focus:border-neutral-400 transition-colors font-sans"
+            className="anim-in w-full px-5 py-3 bg-neutral-50 border-2 border-neutral-200 rounded-2xl text-neutral-900 text-base outline-none focus:border-neutral-400 transition-colors font-sans"
             style={{ animationDelay: "80ms" }}
           />
 
@@ -59,15 +63,27 @@ export function EnterName({
             onChange={(e) => onEmailChange(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && onSubmit()}
             placeholder="Email (optional, for loyalty)"
-            className="anim-in w-full px-5 py-4 bg-neutral-50 border-2 border-neutral-200 rounded-2xl text-neutral-900 text-base outline-none focus:border-neutral-400 transition-colors font-sans"
+            className="anim-in w-full px-5 py-3 bg-neutral-50 border-2 border-neutral-200 rounded-2xl text-neutral-900 text-base outline-none focus:border-neutral-400 transition-colors font-sans"
             style={{ animationDelay: "120ms" }}
           />
         </div>
 
+        {error && (
+          <p className="anim-in text-red-500 text-sm text-center -mt-4">
+            {error}
+          </p>
+        )}
+
+        {!connected && !error && (
+          <p className="anim-in text-neutral-500 text-sm text-center -mt-4">
+            Waiting to reconnect to the machine…
+          </p>
+        )}
+
         <button
           onClick={onSubmit}
-          disabled={!name.trim() || loading}
-          className="anim-in press w-full py-5 text-base font-medium bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
+          disabled={!name.trim() || loading || !connected}
+          className="anim-in press w-full py-3 text-base font-medium bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
           style={{ animationDelay: "200ms" }}
         >
           {loading ? "Placing order..." : "Place order"}

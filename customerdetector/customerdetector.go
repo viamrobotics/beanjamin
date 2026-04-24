@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
@@ -42,6 +43,7 @@ type Config struct {
 	VisionServiceName   string  `json:"vision_service_name"`
 	DataDir             string  `json:"data_dir"`
 	ConfidenceThreshold float64 `json:"confidence_threshold,omitempty"`
+	MinFaceAreaFraction float64 `json:"min_face_area_fraction,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -71,12 +73,13 @@ type customerRecord struct {
 type customerDetector struct {
 	resource.AlwaysRebuild
 
-	name       resource.Name
-	logger     logging.Logger
-	camera     camera.Camera
-	dataDir    string
-	threshold  float64
-	visionName string
+	name                resource.Name
+	logger              logging.Logger
+	camera              camera.Camera
+	dataDir             string
+	threshold           float64
+	minFaceAreaFraction float64
+	visionName          string
 
 	mu        sync.RWMutex
 	customers map[string]*customerRecord // keyed by email
@@ -111,19 +114,25 @@ func newCustomerDetector(
 		threshold = 0.5
 	}
 
+	minFaceAreaFraction := conf.MinFaceAreaFraction
+	if minFaceAreaFraction == 0 {
+		minFaceAreaFraction = defaultMinFaceAreaFraction
+	}
+
 	// Vision service is an optional dependency — it may not be ready yet
 	// (e.g. face-identification needed this directory to exist first).
 	vis, _ := vision.FromProvider(deps, conf.VisionServiceName)
 
 	cd := &customerDetector{
-		name:       rawConf.ResourceName(),
-		logger:     logger,
-		camera:     cam,
-		vision:     vis,
-		visionName: conf.VisionServiceName,
-		dataDir:    conf.DataDir,
-		threshold:  threshold,
-		customers:  make(map[string]*customerRecord),
+		name:                rawConf.ResourceName(),
+		logger:              logger,
+		camera:              cam,
+		vision:              vis,
+		visionName:          conf.VisionServiceName,
+		dataDir:             conf.DataDir,
+		threshold:           threshold,
+		minFaceAreaFraction: minFaceAreaFraction,
+		customers:           make(map[string]*customerRecord),
 	}
 
 	if err := cd.loadCustomers(); err != nil {
@@ -148,6 +157,8 @@ func (cd *customerDetector) getVision() (vision.Service, error) {
 }
 
 func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	ctx, span := trace.StartSpan(ctx, "customer-detector::DoCommand")
+	defer span.End()
 	if reg, ok := cmd["register_customer"].(map[string]interface{}); ok {
 		email, _ := reg["email"].(string)
 		name, _ := reg["name"].(string)
@@ -273,10 +284,15 @@ func (cd *customerDetector) finishRegistration(ctx context.Context, email string
 	}, nil
 }
 
+// defaultMinFaceAreaFraction is the minimum fraction of the (center-cropped)
+// image area a face bounding box must cover to be considered a valid identify
+// candidate. 0.08 corresponds to a face spanning ~28% of the frame linearly.
+const defaultMinFaceAreaFraction = 0.08
+
 // identifyCustomer captures an image and runs face detection against known
-// customers, returning the best match above the confidence threshold that
-// occupies at least 25% of the image. When multiple detections qualify, the
-// largest (by bounding-box area) wins.
+// customers, returning the best match above the confidence threshold whose
+// bounding box covers at least min_face_area_fraction of the image. When
+// multiple detections qualify, the largest (by bounding-box area) wins.
 func (cd *customerDetector) identifyCustomer(ctx context.Context) (map[string]interface{}, error) {
 	vis, err := cd.getVision()
 	if err != nil {
@@ -301,8 +317,6 @@ func (cd *customerDetector) identifyCustomer(ctx context.Context) (map[string]in
 		return nil, fmt.Errorf("failed to get detections: %w", err)
 	}
 
-	const minFaceAreaFraction = 0.25
-
 	var bestLabel string
 	var bestConf float64
 	var bestArea int
@@ -315,7 +329,7 @@ func (cd *customerDetector) identifyCustomer(ctx context.Context) (map[string]in
 			continue
 		}
 		area := bb.Dx() * bb.Dy()
-		if float64(area)/float64(imageArea) < minFaceAreaFraction {
+		if float64(area)/float64(imageArea) < cd.minFaceAreaFraction {
 			continue
 		}
 		if area > bestArea {
@@ -430,6 +444,8 @@ func (cd *customerDetector) saveCustomers() error {
 }
 
 func (cd *customerDetector) Status(ctx context.Context) (map[string]interface{}, error) {
+	_, span := trace.StartSpan(ctx, "customer-detector::Status")
+	defer span.End()
 	return map[string]interface{}{}, nil
 }
 

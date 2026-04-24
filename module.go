@@ -16,6 +16,7 @@ import (
 	"go.viam.com/rdk/components/sensor"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot/framesystem"
@@ -69,20 +70,21 @@ type Step struct {
 }
 
 type Config struct {
-	PoseSwitcherName      string  `json:"pose_switcher_name"`
-	ClawsPoseSwitcherName string  `json:"claws_pose_switcher_name"`
-	ArmName               string  `json:"arm_name"`
-	GripperName           string  `json:"gripper_name"`
-	SpeechServiceName     string  `json:"speech_service_name,omitempty"`
-	VizURL                string  `json:"viz_url,omitempty"`
-	BrewTimeSec           float64 `json:"brew_time_sec,omitempty"`
-	LungoBrewTimeSec      float64 `json:"lungo_brew_time_sec,omitempty"`
-	GrindTimeSec          float64 `json:"grind_time_sec,omitempty"`
-	PlaceCup              bool    `json:"place_cup,omitempty"`
-	CleanAfterUse         bool    `json:"clean_after_use,omitempty"`
-	PortafilterShakeSec   float64 `json:"portafilter_shake_sec,omitempty"`
-	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
-	OrderSensorName       string  `json:"order_sensor_name,omitempty"`
+	PoseSwitcherName          string  `json:"pose_switcher_name"`
+	ClawsPoseSwitcherName     string  `json:"claws_pose_switcher_name"`
+	ArmName                   string  `json:"arm_name"`
+	GripperName               string  `json:"gripper_name"`
+	SpeechServiceName         string  `json:"speech_service_name,omitempty"`
+	VizURL                    string  `json:"viz_url,omitempty"`
+	BrewTimeSec               float64 `json:"brew_time_sec,omitempty"`
+	LungoBrewTimeSec          float64 `json:"lungo_brew_time_sec,omitempty"`
+	GrindTimeSec              float64 `json:"grind_time_sec,omitempty"`
+	SlowMovementVelDegsPerSec float64 `json:"slow_movement_vel_degs_per_sec,omitempty"`
+	PlaceCup                  bool    `json:"place_cup,omitempty"`
+	CleanAfterUse             bool    `json:"clean_after_use,omitempty"`
+	PortafilterShakeSec       float64 `json:"portafilter_shake_sec,omitempty"`
+	SaveMotionRequestsDir     string  `json:"save_motion_requests_dir,omitempty"`
+	OrderSensorName           string  `json:"order_sensor_name,omitempty"`
 
 	CamStorageMuxName    string `json:"cam_storage_mux_name,omitempty"`
 	PendingOrderClipsDir string `json:"pending_order_clips_dir,omitempty"`
@@ -302,6 +304,8 @@ func (s *beanjaminCoffee) setStep(step string) {
 }
 
 func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, error) {
+	_, span := trace.StartSpan(ctx, "beanjamin::Status")
+	defer span.End()
 	orders := s.queue.List()
 	// structpb.NewStruct (used by RDK to serialize Status over the wire) only
 	// accepts []interface{} for list values, not []map[string]interface{}, so
@@ -352,7 +356,11 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 }
 
 func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	ctx, span := trace.StartSpan(ctx, "beanjamin::DoCommand")
+	defer span.End()
 	if orderRaw, ok := cmd["prepare_order"]; ok {
+		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::prepare_order")
+		defer cmdSpan.End()
 		res, err := s.enqueueOrder(ctx, orderRaw)
 		if err != nil {
 			s.logger.Errorw("DoCommand", "error", err)
@@ -360,6 +368,8 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		return res, err
 	}
 	if actionName, ok := cmd["execute_action"].(string); ok {
+		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::execute_action["+actionName+"]")
+		defer cmdSpan.End()
 		res, err := s.executeAction(ctx, actionName)
 		if err != nil {
 			s.logger.Errorw("DoCommand", "error", err)
@@ -367,6 +377,8 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		return res, err
 	}
 	if _, ok := cmd["cancel"]; ok {
+		_, cmdSpan := trace.StartSpan(ctx, "beanjamin::cancel")
+		defer cmdSpan.End()
 		res, err := s.cancel()
 		if err != nil {
 			s.logger.Errorw("DoCommand", "error", err)
@@ -374,19 +386,39 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		return res, err
 	}
 	if _, ok := cmd["get_queue"]; ok {
+		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::get_queue")
+		defer cmdSpan.End()
 		return s.Status(ctx)
 	}
 	if _, ok := cmd["proceed"]; ok {
+		_, cmdSpan := trace.StartSpan(ctx, "beanjamin::proceed")
+		defer cmdSpan.End()
 		return s.proceedQueue()
 	}
 	if _, ok := cmd["clear_queue"]; ok {
+		_, cmdSpan := trace.StartSpan(ctx, "beanjamin::clear_queue")
+		defer cmdSpan.End()
 		return s.clearQueue()
 	}
 	if _, ok := cmd["cleanup_pending_clips"]; ok {
+		_, cmdSpan := trace.StartSpan(ctx, "beanjamin::cleanup_pending_clips")
+		defer cmdSpan.End()
 		return s.cleanupPendingClips()
+	}
+
+	if _, ok := cmd["reset_world"]; ok {
+		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::reset_world")
+		defer cmdSpan.End()
+		res, err := s.resetWorld(ctx)
+		if err != nil {
+			s.logger.Errorw("DoCommand", "error", err)
+		}
+		return res, err
 	}
 	// Stream deck key commands
 	if action, ok := cmd["action"].(string); ok {
+		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::action["+action+"]")
+		defer cmdSpan.End()
 		switch action {
 		case "open_gripper":
 			return s.handleOpenGripper(ctx)
@@ -396,7 +428,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 			return nil, fmt.Errorf("unknown action %q", action)
 		}
 	}
-	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, action")
+	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, action")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }
@@ -414,6 +446,24 @@ func (s *beanjaminCoffee) clearQueue() (map[string]interface{}, error) {
 	removed := s.queue.Clear()
 	s.logger.Infof("cleared %d orders from queue", removed)
 	return map[string]interface{}{"status": "cleared", "removed": removed}, nil
+}
+
+// resetWorld rebuilds the cached frame system so any mid-cycle mutations (e.g.
+// a portafilter frame reparented to world by lockFilterFrame) are discarded.
+// Only callable while nothing is moving AND the queue is paused — i.e. after
+// the operator has pressed cancel, or during an inter-order cleanup pause.
+func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]interface{}, error) {
+	if s.running.Load() {
+		return nil, errors.New("reset_world: a sequence is running — send 'cancel' first")
+	}
+	if !s.paused.Load() {
+		return nil, errors.New("reset_world: nothing to reset — run this only after 'cancel' if the portafilter frame is stuck")
+	}
+	if err := s.resetFrameSystem(ctx); err != nil {
+		return nil, fmt.Errorf("reset_world: %w", err)
+	}
+	s.logger.Infof("reset_world: frame system rebuilt from service — portafilter and all mutated frames restored to config defaults")
+	return map[string]interface{}{"status": "reset"}, nil
 }
 
 func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {

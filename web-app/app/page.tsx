@@ -9,18 +9,20 @@ import dynamic from "next/dynamic";
 const FaceRegister = dynamic(() => import("./order/face-register").then(m => ({ default: m.FaceRegister })), { ssr: false });
 import { OrderConfirmation } from "./order/order-confirmation";
 import { OrderTracker } from "./order/order-tracker";
-import { ZooCamFeed } from "./order/zoo-cam-feed";
+import { CamFeed } from "./order/cam-feed";
 import {
-  connectToViam,
   getMachineMetadataKey,
   getMachineName,
   prepareOrder,
   identifyCustomer,
-  type ViamConnection,
 } from "./lib/viamClient";
+import { useViamConnection } from "./lib/useViamConnection";
 import { misspellName } from "./lib/misspell";
 
 type Step = "welcome" | "drink" | "name" | "face-register" | "confirmation";
+
+const LOST_CONNECTION_MSG =
+  "Lost connection to the machine. Please wait for it to reconnect and try again.";
 
 export default function Home() {
   const [step, setStep] = useState<Step>("welcome");
@@ -32,70 +34,81 @@ export default function Home() {
   const [drinkRejection, setDrinkRejection] = useState<string | null>(null);
   const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
   const [machineName, setMachineName] = useState<string | null>(null);
+  const [camName, setCamName] = useState<string | undefined>(undefined);
   const [showTracker, setShowTracker] = useState(false);
 
   // Viam connection state
-  const viamConn = useRef<ViamConnection | null>(null);
+  const {
+    conn: viamConn,
+    connected,
+    error: connectionError,
+  } = useViamConnection();
   const anthropicKey = useRef<string>("");
-  const [viamError, setViamError] = useState<string | null>(null);
+  const [appError, setAppError] = useState<string | null>(null);
+  const viamError = connectionError ?? appError;
 
-  // Connect to Viam on mount and fetch Anthropic API key from machine metadata
+  // Make the machine-name header visible (falling back to "Beanjamin") if the
+  // initial connect failed — otherwise the heading stays invisible forever.
   useEffect(() => {
+    if (viamError) setMachineName((m) => m ?? "Beanjamin");
+  }, [viamError]);
+
+  // Re-run on reconnect; values are stable per machine-session so the
+  // redundant calls are cheap.
+  useEffect(() => {
+    if (!connected || !viamConn) return;
     let cancelled = false;
-    async function init() {
+    (async () => {
       try {
-        console.log("[app] connecting to Viam...");
-        const conn = await connectToViam();
-        if (cancelled) return;
-        viamConn.current = conn;
-        console.log("[app] connected to Viam");
-
-        try {
-          const name = await getMachineName(conn);
-          if (!cancelled) setMachineName(name || "Beanjamin");
-        } catch (err) {
-          console.log("[app] failed to fetch machine name:", err);
-          if (!cancelled) setMachineName("Beanjamin");
-        }
-
-        const key = await getMachineMetadataKey(conn, "anthropic_api_key");
-        if (cancelled) return;
-        if (!key) {
-          setViamError(
-            'Machine metadata missing "anthropic_api_key". Set it in the Viam app.'
-          );
-          return;
-        }
-        anthropicKey.current = key;
-
-        // Try to identify a returning customer
-        try {
-          console.log("[app] attempting to identify returning customer...");
-          const id = await identifyCustomer(conn);
-          console.log("[app] identify result:", id);
-          if (!cancelled && id.identified && id.name) {
-            setName(id.name);
-            setEmail(id.email ?? "");
-            setWelcomeBack(id.name);
-            console.log("[app] welcome back:", id.name);
-          }
-        } catch (err) {
-          console.log("[app] identify skipped:", err);
-        }
+        const name = await getMachineName(viamConn);
+        if (!cancelled) setMachineName(name || "Beanjamin");
       } catch (err) {
-        if (cancelled) return;
-        console.error("Viam connection failed:", err);
-        setMachineName("Beanjamin");
-        setViamError(
-          `Viam connection failed: ${err instanceof Error ? err.message : String(err)}`
-        );
+        console.log("[app] failed to fetch machine name:", err);
+        if (!cancelled) setMachineName("Beanjamin");
       }
-    }
-    init();
+
+      const key = await getMachineMetadataKey(viamConn, "anthropic_api_key");
+      if (cancelled) return;
+      if (!key) {
+        setAppError(
+          'Machine metadata missing "anthropic_api_key". Set it in the Viam app.'
+        );
+        return;
+      }
+      anthropicKey.current = key;
+
+      const configuredCam = await getMachineMetadataKey(viamConn, "cam_name");
+      if (!cancelled && configuredCam) setCamName(configuredCam);
+    })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [connected, viamConn]);
+
+  // Customer identification is per-visit, not per-app. Run whenever we're on
+  // the welcome screen with a live connection so each new customer who walks
+  // up to the kiosk gets the camera-based "welcome back" treatment.
+  useEffect(() => {
+    if (step !== "welcome" || !connected || !viamConn) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        console.log("[app] attempting to identify customer...");
+        const id = await identifyCustomer(viamConn);
+        console.log("[app] identify result:", id);
+        if (cancelled || !id.identified || !id.name) return;
+        setName(id.name);
+        setEmail(id.email ?? "");
+        setWelcomeBack(id.name);
+        console.log("[app] welcome back:", id.name);
+      } catch (err) {
+        console.log("[app] identify skipped:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [step, connected, viamConn]);
 
   async function handleDrinkNext() {
     if (!selectedDrink) return;
@@ -115,10 +128,10 @@ export default function Home() {
     }
 
     // Non-espresso: call prepare_order so the robot speaks the rejection
-    if (viamConn.current) {
+    if (connected && viamConn) {
       try {
         const drink = DRINKS.find((d) => d.id === selectedDrink);
-        await prepareOrder(viamConn.current, {
+        await prepareOrder(viamConn, {
           drink: selectedDrink,
           drinkLabel: drink?.label ?? selectedDrink,
           customerName: "",
@@ -129,25 +142,45 @@ export default function Home() {
         setDrinkRejection(colonIdx >= 0 ? msg.slice(colonIdx + 2) : msg);
       }
     } else {
-      setDrinkRejection("Not connected to the robot yet.");
+      setDrinkRejection(LOST_CONNECTION_MSG);
     }
   }
 
-  function placeOrder(misspelledName: string) {
+  async function placeOrder(misspelledName: string): Promise<void> {
     console.log("[app] placing order for:", misspelledName);
     setMisspelled(misspelledName);
-    setStep("confirmation");
-    setShowTracker(true);
+    setAppError(null);
 
-    // Enqueue the order — returns immediately with queue position.
-    if (viamConn.current) {
-      const drink = DRINKS.find((d) => d.id === selectedDrink);
-      prepareOrder(viamConn.current, {
+    // Route failures back to the name screen so the red error is visible and
+    // the user can retry. If we were on face-register, mark them as "welcomed
+    // back" so retry skips face-register (the server already stored their
+    // face from the earlier successful finishRegistration).
+    const rewindToNameAfterFailure = () => {
+      if (step === "face-register") setWelcomeBack(name);
+      setStep("name");
+    };
+
+    if (!connected || !viamConn) {
+      setAppError(LOST_CONNECTION_MSG);
+      rewindToNameAfterFailure();
+      return;
+    }
+
+    const drink = DRINKS.find((d) => d.id === selectedDrink);
+    try {
+      await prepareOrder(viamConn, {
         drink: selectedDrink!,
         drinkLabel: drink?.label ?? selectedDrink!,
         customerName: misspelledName,
         pronunciation: undefined,
-      }).catch((err) => console.error("prepare_order failed:", err));
+      });
+      setStep("confirmation");
+      setShowTracker(true);
+    } catch (err) {
+      console.error("prepare_order failed:", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      setAppError(`Could not place order: ${msg}`);
+      rewindToNameAfterFailure();
     }
   }
 
@@ -170,11 +203,11 @@ export default function Home() {
         setStep("face-register");
       } else {
         console.log("[app] skipping face-register:", !email.trim() ? "no email" : "returning customer");
-        placeOrder(result.misspelled || name);
+        await placeOrder(result.misspelled || name);
       }
     } catch (err) {
       console.error("Misspell error:", err);
-      placeOrder(name);
+      await placeOrder(name);
     } finally {
       setLoading(false);
     }
@@ -186,6 +219,7 @@ export default function Home() {
     setEmail("");
     setSelectedDrink(null);
     setWelcomeBack(null);
+    setAppError(null);
   }, []);
 
   const handleTrackerEmpty = useCallback(() => {
@@ -199,7 +233,7 @@ export default function Home() {
         <FaceRegister
           name={name}
           email={email}
-          viamConn={viamConn.current}
+          viamConn={viamConn}
           onBack={() => setStep("name")}
           onComplete={() => placeOrder(misspelled)}
           onSkip={() => placeOrder(misspelled)}
@@ -225,7 +259,12 @@ export default function Home() {
           name={name}
           email={email}
           loading={loading}
-          onNameChange={setName}
+          connected={connected}
+          error={appError}
+          onNameChange={(n) => {
+            setName(n);
+            if (appError) setAppError(null);
+          }}
           onEmailChange={setEmail}
           onBack={() => setStep("drink")}
           onSubmit={handleSubmit}
@@ -238,6 +277,7 @@ export default function Home() {
         <ChooseDrink
           selectedDrink={selectedDrink}
           rejection={drinkRejection}
+          connected={connected}
           onSelect={(id) => {
             setDrinkRejection(null);
             setSelectedDrink(id);
@@ -299,9 +339,16 @@ export default function Home() {
           </p>
         )}
 
+        {!connected && !viamError && (
+          <p className="text-neutral-500 text-sm text-center mb-4">
+            Connecting to the machine…
+          </p>
+        )}
+
         <button
           onClick={() => setStep("drink")}
-          className="anim-in-hero press px-20 py-4 text-lg font-medium bg-neutral-900 text-white rounded-full transition-colors hover:bg-neutral-800"
+          disabled={!connected}
+          className="anim-in-hero press px-20 py-4 text-lg font-medium bg-neutral-900 text-white rounded-full transition-colors hover:bg-neutral-800 disabled:bg-neutral-300 disabled:cursor-not-allowed disabled:hover:bg-neutral-300"
           style={{ animationDelay: welcomeBack ? "1400ms" : "1200ms" }}
         >
           Place an order
@@ -317,13 +364,13 @@ export default function Home() {
         {renderStep()}
       </div>
 
-      {/* Right panel: live zoo-cam feed + order tracker */}
+      {/* Right panel: live cam feed + order tracker */}
       {showTracker && (
         <div className="w-[340px] shrink-0 border-l border-neutral-200 flex flex-col">
-          <ZooCamFeed viamConn={viamConn.current} />
+          <CamFeed viamConn={viamConn} cameraName={camName} />
           <div className="flex-1 min-h-0">
             <OrderTracker
-              viamConn={viamConn.current}
+              viamConn={viamConn}
               onEmpty={handleTrackerEmpty}
             />
           </div>

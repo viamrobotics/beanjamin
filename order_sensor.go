@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/components/sensor"
 	"go.viam.com/rdk/data"
 	"go.viam.com/rdk/logging"
@@ -63,7 +64,9 @@ func (s *orderSensor) Status(context.Context) (map[string]interface{}, error) {
 	return map[string]interface{}{}, nil
 }
 
-func (s *orderSensor) Readings(context.Context, map[string]interface{}) (map[string]interface{}, error) {
+func (s *orderSensor) Readings(ctx context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
+	_, span := trace.StartSpan(ctx, "order-sensor::Readings")
+	defer span.End()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.pending) == 0 {
@@ -75,7 +78,9 @@ func (s *orderSensor) Readings(context.Context, map[string]interface{}) (map[str
 	return payload, nil
 }
 
-func (*orderSensor) DoCommand(context.Context, map[string]interface{}) (map[string]interface{}, error) {
+func (*orderSensor) DoCommand(ctx context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
+	_, span := trace.StartSpan(ctx, "order-sensor::DoCommand")
+	defer span.End()
 	return nil, nil
 }
 

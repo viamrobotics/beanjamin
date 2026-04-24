@@ -2,6 +2,9 @@
 // implements the rdk:service:generic API. It synthesises audio via the Google
 // Cloud Text-to-Speech API and plays it through an rdk:component:audio_out
 // dependency.
+//
+// Deprecated: this model is deprecated. Migrate to
+// viam:conversation-bundle:text-to-speech.
 package texttospeech
 
 import (
@@ -13,6 +16,7 @@ import (
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1"
 	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
+	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/components/audioout"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
@@ -78,6 +82,9 @@ type ttsService struct {
 }
 
 func newTextToSpeech(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
+	logger.Error("viam:beanjamin:text-to-speech is DEPRECATED and will be removed in a future release. " +
+		"Please migrate to viam:conversation-bundle:text-to-speech.")
+
 	conf, err := resource.NativeConfig[*Config](rawConf)
 	if err != nil {
 		return nil, err
@@ -199,6 +206,8 @@ func (s *ttsService) asyncWorker() {
 }
 
 func (s *ttsService) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	ctx, span := trace.StartSpan(ctx, "text-to-speech::DoCommand")
+	defer span.End()
 	if text, ok := cmd["say"].(string); ok {
 		result, err := s.Say(ctx, text)
 		if err != nil {
@@ -237,6 +246,8 @@ func monoToStereo(mono []byte) []byte {
 }
 
 func (s *ttsService) Status(ctx context.Context) (map[string]interface{}, error) {
+	_, span := trace.StartSpan(ctx, "text-to-speech::Status")
+	defer span.End()
 	return map[string]interface{}{}, nil
 }
 

@@ -20,7 +20,7 @@
     {
       "api": "rdk:service:generic",
       "model": "viam:beanjamin:text-to-speech",
-      "short_description": "Text-to-speech service using Google Cloud TTS API with audioout playback.",
+      "short_description": "[DEPRECATED: use viam:conversation-bundle:text-to-speech] Google Cloud TTS with audioout playback.",
       "markdown_link": "README.md#model-viambeanjamintext-to-speech"
     },
     {

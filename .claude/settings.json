@@ -1,6 +1,6 @@
 {
   "permissions": {
-    "allow": ["Read", "Edit", "Write"],
+    "allow": ["Read", "Edit", "Write", "Bash(make test)", "Bash(make lint)"],
     "deny": []
   }
 }

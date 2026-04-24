@@ -4,7 +4,7 @@ The `viam:beanjamin` module provides these models for arm-based automation workf
 
 1. **`viam:beanjamin:coffee`** - A generic service that orchestrates a full coffee brew cycle by sequentially moving through all poses on a pose switcher.
 2. **`viam:beanjamin:multi-poses-execution-switch`** - A switch component that moves an arm between predefined poses using the Motion service.
-3. **`viam:beanjamin:text-to-speech`** - A generic service that synthesises speech via Google Cloud Text-to-Speech and plays it through an audioout service.
+3. **`viam:beanjamin:text-to-speech`** *(deprecated — migrate to [`viam:conversation-bundle:text-to-speech`](https://app.viam.com/module/viam/conversation-bundle))* - A generic service that synthesises speech via Google Cloud Text-to-Speech and plays it through an audioout service.
 4. **`viam:beanjamin:maintenance-sensor`** - A sensor component that reports whether the system is safe for maintenance (arm idle, no orders running or queued).
 5. **`viam:beanjamin:order-sensor`** - A sensor that yields one reading per completed order (start/end timestamps and outcome) when wired from the coffee service.
 6. **`viam:beanjamin:dial-control-motion`** - A generic service that translates Stream Deck dial inputs into relative arm motions.
@@ -199,6 +199,7 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
   "brew_time_sec": 25,
   "lungo_brew_time_sec": 40,
   "grind_time_sec": 7.5,
+  "slow_movement_vel_degs_per_sec": 25,
   "place_cup": true,
   "clean_after_use": true,
   "portafilter_shake_sec": 2.5,
@@ -232,6 +233,7 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
 | `brew_time_sec`            | float  | No       | Espresso brew duration in seconds (default: 8).                                                               |
 | `lungo_brew_time_sec`      | float  | No       | Lungo brew duration in seconds (default: 15).                                                                 |
 | `grind_time_sec`           | float  | No       | Bean grinding duration in seconds, applied to both regular and decaf grinders (default: 7.5).                 |
+| `slow_movement_vel_degs_per_sec` | float | No    | Max joint velocity (degrees/sec) used when a step has a `LinearConstraint` without explicit `MoveOptions`, as well as for pivot and circular motions. Raise carefully — precision and contact steps rely on this (default: 25). |
 | `place_cup`                | bool   | No       | Enable cup placement step in the brew cycle.                                                                  |
 | `clean_after_use`          | bool   | No       | Enable cleaning step after each brew.                                                                         |
 | `portafilter_shake_sec`    | float  | No       | Duration in seconds of a small circular shake at the `coffee_shake` pose during `unlock_portafilter`, to dislodge a stuck puck. Requires a `coffee_shake` pose in the filter pose switcher. Defaults to 0 (disabled). |
@@ -306,6 +308,14 @@ Returns `{"status": "cleared", "removed": 2}`.
 
 Returns `{"saved": 1, "skipped": 0}`.
 
+**`reset_world`** - Rebuild the cached frame system from the framesystem service, discarding any mid-cycle mutations (e.g. a portafilter frame that was reparented to world by `lock_portafilter`). Useful after a `cancel` leaves the world in a state where the portafilter is "stuck" attached to the world at wherever the arm abandoned it. Only callable when nothing is running AND the queue is paused (i.e. after `cancel`, or during an inter-order cleanup pause when `clean_after_use` is false). Does not move the arm — if you want to re-home, run `execute_action` afterward.
+
+```json
+{"reset_world": true}
+```
+
+Returns `{"status": "reset"}`.
+
 **`action`** - Control the gripper. Supported values: `"open_gripper"`, `"close_gripper"`.
 
 ```json
@@ -373,6 +383,8 @@ Returns `{"status": "speed_updated", "dial_move_x_mm": 7.5, "dial_move_y_mm": 7.
 ## Model: `viam:beanjamin:text-to-speech`
 
 **API:** `rdk:service:generic`
+
+> **⚠️ Deprecated.** This model is deprecated and will be removed in a future release. Migrate to [`viam:conversation-bundle:text-to-speech`](https://app.viam.com/module/viam/conversation-bundle), which offers the same functionality and is actively maintained. Existing configurations continue to work, but you should plan to move off this model.
 
 Synthesises speech using the [Google Cloud Text-to-Speech API](https://cloud.google.com/text-to-speech) and plays the resulting audio through an `rdk:component:audio_out` component. Can be used standalone or as the speech backend for the `coffee` service (via `speech_service_name`).
 
@@ -540,16 +552,18 @@ Identifies return customers using facial recognition. Wraps the [`viam:vision:fa
   "camera_name": "<string>",
   "vision_service_name": "<string>",
   "data_dir": "<string>",
-  "confidence_threshold": <float>
+  "confidence_threshold": <float>,
+  "min_face_area_fraction": <float>
 }
 ```
 
-| Name                   | Type   | Required | Description                                                                                     |
-| ---------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------- |
-| `camera_name`          | string | Yes      | Name of the camera component used to capture customer photos.                                   |
-| `vision_service_name`  | string | Yes      | Name of the `face-identification` vision service dependency.                                    |
-| `data_dir`             | string | Yes      | Directory for storing known face images and customer records. Must match the vision service's `picture_directory` parent (i.e. the vision service's `picture_directory` should be `<data_dir>/known_faces`). |
-| `confidence_threshold` | float  | No       | Minimum confidence score to consider a face match. Defaults to `0.5`.                           |
+| Name                     | Type   | Required | Description                                                                                     |
+| ------------------------ | ------ | -------- | ----------------------------------------------------------------------------------------------- |
+| `camera_name`            | string | Yes      | Name of the camera component used to capture customer photos.                                   |
+| `vision_service_name`    | string | Yes      | Name of the `face-identification` vision service dependency.                                    |
+| `data_dir`               | string | Yes      | Directory for storing known face images and customer records. Must match the vision service's `picture_directory` parent (i.e. the vision service's `picture_directory` should be `<data_dir>/known_faces`). |
+| `confidence_threshold`   | float  | No       | Minimum confidence score to consider a face match. Defaults to `0.5`.                           |
+| `min_face_area_fraction` | float  | No       | Minimum fraction of the (center-cropped) image area a detected face bounding box must cover to be considered for identification. Defaults to `0.08` (face spans ~28% of the frame linearly). |
 
 ### Example Configuration
 
@@ -558,7 +572,8 @@ Identifies return customers using facial recognition. Wraps the [`viam:vision:fa
   "camera_name": "customer-cam",
   "vision_service_name": "face-detector",
   "data_dir": "/data/customers",
-  "confidence_threshold": 0.6
+  "confidence_threshold": 0.6,
+  "min_face_area_fraction": 0.08
 }
 ```
 

@@ -26,8 +26,19 @@ var defaultApproachConstraint = &StepLinearConstraint{
 	OrientationToleranceDegs: 2,
 }
 
-var slowMovementMoveOptions = &arm.MoveOptions{
-	MaxVelRads: 20 * math.Pi / 180.0,
+const defaultSlowMovementVelDegsPerSec = 25.0
+
+// slowMovementMoveOptions returns the MoveOptions used whenever a step carries
+// a LinearConstraint (or for pivot/circular moves) but no explicit per-step
+// MoveOptions. Velocity is configurable via Config.SlowMovementVelDegsPerSec.
+func (s *beanjaminCoffee) slowMovementMoveOptions() *arm.MoveOptions {
+	velDegs := s.cfg.SlowMovementVelDegsPerSec
+	if velDegs <= 0 {
+		velDegs = defaultSlowMovementVelDegsPerSec
+	}
+	return &arm.MoveOptions{
+		MaxVelRads: velDegs * math.Pi / 180.0,
+	}
 }
 
 // moveToPose fetches a named pose and moves to it.
@@ -241,9 +252,11 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	return nil
 }
 
-// unlockFilterFrame rebuilds the cached frame system from the service,
-// restoring the filter frame to its original position in the arm subtree.
-func (s *beanjaminCoffee) unlockFilterFrame(ctx context.Context) error {
+// resetFrameSystem rebuilds the cached frame system from the service, discarding
+// any in-flight mutations (e.g. a filter frame that was reparented to world by
+// lockFilterFrame). Shared by unlockFilterFrame during the normal brew cycle and
+// by the reset_world operator command to recover from a mid-cycle cancel.
+func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 	fs, err := framesystem.NewFromService(ctx, s.fsSvc, nil)
 	if err != nil {
 		return fmt.Errorf("rebuild frame system: %w", err)
@@ -252,6 +265,15 @@ func (s *beanjaminCoffee) unlockFilterFrame(ctx context.Context) error {
 		return fmt.Errorf("re-apply joint limits: %w", err)
 	}
 	s.cachedFS = fs
+	return nil
+}
+
+// unlockFilterFrame rebuilds the cached frame system from the service,
+// restoring the filter frame to its original position in the arm subtree.
+func (s *beanjaminCoffee) unlockFilterFrame(ctx context.Context) error {
+	if err := s.resetFrameSystem(ctx); err != nil {
+		return err
+	}
 	s.logger.Infof("unlocked filter frame, frame system restored from service")
 	return nil
 }
@@ -422,7 +444,7 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	}
 	opts := buildMoveOptions(moveOpts)
 	if opts == nil && lc != nil {
-		opts = slowMovementMoveOptions
+		opts = s.slowMovementMoveOptions()
 	}
 	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
 }
@@ -516,7 +538,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	}
 	opts := buildMoveOptions(step.MoveOptions)
 	if opts == nil {
-		opts = slowMovementMoveOptions
+		opts = s.slowMovementMoveOptions()
 	}
 	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
 }
@@ -611,7 +633,7 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 		s.logger.Debugf("circular revolution %d", rev+1)
 		circOpts := buildMoveOptions(step.MoveOptions)
 		if circOpts == nil {
-			circOpts = slowMovementMoveOptions
+			circOpts = s.slowMovementMoveOptions()
 		}
 		if err := s.arm.MoveThroughJointPositions(ctx, positions, circOpts, nil); err != nil {
 			return fmt.Errorf("execute circular revolution %d: %w", rev+1, err)
