@@ -26,8 +26,19 @@ var defaultApproachConstraint = &StepLinearConstraint{
 	OrientationToleranceDegs: 2,
 }
 
-var slowMovementMoveOptions = &arm.MoveOptions{
-	MaxVelRads: 20 * math.Pi / 180.0,
+const defaultSlowMovementVelDegsPerSec = 25.0
+
+// slowMovementMoveOptions returns the MoveOptions used whenever a step carries
+// a LinearConstraint (or for pivot/circular moves) but no explicit per-step
+// MoveOptions. Velocity is configurable via Config.SlowMovementVelDegsPerSec.
+func (s *beanjaminCoffee) slowMovementMoveOptions() *arm.MoveOptions {
+	velDegs := s.cfg.SlowMovementVelDegsPerSec
+	if velDegs <= 0 {
+		velDegs = defaultSlowMovementVelDegsPerSec
+	}
+	return &arm.MoveOptions{
+		MaxVelRads: velDegs * math.Pi / 180.0,
+	}
 }
 
 // moveToPose fetches a named pose and moves to it.
@@ -433,7 +444,7 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	}
 	opts := buildMoveOptions(moveOpts)
 	if opts == nil && lc != nil {
-		opts = slowMovementMoveOptions
+		opts = s.slowMovementMoveOptions()
 	}
 	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
 }
@@ -527,7 +538,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	}
 	opts := buildMoveOptions(step.MoveOptions)
 	if opts == nil {
-		opts = slowMovementMoveOptions
+		opts = s.slowMovementMoveOptions()
 	}
 	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
 }
@@ -622,7 +633,7 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 		s.logger.Debugf("circular revolution %d", rev+1)
 		circOpts := buildMoveOptions(step.MoveOptions)
 		if circOpts == nil {
-			circOpts = slowMovementMoveOptions
+			circOpts = s.slowMovementMoveOptions()
 		}
 		if err := s.arm.MoveThroughJointPositions(ctx, positions, circOpts, nil); err != nil {
 			return fmt.Errorf("execute circular revolution %d: %w", rev+1, err)
