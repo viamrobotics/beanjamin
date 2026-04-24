@@ -2,6 +2,9 @@
 // implements the rdk:service:generic API. It synthesises audio via the Google
 // Cloud Text-to-Speech API and plays it through an rdk:component:audio_out
 // dependency.
+//
+// Deprecated: this model is deprecated. Migrate to
+// viam:conversation-bundle:text-to-speech.
 package texttospeech
 
 import (
@@ -78,6 +81,9 @@ type ttsService struct {
 }
 
 func newTextToSpeech(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
+	logger.Error("viam:beanjamin:text-to-speech is DEPRECATED and will be removed in a future release. " +
+		"Please migrate to viam:conversation-bundle:text-to-speech.")
+
 	conf, err := resource.NativeConfig[*Config](rawConf)
 	if err != nil {
 		return nil, err
