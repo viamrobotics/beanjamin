@@ -4,7 +4,7 @@ The `viam:beanjamin` module provides these models for arm-based automation workf
 
 1. **`viam:beanjamin:coffee`** - A generic service that orchestrates a full coffee brew cycle by sequentially moving through all poses on a pose switcher.
 2. **`viam:beanjamin:multi-poses-execution-switch`** - A switch component that moves an arm between predefined poses using the Motion service.
-3. **`viam:beanjamin:text-to-speech`** - A generic service that synthesises speech via Google Cloud Text-to-Speech and plays it through an audioout service.
+3. **`viam:beanjamin:text-to-speech`** *(deprecated — migrate to [`viam:conversation-bundle:text-to-speech`](https://app.viam.com/module/viam/conversation-bundle))* - A generic service that synthesises speech via Google Cloud Text-to-Speech and plays it through an audioout service.
 4. **`viam:beanjamin:maintenance-sensor`** - A sensor component that reports whether the system is safe for maintenance (arm idle, no orders running or queued).
 5. **`viam:beanjamin:order-sensor`** - A sensor that yields one reading per completed order (start/end timestamps and outcome) when wired from the coffee service.
 6. **`viam:beanjamin:dial-control-motion`** - A generic service that translates Stream Deck dial inputs into relative arm motions.
@@ -364,6 +364,8 @@ Returns `{"status": "speed_updated", "dial_move_x_mm": 7.5, "dial_move_y_mm": 7.
 ## Model: `viam:beanjamin:text-to-speech`
 
 **API:** `rdk:service:generic`
+
+> **⚠️ Deprecated.** This model is deprecated and will be removed in a future release. Migrate to [`viam:conversation-bundle:text-to-speech`](https://app.viam.com/module/viam/conversation-bundle), which offers the same functionality and is actively maintained. Existing configurations continue to work, but you should plan to move off this model.
 
 Synthesises speech using the [Google Cloud Text-to-Speech API](https://cloud.google.com/text-to-speech) and plays the resulting audio through an `rdk:component:audio_out` component. Can be used standalone or as the speech backend for the `coffee` service (via `speech_service_name`).
 
