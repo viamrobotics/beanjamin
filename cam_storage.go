@@ -12,11 +12,11 @@ import (
 
 // Fixed clip padding around each order (not configurable). Pre-roll is limited by the camera ring buffer;
 // trail waits before save so post-order seconds are still recorded (runs in a background goroutine).
-// maxBrewDuration caps the recovery window when a pending save is replayed after a restart.
+// maxBrewDuration caps the clip window when a pending save is replayed after an interruption.
 const (
-	zooCamClipLead        = 15 * time.Second
-	zooCamClipTrail       = 15 * time.Second
-	zooCamMaxBrewDuration = 180 * time.Second
+	clipLead        = 15 * time.Second
+	clipTrail       = 15 * time.Second
+	maxBrewDuration = 180 * time.Second
 )
 
 // formatClipTimestampUTC formats t for video-store save/fetch DoCommand (UTC, ...Z).
@@ -25,7 +25,7 @@ func formatClipTimestampUTC(t time.Time) string {
 }
 
 // pendingSave is written to disk when an order starts and removed when it completes,
-// so a restart can recover the video save for any order that was interrupted.
+// so a scheduled job can recover the video save for any order that was interrupted.
 type pendingSave struct {
 	Order     Order     `json:"order"`
 	VideoFrom time.Time `json:"video_from"`
@@ -37,11 +37,11 @@ func (s *beanjaminCoffee) writePendingSave(order Order, videoFrom time.Time) {
 	}
 	data, err := json.Marshal(pendingSave{Order: order, VideoFrom: videoFrom})
 	if err != nil {
-		s.logger.Warnf("zoo cam: failed to marshal pending save for order %s: %v", order.ID, err)
+		s.logger.Warnf("cam storage: failed to marshal pending save for order %s: %v", order.ID, err)
 		return
 	}
 	if err := os.WriteFile(filepath.Join(s.pendingOrderClipsDir, order.ID+".json"), data, 0o644); err != nil {
-		s.logger.Warnf("zoo cam: failed to write pending save for order %s: %v", order.ID, err)
+		s.logger.Warnf("cam storage: failed to write pending save for order %s: %v", order.ID, err)
 	}
 }
 
@@ -51,7 +51,7 @@ func (s *beanjaminCoffee) clearPendingSave(orderID string) {
 	}
 	path := filepath.Join(s.pendingOrderClipsDir, orderID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		s.logger.Warnf("zoo cam: failed to clear pending save for order %s: %v", orderID, err)
+		s.logger.Warnf("cam storage: failed to clear pending save for order %s: %v", orderID, err)
 	}
 }
 
@@ -74,33 +74,33 @@ func (s *beanjaminCoffee) cleanupPendingClips() (map[string]any, error) {
 		path := filepath.Join(s.pendingOrderClipsDir, entry.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
-			s.logger.Warnf("zoo cam: cleanup: failed to read %s: %v", entry.Name(), err)
+			s.logger.Warnf("cam storage: cleanup: failed to read %s: %v", entry.Name(), err)
 			skipped++
 			continue
 		}
 		var ps pendingSave
 		if err := json.Unmarshal(data, &ps); err != nil {
 			// Corrupt file won't get better — remove it.
-			s.logger.Warnf("zoo cam: cleanup: corrupt pending clip %s removed without save: %v", entry.Name(), err)
+			s.logger.Warnf("cam storage: cleanup: corrupt pending clip %s removed without save: %v", entry.Name(), err)
 			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-				s.logger.Warnf("zoo cam: cleanup: failed to remove corrupt file %s: %v", entry.Name(), err)
+				s.logger.Warnf("cam storage: cleanup: failed to remove corrupt file %s: %v", entry.Name(), err)
 			}
 			skipped++
 			continue
 		}
 		// Skip records that may still be in progress.
-		if time.Now().UTC().Before(ps.VideoFrom.Add(zooCamMaxBrewDuration + zooCamClipLead)) {
+		if time.Now().UTC().Before(ps.VideoFrom.Add(maxBrewDuration + clipLead)) {
 			skipped++
 			continue
 		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			s.logger.Warnf("zoo cam: cleanup: failed to remove %s: %v", entry.Name(), err)
+			s.logger.Warnf("cam storage: cleanup: failed to remove %s: %v", entry.Name(), err)
 			skipped++
 			continue
 		}
-		s.logger.Infof("zoo cam: cleanup: attempting save for interrupted order %s (%s)", ps.Order.ID, ps.Order.CustomerName)
-		clipFrom := ps.VideoFrom.Add(-zooCamClipLead)
-		clipTo := ps.VideoFrom.Add(zooCamMaxBrewDuration + zooCamClipLead)
+		s.logger.Infof("cam storage: cleanup: attempting save for interrupted order %s (%s)", ps.Order.ID, ps.Order.CustomerName)
+		clipFrom := ps.VideoFrom.Add(-clipLead)
+		clipTo := ps.VideoFrom.Add(maxBrewDuration + clipLead)
 		if now := time.Now().UTC(); clipTo.After(now) {
 			clipTo = now
 		}
@@ -111,17 +111,17 @@ func (s *beanjaminCoffee) cleanupPendingClips() (map[string]any, error) {
 }
 
 // saveOrderVideoAsync launches a background goroutine that waits for the post-order trail,
-// then asks the optional zoo cam (viam:video:storage) to slice [from, now] and queue cloud upload.
+// then asks the cam storage multiplexer to slice [from, now] and queue cloud upload.
 // See https://github.com/viam-modules/video-store — uses async "save" so the in-progress segment can finish.
 // execErr is nil when the order finished the brew sequence; non-nil records failure (including panic) in metadata.
 func (s *beanjaminCoffee) saveOrderVideoAsync(order Order, from time.Time, execErr error) {
-	if s.zooCam == nil {
+	if s.camStorage == nil {
 		return
 	}
-	clipFrom := from.Add(-zooCamClipLead)
+	clipFrom := from.Add(-clipLead)
 	go func() {
 		// Post-roll is not tied to service/caller cancellation—we still want to queue the clip.
-		time.Sleep(zooCamClipTrail)
+		time.Sleep(clipTrail)
 		s.issueVideoSave(order, clipFrom, time.Now().UTC(), execErr)
 	}()
 }
@@ -140,7 +140,7 @@ func (s *beanjaminCoffee) issueVideoSave(order Order, clipFrom, clipTo time.Time
 	}
 	meta, err := json.Marshal(metaObj)
 	if err != nil {
-		s.logger.Warnf("zoo cam: skip save for order %s: metadata: %v", order.ID, err)
+		s.logger.Warnf("cam storage: skip save for order %s: metadata: %v", order.ID, err)
 		return
 	}
 	cmd := map[string]any{
@@ -151,10 +151,15 @@ func (s *beanjaminCoffee) issueVideoSave(order Order, clipFrom, clipTo time.Time
 		"tags":     []string{order.ID},
 		"async":    true,
 	}
-	resp, err := s.zooCam.DoCommand(context.Background(), cmd)
+	resp, err := s.camStorage.DoCommand(context.Background(), cmd)
 	if err != nil {
-		s.logger.Warnf("zoo cam: save failed for order %s: %v", order.ID, err)
+		s.logger.Warnf("cam storage: save failed for order %s: %v", order.ID, err)
 		return
 	}
-	s.logger.Infof("zoo cam: queued upload for order %s (response: %+v)", order.ID, resp)
+	if errs, ok := resp["errors"].(map[string]any); ok {
+		for store, msg := range errs {
+			s.logger.Warnf("cam storage: save failed for order %s on %q: %v", order.ID, store, msg)
+		}
+	}
+	s.logger.Infof("cam storage: queued upload for order %s (response: %+v)", order.ID, resp)
 }

@@ -204,7 +204,7 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
   "portafilter_shake_sec": 2.5,
   "save_motion_requests_dir": "/tmp/motion-requests",
   "order_sensor_name": "order-events",
-  "zoo_cam_storage_name": "video-store",
+  "cam_storage_multiplexer_name": "video-store-mux",
   "input_range_override": {
     "my-arm": {
       "5": { "min_degs": -270, "max_degs": 270 }
@@ -237,8 +237,8 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
 | `portafilter_shake_sec`    | float  | No       | Duration in seconds of a small circular shake at the `coffee_shake` pose during `unlock_portafilter`, to dislodge a stuck puck. Requires a `coffee_shake` pose in the filter pose switcher. Defaults to 0 (disabled). |
 | `save_motion_requests_dir` | string | No       | Directory to save motion request payloads for debugging.                                                      |
 | `order_sensor_name`        | string | No       | Name of a `viam:beanjamin:order-sensor` sensor to notify when each order attempt completes (must appear in **depends_on**). |
-| `zoo_cam_storage_name`     | string | No       | Name of the “zoo” camera storage ([`viam:video:storage`](https://github.com/viam-modules/video-store) or compatible); when set, uploads a clip per order attempt (async `save`), with fixed 5s pre-roll and 5s post-roll. |
-| `pending_order_clips_dir`  | string | No       | Directory to persist in-progress video save records. When set, a record is written when each order starts and removed when it completes; on startup any leftover records are replayed so clips are not lost if the machine restarts mid-brew. Requires `zoo_cam_storage_name`. |
+| `cam_storage_multiplexer_name` | string | No   | Name of a [`viam:multiplexer:generic-service-multiplexer`](https://github.com/viam-modules/multiplexer) generic service whose dependencies are `viam:video:storage` cameras; when set, uploads a clip per order attempt (async `save`) to all configured stores. |
+| `pending_order_clips_dir`  | string | No       | Directory to persist in-progress video save records. When set, a record is written when each order starts and removed when it completes. Use with a Viam scheduled job calling `cleanup_pending_clips` to recover clips from interrupted orders. Requires `cam_storage_multiplexer_name`. |
 | `input_range_override`     | object | No       | Narrows joint limits on named frames before motion planning. Outer key is the frame name (typically the arm); inner key is either the joint name or its stringified index (e.g. `"5"` for the last joint of a 6-DoF arm). Each value is `{ "min_degs": number, "max_degs": number }`. |
 
 ### DoCommand
@@ -298,7 +298,7 @@ Returns `{"status": "resumed"}`.
 
 Returns `{"status": "cleared", "removed": 2}`.
 
-**`cleanup_pending_clips`** - Attempt a video save for any remaining records in `pending_order_clips_dir`, then remove them. Catches clips that could not be recovered on startup (e.g. zoo cam unavailable at boot). Intended to be invoked via a Viam scheduled job.
+**`cleanup_pending_clips`** - Attempt a video save for any remaining records in `pending_order_clips_dir`, then remove them. Catches clips that could not be recovered on startup (e.g. cam storage unavailable at boot). Intended to be invoked via a Viam scheduled job.
 
 ```json
 {"cleanup_pending_clips": true}
