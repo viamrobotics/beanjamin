@@ -21,6 +21,14 @@ import { misspellName } from "./lib/misspell";
 
 type Step = "welcome" | "drink" | "name" | "face-register" | "confirmation";
 
+// 'hidden' = no tracker. 'auto' = right-rail tracker that appeared when the
+// user placed an order; auto-dismisses when the queue drains. 'manual' =
+// full-screen "View queue" takeover; stays up until the user closes it.
+type TrackerMode = "hidden" | "auto" | "manual";
+
+// Width of the order tracker panel in both auto and manual modes.
+const TRACKER_PANEL_WIDTH = "w-[560px]";
+
 const LOST_CONNECTION_MSG =
   "Lost connection to the machine. Please wait for it to reconnect and try again.";
 
@@ -35,7 +43,7 @@ export default function Home() {
   const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
   const [machineName, setMachineName] = useState<string | null>(null);
   const [camName, setCamName] = useState<string | undefined>(undefined);
-  const [showTracker, setShowTracker] = useState(false);
+  const [trackerMode, setTrackerMode] = useState<TrackerMode>("hidden");
 
   // Viam connection state
   const {
@@ -175,7 +183,7 @@ export default function Home() {
         pronunciation: undefined,
       });
       setStep("confirmation");
-      setShowTracker(true);
+      setTrackerMode("auto");
     } catch (err) {
       console.error("prepare_order failed:", err);
       const msg = err instanceof Error ? err.message : String(err);
@@ -222,8 +230,14 @@ export default function Home() {
     setAppError(null);
   }, []);
 
+  // Only the 'auto' tracker fires onEmpty — 'manual' is persistent — so this
+  // always collapses to 'hidden'.
   const handleTrackerEmpty = useCallback(() => {
-    setShowTracker(false);
+    setTrackerMode("hidden");
+  }, []);
+
+  const handleTrackerClose = useCallback(() => {
+    setTrackerMode("hidden");
   }, []);
 
   // --- Render the left panel content based on step ---
@@ -353,7 +367,38 @@ export default function Home() {
         >
           Place an order
         </button>
+
+        {trackerMode === "hidden" && (
+          <button
+            onClick={() => setTrackerMode("manual")}
+            disabled={!connected}
+            className="anim-in-hero mt-6 text-sm font-mono text-neutral-400 uppercase tracking-widest hover:text-neutral-600 transition-colors disabled:text-neutral-300 disabled:cursor-not-allowed disabled:hover:text-neutral-300"
+            style={{ animationDelay: welcomeBack ? "1600ms" : "1400ms" }}
+          >
+            View queue
+          </button>
+        )}
       </main>
+    );
+  }
+
+  // Manual "View queue" mode takes over the full screen: larger cam feed on
+  // the left, order list on the right. The ordering flow is hidden.
+  if (trackerMode === "manual") {
+    return (
+      <div className="h-dvh flex">
+        <div className="flex-1 min-w-0 h-full bg-neutral-900">
+          <CamFeed viamConn={viamConn} cameraName={camName} fill />
+        </div>
+        <div className={`${TRACKER_PANEL_WIDTH} shrink-0 border-l border-neutral-200`}>
+          <OrderTracker
+            viamConn={viamConn}
+            onEmpty={handleTrackerEmpty}
+            persistent
+            onClose={handleTrackerClose}
+          />
+        </div>
+      </div>
     );
   }
 
@@ -365,9 +410,13 @@ export default function Home() {
       </div>
 
       {/* Right panel: live cam feed + order tracker */}
-      {showTracker && (
-        <div className="w-[340px] shrink-0 border-l border-neutral-200 flex flex-col">
-          <CamFeed viamConn={viamConn} cameraName={camName} />
+      {trackerMode === "auto" && (
+        <div className={`${TRACKER_PANEL_WIDTH} shrink-0 border-l border-neutral-200 flex flex-col`}>
+          <CamFeed
+            viamConn={viamConn}
+            cameraName={camName}
+            onExpand={() => setTrackerMode("manual")}
+          />
           <div className="flex-1 min-h-0">
             <OrderTracker
               viamConn={viamConn}

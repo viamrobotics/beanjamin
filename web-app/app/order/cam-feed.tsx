@@ -9,9 +9,13 @@ const DEFAULT_CAM_NAME = "cam";
 export function CamFeed({
   viamConn,
   cameraName,
+  fill = false,
+  onExpand,
 }: {
   viamConn: ViamConnection | null;
   cameraName?: string;
+  fill?: boolean;
+  onExpand?: () => void;
 }) {
   const name = cameraName || DEFAULT_CAM_NAME;
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -31,6 +35,10 @@ export function CamFeed({
       try {
         const sc = new StreamClient(viamConn!.robotClient);
         streamClientRef.current = sc;
+        // Clear any stale stream left by a prior mount (Strict Mode
+        // double-invoke, hot reload, or a dead tab) before opening a new one.
+        await sc.remove(name).catch(() => {});
+        if (stopped) return;
         const mediaStream = await sc.getStream(name);
         if (stopped) return;
         if (video) {
@@ -62,7 +70,11 @@ export function CamFeed({
   if (unavailable || failed) return null;
 
   return (
-    <div className="relative bg-neutral-900 aspect-video w-full overflow-hidden">
+    <div
+      className={`relative bg-neutral-900 overflow-hidden ${
+        fill ? "w-full h-full" : "aspect-video w-full"
+      }`}
+    >
       <video
         ref={videoRef}
         autoPlay
@@ -85,6 +97,26 @@ export function CamFeed({
           Live
         </span>
       </div>
+      {onExpand && (
+        <button
+          onClick={onExpand}
+          aria-label="Expand camera"
+          className="absolute top-2 right-2 flex items-center justify-center w-7 h-7 rounded-full bg-black/60 backdrop-blur-sm text-white hover:bg-black/80 transition-colors"
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M3 7V3h4M17 7V3h-4M3 13v4h4M17 13v4h-4" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }

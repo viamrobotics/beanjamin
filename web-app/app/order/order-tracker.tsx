@@ -43,9 +43,14 @@ function isReadyDuringCleanup(order: QueueOrder): boolean {
 interface OrderTrackerProps {
   viamConn: ViamConnection | null;
   onEmpty: () => void;
+  // When true, stay mounted on an empty queue (and suppress onEmpty). Used by
+  // the manual "View queue" takeover so it doesn't auto-dismiss.
+  persistent?: boolean;
+  // Optional × button in the header.
+  onClose?: () => void;
 }
 
-export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
+export function OrderTracker({ viamConn, onEmpty, persistent, onClose }: OrderTrackerProps) {
   const [orders, setOrders] = useState<QueueOrder[]>([]);
   // Don't fire onEmpty until we've seen at least one order — otherwise the
   // tracker dismisses itself immediately after mount because prepareOrder is
@@ -73,14 +78,16 @@ export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
     return () => clearInterval(interval);
   }, [viamConn, poll]);
 
-  // Notify parent when the backend has nothing left to show.
+  // Notify parent when the backend has nothing left to show — but only for
+  // order-initiated opens; persistent trackers stay up until closed.
   useEffect(() => {
+    if (persistent) return;
     if (hasSeenOrders.current && orders.length === 0) {
       onEmpty();
     }
-  }, [orders.length, onEmpty]);
+  }, [orders.length, onEmpty, persistent]);
 
-  if (orders.length === 0) return null;
+  if (orders.length === 0 && !persistent) return null;
 
   // Pending count for the header chip — orders that haven't completed yet.
   const pendingCount = orders.filter((o) => !isCompleted(o)).length;
@@ -90,61 +97,80 @@ export function OrderTracker({ viamConn, onEmpty }: OrderTrackerProps) {
 
   return (
     <div className="h-full flex flex-col bg-neutral-50 p-6">
-      <h2 className="text-sm font-mono font-semibold text-neutral-400 uppercase tracking-widest mb-6">
-        Orders
-        <span className="ml-2 inline-flex items-center justify-center w-6 h-6 rounded-full bg-neutral-200 text-neutral-600 text-xs font-bold">
-          {pendingCount}
-        </span>
-      </h2>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-sm font-mono font-semibold text-neutral-400 uppercase tracking-widest">
+          Orders
+          <span className="ml-2 inline-flex items-center justify-center w-6 h-6 rounded-full bg-neutral-200 text-neutral-600 text-xs font-bold">
+            {pendingCount}
+          </span>
+        </h2>
+        {onClose && (
+          <button
+            onClick={onClose}
+            aria-label="Close queue"
+            className="text-neutral-400 hover:text-neutral-700 text-xl leading-none px-2"
+          >
+            ×
+          </button>
+        )}
+      </div>
 
-      <div className="flex-1 overflow-y-auto space-y-3">
-        {orders.map((order, i) => {
-          if (isCompleted(order)) {
-            return (
-              <OrderCard
-                key={order.id}
-                order={order}
-                cardClass={GREEN_CARD_CLASSES}
-                statusKind="ready"
-                label={DONE_LABEL}
-              />
-            );
-          }
-          if (isReadyDuringCleanup(order)) {
-            return (
-              <OrderCard
-                key={order.id}
-                order={order}
-                cardClass={GREEN_CARD_CLASSES}
-                statusKind="ready"
-                label={READY_LABEL}
-              />
-            );
-          }
-          if (i === firstPendingIdx) {
+      {orders.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center">
+          <p className="text-sm font-mono text-neutral-400 uppercase tracking-widest">
+            No active orders
+          </p>
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto space-y-3">
+          {orders.map((order, i) => {
+            if (isCompleted(order)) {
+              return (
+                <OrderCard
+                  key={order.id}
+                  order={order}
+                  cardClass={GREEN_CARD_CLASSES}
+                  statusKind="ready"
+                  label={DONE_LABEL}
+                />
+              );
+            }
+            if (isReadyDuringCleanup(order)) {
+              return (
+                <OrderCard
+                  key={order.id}
+                  order={order}
+                  cardClass={GREEN_CARD_CLASSES}
+                  statusKind="ready"
+                  label={READY_LABEL}
+                />
+              );
+            }
+            if (i === firstPendingIdx) {
+              return (
+                <OrderCard
+                  key={order.id}
+                  order={order}
+                  cardClass={NORMAL_CARD_CLASSES}
+                  statusKind="making"
+                  label={order.raw_step || QUEUED_LABEL}
+                />
+              );
+            }
+            // Other pending orders: position relative to the front pending order.
+            const queuePosition = i - firstPendingIdx + 1;
             return (
               <OrderCard
                 key={order.id}
                 order={order}
                 cardClass={NORMAL_CARD_CLASSES}
-                statusKind="making"
-                label={order.raw_step || QUEUED_LABEL}
+                statusKind="queued"
+                label={`In queue · #${queuePosition}`}
               />
             );
-          }
-          // Other pending orders: position relative to the front pending order.
-          const queuePosition = i - firstPendingIdx + 1;
-          return (
-            <OrderCard
-              key={order.id}
-              order={order}
-              cardClass={NORMAL_CARD_CLASSES}
-              statusKind="queued"
-              label={`In queue · #${queuePosition}`}
-            />
-          );
-        })}
-      </div>
+          })}
+        </div>
+      )}
     </div>
   );
 }
