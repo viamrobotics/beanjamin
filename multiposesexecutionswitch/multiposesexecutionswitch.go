@@ -11,6 +11,7 @@ import (
 
 	"github.com/golang/geo/r3"
 	commonpb "go.viam.com/api/common/v1"
+	"go.viam.com/rdk/module/trace"
 
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
@@ -265,11 +266,17 @@ func (s *multiPosesExecutionSwitch) Name() resource.Name {
 }
 
 func (s *multiPosesExecutionSwitch) Status(ctx context.Context) (map[string]interface{}, error) {
+	_, span := trace.StartSpan(ctx, "multi-poses-execution-switch::Status")
+	defer span.End()
 	return map[string]interface{}{}, nil
 }
 
 func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	ctx, span := trace.StartSpan(ctx, "multi-poses-execution-switch::DoCommand")
+	defer span.End()
 	if name, ok := cmd["set_position_by_name"].(string); ok {
+		ctx, cmdSpan := trace.StartSpan(ctx, "multi-poses-execution-switch::set_position_by_name["+name+"]")
+		defer cmdSpan.End()
 		for i, pn := range s.poseNames {
 			if pn == name {
 				if err := s.SetPosition(ctx, uint32(i), nil); err != nil {
@@ -285,6 +292,8 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 	}
 
 	if _, ok := cmd["get_current_position_name"]; ok {
+		_, cmdSpan := trace.StartSpan(ctx, "multi-poses-execution-switch::get_current_position_name")
+		defer cmdSpan.End()
 		s.mu.Lock()
 		pos := s.position
 		s.mu.Unlock()
@@ -294,6 +303,8 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 	}
 
 	if name, ok := cmd["get_pose_by_name"].(string); ok {
+		_, cmdSpan := trace.StartSpan(ctx, "multi-poses-execution-switch::get_pose_by_name["+name+"]")
+		defer cmdSpan.End()
 		for i, pn := range s.poseNames {
 			if pn == name {
 				rp := s.resolvedPoses[i]
@@ -321,16 +332,22 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 }
 
 func (s *multiPosesExecutionSwitch) GetNumberOfPositions(ctx context.Context, extra map[string]interface{}) (uint32, []string, error) {
+	_, span := trace.StartSpan(ctx, "multi-poses-execution-switch::GetNumberOfPositions")
+	defer span.End()
 	return uint32(len(s.poseNames)), s.poseNames, nil
 }
 
 func (s *multiPosesExecutionSwitch) GetPosition(ctx context.Context, extra map[string]interface{}) (uint32, error) {
+	_, span := trace.StartSpan(ctx, "multi-poses-execution-switch::GetPosition")
+	defer span.End()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.position, nil
 }
 
 func (s *multiPosesExecutionSwitch) SetPosition(ctx context.Context, position uint32, extra map[string]interface{}) error {
+	ctx, span := trace.StartSpan(ctx, "multi-poses-execution-switch::SetPosition")
+	defer span.End()
 	if position > uint32(len(s.poseNames))-1 {
 		return fmt.Errorf("requested position %d is greater than highest possible position %d", position, len(s.poseNames)-1)
 	}

@@ -16,6 +16,7 @@ import (
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1"
 	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
+	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/components/audioout"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
@@ -205,6 +206,8 @@ func (s *ttsService) asyncWorker() {
 }
 
 func (s *ttsService) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	ctx, span := trace.StartSpan(ctx, "text-to-speech::DoCommand")
+	defer span.End()
 	if text, ok := cmd["say"].(string); ok {
 		result, err := s.Say(ctx, text)
 		if err != nil {
@@ -243,6 +246,8 @@ func monoToStereo(mono []byte) []byte {
 }
 
 func (s *ttsService) Status(ctx context.Context) (map[string]interface{}, error) {
+	_, span := trace.StartSpan(ctx, "text-to-speech::Status")
+	defer span.End()
 	return map[string]interface{}{}, nil
 }
 

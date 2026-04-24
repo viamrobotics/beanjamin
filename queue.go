@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.viam.com/rdk/module/trace"
 )
 
 // RecentDisplayDuration is how long a completed order stays visible in
@@ -280,7 +281,7 @@ func (s *beanjaminCoffee) processQueue() {
 // single failing order cannot kill the queue-processing goroutine and strand
 // every order behind it. Notifies the optional order sensor and queues a zoo-cam clip when configured.
 func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
-	ctx := context.Background()
+	ctx, span := trace.StartSpan(context.Background(), "beanjamin::order["+order.ID+"/"+order.Drink+"]")
 	videoFrom := time.Now().UTC()
 	var execErr error
 	startedAt := time.Now()
@@ -292,6 +293,7 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 		}
 		s.notifyOrderReading(order, execErr, startedAt, time.Now())
 		s.saveOrderVideoAsync(order, videoFrom, execErr)
+		span.End()
 	}()
 	execErr = s.executeQueuedOrder(ctx, order)
 }
@@ -299,6 +301,8 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 // executeQueuedOrder runs a single order: says greeting, brews, says completion.
 // A non-nil return means the brew sequence failed; the caller still notifies the sensor and saves video via safeExecuteOrder.
 func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) error {
+	ctx, span := trace.StartSpan(ctx, "beanjamin::executeQueuedOrder")
+	defer span.End()
 	waitTime := time.Since(order.EnqueuedAt).Round(time.Second)
 	s.logger.Infof("starting order %s for %s (%s) — waited %s in queue",
 		order.ID, order.CustomerName, order.Drink, waitTime)

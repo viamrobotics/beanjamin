@@ -15,6 +15,7 @@ import (
 	"go.viam.com/rdk/components/sensor"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot/framesystem"
@@ -292,6 +293,8 @@ func (s *beanjaminCoffee) setStep(step string) {
 }
 
 func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, error) {
+	_, span := trace.StartSpan(ctx, "beanjamin::Status")
+	defer span.End()
 	orders := s.queue.List()
 	// structpb.NewStruct (used by RDK to serialize Status over the wire) only
 	// accepts []interface{} for list values, not []map[string]interface{}, so
@@ -342,7 +345,11 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 }
 
 func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	ctx, span := trace.StartSpan(ctx, "beanjamin::DoCommand")
+	defer span.End()
 	if orderRaw, ok := cmd["prepare_order"]; ok {
+		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::prepare_order")
+		defer cmdSpan.End()
 		res, err := s.enqueueOrder(ctx, orderRaw)
 		if err != nil {
 			s.logger.Errorw("DoCommand", "error", err)
@@ -350,6 +357,8 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		return res, err
 	}
 	if actionName, ok := cmd["execute_action"].(string); ok {
+		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::execute_action["+actionName+"]")
+		defer cmdSpan.End()
 		res, err := s.executeAction(ctx, actionName)
 		if err != nil {
 			s.logger.Errorw("DoCommand", "error", err)
@@ -357,6 +366,8 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		return res, err
 	}
 	if _, ok := cmd["cancel"]; ok {
+		_, cmdSpan := trace.StartSpan(ctx, "beanjamin::cancel")
+		defer cmdSpan.End()
 		res, err := s.cancel()
 		if err != nil {
 			s.logger.Errorw("DoCommand", "error", err)
@@ -364,15 +375,23 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		return res, err
 	}
 	if _, ok := cmd["get_queue"]; ok {
+		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::get_queue")
+		defer cmdSpan.End()
 		return s.Status(ctx)
 	}
 	if _, ok := cmd["proceed"]; ok {
+		_, cmdSpan := trace.StartSpan(ctx, "beanjamin::proceed")
+		defer cmdSpan.End()
 		return s.proceedQueue()
 	}
 	if _, ok := cmd["clear_queue"]; ok {
+		_, cmdSpan := trace.StartSpan(ctx, "beanjamin::clear_queue")
+		defer cmdSpan.End()
 		return s.clearQueue()
 	}
 	if _, ok := cmd["reset_world"]; ok {
+		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::reset_world")
+		defer cmdSpan.End()
 		res, err := s.resetWorld(ctx)
 		if err != nil {
 			s.logger.Errorw("DoCommand", "error", err)
@@ -381,6 +400,8 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 	}
 	// Stream deck key commands
 	if action, ok := cmd["action"].(string); ok {
+		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::action["+action+"]")
+		defer cmdSpan.End()
 		switch action {
 		case "open_gripper":
 			return s.handleOpenGripper(ctx)

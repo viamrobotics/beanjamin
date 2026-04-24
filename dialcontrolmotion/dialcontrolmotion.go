@@ -9,6 +9,7 @@ import (
 	"math"
 	"sync"
 
+	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
@@ -89,10 +90,14 @@ func (s *dialControlMotion) Name() resource.Name {
 }
 
 func (s *dialControlMotion) Status(ctx context.Context) (map[string]interface{}, error) {
+	_, span := trace.StartSpan(ctx, "dial-control-motion::Status")
+	defer span.End()
 	return map[string]interface{}{}, nil
 }
 
 func (s *dialControlMotion) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	ctx, span := trace.StartSpan(ctx, "dial-control-motion::DoCommand")
+	defer span.End()
 	if v, ok := cmd["dial_move_x"]; ok {
 		return s.handleDialMove(ctx, "x", v)
 	}
