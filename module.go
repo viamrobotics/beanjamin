@@ -418,7 +418,7 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]interface{
 		return nil, errors.New("reset_world: a sequence is running — send 'cancel' first")
 	}
 	if !s.paused.Load() {
-		return nil, errors.New("reset_world: nothing to reset — only available after 'cancel' or between orders")
+		return nil, errors.New("reset_world: nothing to reset — run this only after 'cancel' if the portafilter frame is stuck")
 	}
 	if err := s.resetFrameSystem(ctx); err != nil {
 		return nil, fmt.Errorf("reset_world: %w", err)
