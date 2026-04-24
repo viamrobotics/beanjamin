@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/sensor"
 	"go.viam.com/rdk/logging"
@@ -81,6 +82,8 @@ func (m *maintenanceSensor) Status(ctx context.Context) (map[string]interface{},
 }
 
 func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]interface{}) (map[string]interface{}, error) {
+	ctx, span := trace.StartSpan(ctx, "maintenance-sensor::Readings")
+	defer span.End()
 	// Check if the arm is physically moving.
 	armMoving, err := m.arm.IsMoving(ctx)
 	if err != nil {
@@ -116,6 +119,8 @@ func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]inter
 }
 
 func (m *maintenanceSensor) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	_, span := trace.StartSpan(ctx, "maintenance-sensor::DoCommand")
+	defer span.End()
 	return nil, nil
 }
 

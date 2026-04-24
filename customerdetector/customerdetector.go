@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
@@ -156,6 +157,8 @@ func (cd *customerDetector) getVision() (vision.Service, error) {
 }
 
 func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	ctx, span := trace.StartSpan(ctx, "customer-detector::DoCommand")
+	defer span.End()
 	if reg, ok := cmd["register_customer"].(map[string]interface{}); ok {
 		email, _ := reg["email"].(string)
 		name, _ := reg["name"].(string)
@@ -441,6 +444,8 @@ func (cd *customerDetector) saveCustomers() error {
 }
 
 func (cd *customerDetector) Status(ctx context.Context) (map[string]interface{}, error) {
+	_, span := trace.StartSpan(ctx, "customer-detector::Status")
+	defer span.End()
 	return map[string]interface{}{}, nil
 }
 
