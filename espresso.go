@@ -632,6 +632,9 @@ func (s *beanjaminCoffee) cleanPortafilter(ctx, cancelCtx context.Context) error
 }
 
 func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step) error {
+	ctx, span := trace.StartSpan(ctx, "beanjamin::executeStep::"+step.PoseName)
+	defer span.End()
+
 	select {
 	case <-ctx.Done():
 		return fmt.Errorf("cancelled before %q: %w", step.PoseName, ctx.Err())
