@@ -9,13 +9,13 @@ import (
 	"time"
 
 	viz "github.com/viam-labs/motion-tools/client/client"
-	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/components/gripper"
 	"go.viam.com/rdk/components/sensor"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot/framesystem"
@@ -293,7 +293,7 @@ func (s *beanjaminCoffee) setStep(step string) {
 }
 
 func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, error) {
-	ctx, span := trace.StartSpan(ctx, "beanjamin::Status")
+	_, span := trace.StartSpan(ctx, "beanjamin::Status")
 	defer span.End()
 	orders := s.queue.List()
 	// structpb.NewStruct (used by RDK to serialize Status over the wire) only
