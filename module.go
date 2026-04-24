@@ -371,6 +371,13 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 	if _, ok := cmd["clear_queue"]; ok {
 		return s.clearQueue()
 	}
+	if _, ok := cmd["reset_world"]; ok {
+		res, err := s.resetWorld(ctx)
+		if err != nil {
+			s.logger.Errorw("DoCommand", "error", err)
+		}
+		return res, err
+	}
 	// Stream deck key commands
 	if action, ok := cmd["action"].(string); ok {
 		switch action {
@@ -382,7 +389,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 			return nil, fmt.Errorf("unknown action %q", action)
 		}
 	}
-	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, action")
+	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, reset_world, action")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }
@@ -400,6 +407,24 @@ func (s *beanjaminCoffee) clearQueue() (map[string]interface{}, error) {
 	removed := s.queue.Clear()
 	s.logger.Infof("cleared %d orders from queue", removed)
 	return map[string]interface{}{"status": "cleared", "removed": removed}, nil
+}
+
+// resetWorld rebuilds the cached frame system so any mid-cycle mutations (e.g.
+// a portafilter frame reparented to world by lockFilterFrame) are discarded.
+// Only callable while nothing is moving AND the queue is paused — i.e. after
+// the operator has pressed cancel, or during an inter-order cleanup pause.
+func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]interface{}, error) {
+	if s.running.Load() {
+		return nil, errors.New("reset_world: a sequence is running — send 'cancel' first")
+	}
+	if !s.paused.Load() {
+		return nil, errors.New("reset_world: nothing to reset — run this only after 'cancel' if the portafilter frame is stuck")
+	}
+	if err := s.resetFrameSystem(ctx); err != nil {
+		return nil, fmt.Errorf("reset_world: %w", err)
+	}
+	s.logger.Infof("reset_world: frame system rebuilt from service — portafilter and all mutated frames restored to config defaults")
+	return map[string]interface{}{"status": "reset"}, nil
 }
 
 func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {

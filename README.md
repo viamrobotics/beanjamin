@@ -297,6 +297,14 @@ Returns `{"status": "resumed"}`.
 
 Returns `{"status": "cleared", "removed": 2}`.
 
+**`reset_world`** - Rebuild the cached frame system from the framesystem service, discarding any mid-cycle mutations (e.g. a portafilter frame that was reparented to world by `lock_portafilter`). Useful after a `cancel` leaves the world in a state where the portafilter is "stuck" attached to the world at wherever the arm abandoned it. Only callable when nothing is running AND the queue is paused (i.e. after `cancel`, or during an inter-order cleanup pause when `clean_after_use` is false). Does not move the arm — if you want to re-home, run `execute_action` afterward.
+
+```json
+{"reset_world": true}
+```
+
+Returns `{"status": "reset"}`.
+
 **`action`** - Control the gripper. Supported values: `"open_gripper"`, `"close_gripper"`.
 
 ```json

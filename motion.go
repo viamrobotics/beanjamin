@@ -241,9 +241,11 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	return nil
 }
 
-// unlockFilterFrame rebuilds the cached frame system from the service,
-// restoring the filter frame to its original position in the arm subtree.
-func (s *beanjaminCoffee) unlockFilterFrame(ctx context.Context) error {
+// resetFrameSystem rebuilds the cached frame system from the service, discarding
+// any in-flight mutations (e.g. a filter frame that was reparented to world by
+// lockFilterFrame). Shared by unlockFilterFrame during the normal brew cycle and
+// by the reset_world operator command to recover from a mid-cycle cancel.
+func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 	fs, err := framesystem.NewFromService(ctx, s.fsSvc, nil)
 	if err != nil {
 		return fmt.Errorf("rebuild frame system: %w", err)
@@ -252,6 +254,15 @@ func (s *beanjaminCoffee) unlockFilterFrame(ctx context.Context) error {
 		return fmt.Errorf("re-apply joint limits: %w", err)
 	}
 	s.cachedFS = fs
+	return nil
+}
+
+// unlockFilterFrame rebuilds the cached frame system from the service,
+// restoring the filter frame to its original position in the arm subtree.
+func (s *beanjaminCoffee) unlockFilterFrame(ctx context.Context) error {
+	if err := s.resetFrameSystem(ctx); err != nil {
+		return err
+	}
 	s.logger.Infof("unlocked filter frame, frame system restored from service")
 	return nil
 }
