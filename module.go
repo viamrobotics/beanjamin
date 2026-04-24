@@ -68,20 +68,21 @@ type Step struct {
 }
 
 type Config struct {
-	PoseSwitcherName      string  `json:"pose_switcher_name"`
-	ClawsPoseSwitcherName string  `json:"claws_pose_switcher_name"`
-	ArmName               string  `json:"arm_name"`
-	GripperName           string  `json:"gripper_name"`
-	SpeechServiceName     string  `json:"speech_service_name,omitempty"`
-	VizURL                string  `json:"viz_url,omitempty"`
-	BrewTimeSec           float64 `json:"brew_time_sec,omitempty"`
-	LungoBrewTimeSec      float64 `json:"lungo_brew_time_sec,omitempty"`
-	GrindTimeSec          float64 `json:"grind_time_sec,omitempty"`
-	PlaceCup              bool    `json:"place_cup,omitempty"`
-	CleanAfterUse         bool    `json:"clean_after_use,omitempty"`
-	PortafilterShakeSec   float64 `json:"portafilter_shake_sec,omitempty"`
-	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
-	OrderSensorName       string  `json:"order_sensor_name,omitempty"`
+	PoseSwitcherName          string  `json:"pose_switcher_name"`
+	ClawsPoseSwitcherName     string  `json:"claws_pose_switcher_name"`
+	ArmName                   string  `json:"arm_name"`
+	GripperName               string  `json:"gripper_name"`
+	SpeechServiceName         string  `json:"speech_service_name,omitempty"`
+	VizURL                    string  `json:"viz_url,omitempty"`
+	BrewTimeSec               float64 `json:"brew_time_sec,omitempty"`
+	LungoBrewTimeSec          float64 `json:"lungo_brew_time_sec,omitempty"`
+	GrindTimeSec              float64 `json:"grind_time_sec,omitempty"`
+	SlowMovementVelDegsPerSec float64 `json:"slow_movement_vel_degs_per_sec,omitempty"`
+	PlaceCup                  bool    `json:"place_cup,omitempty"`
+	CleanAfterUse             bool    `json:"clean_after_use,omitempty"`
+	PortafilterShakeSec       float64 `json:"portafilter_shake_sec,omitempty"`
+	SaveMotionRequestsDir     string  `json:"save_motion_requests_dir,omitempty"`
+	OrderSensorName           string  `json:"order_sensor_name,omitempty"`
 
 	ZooCamStorageName string `json:"zoo_cam_storage_name,omitempty"`
 	CanServeDecaf     bool   `json:"can_serve_decaf,omitempty"`

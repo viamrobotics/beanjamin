@@ -199,6 +199,7 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
   "brew_time_sec": 25,
   "lungo_brew_time_sec": 40,
   "grind_time_sec": 7.5,
+  "slow_movement_vel_degs_per_sec": 25,
   "place_cup": true,
   "clean_after_use": true,
   "portafilter_shake_sec": 2.5,
@@ -232,6 +233,7 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
 | `brew_time_sec`            | float  | No       | Espresso brew duration in seconds (default: 8).                                                               |
 | `lungo_brew_time_sec`      | float  | No       | Lungo brew duration in seconds (default: 15).                                                                 |
 | `grind_time_sec`           | float  | No       | Bean grinding duration in seconds, applied to both regular and decaf grinders (default: 7.5).                 |
+| `slow_movement_vel_degs_per_sec` | float | No    | Max joint velocity (degrees/sec) used when a step has a `LinearConstraint` without explicit `MoveOptions`, as well as for pivot and circular motions. Raise carefully — precision and contact steps rely on this (default: 25). |
 | `place_cup`                | bool   | No       | Enable cup placement step in the brew cycle.                                                                  |
 | `clean_after_use`          | bool   | No       | Enable cleaning step after each brew.                                                                         |
 | `portafilter_shake_sec`    | float  | No       | Duration in seconds of a small circular shake at the `coffee_shake` pose during `unlock_portafilter`, to dislodge a stuck puck. Requires a `coffee_shake` pose in the filter pose switcher. Defaults to 0 (disabled). |
