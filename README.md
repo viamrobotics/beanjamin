@@ -533,16 +533,18 @@ Identifies return customers using facial recognition. Wraps the [`viam:vision:fa
   "camera_name": "<string>",
   "vision_service_name": "<string>",
   "data_dir": "<string>",
-  "confidence_threshold": <float>
+  "confidence_threshold": <float>,
+  "min_face_area_fraction": <float>
 }
 ```
 
-| Name                   | Type   | Required | Description                                                                                     |
-| ---------------------- | ------ | -------- | ----------------------------------------------------------------------------------------------- |
-| `camera_name`          | string | Yes      | Name of the camera component used to capture customer photos.                                   |
-| `vision_service_name`  | string | Yes      | Name of the `face-identification` vision service dependency.                                    |
-| `data_dir`             | string | Yes      | Directory for storing known face images and customer records. Must match the vision service's `picture_directory` parent (i.e. the vision service's `picture_directory` should be `<data_dir>/known_faces`). |
-| `confidence_threshold` | float  | No       | Minimum confidence score to consider a face match. Defaults to `0.5`.                           |
+| Name                     | Type   | Required | Description                                                                                     |
+| ------------------------ | ------ | -------- | ----------------------------------------------------------------------------------------------- |
+| `camera_name`            | string | Yes      | Name of the camera component used to capture customer photos.                                   |
+| `vision_service_name`    | string | Yes      | Name of the `face-identification` vision service dependency.                                    |
+| `data_dir`               | string | Yes      | Directory for storing known face images and customer records. Must match the vision service's `picture_directory` parent (i.e. the vision service's `picture_directory` should be `<data_dir>/known_faces`). |
+| `confidence_threshold`   | float  | No       | Minimum confidence score to consider a face match. Defaults to `0.5`.                           |
+| `min_face_area_fraction` | float  | No       | Minimum fraction of the (center-cropped) image area a detected face bounding box must cover to be considered for identification. Defaults to `0.08` (face spans ~28% of the frame linearly). |
 
 ### Example Configuration
 
@@ -551,7 +553,8 @@ Identifies return customers using facial recognition. Wraps the [`viam:vision:fa
   "camera_name": "customer-cam",
   "vision_service_name": "face-detector",
   "data_dir": "/data/customers",
-  "confidence_threshold": 0.6
+  "confidence_threshold": 0.6,
+  "min_face_area_fraction": 0.08
 }
 ```
 
