@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	viz "github.com/viam-labs/motion-tools/client/client"
 	"go.viam.com/rdk/components/arm"
-	"go.viam.com/rdk/components/camera"
+
 	"go.viam.com/rdk/components/gripper"
 	"go.viam.com/rdk/components/sensor"
 	toggleswitch "go.viam.com/rdk/components/switch"
@@ -85,8 +86,9 @@ type Config struct {
 	SaveMotionRequestsDir     string  `json:"save_motion_requests_dir,omitempty"`
 	OrderSensorName           string  `json:"order_sensor_name,omitempty"`
 
-	ZooCamStorageName string `json:"zoo_cam_storage_name,omitempty"`
-	CanServeDecaf     bool   `json:"can_serve_decaf,omitempty"`
+	CamStorageMuxName    string `json:"cam_storage_mux_name,omitempty"`
+	PendingOrderClipsDir string `json:"pending_order_clips_dir,omitempty"`
+	CanServeDecaf        bool   `json:"can_serve_decaf,omitempty"`
 
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
 }
@@ -113,8 +115,8 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.OrderSensorName != "" {
 		optDeps = append(optDeps, sensor.Named(cfg.OrderSensorName).String())
 	}
-	if cfg.ZooCamStorageName != "" {
-		optDeps = append(optDeps, camera.Named(cfg.ZooCamStorageName).String())
+	if cfg.CamStorageMuxName != "" {
+		optDeps = append(optDeps, generic.Named(cfg.CamStorageMuxName).String())
 	}
 
 	return reqDeps, optDeps, nil
@@ -135,7 +137,8 @@ type beanjaminCoffee struct {
 	vizEnabled             bool                        // true when viz_url is configured
 	vizConsecutiveFailures int                         // auto-disables viz after repeated failures
 	gripper                gripper.Gripper
-	zooCam                 camera.Camera // optional; viam:video:storage (or compatible); nil if zoo_cam_storage_name unset
+	camStorage             generic.Service // optional; mux over video stores; nil if cam_storage_mux_name unset
+	pendingOrderClipsDir   string          // optional; directory for pending-clip records to survive restarts
 	mu                     sync.Mutex
 	cancelCtx              context.Context
 	cancelFunc             func()
@@ -223,15 +226,22 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		}
 	}
 
-	var zooCam camera.Camera
-	if conf.ZooCamStorageName != "" {
-		zc, err := camera.FromProvider(deps, conf.ZooCamStorageName)
+	var camStorage generic.Service
+	if conf.CamStorageMuxName != "" {
+		zc, err := generic.FromProvider(deps, conf.CamStorageMuxName)
 		if err != nil {
 			cancelFunc()
-			return nil, fmt.Errorf("zoo cam storage %q: %w", conf.ZooCamStorageName, err)
+			return nil, fmt.Errorf("cam_storage_mux_name %q: %w", conf.CamStorageMuxName, err)
 		}
-		zooCam = zc
-		logger.Infof("zoo cam storage %q connected", conf.ZooCamStorageName)
+		camStorage = zc
+		logger.Infof("cam storage mux %q connected", conf.CamStorageMuxName)
+	}
+
+	if conf.PendingOrderClipsDir != "" {
+		if err := os.MkdirAll(conf.PendingOrderClipsDir, 0o755); err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("pending_order_clips_dir %q: %w", conf.PendingOrderClipsDir, err)
+		}
 	}
 
 	vizEnabled := false
@@ -259,23 +269,24 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	}
 
 	s := &beanjaminCoffee{
-		name:            name,
-		logger:          logger,
-		cfg:             conf,
-		filterSw:        filterSw,
-		clawsSw:         clawSw,
-		arm:             armComp,
-		fsSvc:           fsSvc,
-		cachedFS:        cachedFS,
-		speech:          speech,
-		zooCam:          zooCam,
-		gripper:         gripperComp,
-		vizEnabled:      vizEnabled,
-		cancelCtx:       cancelCtx,
-		cancelFunc:      cancelFunc,
-		queue:           NewOrderQueue(),
-		queueStop:       make(chan struct{}),
-		orderSensorSink: sink,
+		name:                 name,
+		logger:               logger,
+		cfg:                  conf,
+		filterSw:             filterSw,
+		clawsSw:              clawSw,
+		arm:                  armComp,
+		fsSvc:                fsSvc,
+		cachedFS:             cachedFS,
+		speech:               speech,
+		camStorage:           camStorage,
+		pendingOrderClipsDir: conf.PendingOrderClipsDir,
+		gripper:              gripperComp,
+		vizEnabled:           vizEnabled,
+		cancelCtx:            cancelCtx,
+		cancelFunc:           cancelFunc,
+		queue:                NewOrderQueue(),
+		queueStop:            make(chan struct{}),
+		orderSensorSink:      sink,
 	}
 	go s.processQueue()
 	return s, nil
@@ -389,6 +400,12 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		defer cmdSpan.End()
 		return s.clearQueue()
 	}
+	if _, ok := cmd["cleanup_pending_clips"]; ok {
+		_, cmdSpan := trace.StartSpan(ctx, "beanjamin::cleanup_pending_clips")
+		defer cmdSpan.End()
+		return s.cleanupPendingClips()
+	}
+
 	if _, ok := cmd["reset_world"]; ok {
 		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::reset_world")
 		defer cmdSpan.End()
@@ -411,7 +428,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 			return nil, fmt.Errorf("unknown action %q", action)
 		}
 	}
-	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, reset_world, action")
+	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, action")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }

@@ -279,12 +279,13 @@ func (s *beanjaminCoffee) processQueue() {
 
 // safeExecuteOrder wraps executeQueuedOrder with panic recovery so that a
 // single failing order cannot kill the queue-processing goroutine and strand
-// every order behind it. Notifies the optional order sensor and queues a zoo-cam clip when configured.
+// every order behind it. Notifies the optional order sensor and queues a clip from each camera via cam storage when configured.
 func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 	ctx, span := trace.StartSpan(context.Background(), "beanjamin::order["+order.ID+"/"+order.Drink+"]")
 	videoFrom := time.Now().UTC()
 	var execErr error
 	startedAt := time.Now()
+	s.writePendingSave(order, videoFrom)
 	defer func() {
 		if r := recover(); r != nil {
 			execErr = fmt.Errorf("panic: %v", r)
@@ -293,6 +294,7 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 		}
 		s.notifyOrderReading(order, execErr, startedAt, time.Now())
 		s.saveOrderVideoAsync(order, videoFrom, execErr)
+		s.clearPendingSave(order.ID)
 		span.End()
 	}()
 	execErr = s.executeQueuedOrder(ctx, order)
