@@ -43,12 +43,14 @@ function isReadyDuringCleanup(order: QueueOrder): boolean {
 interface OrderTrackerProps {
   viamConn: ViamConnection | null;
   onEmpty: () => void;
-  // If provided, the tracker was opened manually (via "View queue") — render
-  // an empty state with a close button and skip the auto-dismiss on empty.
+  // When true, stay mounted on an empty queue (and suppress onEmpty). Used by
+  // the manual "View queue" takeover so it doesn't auto-dismiss.
+  persistent?: boolean;
+  // Optional × button in the header.
   onClose?: () => void;
 }
 
-export function OrderTracker({ viamConn, onEmpty, onClose }: OrderTrackerProps) {
+export function OrderTracker({ viamConn, onEmpty, persistent, onClose }: OrderTrackerProps) {
   const [orders, setOrders] = useState<QueueOrder[]>([]);
   // Don't fire onEmpty until we've seen at least one order — otherwise the
   // tracker dismisses itself immediately after mount because prepareOrder is
@@ -77,15 +79,15 @@ export function OrderTracker({ viamConn, onEmpty, onClose }: OrderTrackerProps) 
   }, [viamConn, poll]);
 
   // Notify parent when the backend has nothing left to show — but only for
-  // order-initiated opens; manually opened trackers stay up until closed.
+  // order-initiated opens; persistent trackers stay up until closed.
   useEffect(() => {
-    if (onClose) return;
+    if (persistent) return;
     if (hasSeenOrders.current && orders.length === 0) {
       onEmpty();
     }
-  }, [orders.length, onEmpty, onClose]);
+  }, [orders.length, onEmpty, persistent]);
 
-  if (orders.length === 0 && !onClose) return null;
+  if (orders.length === 0 && !persistent) return null;
 
   // Pending count for the header chip — orders that haven't completed yet.
   const pendingCount = orders.filter((o) => !isCompleted(o)).length;
@@ -120,54 +122,54 @@ export function OrderTracker({ viamConn, onEmpty, onClose }: OrderTrackerProps) 
           </p>
         </div>
       ) : (
-      <div className="flex-1 overflow-y-auto space-y-3">
-        {orders.map((order, i) => {
-          if (isCompleted(order)) {
-            return (
-              <OrderCard
-                key={order.id}
-                order={order}
-                cardClass={GREEN_CARD_CLASSES}
-                statusKind="ready"
-                label={DONE_LABEL}
-              />
-            );
-          }
-          if (isReadyDuringCleanup(order)) {
-            return (
-              <OrderCard
-                key={order.id}
-                order={order}
-                cardClass={GREEN_CARD_CLASSES}
-                statusKind="ready"
-                label={READY_LABEL}
-              />
-            );
-          }
-          if (i === firstPendingIdx) {
+        <div className="flex-1 overflow-y-auto space-y-3">
+          {orders.map((order, i) => {
+            if (isCompleted(order)) {
+              return (
+                <OrderCard
+                  key={order.id}
+                  order={order}
+                  cardClass={GREEN_CARD_CLASSES}
+                  statusKind="ready"
+                  label={DONE_LABEL}
+                />
+              );
+            }
+            if (isReadyDuringCleanup(order)) {
+              return (
+                <OrderCard
+                  key={order.id}
+                  order={order}
+                  cardClass={GREEN_CARD_CLASSES}
+                  statusKind="ready"
+                  label={READY_LABEL}
+                />
+              );
+            }
+            if (i === firstPendingIdx) {
+              return (
+                <OrderCard
+                  key={order.id}
+                  order={order}
+                  cardClass={NORMAL_CARD_CLASSES}
+                  statusKind="making"
+                  label={order.raw_step || QUEUED_LABEL}
+                />
+              );
+            }
+            // Other pending orders: position relative to the front pending order.
+            const queuePosition = i - firstPendingIdx + 1;
             return (
               <OrderCard
                 key={order.id}
                 order={order}
                 cardClass={NORMAL_CARD_CLASSES}
-                statusKind="making"
-                label={order.raw_step || QUEUED_LABEL}
+                statusKind="queued"
+                label={`In queue · #${queuePosition}`}
               />
             );
-          }
-          // Other pending orders: position relative to the front pending order.
-          const queuePosition = i - firstPendingIdx + 1;
-          return (
-            <OrderCard
-              key={order.id}
-              order={order}
-              cardClass={NORMAL_CARD_CLASSES}
-              statusKind="queued"
-              label={`In queue · #${queuePosition}`}
-            />
-          );
-        })}
-      </div>
+          })}
+        </div>
       )}
     </div>
   );
