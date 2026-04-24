@@ -9,9 +9,11 @@ const DEFAULT_CAM_NAME = "cam";
 export function CamFeed({
   viamConn,
   cameraName,
+  fill = false,
 }: {
   viamConn: ViamConnection | null;
   cameraName?: string;
+  fill?: boolean;
 }) {
   const name = cameraName || DEFAULT_CAM_NAME;
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -31,6 +33,10 @@ export function CamFeed({
       try {
         const sc = new StreamClient(viamConn!.robotClient);
         streamClientRef.current = sc;
+        // Clear any stale stream left by a prior mount (Strict Mode
+        // double-invoke, hot reload, or a dead tab) before opening a new one.
+        await sc.remove(name).catch(() => {});
+        if (stopped) return;
         const mediaStream = await sc.getStream(name);
         if (stopped) return;
         if (video) {
@@ -62,7 +68,11 @@ export function CamFeed({
   if (unavailable || failed) return null;
 
   return (
-    <div className="relative bg-neutral-900 aspect-video w-full overflow-hidden">
+    <div
+      className={`relative bg-neutral-900 overflow-hidden ${
+        fill ? "w-full h-full" : "aspect-video w-full"
+      }`}
+    >
       <video
         ref={videoRef}
         autoPlay

@@ -36,6 +36,7 @@ export default function Home() {
   const [machineName, setMachineName] = useState<string | null>(null);
   const [camName, setCamName] = useState<string | undefined>(undefined);
   const [showTracker, setShowTracker] = useState(false);
+  const [trackerManual, setTrackerManual] = useState(false);
 
   // Viam connection state
   const {
@@ -226,6 +227,11 @@ export default function Home() {
     setShowTracker(false);
   }, []);
 
+  const handleTrackerClose = useCallback(() => {
+    setShowTracker(false);
+    setTrackerManual(false);
+  }, []);
+
   // --- Render the left panel content based on step ---
   function renderStep() {
     if (step === "face-register") {
@@ -353,7 +359,39 @@ export default function Home() {
         >
           Place an order
         </button>
+
+        {!showTracker && (
+          <button
+            onClick={() => {
+              setTrackerManual(true);
+              setShowTracker(true);
+            }}
+            className="anim-in-hero mt-6 text-sm font-mono text-neutral-400 uppercase tracking-widest hover:text-neutral-600 transition-colors"
+            style={{ animationDelay: welcomeBack ? "1600ms" : "1400ms" }}
+          >
+            View queue
+          </button>
+        )}
       </main>
+    );
+  }
+
+  // Manual "View queue" mode takes over the full screen: larger cam feed on
+  // the left, order list on the right. The ordering flow is hidden.
+  if (trackerManual) {
+    return (
+      <div className="h-dvh flex">
+        <div className="flex-1 min-w-0 bg-neutral-900">
+          <CamFeed viamConn={viamConn.current} cameraName={camName} fill />
+        </div>
+        <div className="w-[560px] shrink-0 border-l border-neutral-200">
+          <OrderTracker
+            viamConn={viamConn.current}
+            onEmpty={handleTrackerEmpty}
+            onClose={handleTrackerClose}
+          />
+        </div>
+      </div>
     );
   }
 
