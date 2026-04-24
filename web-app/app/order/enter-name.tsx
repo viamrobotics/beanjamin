@@ -2,6 +2,8 @@ export function EnterName({
   name,
   email,
   loading,
+  connected,
+  error,
   onNameChange,
   onEmailChange,
   onBack,
@@ -10,6 +12,8 @@ export function EnterName({
   name: string;
   email: string;
   loading: boolean;
+  connected: boolean;
+  error: string | null;
   onNameChange: (name: string) => void;
   onEmailChange: (email: string) => void;
   onBack: () => void;
@@ -64,9 +68,21 @@ export function EnterName({
           />
         </div>
 
+        {error && (
+          <p className="anim-in text-red-500 text-sm text-center -mt-4">
+            {error}
+          </p>
+        )}
+
+        {!connected && !error && (
+          <p className="anim-in text-neutral-500 text-sm text-center -mt-4">
+            Waiting to reconnect to the machine…
+          </p>
+        )}
+
         <button
           onClick={onSubmit}
-          disabled={!name.trim() || loading}
+          disabled={!name.trim() || loading || !connected}
           className="anim-in press w-full py-3 text-base font-medium bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
           style={{ animationDelay: "200ms" }}
         >

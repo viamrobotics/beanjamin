@@ -6,6 +6,7 @@ export interface ViamConnection {
   robotClient: RobotClient;
   machineId: string;
   hostname: string;
+  isDev: boolean;
 }
 
 // --------------- Dev mode (localhost) ---------------
@@ -145,6 +146,7 @@ export async function connectToViam(): Promise<ViamConnection> {
       robotClient: {} as RobotClient,
       machineId: "dev-machine",
       hostname: "localhost",
+      isDev: true,
     };
   }
 
@@ -182,7 +184,7 @@ export async function connectToViam(): Promise<ViamConnection> {
     host: hostname,
   });
 
-  return { viamClient, robotClient, machineId, hostname };
+  return { viamClient, robotClient, machineId, hostname, isDev: false };
 }
 
 /** Read a key from the machine's user-defined metadata. */
