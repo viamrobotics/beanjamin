@@ -84,7 +84,7 @@ type Config struct {
 	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
 	OrderSensorName       string  `json:"order_sensor_name,omitempty"`
 
-	CamStorageMuxName string `json:"cam_storage_multiplexer_name,omitempty"`
+	CamStorageMuxName    string `json:"cam_storage_mux_name,omitempty"`
 	PendingOrderClipsDir string `json:"pending_order_clips_dir,omitempty"`
 	CanServeDecaf        bool   `json:"can_serve_decaf,omitempty"`
 
@@ -135,8 +135,8 @@ type beanjaminCoffee struct {
 	vizEnabled             bool                        // true when viz_url is configured
 	vizConsecutiveFailures int                         // auto-disables viz after repeated failures
 	gripper                gripper.Gripper
-	camStorage             generic.Service // optional; mux over video stores; nil if cam_storage_multiplexer_name unset
-	pendingOrderClipsDir   string        // optional; directory for pending-clip records to survive restarts
+	camStorage             generic.Service // optional; mux over video stores; nil if cam_storage_mux_name unset
+	pendingOrderClipsDir   string          // optional; directory for pending-clip records to survive restarts
 	mu                     sync.Mutex
 	cancelCtx              context.Context
 	cancelFunc             func()
@@ -276,7 +276,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		fsSvc:                fsSvc,
 		cachedFS:             cachedFS,
 		speech:               speech,
-		camStorage:               camStorage,
+		camStorage:           camStorage,
 		pendingOrderClipsDir: conf.PendingOrderClipsDir,
 		gripper:              gripperComp,
 		vizEnabled:           vizEnabled,
