@@ -6,12 +6,14 @@ import { DRINKS } from "./drinks";
 export function ChooseDrink({
   selectedDrink,
   rejection,
+  connected,
   onSelect,
   onBack,
   onNext,
 }: {
   selectedDrink: string | null;
   rejection: string | null;
+  connected: boolean;
   onSelect: (id: string) => void;
   onBack: () => void;
   onNext: () => void;
@@ -108,9 +110,15 @@ export function ChooseDrink({
           </p>
         )}
 
+        {!connected && !rejection && (
+          <p className="anim-in text-neutral-500 text-center text-sm -mt-4">
+            Waiting to reconnect to the machine…
+          </p>
+        )}
+
         <button
           onClick={onNext}
-          disabled={!selectedDrink}
+          disabled={!selectedDrink || !connected}
           className="anim-in press w-full py-3 text-base font-medium bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
           style={{ animationDelay: "600ms" }}
         >
