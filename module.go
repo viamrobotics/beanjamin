@@ -87,6 +87,12 @@ type Config struct {
 	CanServeDecaf     bool   `json:"can_serve_decaf,omitempty"`
 
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
+
+	// FakeMode skips AllowedCollision entries that reference gripper
+	// sub-geometries (e.g. "gripper:claws") which only exist on the real
+	// ufactory gripper. Set true on fake-hardware test machines; leave
+	// unset on the real bot.
+	FakeMode bool `json:"fake_mode,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {

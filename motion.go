@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/golang/geo/r3"
@@ -294,6 +295,29 @@ func collectDescendants(fs *referenceframe.FrameSystem, rootName string) []desce
 	return descendants
 }
 
+// fakeMissingFrames are gripper sub-geometries that only exist on the real
+// ufactory gripper. When running against a fake barista (FakeMode=true),
+// AllowedCollision entries referencing these frames are dropped so motion
+// planning doesn't fail on unknown frames.
+var fakeMissingFrames = []string{"gripper:claws", "gripper:case-gripper"}
+
+// filterFakeModeCollisions drops AllowedCollision entries that reference a
+// frame in fakeMissingFrames. Returns the input unchanged when FakeMode is off.
+func (s *beanjaminCoffee) filterFakeModeCollisions(acs []AllowedCollision) []AllowedCollision {
+	if !s.cfg.FakeMode {
+		return acs
+	}
+	out := make([]AllowedCollision, 0, len(acs))
+	for _, ac := range acs {
+		if slices.Contains(fakeMissingFrames, ac.Frame1) || slices.Contains(fakeMissingFrames, ac.Frame2) {
+			s.logger.Debugf("fake mode: dropping allowed collision %s <-> %s", ac.Frame1, ac.Frame2)
+			continue
+		}
+		out = append(out, ac)
+	}
+	return out
+}
+
 // buildConstraints converts step-level linear constraints and allowed collisions
 // into the motionplan.Constraints structure used by armplanning.
 func buildConstraints(lc *StepLinearConstraint, allowedCollisions []AllowedCollision) *motionplan.Constraints {
@@ -400,6 +424,7 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	}
 	goalPose := tf.(*referenceframe.PoseInFrame)
 
+	allowedCollisions = s.filterFakeModeCollisions(allowedCollisions)
 	constraints := buildConstraints(lc, allowedCollisions)
 	if lc != nil {
 		s.logger.Infof("applying linear constraint (line=%.1fmm, orient=%.1f°)",
@@ -503,7 +528,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	}
 
 	// Build constraints.
-	constraints := buildConstraints(step.LinearConstraint, step.AllowedCollisions)
+	constraints := buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(step.AllowedCollisions))
 
 	// Plan all waypoints in a single call.
 	req := &armplanning.PlanRequest{
@@ -591,7 +616,7 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 		))
 	}
 
-	constraints := buildConstraints(step.LinearConstraint, step.AllowedCollisions)
+	constraints := buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(step.AllowedCollisions))
 
 	req := &armplanning.PlanRequest{
 		FrameSystem: fs,
