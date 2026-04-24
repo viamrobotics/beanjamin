@@ -412,7 +412,11 @@ export default function Home() {
       {/* Right panel: live cam feed + order tracker */}
       {trackerMode === "auto" && (
         <div className={`${TRACKER_PANEL_WIDTH} shrink-0 border-l border-neutral-200 flex flex-col`}>
-          <CamFeed viamConn={viamConn} cameraName={camName} />
+          <CamFeed
+            viamConn={viamConn}
+            cameraName={camName}
+            onExpand={() => setTrackerMode("manual")}
+          />
           <div className="flex-1 min-h-0">
             <OrderTracker
               viamConn={viamConn}

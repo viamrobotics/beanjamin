@@ -10,10 +10,12 @@ export function CamFeed({
   viamConn,
   cameraName,
   fill = false,
+  onExpand,
 }: {
   viamConn: ViamConnection | null;
   cameraName?: string;
   fill?: boolean;
+  onExpand?: () => void;
 }) {
   const name = cameraName || DEFAULT_CAM_NAME;
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -95,6 +97,26 @@ export function CamFeed({
           Live
         </span>
       </div>
+      {onExpand && (
+        <button
+          onClick={onExpand}
+          aria-label="Expand camera"
+          className="absolute top-2 right-2 flex items-center justify-center w-7 h-7 rounded-full bg-black/60 backdrop-blur-sm text-white hover:bg-black/80 transition-colors"
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M3 7V3h4M17 7V3h-4M3 13v4h4M17 13v4h-4" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }
