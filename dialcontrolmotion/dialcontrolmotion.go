@@ -33,7 +33,7 @@ var Model = resource.NewModel("viam", "beanjamin", "dial-control-motion")
 // ModuleVersion is a hand-bumped marker that proves which iteration of this
 // model is actually running. Bump it whenever you change behavior so a
 // machine's logs reveal whether the new code is loaded.
-const ModuleVersion = "v5-delta-count-2026-05-07"
+const ModuleVersion = "v6-skip-zero-delta-2026-05-07"
 
 const (
 	defaultMoveMM     float64 = 1.0
@@ -337,6 +337,14 @@ func (s *dialControlMotion) handleDialMove(axis string, dialValue interface{}) (
 		delta -= maxPos + 1
 	} else if delta < -maxPos/2 {
 		delta += maxPos + 1
+	}
+
+	// No actual movement (e.g. Stream Deck retransmitting at a dial boundary
+	// like 0 or 100). Update the cached position but do not queue a step.
+	if delta == 0 {
+		*last = dialVal
+		s.dialMu.Unlock()
+		return map[string]interface{}{"status": "no_change", "axis": axis, "position": dialVal}, nil
 	}
 
 	lastDir := s.lastDirection[axis]
