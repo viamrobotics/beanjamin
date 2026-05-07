@@ -3,6 +3,9 @@ package beanjamin
 import (
 	"strings"
 	"testing"
+
+	"go.viam.com/rdk/components/camera"
+	"go.viam.com/rdk/services/vision"
 )
 
 func validBaseConfig() *Config {
@@ -106,12 +109,14 @@ func TestValidate_DynamicCupPickup_AppendsDeps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
+	wantVis := vision.Named("vis").String()
+	wantCam := camera.Named("cam").String()
 	var sawVision, sawCamera bool
 	for _, d := range req {
-		if strings.Contains(d, "vis") {
+		if d == wantVis {
 			sawVision = true
 		}
-		if strings.Contains(d, "cam") {
+		if d == wantCam {
 			sawCamera = true
 		}
 	}
