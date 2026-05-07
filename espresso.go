@@ -410,7 +410,7 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 
 	if s.cfg.DynamicCupPickup {
 		if err := s.pickCupDynamic(ctx, cancelCtx); err != nil {
-			return fmt.Errorf("set_cup_for_coffee: %w", err)
+			return err
 		}
 	} else {
 		// Static pickup: approach -> open gripper -> grab -> retreat.
