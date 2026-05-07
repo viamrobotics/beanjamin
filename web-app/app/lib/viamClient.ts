@@ -13,27 +13,32 @@ export interface ViamConnection {
 
 // Dev mode returns mock data so the app runs without a real robot.
 //
-// Detection rules, in priority order:
-//   1. ?mock=1 query param → force dev mode
-//   2. ?mock=0 query param → force real mode
-//   3. URL path starts with /machine/<hostname>/ → real mode (this is what
-//      `viam module local-app-testing` serves, even on localhost)
-//   4. hostname is localhost or 127.0.0.1 → dev mode
-//   5. otherwise → real mode
+// Detection rules:
+//   - No `userToken` cookie → dev mode (no way to make a real connection).
+//   - userToken present:
+//       1. ?mock=1 query param → force dev mode
+//       2. ?mock=0 query param → force real mode
+//       3. otherwise → real mode
 function isDevMode(): boolean {
   if (typeof window === "undefined") return false;
+
+  if (!hasUserToken()) return true;
 
   const params = new URLSearchParams(window.location.search);
   const mockParam = params.get("mock");
   if (mockParam === "1" || mockParam === "true") return true;
   if (mockParam === "0" || mockParam === "false") return false;
 
-  if (window.location.pathname.startsWith("/machine/")) return false;
+  return false;
+}
 
-  return (
-    window.location.hostname === "localhost" ||
-    window.location.hostname === "127.0.0.1"
-  );
+function hasUserToken(): boolean {
+  if (typeof document === "undefined") return false;
+  const prefix = "userToken=";
+  for (const part of document.cookie.split(";")) {
+    if (part.trim().startsWith(prefix)) return true;
+  }
+  return false;
 }
 
 // Simulated queue: each order takes DEV_ORDER_DURATION_MS to process
@@ -138,7 +143,7 @@ async function loadSDK() {
 const COFFEE_SERVICE_NAME = "coffee-lifecycle";
 const CUSTOMER_DETECTOR_SERVICE_NAME = "customer-detector";
 
-export async function connectToViam(): Promise<ViamConnection> {
+export async function connectToViam(partId: string): Promise<ViamConnection> {
   if (isDevMode()) {
     console.log("[dev] using mock Viam connection");
     return {
@@ -150,35 +155,32 @@ export async function connectToViam(): Promise<ViamConnection> {
     };
   }
 
+  if (!partId) {
+    throw new Error("connectToViam: partId is required");
+  }
+
   const sdk = await loadSDK();
 
-  const machineCookieKey = window.location.pathname.split("/")[2];
-  if (!machineCookieKey) {
-    throw new Error(
-      "No machine hostname found in URL path. Expected /machine/<hostname>/"
-    );
-  }
-
-  const raw = sdk.Cookies.get(machineCookieKey);
+  const raw = sdk.Cookies.get("userToken");
   if (!raw) {
-    throw new Error(
-      `No Viam credentials cookie found for "${machineCookieKey}"`
-    );
+    throw new Error('No "userToken" cookie found');
   }
-
-  const { apiKey, machineId, hostname } = JSON.parse(raw) as {
-    apiKey: { id: string; key: string };
-    machineId: string;
-    hostname: string;
-  };
+  const { access_token } = JSON.parse(raw) as { access_token: string };
 
   const viamClient = await sdk.createViamClient({
     credentials: {
-      type: "api-key",
-      authEntity: apiKey.id,
-      payload: apiKey.key,
+      type: "access-token",
+      payload: access_token,
     },
   });
+
+  const partResp = await viamClient.appClient.getRobotPart(partId);
+  const part = partResp.part;
+  if (!part) {
+    throw new Error(`getRobotPart(${partId}) returned no part`);
+  }
+  const hostname = part.fqdn;
+  const machineId = part.robot;
 
   const robotClient = await viamClient.connectToMachine({
     host: hostname,

@@ -2,6 +2,11 @@
 
 Customer-facing kiosk UI for the Beanjamin espresso robot. Built with Next.js and communicates with the robot via the Viam TypeScript SDK.
 
+## Routes
+
+- `/` — machine picker. Lists machines accessible to the logged-in user and links into the kiosk for each one.
+- `/machine?partId=<partId>` — kiosk for a specific robot part. The `partId` is resolved to an FQDN via `appClient.getRobotPart` and the kiosk connects directly to the machine.
+
 ## Running locally
 
 Requires Node.js 20.20.2 or later.
@@ -18,18 +23,31 @@ Start the dev server:
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The app automatically runs in **dev/mock mode** on localhost — no real robot connection needed. Step through the full order flow with simulated queue progress.
+Open [http://localhost:3000](http://localhost:3000). On localhost without a `userToken` cookie, the app runs in **dev/mock mode** — no real robot connection needed. The home page shows an "Open dev kiosk" button that opens the kiosk against a simulated queue.
 
-To force mock mode on any URL, append `?mock=1`. To force real mode (e.g. to test against a live machine from a local server), append `?mock=0`.
+### Dev/mock mode rules
+
+Defined in [`app/lib/viamClient.ts`](app/lib/viamClient.ts):
+
+- No `userToken` cookie → dev mode (forced).
+- `userToken` cookie present:
+  - `?mock=1` → dev mode
+  - `?mock=0` → real mode
+  - default → real mode
+
+The dev-kiosk button always appends `?mock=1` so it works whether or not a `userToken` is set on the origin.
 
 ## Connecting to a real robot
 
-When served by `viam module local-app-testing` or deployed as a Viam module, the app is served at `/machine/<hostname>/` and reads Viam credentials from a cookie set by the platform. No additional configuration is needed.
+The kiosk authenticates via an `access-token` parsed from the `userToken` cookie set by Viam's web app on its own origin. To connect to a real machine, serve the app from an origin where that cookie is set — typically by:
+
+- **Deploying as a Viam module** (the production path).
+- **Tunneling localhost through a domain that has the cookie** (e.g. for end-to-end testing against a real robot from your dev machine). The tunnel domain is what `window.location.hostname` reads, so the app behaves as a deployed instance on that origin.
 
 ## Other commands
 
 ```bash
-npm run build        # production build (static export → web-app/out/)
+npm run build        # static export → web-app/out/
 npm run lint         # eslint
 ```
 

@@ -13,7 +13,7 @@
   "applications": [
     {
       "name": "beanjamin",
-      "type": "single_machine",
+      "type": "multi_machine",
       "entrypoint": "out/index.html"
     }
   ]
