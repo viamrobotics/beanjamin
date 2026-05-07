@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -86,9 +87,9 @@ type Config struct {
 	SaveMotionRequestsDir     string  `json:"save_motion_requests_dir,omitempty"`
 	OrderSensorName           string  `json:"order_sensor_name,omitempty"`
 
-	CamStorageMuxName    string `json:"cam_storage_mux_name,omitempty"`
-	PendingOrderClipsDir string `json:"pending_order_clips_dir,omitempty"`
-	CanServeDecaf        bool   `json:"can_serve_decaf,omitempty"`
+	CamStorageMuxName string `json:"cam_storage_mux_name,omitempty"`
+	DataDir           string `json:"data_dir,omitempty"`
+	CanServeDecaf     bool   `json:"can_serve_decaf,omitempty"`
 
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
 }
@@ -237,10 +238,12 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger.Infof("cam storage mux %q connected", conf.CamStorageMuxName)
 	}
 
-	if conf.PendingOrderClipsDir != "" {
-		if err := os.MkdirAll(conf.PendingOrderClipsDir, 0o755); err != nil {
+	var pendingOrderClipsDir string
+	if conf.DataDir != "" {
+		pendingOrderClipsDir = filepath.Join(conf.DataDir, "pending-clips")
+		if err := os.MkdirAll(pendingOrderClipsDir, 0o755); err != nil {
 			cancelFunc()
-			return nil, fmt.Errorf("pending_order_clips_dir %q: %w", conf.PendingOrderClipsDir, err)
+			return nil, fmt.Errorf("data_dir %q: %w", conf.DataDir, err)
 		}
 	}
 
@@ -279,7 +282,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		cachedFS:             cachedFS,
 		speech:               speech,
 		camStorage:           camStorage,
-		pendingOrderClipsDir: conf.PendingOrderClipsDir,
+		pendingOrderClipsDir: pendingOrderClipsDir,
 		gripper:              gripperComp,
 		vizEnabled:           vizEnabled,
 		cancelCtx:            cancelCtx,
