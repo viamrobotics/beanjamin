@@ -142,9 +142,18 @@ export default function Home() {
           return (
             <li key={m.id}>
               {m.mainPartId ? (
-                <Link href={`/machine?partId=${m.mainPartId}`} style={{ color: "inherit", textDecoration: "none" }}>
-                  {row}
-                </Link>
+                <>
+                  <Link href={`/machine?partId=${m.mainPartId}`} style={{ color: "inherit", textDecoration: "none" }}>
+                    {row}
+                  </Link>
+                  {" "}
+                  <Link
+                    href={`/machine?partId=${m.mainPartId}&kiosk=1`}
+                    style={{ color: "#2563eb", marginLeft: "0.5em" }}
+                  >
+                    [kiosk mode →]
+                  </Link>
+                </>
               ) : (
                 row
               )}

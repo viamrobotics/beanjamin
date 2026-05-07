@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useState, useEffect, useRef } from "react";
 
 const HEARTS = [
@@ -16,6 +17,7 @@ interface OrderConfirmationProps {
   actualName: string;
   drinkLabel: string;
   onDismiss: () => void;
+  showBack?: boolean;
 }
 
 export function OrderConfirmation({
@@ -23,6 +25,7 @@ export function OrderConfirmation({
   actualName,
   drinkLabel,
   onDismiss,
+  showBack = true,
 }: OrderConfirmationProps) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -49,6 +52,14 @@ export function OrderConfirmation({
 
   return (
     <main className="relative h-full bg-white flex flex-col items-center justify-center p-8 font-sans">
+      {showBack && (
+        <Link
+          href="/"
+          className="absolute top-4 left-4 text-sm text-neutral-500 hover:text-neutral-900 transition-colors"
+        >
+          ← Back to Fleet Dashboard
+        </Link>
+      )}
       <div className="flex flex-col items-center">
         <p className="anim-in text-neutral-400 text-lg uppercase tracking-widest font-mono">
           {drinkLabel} for

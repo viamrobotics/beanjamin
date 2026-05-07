@@ -3,6 +3,7 @@
 import { Suspense, useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
+import Link from "next/link";
 import { DRINKS } from "../order/drinks";
 import { ChooseDrink } from "../order/choose-drink";
 import { EnterName } from "../order/enter-name";
@@ -34,7 +35,9 @@ export default function KioskPage() {
 }
 
 function Kiosk() {
-  const partId = useSearchParams().get("partId") ?? "";
+  const searchParams = useSearchParams();
+  const partId = searchParams.get("partId") ?? "";
+  const kioskMode = searchParams.get("kiosk") === "1";
 
   const [step, setStep] = useState<Step>("welcome");
   const [name, setName] = useState("");
@@ -260,6 +263,7 @@ function Kiosk() {
           actualName={name}
           drinkLabel={drink?.label ?? ""}
           onDismiss={handleConfirmationDismiss}
+          showBack={!kioskMode}
         />
       );
     }
@@ -301,7 +305,15 @@ function Kiosk() {
 
     // --- Welcome screen (default) ---
     return (
-      <main className="h-full bg-white flex flex-col items-center justify-center p-8 font-sans">
+      <main className="relative h-full bg-white flex flex-col items-center justify-center p-8 font-sans">
+        {!kioskMode && (
+          <Link
+            href="/"
+            className="absolute top-4 left-4 text-sm text-neutral-500 hover:text-neutral-900 transition-colors"
+          >
+            ← Back to Fleet Dashboard
+          </Link>
+        )}
         <Image
           src="/beans.png"
           alt="coffee beans"
