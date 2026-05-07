@@ -17,6 +17,7 @@ import {
   getMachineName,
   prepareOrder,
   identifyCustomer,
+  getQueue,
 } from "../lib/viamClient";
 import { useViamConnection } from "../lib/useViamConnection";
 import { misspellName } from "../lib/misspell";
@@ -96,6 +97,34 @@ function Kiosk() {
     })();
     return () => {
       cancelled = true;
+    };
+  }, [connected, viamConn]);
+
+  // Cold-start visibility: a fresh app instance starts with showTracker=false,
+  // so a second tab/instance opened while the machine is already brewing for
+  // someone else would never see the queue. Poll getQueue at the page level
+  // and flip showTracker on whenever the backend reports any orders. The
+  // OrderTracker still owns its own per-second polling for rendering and
+  // calls onEmpty -> handleTrackerEmpty to hide itself once the queue drains.
+  useEffect(() => {
+    if (!connected || !viamConn) return;
+    let cancelled = false;
+
+    const tick = async () => {
+      try {
+        const q = await getQueue(viamConn);
+        if (cancelled) return;
+        if (q.orders.length > 0) setShowTracker(true);
+      } catch (err) {
+        console.error("[app] queue visibility poll failed:", err);
+      }
+    };
+    tick();
+    const interval = setInterval(tick, 2000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
     };
   }, [connected, viamConn]);
 
