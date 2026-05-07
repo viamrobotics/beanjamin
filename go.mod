@@ -10,6 +10,7 @@ require (
 	go.viam.com/api v0.1.533
 	go.viam.com/rdk v0.119.2
 	go.viam.com/utils v0.4.13
+	gonum.org/v1/gonum v0.16.0
 	google.golang.org/api v0.247.0
 )
 
@@ -219,7 +220,6 @@ require (
 	golang.org/x/time v0.12.0 // indirect
 	golang.org/x/tools v0.42.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
-	gonum.org/v1/gonum v0.16.0 // indirect
 	gonum.org/v1/plot v0.15.2 // indirect
 	google.golang.org/genproto v0.0.0-20250603155806-513f23925822 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260128011058-8636f8732409 // indirect

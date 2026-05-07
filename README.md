@@ -321,7 +321,7 @@ Returns `{"status": "opened"}` or `{"status": "closed", "grabbed": true}`.
 
 **API:** `rdk:service:generic`
 
-Translates Stream Deck dial inputs into relative arm motions. Each dial tick moves the arm by a configurable number of millimeters along the X, Y, or Z axis, or along the tool's orientation vector. The service tracks the absolute dial position between calls to determine direction (handling rollover at the dial range boundaries).
+Translates Stream Deck dial inputs into relative arm motions. Each dial tick contributes a step (mm for translations, degrees for rotations) along the chosen axis. The service tracks the absolute dial position between calls to determine direction (handling rollover at the dial range boundaries) and accumulates pending motion in a per-axis bucket. A background drain loop flushes accumulated motion to the arm at `drain_interval_ms`, applying a per-axis acceleration multiplier — single detents stay at 1× for fine control, while rapid spinning amplifies motion non-linearly.
 
 ### Configuration
 
@@ -332,42 +332,56 @@ Translates Stream Deck dial inputs into relative arm motions. Each dial tick mov
   "dial_move_y_mm": 5,
   "dial_move_z_mm": 5,
   "dial_move_orientation_mm": 5,
-  "dial_max_position": 100
+  "dial_move_rx_deg": 2,
+  "dial_move_ry_deg": 2,
+  "dial_move_rz_deg": 2,
+  "dial_max_position": 100,
+  "drain_interval_ms": 20,
+  "accel_threshold_count": 2,
+  "accel_max_multiplier": 10,
+  "accel_exponent": 1.5
 }
 ```
 
-| Name                       | Type   | Required | Description                                                                                    |
-| -------------------------- | ------ | -------- | ---------------------------------------------------------------------------------------------- |
-| `arm_name`                 | string | Yes      | Name of the arm component to move.                                                             |
-| `dial_move_x_mm`           | float  | No       | Millimeters to move per dial tick on the X axis. Defaults to `1`.                              |
-| `dial_move_y_mm`           | float  | No       | Millimeters to move per dial tick on the Y axis. Defaults to `1`.                              |
-| `dial_move_z_mm`           | float  | No       | Millimeters to move per dial tick on the Z axis. Defaults to `1`.                              |
-| `dial_move_orientation_mm` | float  | No       | Millimeters to move per dial tick along the tool's orientation vector. Defaults to `1`.        |
-| `dial_max_position`        | float  | No       | Maximum dial position value, used for rollover detection. Defaults to `100`.                   |
+| Name                       | Type   | Required | Description                                                                                                                            |
+| -------------------------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `arm_name`                 | string | Yes      | Name of the arm component to move.                                                                                                     |
+| `dial_move_x_mm`           | float  | No       | Base millimeters per dial detent on the X axis. Defaults to `1`.                                                                       |
+| `dial_move_y_mm`           | float  | No       | Base millimeters per dial detent on the Y axis. Defaults to `1`.                                                                       |
+| `dial_move_z_mm`           | float  | No       | Base millimeters per dial detent on the Z axis. Defaults to `1`.                                                                       |
+| `dial_move_orientation_mm` | float  | No       | Base millimeters per dial detent along the tool's orientation vector. Defaults to `1`.                                                 |
+| `dial_move_rx_deg`         | float  | No       | Base degrees per dial detent rotating around world X. Defaults to `1`.                                                                 |
+| `dial_move_ry_deg`         | float  | No       | Base degrees per dial detent rotating around world Y. Defaults to `1`.                                                                 |
+| `dial_move_rz_deg`         | float  | No       | Base degrees per dial detent rotating around world Z. Defaults to `1`.                                                                 |
+| `dial_max_position`        | float  | No       | Maximum dial position value, used for rollover detection. Defaults to `100`.                                                           |
+| `drain_interval_ms`        | int    | No       | Flush cadence in milliseconds. Detents arriving within a window are summed before being applied. Defaults to `20` (50 Hz).             |
+| `accel_threshold_count`    | float  | No       | Detents per window before acceleration kicks in. Below or equal to this, multiplier is `1×`. Defaults to `2`.                          |
+| `accel_max_multiplier`     | float  | No       | Upper bound on the acceleration multiplier at high spin rates. Defaults to `10`.                                                       |
+| `accel_exponent`           | float  | No       | Curve shape: `1` linear, `2` quadratic. Defaults to `1.5`. Multiplier = `clamp((count/threshold)^exponent, 1, max)`.                   |
 
 ### DoCommand
 
-**`dial_move_x`** / **`dial_move_y`** / **`dial_move_z`** - Move the arm along an axis using a Stream Deck dial value. The first call for a given axis calibrates the dial position and does not move the arm.
+**`dial_move_x`** / **`dial_move_y`** / **`dial_move_z`** - Enqueue a translation along the named axis from a Stream Deck dial value. The first call for a given axis calibrates the dial position and does not move the arm.
 
 ```json
 {"dial_move_x": 50}
 ```
 
-Returns `{"status": "moved", "axis": "x", "mm": 5.0}` or `{"status": "dial_initialized", "axis": "x", "position": 50}` on first call (calibration).
+Returns `{"status": "queued", "axis": "x", "step": 5.0}` or `{"status": "dial_initialized", "axis": "x", "position": 50}` on first call.
 
-**`dial_move_orientation`** - Move the arm along its current tool orientation vector.
+**`dial_move_orientation`** - Enqueue a translation along the current tool orientation vector.
 
 ```json
 {"dial_move_orientation": 50}
 ```
 
-**`dial_move_speed`** - Adjust dial movement speed. Updates `dial_move_x_mm`, `dial_move_y_mm`, `dial_move_z_mm`, and `dial_move_orientation_mm` based on dial input.
+**`dial_move_rx`** / **`dial_move_ry`** / **`dial_move_rz`** - Enqueue a rotation around the named world axis. Step magnitude is in degrees per detent.
 
 ```json
-{"dial_move_speed": 75}
+{"dial_move_rx": 50}
 ```
 
-Returns `{"status": "speed_updated", "dial_move_x_mm": 7.5, "dial_move_y_mm": 7.5, "dial_move_z_mm": 7.5, "dial_move_orientation_mm": 7.5}`.
+> **Removed:** `dial_move_speed` no longer exists. The new acceleration model (`accel_threshold_count` / `accel_max_multiplier` / `accel_exponent`) replaces it. Stream Deck profiles bound to `dial_move_speed` will receive an error and need to be remapped.
 
 ---
 
