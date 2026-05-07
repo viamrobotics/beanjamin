@@ -91,6 +91,17 @@ type Config struct {
 	DataDir           string `json:"data_dir,omitempty"`
 	CanServeDecaf     bool   `json:"can_serve_decaf,omitempty"`
 
+	// Dynamic cup pickup. When true, setCupForCoffee uses vision-driven
+	// detection to find the cup; when false, the existing static pickup
+	// (empty_cup_approach -> empty_cup) is used.
+	DynamicCupPickup           bool     `json:"dynamic_cup_pickup,omitempty"`
+	CupVisionServiceName       string   `json:"cup_vision_service_name,omitempty"`
+	SrcCameraName              string   `json:"src_camera_name,omitempty"`
+	ExpectedCupPositionMm      *Vec3Mm  `json:"expected_cup_position_mm,omitempty"`
+	CupMaxDistanceFromTargetMm float64  `json:"cup_max_distance_from_target_mm,omitempty"`
+	CupDetectionRetries        int      `json:"cup_detection_retries,omitempty"`
+	CupDetectionRetrySleepMs   int      `json:"cup_detection_retry_sleep_ms,omitempty"`
+
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
 
 	// FakeMode skips AllowedCollision entries that reference gripper
@@ -98,6 +109,13 @@ type Config struct {
 	// ufactory gripper. Set true on fake-hardware test machines; leave
 	// unset on the real bot.
 	FakeMode bool `json:"fake_mode,omitempty"`
+}
+
+// Vec3Mm is a 3D point in millimeters used for world-frame configuration.
+type Vec3Mm struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
