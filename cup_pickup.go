@@ -155,6 +155,13 @@ func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 	ctx, span := trace.StartSpan(ctx, "beanjamin::dynamic_cup_pickup")
 	defer span.End()
 
+	// Merge cancelCtx into ctx so operator cancel interrupts moveToRawPose
+	// and gripper calls. Mirrors motion.go executePivot / executeCircularMotion.
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(cancelCtx, func() { cancel() })
+	defer stop()
+	defer cancel()
+
 	if s.gripper == nil {
 		return fmt.Errorf("dynamic_cup_pickup: no gripper configured")
 	}
