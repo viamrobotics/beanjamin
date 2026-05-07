@@ -95,13 +95,13 @@ type Config struct {
 	// Dynamic cup pickup. When true, setCupForCoffee uses vision-driven
 	// detection to find the cup; when false, the existing static pickup
 	// (empty_cup_approach -> empty_cup) is used.
-	DynamicCupPickup           bool     `json:"dynamic_cup_pickup,omitempty"`
-	CupVisionServiceName       string   `json:"cup_vision_service_name,omitempty"`
-	SrcCameraName              string   `json:"src_camera_name,omitempty"`
-	ExpectedCupPositionMm      *Vec3Mm  `json:"expected_cup_position_mm,omitempty"`
-	CupMaxDistanceFromTargetMm float64  `json:"cup_max_distance_from_target_mm,omitempty"`
-	CupDetectionRetries        int      `json:"cup_detection_retries,omitempty"`
-	CupDetectionRetrySleepMs   int      `json:"cup_detection_retry_sleep_ms,omitempty"`
+	DynamicCupPickup           bool    `json:"dynamic_cup_pickup,omitempty"`
+	CupVisionServiceName       string  `json:"cup_vision_service_name,omitempty"`
+	SrcCameraName              string  `json:"src_camera_name,omitempty"`
+	ExpectedCupPositionMm      *Vec3Mm `json:"expected_cup_position_mm,omitempty"`
+	CupMaxDistanceFromTargetMm float64 `json:"cup_max_distance_from_target_mm,omitempty"`
+	CupDetectionRetries        int     `json:"cup_detection_retries,omitempty"`
+	CupDetectionRetrySleepMs   int     `json:"cup_detection_retry_sleep_ms,omitempty"`
 
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
 

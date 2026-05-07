@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/sensor"
 	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/resource"
 	generic "go.viam.com/rdk/services/generic"
 )
