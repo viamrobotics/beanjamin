@@ -14,11 +14,24 @@ const (
 	gripperPause = 500 * time.Millisecond
 )
 
-// say queues text for the speech service via the non-blocking say_async
-// DoCommand. It returns as soon as the text is accepted by the speech
-// service's async queue; the audio will be played once any in-flight
-// speech has finished. It is a no-op when no speech service is configured.
+// say queues text for the speech service when conversational mode is
+// enabled, otherwise no-ops. Use this for status-narrating lines (greetings,
+// progress prompts, rejections) that an external orchestrator may want to
+// own instead. For lines that must always be spoken regardless of mode
+// (e.g. the drink-ready handoff), use sayAlways.
 func (s *beanjaminCoffee) say(ctx context.Context, text string) error {
+	if !s.cfg.Conversational {
+		return nil
+	}
+	return s.sayAlways(ctx, text)
+}
+
+// sayAlways queues text for the speech service via the non-blocking
+// say_async DoCommand, regardless of the Conversational config. It
+// returns as soon as the text is accepted by the speech service's async
+// queue; the audio will be played once any in-flight speech has finished.
+// No-op when no speech service is configured.
+func (s *beanjaminCoffee) sayAlways(ctx context.Context, text string) error {
 	if s.speech == nil {
 		return nil
 	}
@@ -209,7 +222,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		if err != nil {
 			return err
 		}
-		if err := s.say(ctx, pickDrinkReady(drink, customerName)); err != nil {
+		if err := s.sayAlways(ctx, pickDrinkReady(drink, customerName)); err != nil {
 			s.logger.Warnf("failed to say drink-ready: %v", err)
 		}
 	} else {
