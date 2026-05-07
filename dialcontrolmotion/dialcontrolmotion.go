@@ -33,7 +33,7 @@ var Model = resource.NewModel("viam", "beanjamin", "dial-control-motion")
 // ModuleVersion is a hand-bumped marker that proves which iteration of this
 // model is actually running. Bump it whenever you change behavior so a
 // machine's logs reveal whether the new code is loaded.
-const ModuleVersion = "v4-ewma-smoothing-2026-05-07"
+const ModuleVersion = "v5-delta-count-2026-05-07"
 
 const (
 	defaultMoveMM     float64 = 1.0
@@ -362,9 +362,19 @@ func (s *dialControlMotion) handleDialMove(axis string, dialValue interface{}) (
 		step = s.cfg.moveMM(axis) * direction
 	}
 
+	// Stream Deck sends coarse position samples — a single DoCommand can
+	// represent multiple detents of dial movement. Use the absolute delta
+	// (clamped to ≥1) as the count contribution so the acceleration EWMA sees
+	// how fast the user is actually spinning, regardless of drain interval.
+	// step itself is left at one detent per call; only the multiplier scales.
+	deltaCount := int(math.Abs(delta))
+	if deltaCount < 1 {
+		deltaCount = 1
+	}
+
 	s.pendingMu.Lock()
 	s.pendingMoves[axis] += step
-	s.pendingCounts[axis]++
+	s.pendingCounts[axis] += deltaCount
 	pendingForAxis := s.pendingMoves[axis]
 	countForAxis := s.pendingCounts[axis]
 	s.pendingMu.Unlock()
@@ -373,6 +383,8 @@ func (s *dialControlMotion) handleDialMove(axis string, dialValue interface{}) (
 		"module_version", ModuleVersion,
 		"axis", axis,
 		"dial_value", dialVal,
+		"delta", delta,
+		"delta_count", deltaCount,
 		"direction", direction,
 		"step", step,
 		"pending", pendingForAxis,
