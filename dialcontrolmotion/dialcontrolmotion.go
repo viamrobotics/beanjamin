@@ -33,7 +33,7 @@ var Model = resource.NewModel("viam", "beanjamin", "dial-control-motion")
 // ModuleVersion is a hand-bumped marker that proves which iteration of this
 // model is actually running. Bump it whenever you change behavior so a
 // machine's logs reveal whether the new code is loaded.
-const ModuleVersion = "v3-delta-magnitude-2026-05-07"
+const ModuleVersion = "v2-accel-drainloop-2026-05-07"
 
 const (
 	defaultMoveMM     float64 = 1.0
@@ -332,26 +332,17 @@ func (s *dialControlMotion) handleDialMove(axis string, dialValue interface{}) (
 	*last = dialVal
 	s.dialMu.Unlock()
 
-	// Stream Deck sends coarse position samples — a single DoCommand can
-	// represent multiple detents of dial movement. Use the absolute delta as
-	// the number of detent-equivalents so both step magnitude and the
-	// per-window count reflect how fast the user is actually spinning.
-	magnitude := math.Abs(delta)
-	if magnitude < 1 {
-		magnitude = 1
-	}
-
 	var step float64
 	switch axis {
 	case "rx", "ry", "rz":
-		step = s.cfg.moveDeg(axis) * direction * magnitude
+		step = s.cfg.moveDeg(axis) * direction
 	default:
-		step = s.cfg.moveMM(axis) * direction * magnitude
+		step = s.cfg.moveMM(axis) * direction
 	}
 
 	s.pendingMu.Lock()
 	s.pendingMoves[axis] += step
-	s.pendingCounts[axis] += int(magnitude)
+	s.pendingCounts[axis]++
 	pendingForAxis := s.pendingMoves[axis]
 	countForAxis := s.pendingCounts[axis]
 	s.pendingMu.Unlock()
@@ -360,8 +351,6 @@ func (s *dialControlMotion) handleDialMove(axis string, dialValue interface{}) (
 		"module_version", ModuleVersion,
 		"axis", axis,
 		"dial_value", dialVal,
-		"delta", delta,
-		"magnitude", magnitude,
 		"direction", direction,
 		"step", step,
 		"pending", pendingForAxis,
