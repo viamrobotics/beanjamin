@@ -10,11 +10,14 @@
 package beanjamin
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
+	viz "go.viam.com/rdk/vision"
 )
 
 // selectCupCentroid returns the centroid in `centroids` closest to `target`
@@ -71,4 +74,73 @@ func cameraToWorld(
 	}
 	worldPose := tf.(*referenceframe.PoseInFrame)
 	return worldPose.Pose().Point(), nil
+}
+
+// observeCupCentroid calls the vision service for cup detections, retries
+// on empty results per the configured retry policy, lifts each detection's
+// centroid into world coordinates, and returns the closest in-range
+// centroid (per selectCupCentroid). Returns an error if no cups are found
+// after all retries, or if all detections fall outside the configured
+// max distance.
+func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, error) {
+	maxAttempts := s.cfg.CupDetectionRetries + 1
+	sleep := time.Duration(s.cfg.CupDetectionRetrySleepMs) * time.Millisecond
+	if sleep <= 0 {
+		sleep = 250 * time.Millisecond
+	}
+
+	var objects []*viz.Object
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		objs, err := s.cupVision.GetObjectPointClouds(ctx, s.cupCameraName, nil)
+		if err != nil {
+			return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: detect: %w", err)
+		}
+		s.logger.Infof("dynamic cup pickup: attempt %d/%d, found %d detections", attempt, maxAttempts, len(objs))
+		if len(objs) > 0 {
+			objects = objs
+			break
+		}
+		if attempt < maxAttempts {
+			select {
+			case <-time.After(sleep):
+			case <-ctx.Done():
+				return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: cancelled during retry: %w", ctx.Err())
+			}
+		}
+	}
+	if len(objects) == 0 {
+		return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: no cups detected after %d attempts", maxAttempts)
+	}
+
+	fs, fsInputs, err := s.currentInputs(ctx)
+	if err != nil {
+		return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %w", err)
+	}
+
+	centroids := make([]r3.Vector, 0, len(objects))
+	for _, obj := range objects {
+		if obj.Geometry == nil {
+			continue
+		}
+		local := obj.Geometry.Pose().Point()
+		world, err := cameraToWorld(fs, fsInputs, s.cupCameraName, local)
+		if err != nil {
+			return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %w", err)
+		}
+		s.logger.Debugf("dynamic cup pickup: detection at camera-local %v -> world %v", local, world)
+		centroids = append(centroids, world)
+	}
+	if len(centroids) == 0 {
+		return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %d detection(s) had no usable geometry", len(objects))
+	}
+
+	target := r3.Vector{X: s.cfg.ExpectedCupPositionMm.X, Y: s.cfg.ExpectedCupPositionMm.Y, Z: s.cfg.ExpectedCupPositionMm.Z}
+	chosen, idx, err := selectCupCentroid(centroids, target, s.cfg.CupMaxDistanceFromTargetMm)
+	if err != nil {
+		return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %d detection(s) found but %w", len(centroids), err)
+	}
+	dist := chosen.Sub(target).Norm()
+	s.logger.Infof("dynamic cup pickup: chose centroid %d at (x=%.1f, y=%.1f, z=%.1f) — %.1fmm from target",
+		idx, chosen.X, chosen.Y, chosen.Z, dist)
+	return chosen, nil
 }
