@@ -251,6 +251,9 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 			cancelFunc()
 			return nil, fmt.Errorf("data_dir %q: %w", conf.DataDir, err)
 		}
+		logger.Infof("cam storage: pending-clip records will be written to %s", pendingOrderClipsDir)
+	} else {
+		logger.Infof("cam storage: no data_dir configured — pending-clip records disabled (interrupted orders will not be recoverable)")
 	}
 
 	vizEnabled := false
