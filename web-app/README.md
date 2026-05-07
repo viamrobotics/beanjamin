@@ -1,36 +1,69 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Beanjamin Web App
 
-## Getting Started
+Customer-facing kiosk UI for the Beanjamin espresso robot. Built with Next.js and communicates with the robot via the Viam TypeScript SDK.
 
-First, run the development server:
+## Routes
+
+- `/` — machine picker. Lists machines accessible to the logged-in user. Each row offers two links: the row itself opens the kiosk in **standard mode**, and a `[kiosk mode →]` link opens it in **kiosk mode**.
+- `/machine?partId=<partId>` — kiosk for a specific robot part. The `partId` is resolved to an FQDN via `appClient.getRobotPart` and the kiosk connects directly to the machine.
+
+### Query parameters
+
+- `partId` — the robot part to connect to (required for real connections).
+- `kiosk=1` — kiosk mode: hides the "← Back to Fleet Dashboard" link on the welcome and order-confirmation screens. Use when the page is the only thing on screen and you don't want customers navigating away.
+- `mock=1` / `mock=0` — see dev-mode rules below.
+
+## Running locally
+
+Requires Node.js 20.20.2 or later.
+
+Install dependencies (from `web-app/`):
+
+```bash
+npm ci
+```
+
+Start the dev server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000). On localhost without a `userToken` cookie, the app runs in **dev/mock mode** — no real robot connection needed. The home page shows an "Open dev kiosk" button that opens the kiosk against a simulated queue.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Dev/mock mode rules
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Defined in [`app/lib/viamClient.ts`](app/lib/viamClient.ts):
 
-## Learn More
+- No `userToken` cookie → dev mode (forced).
+- `userToken` cookie present:
+  - `?mock=1` → dev mode
+  - `?mock=0` → real mode
+  - default → real mode
 
-To learn more about Next.js, take a look at the following resources:
+The dev-kiosk button always appends `?mock=1` so it works whether or not a `userToken` is set on the origin.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Connecting to a real robot
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+The kiosk authenticates via an `access-token` parsed from the `userToken` cookie set by Viam's web app on its own origin. To connect to a real machine, serve the app from an origin where that cookie is set — typically by:
 
-## Deploy on Vercel
+- **Deploying as a Viam module** (the production path).
+- **Tunneling localhost through a domain that has the cookie** (e.g. for end-to-end testing against a real robot from your dev machine). The tunnel domain is what `window.location.hostname` reads, so the app behaves as a deployed instance on that origin.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Run the following and go to http://localhost:8012 to get the cookie. 
+```bash
+viam module local-app-testing --app-url http://localhost:3000
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Other commands
+
+```bash
+npm run build        # static export → web-app/out/
+npm run lint         # eslint
+```
+
+To build the bundled Viam module (web app + Go launcher), run from the repo root:
+
+```bash
+make web-app-module
+```

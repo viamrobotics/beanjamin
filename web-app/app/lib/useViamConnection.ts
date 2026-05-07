@@ -3,7 +3,7 @@ import { connectToViam, type ViamConnection } from "./viamClient";
 
 const HEARTBEAT_INTERVAL_MS = 3000;
 
-export function useViamConnection() {
+export function useViamConnection(partId: string) {
   const [conn, setConn] = useState<ViamConnection | null>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +21,7 @@ export function useViamConnection() {
       initInFlight = true;
       try {
         console.log("[app] connecting to Viam...");
-        const next = await connectToViam();
+        const next = await connectToViam(partId);
         if (cancelled) return;
         connRef.current = next;
         setConn(next);
@@ -64,7 +64,7 @@ export function useViamConnection() {
         reconnecting = true;
         console.log("[app] attempting fresh reconnect…");
         try {
-          const next = await connectToViam();
+          const next = await connectToViam(partId);
           if (cancelled) return;
           // Tear down the old zombie client before swapping in the new one —
           // the SDK usually handles a dead channel gracefully, but the
@@ -110,7 +110,7 @@ export function useViamConnection() {
       if (heartbeatInterval) clearInterval(heartbeatInterval);
       window.removeEventListener("online", handleOnline);
     };
-  }, []);
+  }, [partId]);
 
   return { conn, connected, error };
 }
