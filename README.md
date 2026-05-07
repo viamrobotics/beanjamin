@@ -383,6 +383,30 @@ Returns `{"status": "queued", "axis": "x", "step": 5.0}` or `{"status": "dial_in
 {"dial_move_rx": 50}
 ```
 
+**`toggle_axis_mode`** - Flip the dial-mode for X/Y/Z dials between translation and rotation. Bind this to a Stream Deck button to repurpose the dials live. While in rotation mode, `dial_move_x` is routed to `rx` (and similarly for y/z); `dial_move_orientation` is unaffected.
+
+```json
+{"toggle_axis_mode": true}
+```
+
+Returns `{"status": "toggled", "axis_mode": "rotation"}`.
+
+**`set_axis_mode`** - Set the mode explicitly (idempotent). Value must be `"translation"` or `"rotation"`.
+
+```json
+{"set_axis_mode": "rotation"}
+```
+
+Returns `{"status": "set", "axis_mode": "rotation"}`.
+
+**`get_axis_mode`** - Read the current mode without changing it.
+
+```json
+{"get_axis_mode": true}
+```
+
+Returns `{"axis_mode": "translation"}`.
+
 > **Removed:** `dial_move_speed` no longer exists. The new acceleration model (`accel_threshold_count` / `accel_max_multiplier` / `accel_exponent`) replaces it. Stream Deck profiles bound to `dial_move_speed` will receive an error and need to be remapped.
 
 ---

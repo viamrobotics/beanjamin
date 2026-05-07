@@ -33,7 +33,12 @@ var Model = resource.NewModel("viam", "beanjamin", "dial-control-motion")
 // ModuleVersion is a hand-bumped marker that proves which iteration of this
 // model is actually running. Bump it whenever you change behavior so a
 // machine's logs reveal whether the new code is loaded.
-const ModuleVersion = "v6-skip-zero-delta-2026-05-07"
+const ModuleVersion = "v7-axis-mode-toggle-2026-05-07"
+
+const (
+	axisModeTranslation = "translation"
+	axisModeRotation    = "rotation"
+)
 
 const (
 	defaultMoveMM     float64 = 1.0
@@ -200,6 +205,11 @@ type dialControlMotion struct {
 	// per-axis detent count across drain windows so the acceleration multiplier
 	// ramps up and decays instead of snapping per-flush.
 	smoothedCounts map[string]float64
+
+	// axisMode is "translation" or "rotation". When "rotation", dial_move_x/y/z
+	// are routed to rx/ry/rz internally. dial_move_orientation is unaffected.
+	// Guarded by dialMu.
+	axisMode string
 }
 
 func newDialControlMotion(_ context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -226,6 +236,7 @@ func newDialControlMotion(_ context.Context, deps resource.Dependencies, rawConf
 		pendingMoves:   make(map[string]float64),
 		pendingCounts:  make(map[string]int),
 		smoothedCounts: make(map[string]float64),
+		axisMode:       axisModeTranslation,
 	}
 
 	logger.Infow("dial-control-motion starting",
@@ -302,15 +313,56 @@ func (s *dialControlMotion) DoCommand(ctx context.Context, cmd map[string]interf
 		return nil, err
 	}
 
+	if _, ok := cmd["toggle_axis_mode"]; ok {
+		return s.toggleAxisMode()
+	}
+	if v, ok := cmd["set_axis_mode"]; ok {
+		return s.setAxisMode(v)
+	}
+	if _, ok := cmd["get_axis_mode"]; ok {
+		s.dialMu.Lock()
+		mode := s.axisMode
+		s.dialMu.Unlock()
+		return map[string]interface{}{"axis_mode": mode}, nil
+	}
+
 	for key, axis := range supportedAxes {
 		if v, ok := cmd[key]; ok {
 			return s.handleDialMove(axis, v)
 		}
 	}
 
-	err := fmt.Errorf("unknown command, supported commands: dial_move_x/y/z/orientation/rx/ry/rz")
+	err := fmt.Errorf("unknown command, supported commands: dial_move_x/y/z/orientation/rx/ry/rz, toggle_axis_mode, set_axis_mode, get_axis_mode")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
+}
+
+func (s *dialControlMotion) toggleAxisMode() (map[string]interface{}, error) {
+	s.dialMu.Lock()
+	if s.axisMode == axisModeRotation {
+		s.axisMode = axisModeTranslation
+	} else {
+		s.axisMode = axisModeRotation
+	}
+	mode := s.axisMode
+	s.dialMu.Unlock()
+	s.logger.Infow("axis mode toggled", "module_version", ModuleVersion, "axis_mode", mode)
+	return map[string]interface{}{"status": "toggled", "axis_mode": mode}, nil
+}
+
+func (s *dialControlMotion) setAxisMode(v interface{}) (map[string]interface{}, error) {
+	requested, ok := v.(string)
+	if !ok {
+		return nil, fmt.Errorf("set_axis_mode: value must be %q or %q, got %T", axisModeTranslation, axisModeRotation, v)
+	}
+	if requested != axisModeTranslation && requested != axisModeRotation {
+		return nil, fmt.Errorf("set_axis_mode: value must be %q or %q, got %q", axisModeTranslation, axisModeRotation, requested)
+	}
+	s.dialMu.Lock()
+	s.axisMode = requested
+	s.dialMu.Unlock()
+	s.logger.Infow("axis mode set", "module_version", ModuleVersion, "axis_mode", requested)
+	return map[string]interface{}{"status": "set", "axis_mode": requested}, nil
 }
 
 // handleDialMove converts an absolute dial reading into a signed step and
@@ -322,6 +374,19 @@ func (s *dialControlMotion) handleDialMove(axis string, dialValue interface{}) (
 	}
 
 	s.dialMu.Lock()
+	// In rotation mode, route x/y/z to rx/ry/rz so all downstream state
+	// (direction inference, pending bucket, EWMA) is keyed by the effective
+	// axis. orientation and rx/ry/rz are pass-through.
+	if s.axisMode == axisModeRotation {
+		switch axis {
+		case "x":
+			axis = "rx"
+		case "y":
+			axis = "ry"
+		case "z":
+			axis = "rz"
+		}
+	}
 	last, seen := s.lastDial[axis]
 	if !seen || last == nil {
 		v := dialVal
