@@ -13,6 +13,7 @@ import (
 	"fmt"
 
 	"github.com/golang/geo/r3"
+	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
 )
 
@@ -52,4 +53,25 @@ func selectCupCentroid(centroids []r3.Vector, target r3.Vector, maxDistMm float6
 func composeCupPose(centroidWorld r3.Vector, relative spatialmath.Pose) spatialmath.Pose {
 	centroid := spatialmath.NewPoseFromPoint(centroidWorld)
 	return spatialmath.Compose(centroid, relative)
+}
+
+// cameraToWorld lifts a point given in the camera's local frame into the
+// world frame. The vision service returns object geometry in the camera
+// frame; this function uses the frame system Transform to convert.
+func cameraToWorld(
+	fs *referenceframe.FrameSystem,
+	fsInputs referenceframe.FrameSystemInputs,
+	cameraFrame string,
+	point r3.Vector,
+) (r3.Vector, error) {
+	pif := referenceframe.NewPoseInFrame(cameraFrame, spatialmath.NewPoseFromPoint(point))
+	tf, err := fs.Transform(fsInputs.ToLinearInputs(), pif, referenceframe.World)
+	if err != nil {
+		return r3.Vector{}, fmt.Errorf("transform %q to world: %w", cameraFrame, err)
+	}
+	worldPose, ok := tf.(*referenceframe.PoseInFrame)
+	if !ok {
+		return r3.Vector{}, fmt.Errorf("unexpected transform result type %T", tf)
+	}
+	return worldPose.Pose().Point(), nil
 }
