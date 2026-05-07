@@ -33,16 +33,17 @@ var Model = resource.NewModel("viam", "beanjamin", "dial-control-motion")
 // ModuleVersion is a hand-bumped marker that proves which iteration of this
 // model is actually running. Bump it whenever you change behavior so a
 // machine's logs reveal whether the new code is loaded.
-const ModuleVersion = "v2-accel-drainloop-2026-05-07"
+const ModuleVersion = "v4-ewma-smoothing-2026-05-07"
 
 const (
 	defaultMoveMM     float64 = 1.0
 	defaultMoveDeg    float64 = 1.0
 	defaultDrainMs    int     = 20 // 50 Hz
 	defaultMaxPos     float64 = 100
-	defaultAccelThr   float64 = 2.0
+	defaultAccelThr   float64 = 1.0
 	defaultAccelMax   float64 = 10.0
 	defaultAccelExp   float64 = 1.5
+	defaultAccelAlpha float64 = 0.4
 )
 
 func init() {
@@ -72,11 +73,18 @@ type Config struct {
 	// turning produces proportionally larger moves per flush.
 	DrainIntervalMs int `json:"drain_interval_ms,omitempty"`
 
-	// Acceleration: movement multiplier grows as more detents arrive per flush window.
-	// multiplier = clamp((count / AccelThresholdCount)^AccelExponent, 1, AccelMaxMultiplier)
+	// Acceleration: movement multiplier grows with detent rate. The raw per-window
+	// count is smoothed via EWMA across drain windows so the multiplier ramps up
+	// and decays gracefully instead of snapping per-flush.
+	//
+	//   smoothed = alpha * count + (1 - alpha) * smoothed_prev
+	//   multiplier = clamp((smoothed / AccelThresholdCount)^AccelExponent, 1, AccelMaxMultiplier)
+	//
+	// AccelSmoothingAlpha in (0, 1]: 1 = no smoothing (instant), smaller = smoother/laggier.
 	AccelThresholdCount float64 `json:"accel_threshold_count,omitempty"`
 	AccelMaxMultiplier  float64 `json:"accel_max_multiplier,omitempty"`
 	AccelExponent       float64 `json:"accel_exponent,omitempty"`
+	AccelSmoothingAlpha float64 `json:"accel_smoothing_alpha,omitempty"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -119,6 +127,13 @@ func (cfg *Config) accelExponent() float64 {
 		return cfg.AccelExponent
 	}
 	return defaultAccelExp
+}
+
+func (cfg *Config) accelSmoothingAlpha() float64 {
+	if cfg.AccelSmoothingAlpha > 0 && cfg.AccelSmoothingAlpha <= 1 {
+		return cfg.AccelSmoothingAlpha
+	}
+	return defaultAccelAlpha
 }
 
 func (cfg *Config) moveMM(axis string) float64 {
@@ -180,6 +195,11 @@ type dialControlMotion struct {
 	pendingMu     sync.Mutex
 	pendingMoves  map[string]float64 // axis -> accumulated signed delta (mm or deg)
 	pendingCounts map[string]int     // axis -> detent count this window
+
+	// smoothedCounts is owned exclusively by drainLoop; it carries an EWMA of
+	// per-axis detent count across drain windows so the acceleration multiplier
+	// ramps up and decays instead of snapping per-flush.
+	smoothedCounts map[string]float64
 }
 
 func newDialControlMotion(_ context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -203,8 +223,9 @@ func newDialControlMotion(_ context.Context, deps resource.Dependencies, rawConf
 		cancelFunc:    cancelFunc,
 		lastDial:      make(map[string]*float64),
 		lastDirection: make(map[string]float64),
-		pendingMoves:  make(map[string]float64),
-		pendingCounts: make(map[string]int),
+		pendingMoves:   make(map[string]float64),
+		pendingCounts:  make(map[string]int),
+		smoothedCounts: make(map[string]float64),
 	}
 
 	logger.Infow("dial-control-motion starting",
@@ -218,6 +239,7 @@ func newDialControlMotion(_ context.Context, deps resource.Dependencies, rawConf
 		"resolved_accel_threshold", s.cfg.accelThresholdCount(),
 		"resolved_accel_max", s.cfg.accelMaxMultiplier(),
 		"resolved_accel_exponent", s.cfg.accelExponent(),
+		"resolved_accel_smoothing_alpha", s.cfg.accelSmoothingAlpha(),
 	)
 
 	go s.drainLoop()
@@ -360,8 +382,9 @@ func (s *dialControlMotion) handleDialMove(axis string, dialValue interface{}) (
 	return map[string]interface{}{"status": "queued", "axis": axis, "step": step}, nil
 }
 
-// drainLoop ticks at drain_interval_ms and sends one arm command per tick
-// containing all accumulated movement since the last tick.
+// drainLoop ticks at drain_interval_ms. Every tick it advances the per-axis
+// smoothed-count EWMA (so multiplier decays even on quiet windows), and if any
+// motion was accumulated this window, flushes it to the arm.
 func (s *dialControlMotion) drainLoop() {
 	ticker := time.NewTicker(s.cfg.drainInterval())
 	defer ticker.Stop()
@@ -372,48 +395,75 @@ func (s *dialControlMotion) drainLoop() {
 			return
 		case <-ticker.C:
 			s.pendingMu.Lock()
-			if len(s.pendingMoves) == 0 {
-				s.pendingMu.Unlock()
-				continue
-			}
 			pending := s.pendingMoves
 			counts := s.pendingCounts
 			s.pendingMoves = make(map[string]float64)
 			s.pendingCounts = make(map[string]int)
 			s.pendingMu.Unlock()
 
-			multipliers := make(map[string]float64, len(counts))
-			for axis, c := range counts {
-				multipliers[axis] = s.accelMultiplier(c)
+			s.advanceSmoothedCounts(counts)
+
+			if len(pending) == 0 {
+				continue
+			}
+
+			multipliers := make(map[string]float64, len(pending))
+			for axis := range pending {
+				multipliers[axis] = s.accelMultiplier(s.smoothedCounts[axis])
 			}
 			s.logger.Infow("dial drain flush",
 				"module_version", ModuleVersion,
 				"pending", pending,
 				"counts", counts,
+				"smoothed", s.smoothedCounts,
 				"multipliers", multipliers,
 			)
-			if err := s.flushMoves(pending, counts); err != nil {
+			if err := s.flushMoves(pending, multipliers); err != nil {
 				s.logger.Warnw("arm move failed", "error", err)
 			}
 		}
 	}
 }
 
-// accelMultiplier returns the movement multiplier for a given detent count.
-// Single detents stay at 1× for fine control.
-func (s *dialControlMotion) accelMultiplier(count int) float64 {
+// advanceSmoothedCounts updates the per-axis EWMA based on this window's raw
+// counts. Active axes (count > 0) ease toward count; previously-active axes
+// with no detents this window decay toward zero. Tiny residuals are pruned.
+func (s *dialControlMotion) advanceSmoothedCounts(counts map[string]int) {
+	alpha := s.cfg.accelSmoothingAlpha()
+
+	for axis, c := range counts {
+		s.smoothedCounts[axis] = alpha*float64(c) + (1-alpha)*s.smoothedCounts[axis]
+	}
+	for axis, sm := range s.smoothedCounts {
+		if _, active := counts[axis]; active {
+			continue
+		}
+		decayed := (1 - alpha) * sm
+		if decayed < 0.05 {
+			delete(s.smoothedCounts, axis)
+		} else {
+			s.smoothedCounts[axis] = decayed
+		}
+	}
+}
+
+// accelMultiplier returns the movement multiplier for a given smoothed count.
+// At smoothed = threshold the multiplier is exactly 1×; below threshold it is
+// also pinned to 1× (we never slow motion below base).
+func (s *dialControlMotion) accelMultiplier(smoothed float64) float64 {
 	threshold := s.cfg.accelThresholdCount()
-	if float64(count) <= threshold {
+	if smoothed <= threshold {
 		return 1.0
 	}
-	multiplier := math.Pow(float64(count)/threshold, s.cfg.accelExponent())
+	multiplier := math.Pow(smoothed/threshold, s.cfg.accelExponent())
 	return math.Min(multiplier, s.cfg.accelMaxMultiplier())
 }
 
 // flushMoves applies all accumulated deltas in a single EndPosition /
 // MoveToPosition round-trip. Translation axes update the position vector;
-// rotation axes are composed onto the orientation quaternion.
-func (s *dialControlMotion) flushMoves(pending map[string]float64, counts map[string]int) error {
+// rotation axes are composed onto the orientation quaternion. Multipliers
+// (one per axis) are pre-computed by drainLoop from the smoothed EWMA.
+func (s *dialControlMotion) flushMoves(pending, multipliers map[string]float64) error {
 	currentPose, err := s.arm.EndPosition(s.cancelCtx, map[string]interface{}{})
 	if err != nil {
 		return fmt.Errorf("failed to get arm position: %w", err)
@@ -422,11 +472,18 @@ func (s *dialControlMotion) flushMoves(pending map[string]float64, counts map[st
 	pt := currentPose.Point()
 	ori := currentPose.Orientation()
 
+	mul := func(axis string) float64 {
+		if m, ok := multipliers[axis]; ok {
+			return m
+		}
+		return 1.0
+	}
+
 	for axis, delta := range pending {
 		if axis == "rx" || axis == "ry" || axis == "rz" {
 			continue
 		}
-		delta *= s.accelMultiplier(counts[axis])
+		delta *= mul(axis)
 		switch axis {
 		case "x":
 			pt.X += delta
@@ -449,7 +506,7 @@ func (s *dialControlMotion) flushMoves(pending map[string]float64, counts map[st
 		if !ok {
 			continue
 		}
-		delta *= s.accelMultiplier(counts[axis])
+		delta *= mul(axis)
 		newPose, err := rotatePose(spatialmath.NewPose(pt, ori), axis, delta)
 		if err != nil {
 			return err
