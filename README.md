@@ -356,10 +356,14 @@ Translates Stream Deck dial inputs into relative arm motions. Each dial tick con
 | `dial_move_rz_deg`         | float  | No       | Base degrees per dial detent rotating around world Z. Defaults to `1`.                                                                 |
 | `dial_max_position`        | float  | No       | Maximum dial position value, used for rollover detection. Defaults to `100`.                                                           |
 | `drain_interval_ms`        | int    | No       | Flush cadence in milliseconds. Detents arriving within a window are summed before being applied. Defaults to `20` (50 Hz).             |
-| `accel_threshold_count`    | float  | No       | Smoothed-detent count at which multiplier reaches `1×`. Below this it's pinned to `1×`. Defaults to `1` so acceleration ramps from the first detent.                          |
-| `accel_max_multiplier`     | float  | No       | Upper bound on the acceleration multiplier at high spin rates. Defaults to `10`.                                                       |
-| `accel_exponent`           | float  | No       | Curve shape: `1` linear, `2` quadratic. Defaults to `1.5`. Multiplier = `clamp((smoothed/threshold)^exponent, 1, max)`.                |
-| `accel_smoothing_alpha`    | float  | No       | EWMA factor in `(0, 1]` applied to the per-axis detent count across drain windows. `1` = no smoothing (instant); smaller = smoother / laggier. Defaults to `0.4`. |
+| `accel_threshold_count`    | float  | No       | Translation: smoothed-detent count at which multiplier reaches `1×`. Below this it's pinned to `1×`. Defaults to `1` so acceleration ramps from the first detent.                          |
+| `accel_max_multiplier`     | float  | No       | Translation: upper bound on the acceleration multiplier at high spin rates. Defaults to `10`.                                                       |
+| `accel_exponent`           | float  | No       | Translation: curve shape, `1` linear, `2` quadratic. Defaults to `1.5`. Multiplier = `clamp((smoothed/threshold)^exponent, 1, max)`.                |
+| `accel_smoothing_alpha`    | float  | No       | Translation: EWMA factor in `(0, 1]` applied to the per-axis detent count across drain windows. `1` = no smoothing (instant); smaller = smoother / laggier. Defaults to `0.4`. |
+| `accel_rotation_threshold_count` | float | No   | Rotation override for `accel_threshold_count`. If unset, falls back to the translation value.                                          |
+| `accel_rotation_max_multiplier`  | float | No   | Rotation override for `accel_max_multiplier`. If unset, falls back to the translation value.                                           |
+| `accel_rotation_exponent`        | float | No   | Rotation override for `accel_exponent`. If unset, falls back to the translation value.                                                 |
+| `accel_rotation_smoothing_alpha` | float | No   | Rotation override for `accel_smoothing_alpha`. If unset, falls back to the translation value.                                          |
 
 ### DoCommand
 

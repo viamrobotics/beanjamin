@@ -33,7 +33,7 @@ var Model = resource.NewModel("viam", "beanjamin", "dial-control-motion")
 // ModuleVersion is a hand-bumped marker that proves which iteration of this
 // model is actually running. Bump it whenever you change behavior so a
 // machine's logs reveal whether the new code is loaded.
-const ModuleVersion = "v7-axis-mode-toggle-2026-05-07"
+const ModuleVersion = "v8-split-accel-2026-05-07"
 
 const (
 	axisModeTranslation = "translation"
@@ -83,13 +83,26 @@ type Config struct {
 	// and decays gracefully instead of snapping per-flush.
 	//
 	//   smoothed = alpha * count + (1 - alpha) * smoothed_prev
-	//   multiplier = clamp((smoothed / AccelThresholdCount)^AccelExponent, 1, AccelMaxMultiplier)
+	//   multiplier = clamp((smoothed / threshold)^exponent, 1, max)
 	//
-	// AccelSmoothingAlpha in (0, 1]: 1 = no smoothing (instant), smaller = smoother/laggier.
+	// alpha in (0, 1]: 1 = no smoothing (instant), smaller = smoother/laggier.
+	//
+	// The base AccelXxx fields apply to translation axes (x/y/z/orientation).
+	// AccelRotationXxx, when set, override for rotation axes (rx/ry/rz).
+	// If a rotation field is unset, it falls back to the translation value.
 	AccelThresholdCount float64 `json:"accel_threshold_count,omitempty"`
 	AccelMaxMultiplier  float64 `json:"accel_max_multiplier,omitempty"`
 	AccelExponent       float64 `json:"accel_exponent,omitempty"`
 	AccelSmoothingAlpha float64 `json:"accel_smoothing_alpha,omitempty"`
+
+	AccelRotationThresholdCount float64 `json:"accel_rotation_threshold_count,omitempty"`
+	AccelRotationMaxMultiplier  float64 `json:"accel_rotation_max_multiplier,omitempty"`
+	AccelRotationExponent       float64 `json:"accel_rotation_exponent,omitempty"`
+	AccelRotationSmoothingAlpha float64 `json:"accel_rotation_smoothing_alpha,omitempty"`
+}
+
+func isRotationAxis(axis string) bool {
+	return axis == "rx" || axis == "ry" || axis == "rz"
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -113,28 +126,40 @@ func (cfg *Config) drainInterval() time.Duration {
 	return time.Duration(defaultDrainMs) * time.Millisecond
 }
 
-func (cfg *Config) accelThresholdCount() float64 {
+func (cfg *Config) accelThresholdCount(axis string) float64 {
+	if isRotationAxis(axis) && cfg.AccelRotationThresholdCount > 0 {
+		return cfg.AccelRotationThresholdCount
+	}
 	if cfg.AccelThresholdCount > 0 {
 		return cfg.AccelThresholdCount
 	}
 	return defaultAccelThr
 }
 
-func (cfg *Config) accelMaxMultiplier() float64 {
+func (cfg *Config) accelMaxMultiplier(axis string) float64 {
+	if isRotationAxis(axis) && cfg.AccelRotationMaxMultiplier > 0 {
+		return cfg.AccelRotationMaxMultiplier
+	}
 	if cfg.AccelMaxMultiplier > 0 {
 		return cfg.AccelMaxMultiplier
 	}
 	return defaultAccelMax
 }
 
-func (cfg *Config) accelExponent() float64 {
+func (cfg *Config) accelExponent(axis string) float64 {
+	if isRotationAxis(axis) && cfg.AccelRotationExponent > 0 {
+		return cfg.AccelRotationExponent
+	}
 	if cfg.AccelExponent > 0 {
 		return cfg.AccelExponent
 	}
 	return defaultAccelExp
 }
 
-func (cfg *Config) accelSmoothingAlpha() float64 {
+func (cfg *Config) accelSmoothingAlpha(axis string) float64 {
+	if isRotationAxis(axis) && cfg.AccelRotationSmoothingAlpha > 0 && cfg.AccelRotationSmoothingAlpha <= 1 {
+		return cfg.AccelRotationSmoothingAlpha
+	}
 	if cfg.AccelSmoothingAlpha > 0 && cfg.AccelSmoothingAlpha <= 1 {
 		return cfg.AccelSmoothingAlpha
 	}
@@ -247,10 +272,14 @@ func newDialControlMotion(_ context.Context, deps resource.Dependencies, rawConf
 		"accel_max_multiplier", conf.AccelMaxMultiplier,
 		"accel_exponent", conf.AccelExponent,
 		"resolved_drain_interval", s.cfg.drainInterval(),
-		"resolved_accel_threshold", s.cfg.accelThresholdCount(),
-		"resolved_accel_max", s.cfg.accelMaxMultiplier(),
-		"resolved_accel_exponent", s.cfg.accelExponent(),
-		"resolved_accel_smoothing_alpha", s.cfg.accelSmoothingAlpha(),
+		"resolved_translation_threshold", s.cfg.accelThresholdCount("x"),
+		"resolved_translation_max", s.cfg.accelMaxMultiplier("x"),
+		"resolved_translation_exponent", s.cfg.accelExponent("x"),
+		"resolved_translation_alpha", s.cfg.accelSmoothingAlpha("x"),
+		"resolved_rotation_threshold", s.cfg.accelThresholdCount("rx"),
+		"resolved_rotation_max", s.cfg.accelMaxMultiplier("rx"),
+		"resolved_rotation_exponent", s.cfg.accelExponent("rx"),
+		"resolved_rotation_alpha", s.cfg.accelSmoothingAlpha("rx"),
 	)
 
 	go s.drainLoop()
@@ -494,7 +523,7 @@ func (s *dialControlMotion) drainLoop() {
 
 			multipliers := make(map[string]float64, len(pending))
 			for axis := range pending {
-				multipliers[axis] = s.accelMultiplier(s.smoothedCounts[axis])
+				multipliers[axis] = s.accelMultiplier(s.smoothedCounts[axis], axis)
 			}
 			s.logger.Infow("dial drain flush",
 				"module_version", ModuleVersion,
@@ -513,16 +542,17 @@ func (s *dialControlMotion) drainLoop() {
 // advanceSmoothedCounts updates the per-axis EWMA based on this window's raw
 // counts. Active axes (count > 0) ease toward count; previously-active axes
 // with no detents this window decay toward zero. Tiny residuals are pruned.
+// Alpha is per-axis so translation and rotation can be tuned separately.
 func (s *dialControlMotion) advanceSmoothedCounts(counts map[string]int) {
-	alpha := s.cfg.accelSmoothingAlpha()
-
 	for axis, c := range counts {
+		alpha := s.cfg.accelSmoothingAlpha(axis)
 		s.smoothedCounts[axis] = alpha*float64(c) + (1-alpha)*s.smoothedCounts[axis]
 	}
 	for axis, sm := range s.smoothedCounts {
 		if _, active := counts[axis]; active {
 			continue
 		}
+		alpha := s.cfg.accelSmoothingAlpha(axis)
 		decayed := (1 - alpha) * sm
 		if decayed < 0.05 {
 			delete(s.smoothedCounts, axis)
@@ -532,16 +562,17 @@ func (s *dialControlMotion) advanceSmoothedCounts(counts map[string]int) {
 	}
 }
 
-// accelMultiplier returns the movement multiplier for a given smoothed count.
-// At smoothed = threshold the multiplier is exactly 1×; below threshold it is
-// also pinned to 1× (we never slow motion below base).
-func (s *dialControlMotion) accelMultiplier(smoothed float64) float64 {
-	threshold := s.cfg.accelThresholdCount()
+// accelMultiplier returns the movement multiplier for a given smoothed count
+// on a specific axis. At smoothed = threshold the multiplier is exactly 1×;
+// below threshold it is pinned to 1× (we never slow motion below base).
+// Translation vs rotation use independently-configurable curves.
+func (s *dialControlMotion) accelMultiplier(smoothed float64, axis string) float64 {
+	threshold := s.cfg.accelThresholdCount(axis)
 	if smoothed <= threshold {
 		return 1.0
 	}
-	multiplier := math.Pow(smoothed/threshold, s.cfg.accelExponent())
-	return math.Min(multiplier, s.cfg.accelMaxMultiplier())
+	multiplier := math.Pow(smoothed/threshold, s.cfg.accelExponent(axis))
+	return math.Min(multiplier, s.cfg.accelMaxMultiplier(axis))
 }
 
 // flushMoves applies all accumulated deltas in a single EndPosition /
