@@ -69,9 +69,6 @@ func cameraToWorld(
 	if err != nil {
 		return r3.Vector{}, fmt.Errorf("transform %q to world: %w", cameraFrame, err)
 	}
-	worldPose, ok := tf.(*referenceframe.PoseInFrame)
-	if !ok {
-		return r3.Vector{}, fmt.Errorf("unexpected transform result type %T", tf)
-	}
+	worldPose := tf.(*referenceframe.PoseInFrame)
 	return worldPose.Pose().Point(), nil
 }
