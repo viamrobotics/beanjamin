@@ -197,6 +197,8 @@ type beanjaminCoffee struct {
 	queueStop              chan struct{}
 	paused                 atomic.Bool
 	orderSensorSink        orderSensorSink // optional; named order-sensor from deps, nil if unset
+	cupVision              vision.Service  // optional; nil when DynamicCupPickup=false
+	cupCameraName          string          // SrcCameraName, validated to exist in cachedFS
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -259,6 +261,23 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	if err := applyJointLimits(logger, cachedFS, conf.InputRangeOverride); err != nil {
 		cancelFunc()
 		return nil, fmt.Errorf("apply joint limits: %w", err)
+	}
+
+	var cupVision vision.Service
+	var cupCameraName string
+	if conf.DynamicCupPickup {
+		visRes, err := vision.FromProvider(deps, conf.CupVisionServiceName)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("cup vision service %q: %w", conf.CupVisionServiceName, err)
+		}
+		cupVision = visRes
+		if cachedFS.Frame(conf.SrcCameraName) == nil {
+			cancelFunc()
+			return nil, fmt.Errorf("src_camera_name %q not found in frame system — add the camera to the frame system fragment", conf.SrcCameraName)
+		}
+		cupCameraName = conf.SrcCameraName
+		logger.Infof("dynamic cup pickup enabled (vision=%q, camera=%q)", conf.CupVisionServiceName, conf.SrcCameraName)
 	}
 
 	var speech resource.Resource
@@ -337,6 +356,8 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		queue:                NewOrderQueue(),
 		queueStop:            make(chan struct{}),
 		orderSensorSink:      sink,
+		cupVision:            cupVision,
+		cupCameraName:        cupCameraName,
 	}
 	go s.processQueue()
 	return s, nil
