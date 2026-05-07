@@ -8,9 +8,12 @@ import (
 )
 
 func TestSelectCupCentroid_Empty(t *testing.T) {
-	_, _, err := selectCupCentroid(nil, r3.Vector{}, 100)
+	_, idx, err := selectCupCentroid(nil, r3.Vector{}, 100)
 	if err == nil {
 		t.Fatalf("expected error on empty input")
+	}
+	if idx != -1 {
+		t.Fatalf("expected idx -1 on error, got %d", idx)
 	}
 }
 
@@ -30,9 +33,12 @@ func TestSelectCupCentroid_SingleInRange(t *testing.T) {
 
 func TestSelectCupCentroid_SingleOutOfRange(t *testing.T) {
 	c := []r3.Vector{{X: 1000, Y: 0, Z: 0}}
-	_, _, err := selectCupCentroid(c, r3.Vector{}, 100)
+	_, idx, err := selectCupCentroid(c, r3.Vector{}, 100)
 	if err == nil || !strings.Contains(err.Error(), "within") {
 		t.Fatalf("expected 'within' error, got %v", err)
+	}
+	if idx != -1 {
+		t.Fatalf("expected idx -1 on error, got %d", idx)
 	}
 }
 
@@ -60,9 +66,12 @@ func TestSelectCupCentroid_AllOutOfRange(t *testing.T) {
 		{X: 1000, Y: 0, Z: 0},
 		{X: 2000, Y: 0, Z: 0},
 	}
-	_, _, err := selectCupCentroid(c, r3.Vector{}, 100)
+	_, idx, err := selectCupCentroid(c, r3.Vector{}, 100)
 	if err == nil || !strings.Contains(err.Error(), "within") {
 		t.Fatalf("expected 'within' error, got %v", err)
+	}
+	if idx != -1 {
+		t.Fatalf("expected idx -1 on error, got %d", idx)
 	}
 }
 

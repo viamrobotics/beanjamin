@@ -37,7 +37,7 @@ func selectCupCentroid(centroids []r3.Vector, target r3.Vector, maxDistMm float6
 		}
 	}
 	if bestIdx == -1 {
-		return r3.Vector{}, -1, fmt.Errorf("no centroid within %.0fmm of target", maxDistMm)
+		return r3.Vector{}, -1, fmt.Errorf("none within %.0fmm of expected position", maxDistMm)
 	}
 	return centroids[bestIdx], bestIdx, nil
 }
