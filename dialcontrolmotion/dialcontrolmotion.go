@@ -33,7 +33,7 @@ var Model = resource.NewModel("viam", "beanjamin", "dial-control-motion")
 // ModuleVersion is a hand-bumped marker that proves which iteration of this
 // model is actually running. Bump it whenever you change behavior so a
 // machine's logs reveal whether the new code is loaded.
-const ModuleVersion = "v9-boundary-saturation-2026-05-07"
+const ModuleVersion = "v10-body-frame-rotation-2026-05-07"
 
 const (
 	axisModeTranslation = "translation"
@@ -643,9 +643,10 @@ func (s *dialControlMotion) flushMoves(pending, multipliers map[string]float64) 
 	return s.arm.MoveToPosition(s.cancelCtx, spatialmath.NewPose(pt, ori), map[string]interface{}{})
 }
 
-// rotatePose applies a rotation of deg degrees around the given world axis
-// (rx/ry/rz) by left-multiplying the rotation quaternion onto the pose's
-// orientation.
+// rotatePose applies a rotation of deg degrees around the given body-frame
+// axis (rx/ry/rz interpreted as the end-effector's current local X/Y/Z) by
+// right-multiplying the rotation quaternion onto the pose's orientation. The
+// pivot is the end-effector's current position, so the arm spins in place.
 func rotatePose(pose spatialmath.Pose, axis string, deg float64) (spatialmath.Pose, error) {
 	theta := deg * math.Pi / 180.0
 	half := theta / 2.0
@@ -664,12 +665,14 @@ func rotatePose(pose spatialmath.Pose, axis string, deg float64) (spatialmath.Po
 	}
 
 	currentQ := pose.Orientation().Quaternion()
-	newQ := quat.Mul(rotQ, quat.Number{
+	// Body-frame: q_new = q_current * q_rot (rotation axis is the body's
+	// current local axis, not the world axis).
+	newQ := quat.Mul(quat.Number{
 		Real: currentQ.Real,
 		Imag: currentQ.Imag,
 		Jmag: currentQ.Jmag,
 		Kmag: currentQ.Kmag,
-	})
+	}, rotQ)
 
 	mag := quat.Abs(newQ)
 	if mag > 1e-10 {
