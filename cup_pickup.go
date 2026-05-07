@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/golang/geo/r3"
+	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
 	viz "go.viam.com/rdk/vision"
@@ -143,4 +144,82 @@ func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, er
 	s.logger.Infof("dynamic cup pickup: chose centroid %d at (x=%.1f, y=%.1f, z=%.1f) — %.1fmm from target",
 		idx, chosen.X, chosen.Y, chosen.Z, dist)
 	return chosen, nil
+}
+
+// pickCupDynamic moves the arm to the configured cup_observe_pose, observes
+// the closest cup via the vision service, and executes a side-grab using
+// the cup_approach_relative_pose / cup_grab_relative_pose entries from the
+// claws pose switch composed onto the detected centroid. Called by
+// setCupForCoffee when DynamicCupPickup=true.
+func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
+	ctx, span := trace.StartSpan(ctx, "beanjamin::dynamic_cup_pickup")
+	defer span.End()
+
+	if s.gripper == nil {
+		return fmt.Errorf("dynamic_cup_pickup: no gripper configured")
+	}
+
+	// 1. Move to observe pose.
+	observeStep := Step{PoseName: "cup_observe_pose", Component: "coffee-claws-middle", Pause: shortPause}
+	if err := s.executeStep(ctx, cancelCtx, observeStep); err != nil {
+		return fmt.Errorf("dynamic_cup_pickup: observe: %w", err)
+	}
+
+	// 2. Observe.
+	detectCtx, detectSpan := trace.StartSpan(ctx, "beanjamin::dynamic_cup_pickup::detect")
+	centroidWorld, err := s.observeCupCentroid(detectCtx)
+	detectSpan.End()
+	if err != nil {
+		return err
+	}
+
+	// 3. Fetch relative poses from the claws pose switch.
+	approachRel, err := s.fetchPose(ctx, "coffee-claws-middle", "cup_approach_relative_pose")
+	if err != nil {
+		return fmt.Errorf("dynamic_cup_pickup: %w", err)
+	}
+	grabRel, err := s.fetchPose(ctx, "coffee-claws-middle", "cup_grab_relative_pose")
+	if err != nil {
+		return fmt.Errorf("dynamic_cup_pickup: %w", err)
+	}
+
+	// 4. Compose into world-frame *poseData for moveToRawPose.
+	approachPD := &poseData{
+		pose:          composeCupPose(centroidWorld, approachRel.pose),
+		refFrame:      referenceframe.World,
+		componentName: "coffee-claws-middle",
+	}
+	grabPD := &poseData{
+		pose:          composeCupPose(centroidWorld, grabRel.pose),
+		refFrame:      referenceframe.World,
+		componentName: "coffee-claws-middle",
+	}
+
+	// 5. Approach (free planning).
+	if err := s.moveToRawPose(ctx, approachPD, nil, nil, nil); err != nil {
+		return fmt.Errorf("dynamic_cup_pickup: approach: %w", err)
+	}
+
+	// 6. Open the gripper before descending.
+	if err := s.gripper.Open(ctx, nil); err != nil {
+		return fmt.Errorf("dynamic_cup_pickup: open gripper: %w", err)
+	}
+	time.Sleep(gripperPause)
+
+	// 7. Linear move to grab pose.
+	if err := s.moveToRawPose(ctx, grabPD, defaultApproachConstraint, nil, nil); err != nil {
+		return fmt.Errorf("dynamic_cup_pickup: grab: %w", err)
+	}
+
+	// 8. Close the gripper.
+	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		return fmt.Errorf("dynamic_cup_pickup: grab gripper: %w", err)
+	}
+	time.Sleep(gripperPause)
+
+	// 9. Linear retreat back to the approach pose.
+	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, nil, nil); err != nil {
+		return fmt.Errorf("dynamic_cup_pickup: retreat: %w", err)
+	}
+	return nil
 }
