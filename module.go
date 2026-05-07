@@ -12,7 +12,7 @@ import (
 
 	viz "github.com/viam-labs/motion-tools/client/client"
 	"go.viam.com/rdk/components/arm"
-
+	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/components/gripper"
 	"go.viam.com/rdk/components/sensor"
 	toggleswitch "go.viam.com/rdk/components/switch"
@@ -22,6 +22,7 @@ import (
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot/framesystem"
 	generic "go.viam.com/rdk/services/generic"
+	"go.viam.com/rdk/services/vision"
 
 	// Register the multi-poses-execution-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
@@ -142,6 +143,28 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 	if cfg.CamStorageMuxName != "" {
 		optDeps = append(optDeps, generic.Named(cfg.CamStorageMuxName).String())
+	}
+
+	if cfg.DynamicCupPickup {
+		if cfg.CupVisionServiceName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_vision_service_name")
+		}
+		if cfg.SrcCameraName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "src_camera_name")
+		}
+		if cfg.ExpectedCupPositionMm == nil {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "expected_cup_position_mm")
+		}
+		if cfg.CupDetectionRetries < 0 {
+			return nil, nil, fmt.Errorf("%s: cup_detection_retries must be >= 0", path)
+		}
+		if cfg.CupMaxDistanceFromTargetMm == 0 {
+			cfg.CupMaxDistanceFromTargetMm = 300
+		}
+		reqDeps = append(reqDeps,
+			vision.Named(cfg.CupVisionServiceName).String(),
+			camera.Named(cfg.SrcCameraName).String(),
+		)
 	}
 
 	return reqDeps, optDeps, nil
