@@ -229,12 +229,12 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 
 	var camStorage generic.Service
 	if conf.CamStorageMuxName != "" {
-		zc, err := generic.FromProvider(deps, conf.CamStorageMuxName)
+		mux, err := generic.FromProvider(deps, conf.CamStorageMuxName)
 		if err != nil {
 			cancelFunc()
 			return nil, fmt.Errorf("cam_storage_mux_name %q: %w", conf.CamStorageMuxName, err)
 		}
-		camStorage = zc
+		camStorage = mux
 		logger.Infof("cam storage mux %q connected", conf.CamStorageMuxName)
 	}
 

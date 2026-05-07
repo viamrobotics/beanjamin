@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - A Go **Viam module** (`cmd/module/main.go`) registering seven models — see `meta.json` and `README.md` for the full list and per-model configuration docs. The headline model is `viam:beanjamin:coffee` (generic service) which orchestrates the full brew cycle.
 - A Next.js **web app** (`web-app/`) that exposes the customer-facing ordering UI and talks to the machine via `@viamrobotics/sdk`. Packaged as its own Viam module via `web-app-module`.
 
-The top-level Go package is `beanjamin` (`module.go`, `espresso.go`, `motion.go`, `queue.go`, `greetings.go`, `maintenance_sensor.go`, `order_sensor.go`, `zoo_cam.go`). Sibling packages in subdirectories each back one of the other models: `customerdetector/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`, `texttospeech/`.
+The top-level Go package is `beanjamin` (`module.go`, `espresso.go`, `motion.go`, `queue.go`, `greetings.go`, `maintenance_sensor.go`, `order_sensor.go`, `cam_storage.go`). Sibling packages in subdirectories each back one of the other models: `customerdetector/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`, `texttospeech/`.
 
 ## Common commands
 
@@ -52,7 +52,7 @@ Build the bundled web-app Viam module from repo root: `make web-app-module` (run
 2. A background queue consumer (`beanjaminCoffee.processQueue`) pops one order at a time and invokes `prepareDrink`.
 3. `prepareDrink` advances through 9 steps; each step sets a label via `setStep(...)` that's visible through `get_queue` and the order sensor. Steps are implemented as small methods (`grindCoffee`, `tampGround`, `brew`, `cleanPortafilter`, etc.) that each execute a list of `Step` structs through `executeStep` in `motion.go`.
 4. On completion/failure, the order is moved to `recent` for `RecentDisplayDuration` (15s) so the UI can render "Ready!" without diffing polls.
-5. A single reading per attempt is pushed to the optional order-sensor sink, and an async clip save is requested on the optional `zoo_cam_storage_name` video-store camera.
+5. A single reading per attempt is pushed to the optional order-sensor sink, and an async clip save is requested on the optional `cam_storage_mux_name` video-store multiplexer.
 
 `cancel`, `clear_queue`, and `proceed` manipulate the same state. Only one routine runs at a time, gated by `running atomic.Bool`; a shared `cancelCtx` is captured under `mu` so cancellation can interrupt motion.
 
