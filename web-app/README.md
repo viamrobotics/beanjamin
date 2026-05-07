@@ -44,6 +44,11 @@ The kiosk authenticates via an `access-token` parsed from the `userToken` cookie
 - **Deploying as a Viam module** (the production path).
 - **Tunneling localhost through a domain that has the cookie** (e.g. for end-to-end testing against a real robot from your dev machine). The tunnel domain is what `window.location.hostname` reads, so the app behaves as a deployed instance on that origin.
 
+Run the following and go to http://localhost:8012 to get the cookie. 
+```bash
+viam module local-app-testing --app-url http://localhost:3000
+```
+
 ## Other commands
 
 ```bash
