@@ -33,7 +33,7 @@ var Model = resource.NewModel("viam", "beanjamin", "dial-control-motion")
 // ModuleVersion is a hand-bumped marker that proves which iteration of this
 // model is actually running. Bump it whenever you change behavior so a
 // machine's logs reveal whether the new code is loaded.
-const ModuleVersion = "v8-split-accel-2026-05-07"
+const ModuleVersion = "v9-boundary-saturation-2026-05-07"
 
 const (
 	axisModeTranslation = "translation"
@@ -433,15 +433,24 @@ func (s *dialControlMotion) handleDialMove(axis string, dialValue interface{}) (
 		delta += maxPos + 1
 	}
 
-	// No actual movement (e.g. Stream Deck retransmitting at a dial boundary
-	// like 0 or 100). Update the cached position but do not queue a step.
+	lastDir := s.lastDirection[axis]
 	if delta == 0 {
-		*last = dialVal
-		s.dialMu.Unlock()
-		return map[string]interface{}{"status": "no_change", "axis": axis, "position": dialVal}, nil
+		// Stream Deck is retransmitting the same value. Two cases:
+		//   1. Dial is at a saturation boundary (0 or maxPos) AND lastDir's
+		//      sign matches the boundary direction — user is still pushing
+		//      past the limit. Synthesize a 1-unit detent in lastDir so motion
+		//      continues. When the user releases, Stream Deck stops calling.
+		//   2. Dial is sitting still anywhere else — genuine no-op.
+		atZero := dialVal == 0 && lastDir < 0
+		atMax := dialVal == s.cfg.maxPosition() && lastDir > 0
+		if !atZero && !atMax {
+			*last = dialVal
+			s.dialMu.Unlock()
+			return map[string]interface{}{"status": "no_change", "axis": axis, "position": dialVal}, nil
+		}
+		delta = lastDir
 	}
 
-	lastDir := s.lastDirection[axis]
 	var direction float64
 	if *last == 0 && lastDir != 0 {
 		// At the zero boundary, the dial can't go lower so the value bounces
