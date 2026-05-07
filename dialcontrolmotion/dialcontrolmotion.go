@@ -490,7 +490,7 @@ func (s *dialControlMotion) handleDialMove(axis string, dialValue interface{}) (
 	countForAxis := s.pendingCounts[axis]
 	s.pendingMu.Unlock()
 
-	s.logger.Infow("dial detent queued",
+	s.logger.Debugw("dial detent queued",
 		"module_version", ModuleVersion,
 		"axis", axis,
 		"dial_value", dialVal,
@@ -534,7 +534,7 @@ func (s *dialControlMotion) drainLoop() {
 			for axis := range pending {
 				multipliers[axis] = s.accelMultiplier(s.smoothedCounts[axis], axis)
 			}
-			s.logger.Infow("dial drain flush",
+			s.logger.Debugw("dial drain flush",
 				"module_version", ModuleVersion,
 				"pending", pending,
 				"counts", counts,
