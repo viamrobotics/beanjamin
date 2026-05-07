@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -28,6 +29,11 @@ import (
 )
 
 var Model = resource.NewModel("viam", "beanjamin", "dial-control-motion")
+
+// ModuleVersion is a hand-bumped marker that proves which iteration of this
+// model is actually running. Bump it whenever you change behavior so a
+// machine's logs reveal whether the new code is loaded.
+const ModuleVersion = "v3-delta-magnitude-2026-05-07"
 
 const (
 	defaultMoveMM     float64 = 1.0
@@ -201,8 +207,42 @@ func newDialControlMotion(_ context.Context, deps resource.Dependencies, rawConf
 		pendingCounts: make(map[string]int),
 	}
 
+	logger.Infow("dial-control-motion starting",
+		"module_version", ModuleVersion,
+		"vcs_revision", buildRevision(),
+		"drain_interval_ms", conf.DrainIntervalMs,
+		"accel_threshold_count", conf.AccelThresholdCount,
+		"accel_max_multiplier", conf.AccelMaxMultiplier,
+		"accel_exponent", conf.AccelExponent,
+		"resolved_drain_interval", s.cfg.drainInterval(),
+		"resolved_accel_threshold", s.cfg.accelThresholdCount(),
+		"resolved_accel_max", s.cfg.accelMaxMultiplier(),
+		"resolved_accel_exponent", s.cfg.accelExponent(),
+	)
+
 	go s.drainLoop()
 	return s, nil
+}
+
+// buildRevision pulls the git commit (and dirty flag) baked in by `go build`
+// from the binary's BuildInfo. Returns "unknown" outside a VCS tree.
+func buildRevision() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	rev, modified := "unknown", ""
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			if s.Value == "true" {
+				modified = "-dirty"
+			}
+		}
+	}
+	return rev + modified
 }
 
 func (s *dialControlMotion) Name() resource.Name {
@@ -292,18 +332,41 @@ func (s *dialControlMotion) handleDialMove(axis string, dialValue interface{}) (
 	*last = dialVal
 	s.dialMu.Unlock()
 
+	// Stream Deck sends coarse position samples — a single DoCommand can
+	// represent multiple detents of dial movement. Use the absolute delta as
+	// the number of detent-equivalents so both step magnitude and the
+	// per-window count reflect how fast the user is actually spinning.
+	magnitude := math.Abs(delta)
+	if magnitude < 1 {
+		magnitude = 1
+	}
+
 	var step float64
 	switch axis {
 	case "rx", "ry", "rz":
-		step = s.cfg.moveDeg(axis) * direction
+		step = s.cfg.moveDeg(axis) * direction * magnitude
 	default:
-		step = s.cfg.moveMM(axis) * direction
+		step = s.cfg.moveMM(axis) * direction * magnitude
 	}
 
 	s.pendingMu.Lock()
 	s.pendingMoves[axis] += step
-	s.pendingCounts[axis]++
+	s.pendingCounts[axis] += int(magnitude)
+	pendingForAxis := s.pendingMoves[axis]
+	countForAxis := s.pendingCounts[axis]
 	s.pendingMu.Unlock()
+
+	s.logger.Infow("dial detent queued",
+		"module_version", ModuleVersion,
+		"axis", axis,
+		"dial_value", dialVal,
+		"delta", delta,
+		"magnitude", magnitude,
+		"direction", direction,
+		"step", step,
+		"pending", pendingForAxis,
+		"count", countForAxis,
+	)
 
 	return map[string]interface{}{"status": "queued", "axis": axis, "step": step}, nil
 }
@@ -330,6 +393,16 @@ func (s *dialControlMotion) drainLoop() {
 			s.pendingCounts = make(map[string]int)
 			s.pendingMu.Unlock()
 
+			multipliers := make(map[string]float64, len(counts))
+			for axis, c := range counts {
+				multipliers[axis] = s.accelMultiplier(c)
+			}
+			s.logger.Infow("dial drain flush",
+				"module_version", ModuleVersion,
+				"pending", pending,
+				"counts", counts,
+				"multipliers", multipliers,
+			)
 			if err := s.flushMoves(pending, counts); err != nil {
 				s.logger.Warnw("arm move failed", "error", err)
 			}
