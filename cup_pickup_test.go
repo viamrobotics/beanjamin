@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/golang/geo/r3"
+	"go.viam.com/rdk/spatialmath"
 )
 
 func TestSelectCupCentroid_Empty(t *testing.T) {
@@ -107,5 +108,40 @@ func TestSelectCupCentroid_TieBreaksFirst(t *testing.T) {
 	}
 	if got != c[0] {
 		t.Fatalf("expected first centroid, got %v", got)
+	}
+}
+
+func TestComposeCupPose_IdentityRelative(t *testing.T) {
+	centroid := r3.Vector{X: 100, Y: 200, Z: 300}
+	relative := spatialmath.NewZeroPose()
+	got := composeCupPose(centroid, relative)
+	if got.Point() != centroid {
+		t.Fatalf("expected centroid preserved %v, got %v", centroid, got.Point())
+	}
+	if !spatialmath.OrientationAlmostEqual(got.Orientation(), spatialmath.NewZeroOrientation()) {
+		t.Fatalf("expected zero orientation, got %v", got.Orientation())
+	}
+}
+
+func TestComposeCupPose_PureTranslation(t *testing.T) {
+	centroid := r3.Vector{X: 100, Y: 200, Z: 300}
+	relative := spatialmath.NewPoseFromPoint(r3.Vector{X: 10, Y: 0, Z: 0})
+	got := composeCupPose(centroid, relative)
+	want := r3.Vector{X: 110, Y: 200, Z: 300}
+	if got.Point() != want {
+		t.Fatalf("expected %v, got %v", want, got.Point())
+	}
+}
+
+func TestComposeCupPose_PureRotation(t *testing.T) {
+	centroid := r3.Vector{X: 100, Y: 200, Z: 300}
+	orient := &spatialmath.OrientationVectorDegrees{OX: 1, OY: 0, OZ: 0, Theta: 90}
+	relative := spatialmath.NewPose(r3.Vector{}, orient)
+	got := composeCupPose(centroid, relative)
+	if got.Point() != centroid {
+		t.Fatalf("expected centroid preserved %v, got %v", centroid, got.Point())
+	}
+	if !spatialmath.OrientationAlmostEqual(got.Orientation(), orient) {
+		t.Fatalf("expected %v, got %v", orient, got.Orientation())
 	}
 }

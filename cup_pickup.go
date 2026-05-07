@@ -13,6 +13,7 @@ import (
 	"fmt"
 
 	"github.com/golang/geo/r3"
+	"go.viam.com/rdk/spatialmath"
 )
 
 // selectCupCentroid returns the centroid in `centroids` closest to `target`
@@ -40,4 +41,15 @@ func selectCupCentroid(centroids []r3.Vector, target r3.Vector, maxDistMm float6
 		return r3.Vector{}, -1, fmt.Errorf("none within %.0fmm of expected position", maxDistMm)
 	}
 	return centroids[bestIdx], bestIdx, nil
+}
+
+// composeCupPose builds a world-frame target pose by composing a relative
+// pose (translation + orientation) onto a centroid point with identity
+// orientation. The relative pose is read from the claws pose switch under
+// names like cup_grab_relative_pose / cup_approach_relative_pose; its
+// reference_frame field is intentionally ignored — these poses are
+// interpreted as offsets from the runtime centroid, not absolute poses.
+func composeCupPose(centroidWorld r3.Vector, relative spatialmath.Pose) spatialmath.Pose {
+	centroid := spatialmath.NewPoseFromPoint(centroidWorld)
+	return spatialmath.Compose(centroid, relative)
 }
