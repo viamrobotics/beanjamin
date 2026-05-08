@@ -59,8 +59,10 @@ func (s *beanjaminCoffee) clearPendingSave(orderID string) {
 // then removes the record. Intended to be called via a Viam scheduled job to catch
 // any orders interrupted before they could save (e.g. machine restart mid-brew).
 func (s *beanjaminCoffee) cleanupPendingClips() (map[string]any, error) {
+	s.logger.Infof("cam storage: cleanup job starting")
 	if s.pendingOrderClipsDir == "" {
-		return map[string]any{"skipped": "no pending_order_clips_dir configured"}, nil
+		s.logger.Infof("cam storage: cleanup job nothing to do — no data_dir configured")
+		return map[string]any{"saved": 0, "skipped": 0}, nil
 	}
 	entries, err := os.ReadDir(s.pendingOrderClipsDir)
 	if err != nil {
@@ -116,9 +118,12 @@ func (s *beanjaminCoffee) cleanupPendingClips() (map[string]any, error) {
 // execErr is nil when the order finished the brew sequence; non-nil records failure (including panic) in metadata.
 func (s *beanjaminCoffee) saveOrderVideoAsync(order Order, from time.Time, execErr error) {
 	if s.camStorage == nil {
+		s.logger.Infof("cam storage: skip save for order %s — no cam_storage_mux_name configured", order.ID)
 		return
 	}
 	clipFrom := from.Add(-clipLead)
+	s.logger.Infof("cam storage: scheduling save for order %s — clipFrom=%s, waiting %s post-roll before save",
+		order.ID, formatClipTimestampUTC(clipFrom), clipTrail)
 	go func() {
 		// Post-roll is not tied to service/caller cancellation—we still want to queue the clip.
 		time.Sleep(clipTrail)
@@ -151,6 +156,8 @@ func (s *beanjaminCoffee) issueVideoSave(order Order, clipFrom, clipTo time.Time
 		"tags":     []string{order.ID},
 		"async":    true,
 	}
+	s.logger.Infof("cam storage: issuing save for order %s — from=%s to=%s",
+		order.ID, formatClipTimestampUTC(clipFrom), formatClipTimestampUTC(clipTo))
 	resp, err := s.camStorage.DoCommand(context.Background(), cmd)
 	if err != nil {
 		s.logger.Warnf("cam storage: save failed for order %s: %v", order.ID, err)

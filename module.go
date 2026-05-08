@@ -92,6 +92,15 @@ type Config struct {
 	DataDir           string `json:"data_dir,omitempty"`
 	CanServeDecaf     bool   `json:"can_serve_decaf,omitempty"`
 
+	// Conversational, when true, makes the coffee service speak its own
+	// status-narrating lines through speech_service_name — initial
+	// greetings, almost-ready prompts, order confirmations, rejection
+	// quips, etc. When false (the default), the service stays silent
+	// except for the drink-ready announcement at cup handoff, leaving
+	// everything else for an external orchestrator (e.g. voice-command)
+	// to handle.
+	Conversational bool `json:"conversational,omitempty"`
+
 	// Dynamic cup pickup. When true, setCupForCoffee uses vision-driven
 	// detection to find the cup; when false, the existing static pickup
 	// (empty_cup_approach -> empty_cup) is used.
@@ -342,6 +351,9 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 			cancelFunc()
 			return nil, fmt.Errorf("data_dir %q: %w", conf.DataDir, err)
 		}
+		logger.Infof("cam storage: pending-clip records will be written to %s", pendingOrderClipsDir)
+	} else {
+		logger.Infof("cam storage: no data_dir configured — pending-clip records disabled (interrupted orders will not be recoverable)")
 	}
 
 	vizEnabled := false
