@@ -38,7 +38,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # Release tags come from the release event; main pushes only produce rc tags.
           release_branches: __none__
-          pre_release_branches: main
+          pre_release_branches: test/auto-deploy
           append_to_pre_release_tag: rc
           default_bump: patch
           dry_run: true
