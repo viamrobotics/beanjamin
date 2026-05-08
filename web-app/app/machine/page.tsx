@@ -24,6 +24,16 @@ import { misspellName } from "../lib/misspell";
 
 type Step = "welcome" | "drink" | "name" | "face-register" | "confirmation";
 
+// 'hidden' = no tracker. 'auto' = right-rail tracker that appeared either
+// because this kiosk placed an order or because the page-level poll noticed
+// orders on the backend (e.g. another tab); auto-dismisses when the queue
+// drains. 'manual' = full-screen "View queue" takeover; stays up until the
+// user closes it.
+type TrackerMode = "hidden" | "auto" | "manual";
+
+// Width of the order tracker panel in both auto and manual modes.
+const TRACKER_PANEL_WIDTH = "w-[560px]";
+
 const LOST_CONNECTION_MSG =
   "Lost connection to the machine. Please wait for it to reconnect and try again.";
 
@@ -50,7 +60,7 @@ function Kiosk() {
   const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
   const [machineName, setMachineName] = useState<string | null>(null);
   const [camName, setCamName] = useState<string | undefined>(undefined);
-  const [showTracker, setShowTracker] = useState(false);
+  const [trackerMode, setTrackerMode] = useState<TrackerMode>("hidden");
 
   // Viam connection state
   const {
@@ -100,12 +110,13 @@ function Kiosk() {
     };
   }, [connected, viamConn]);
 
-  // Cold-start visibility: a fresh app instance starts with showTracker=false,
+  // Cold-start visibility: a fresh app instance starts with trackerMode='hidden',
   // so a second tab/instance opened while the machine is already brewing for
   // someone else would never see the queue. Poll getQueue at the page level
-  // and flip showTracker on whenever the backend reports any orders. The
+  // and flip into 'auto' whenever the backend reports any orders. The
   // OrderTracker still owns its own per-second polling for rendering and
   // calls onEmpty -> handleTrackerEmpty to hide itself once the queue drains.
+  // We only promote 'hidden' -> 'auto' here; 'manual' stays put.
   useEffect(() => {
     if (!connected || !viamConn) return;
     let cancelled = false;
@@ -114,7 +125,9 @@ function Kiosk() {
       try {
         const q = await getQueue(viamConn);
         if (cancelled) return;
-        if (q.orders.length > 0) setShowTracker(true);
+        if (q.orders.length > 0) {
+          setTrackerMode((m) => (m === "hidden" ? "auto" : m));
+        }
       } catch (err) {
         console.error("[app] queue visibility poll failed:", err);
       }
@@ -218,7 +231,7 @@ function Kiosk() {
         pronunciation: undefined,
       });
       setStep("confirmation");
-      setShowTracker(true);
+      setTrackerMode("auto");
     } catch (err) {
       console.error("prepare_order failed:", err);
       const msg = err instanceof Error ? err.message : String(err);
@@ -265,9 +278,39 @@ function Kiosk() {
     setAppError(null);
   }, []);
 
+  // The 'auto' tracker fires onEmpty when the queue drains; 'manual' is
+  // persistent and never fires this. Always collapse to 'hidden'.
   const handleTrackerEmpty = useCallback(() => {
-    setShowTracker(false);
+    setTrackerMode("hidden");
   }, []);
+
+  // × on the manual takeover: if the queue still has work, drop back to the
+  // 'auto' right-rail so the customer keeps seeing it; otherwise collapse to
+  // 'hidden'. We check the queue here because OrderTracker's hasSeenOrders
+  // ref resets when it remounts in non-persistent mode, so we can't rely on
+  // its onEmpty path to collapse an already-empty queue.
+  const handleTrackerClose = useCallback(async () => {
+    if (!viamConn) {
+      setTrackerMode("hidden");
+      return;
+    }
+    try {
+      const q = await getQueue(viamConn);
+      setTrackerMode(q.orders.length > 0 ? "auto" : "hidden");
+    } catch {
+      setTrackerMode("hidden");
+    }
+  }, [viamConn]);
+
+  // Escape closes the manual takeover, mirroring the × button.
+  useEffect(() => {
+    if (trackerMode !== "manual") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") handleTrackerClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [trackerMode, handleTrackerClose]);
 
   // --- Render the left panel content based on step ---
   function renderStep() {
@@ -405,7 +448,38 @@ function Kiosk() {
         >
           Place an order
         </button>
+
+        {trackerMode === "hidden" && (
+          <button
+            onClick={() => setTrackerMode("manual")}
+            disabled={!connected}
+            className="anim-in-hero mt-6 text-sm font-mono text-neutral-400 uppercase tracking-widest hover:text-neutral-600 transition-colors disabled:text-neutral-300 disabled:cursor-not-allowed disabled:hover:text-neutral-300"
+            style={{ animationDelay: welcomeBack ? "1600ms" : "1400ms" }}
+          >
+            View queue
+          </button>
+        )}
       </main>
+    );
+  }
+
+  // Manual "View queue" mode takes over the full screen: larger cam feed on
+  // the left, order list on the right. The ordering flow is hidden.
+  if (trackerMode === "manual") {
+    return (
+      <div className="h-dvh flex">
+        <div className="flex-1 min-w-0 h-full bg-neutral-900">
+          <CamFeed viamConn={viamConn} cameraName={camName} fill />
+        </div>
+        <div className={`${TRACKER_PANEL_WIDTH} shrink-0 border-l border-neutral-200`}>
+          <OrderTracker
+            viamConn={viamConn}
+            onEmpty={handleTrackerEmpty}
+            persistent
+            onClose={handleTrackerClose}
+          />
+        </div>
+      </div>
     );
   }
 
@@ -417,9 +491,13 @@ function Kiosk() {
       </div>
 
       {/* Right panel: live cam feed + order tracker */}
-      {showTracker && (
-        <div className="w-[340px] shrink-0 border-l border-neutral-200 flex flex-col">
-          <CamFeed viamConn={viamConn} cameraName={camName} />
+      {trackerMode === "auto" && (
+        <div className={`${TRACKER_PANEL_WIDTH} shrink-0 border-l border-neutral-200 flex flex-col`}>
+          <CamFeed
+            viamConn={viamConn}
+            cameraName={camName}
+            onExpand={() => setTrackerMode("manual")}
+          />
           <div className="flex-1 min-h-0">
             <OrderTracker
               viamConn={viamConn}
