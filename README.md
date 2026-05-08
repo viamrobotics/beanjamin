@@ -251,6 +251,7 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
 | `cup_max_distance_from_target_mm`     | float  | No       | Hard cutoff: detections beyond this distance from `expected_cup_position_mm` are dropped. Default 300 mm. |
 | `cup_detection_retries`               | int    | No       | Number of additional vision calls if the first returns 0 detections. Default 0. |
 | `cup_detection_retry_sleep_ms`        | int    | No       | Sleep between detection retries in milliseconds. Default 250. |
+| `detections_are_world_frame`          | bool   | No       | When `true`, skip the camera→world transform on detections. Default `false` (lift via the frame system, which is correct for `viam:vision:detections-to-segments`). Flip to `true` if your segmenter is known to return world-frame centroids, or to bypass the lift while debugging. |
 
 **Dynamic cup pickup — required pose on the claws pose switcher (`claws_pose_switcher_name`):**
 

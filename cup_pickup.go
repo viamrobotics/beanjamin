@@ -123,9 +123,19 @@ func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, er
 		return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: no cups detected after %d attempts", maxAttempts)
 	}
 
-	fs, fsInputs, err := s.currentInputs(ctx)
-	if err != nil {
-		return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %w", err)
+	// Frame system inputs are only needed when we lift camera-frame detections
+	// into world. Skip the lookup entirely when the operator has declared
+	// detections already arrive in world frame.
+	var fs *referenceframe.FrameSystem
+	var fsInputs referenceframe.FrameSystemInputs
+	if !s.cfg.DetectionsAreWorldFrame {
+		var err error
+		fs, fsInputs, err = s.currentInputs(ctx)
+		if err != nil {
+			return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %w", err)
+		}
+	} else {
+		s.logger.Infof("dynamic cup pickup: detections_are_world_frame=true — skipping camera-to-world transform")
 	}
 
 	centroids := make([]r3.Vector, 0, len(objects))
@@ -134,9 +144,15 @@ func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, er
 			continue
 		}
 		local := obj.Geometry.Pose().Point()
-		world, err := cameraToWorld(fs, fsInputs, s.cupCameraName, local)
-		if err != nil {
-			return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %w", err)
+		var world r3.Vector
+		if s.cfg.DetectionsAreWorldFrame {
+			world = local
+		} else {
+			var err error
+			world, err = cameraToWorld(fs, fsInputs, s.cupCameraName, local)
+			if err != nil {
+				return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %w", err)
+			}
 		}
 		s.logger.Debugf("dynamic cup pickup: detection at camera-local %v -> world %v", local, world)
 		centroids = append(centroids, world)
@@ -146,7 +162,20 @@ func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, er
 	}
 
 	target := r3.Vector{X: s.cfg.ExpectedCupPositionMm.X, Y: s.cfg.ExpectedCupPositionMm.Y, Z: s.cfg.ExpectedCupPositionMm.Z}
-	chosen, idx, err := selectCupCentroid(centroids, target, s.cfg.CupMaxDistanceFromTargetMm)
+	cutoff := s.cfg.CupMaxDistanceFromTargetMm
+	s.logger.Infof("dynamic cup pickup: target=(x=%.1f, y=%.1f, z=%.1f) cutoff=%.0fmm — %d candidate(s):",
+		target.X, target.Y, target.Z, cutoff, len(centroids))
+	for i, c := range centroids {
+		d := c.Sub(target).Norm()
+		annotation := ""
+		if cutoff > 0 && d > cutoff {
+			annotation = " [REJECTED — beyond cutoff]"
+		}
+		s.logger.Infof("  candidate[%d] world=(x=%.1f, y=%.1f, z=%.1f) distance=%.1fmm%s",
+			i, c.X, c.Y, c.Z, d, annotation)
+	}
+
+	chosen, idx, err := selectCupCentroid(centroids, target, cutoff)
 	if err != nil {
 		return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %d detection(s) found but %w", len(centroids), err)
 	}

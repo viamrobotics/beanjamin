@@ -104,6 +104,12 @@ type Config struct {
 	CupMaxDistanceFromTargetMm float64       `json:"cup_max_distance_from_target_mm,omitempty"`
 	CupDetectionRetries        int           `json:"cup_detection_retries,omitempty"`
 	CupDetectionRetrySleepMs   int           `json:"cup_detection_retry_sleep_ms,omitempty"`
+	// DetectionsAreWorldFrame skips the camera->world transform on vision
+	// detections when true. The default-false path is correct for vision
+	// services like detections-to-segments that return centroids in the
+	// camera's local 3D frame. Flip to true if your segmenter is known to
+	// return world-frame results, or to bypass the lift while debugging.
+	DetectionsAreWorldFrame bool `json:"detections_are_world_frame,omitempty"`
 
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
 
