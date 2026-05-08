@@ -246,21 +246,19 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
 | `cup_vision_service_name`             | string | When `dynamic_cup_pickup` is enabled | Name of a `rdk:service:vision` segmenter that returns cup detections via `GetObjectPointClouds`. |
 | `src_camera_name`                     | string | When `dynamic_cup_pickup` is enabled | Source camera the vision service segments from. Must be present in the frame system. |
 | `expected_cup_position_mm`            | object | When `dynamic_cup_pickup` is enabled | World-frame heuristic point `{ "x": number, "y": number, "z": number }`. The detection closest to this point wins. |
+| `cup_approach_relative_pose`          | object | When `dynamic_cup_pickup` is enabled | 6-DoF offset composed onto the detected cup centroid for the pre-grab pose. Shape `{ "x", "y", "z", "o_x", "o_y", "o_z", "theta" }`; same gripper orientation as the grab pose but translated further back from the cup. **Not** stored on the pose switch — it's an offset, not a real world-frame pose. |
+| `cup_grab_relative_pose`              | object | When `dynamic_cup_pickup` is enabled | 6-DoF offset composed onto the detected cup centroid for the final grab pose. Same shape as `cup_approach_relative_pose`; gripper orientation for a side-grab with a small translation onto the cup. |
 | `cup_max_distance_from_target_mm`     | float  | No       | Hard cutoff: detections beyond this distance from `expected_cup_position_mm` are dropped. Default 300 mm. |
 | `cup_detection_retries`               | int    | No       | Number of additional vision calls if the first returns 0 detections. Default 0. |
 | `cup_detection_retry_sleep_ms`        | int    | No       | Sleep between detection retries in milliseconds. Default 250. |
 
-**Dynamic cup pickup — required poses on the claws pose switcher (`claws_pose_switcher_name`):**
+**Dynamic cup pickup — required pose on the claws pose switcher (`claws_pose_switcher_name`):**
 
-When `dynamic_cup_pickup` is enabled, three additional named poses must exist on the claws pose switch:
+When `dynamic_cup_pickup` is enabled, one additional named pose must exist on the claws pose switch:
 
-| Pose name                    | Type                       | Description |
-| ---------------------------- | -------------------------- | ----------- |
-| `cup_observe_pose`           | Absolute world pose        | Arm moves here before querying the vision service to get a clear view of the cup workspace. |
-| `cup_approach_relative_pose` | Offset composed onto centroid | Pre-grab pose; same gripper orientation as the grab pose but translated further back from the cup. |
-| `cup_grab_relative_pose`     | Offset composed onto centroid | Final grab pose; gripper orientation for a side-grab with a small translation onto the cup. |
-
-The `_relative_pose` entries are interpreted as offsets composed onto the runtime-detected cup centroid. Their `reference_frame` field is ignored; the translation and orientation are applied directly in the frame of the detected centroid.
+| Pose name           | Type                | Description |
+| ------------------- | ------------------- | ----------- |
+| `cup_observe_pose`  | Absolute world pose | Arm moves here before querying the vision service to get a clear view of the cup workspace. |
 
 ### DoCommand
 

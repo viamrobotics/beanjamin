@@ -1,12 +1,13 @@
 // Package beanjamin: dynamic cup pickup.
 //
 // pickCupDynamic replaces the static empty_cup grab in setCupForCoffee
-// when dynamic_cup_pickup is enabled. It moves the arm to a configured
-// observe pose, calls a vision service for cup detections, lifts each
-// centroid into world frame, picks the closest detection within range,
-// composes the configured approach/grab relative poses (read from the
-// claws pose switch by name), and feeds the resulting world poses to
-// moveToRawPose.
+// when dynamic_cup_pickup is enabled. It moves the arm to the configured
+// cup_observe_pose (a real world-frame pose on the claws pose switch),
+// calls a vision service for cup detections, lifts each centroid into
+// world frame, picks the closest detection within range, composes the
+// configured approach/grab relative poses (from Config — they are
+// offsets, not switch-resident world-frame poses) onto the centroid,
+// and feeds the resulting world poses to moveToRawPose.
 package beanjamin
 
 import (
@@ -50,13 +51,22 @@ func selectCupCentroid(centroids []r3.Vector, target r3.Vector, maxDistMm float6
 
 // composeCupPose builds a world-frame target pose by composing a relative
 // pose (translation + orientation) onto a centroid point with identity
-// orientation. The relative pose is read from the claws pose switch under
-// names like cup_grab_relative_pose / cup_approach_relative_pose; its
-// reference_frame field is intentionally ignored — these poses are
-// interpreted as offsets from the runtime centroid, not absolute poses.
+// orientation. The relative pose comes from Config (cup_approach_relative_pose
+// / cup_grab_relative_pose) and is interpreted as an offset onto the runtime
+// centroid — these are offsets, not absolute world-frame poses.
 func composeCupPose(centroidWorld r3.Vector, relative spatialmath.Pose) spatialmath.Pose {
 	centroid := spatialmath.NewPoseFromPoint(centroidWorld)
 	return spatialmath.Compose(centroid, relative)
+}
+
+// relativePoseToSpatial converts a Config RelativePose into a spatialmath.Pose
+// suitable for composeCupPose. Translation is millimeters; orientation is
+// OrientationVectorDegrees.
+func relativePoseToSpatial(r *RelativePose) spatialmath.Pose {
+	return spatialmath.NewPose(
+		r3.Vector{X: r.X, Y: r.Y, Z: r.Z},
+		&spatialmath.OrientationVectorDegrees{OX: r.OX, OY: r.OY, OZ: r.OZ, Theta: r.Theta},
+	)
 }
 
 // cameraToWorld lifts a point given in the camera's local frame into the
@@ -148,9 +158,9 @@ func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, er
 
 // pickCupDynamic moves the arm to the configured cup_observe_pose, observes
 // the closest cup via the vision service, and executes a side-grab using
-// the cup_approach_relative_pose / cup_grab_relative_pose entries from the
-// claws pose switch composed onto the detected centroid. Called by
-// setCupForCoffee when DynamicCupPickup=true.
+// the cup_approach_relative_pose / cup_grab_relative_pose offsets from
+// Config composed onto the detected centroid. Called by setCupForCoffee
+// when DynamicCupPickup=true.
 func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 	ctx, span := trace.StartSpan(ctx, "beanjamin::dynamic_cup_pickup")
 	defer span.End()
@@ -180,24 +190,14 @@ func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 		return err
 	}
 
-	// 3. Fetch relative poses from the claws pose switch.
-	approachRel, err := s.fetchPose(ctx, "coffee-claws-middle", "cup_approach_relative_pose")
-	if err != nil {
-		return fmt.Errorf("dynamic_cup_pickup: %w", err)
-	}
-	grabRel, err := s.fetchPose(ctx, "coffee-claws-middle", "cup_grab_relative_pose")
-	if err != nil {
-		return fmt.Errorf("dynamic_cup_pickup: %w", err)
-	}
-
-	// 4. Compose into world-frame *poseData for moveToRawPose.
+	// 3. Compose configured offsets onto the centroid → world-frame *poseData.
 	approachPD := &poseData{
-		pose:          composeCupPose(centroidWorld, approachRel.pose),
+		pose:          composeCupPose(centroidWorld, relativePoseToSpatial(s.cfg.CupApproachRelativePose)),
 		refFrame:      referenceframe.World,
 		componentName: "coffee-claws-middle",
 	}
 	grabPD := &poseData{
-		pose:          composeCupPose(centroidWorld, grabRel.pose),
+		pose:          composeCupPose(centroidWorld, relativePoseToSpatial(s.cfg.CupGrabRelativePose)),
 		refFrame:      referenceframe.World,
 		componentName: "coffee-claws-middle",
 	}

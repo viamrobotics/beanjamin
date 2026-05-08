@@ -17,6 +17,20 @@ func validBaseConfig() *Config {
 	}
 }
 
+// validDynamicConfig returns a Config with every field required by Validate
+// when DynamicCupPickup=true populated to a valid (zero-value) entry, so
+// success-path tests can flip a single field to exercise that branch alone.
+func validDynamicConfig() *Config {
+	cfg := validBaseConfig()
+	cfg.DynamicCupPickup = true
+	cfg.CupVisionServiceName = "vis"
+	cfg.SrcCameraName = "cam"
+	cfg.ExpectedCupPositionMm = &Vec3Mm{}
+	cfg.CupApproachRelativePose = &RelativePose{}
+	cfg.CupGrabRelativePose = &RelativePose{}
+	return cfg
+}
+
 func TestValidate_DynamicCupPickup_OffLeavesUnsetFieldsAlone(t *testing.T) {
 	cfg := validBaseConfig()
 	if _, _, err := cfg.Validate(""); err != nil {
@@ -57,12 +71,26 @@ func TestValidate_DynamicCupPickup_RequiresExpectedCupPosition(t *testing.T) {
 	}
 }
 
+func TestValidate_DynamicCupPickup_RequiresApproachRelativePose(t *testing.T) {
+	cfg := validDynamicConfig()
+	cfg.CupApproachRelativePose = nil
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "cup_approach_relative_pose") {
+		t.Fatalf("expected cup_approach_relative_pose required error, got %v", err)
+	}
+}
+
+func TestValidate_DynamicCupPickup_RequiresGrabRelativePose(t *testing.T) {
+	cfg := validDynamicConfig()
+	cfg.CupGrabRelativePose = nil
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "cup_grab_relative_pose") {
+		t.Fatalf("expected cup_grab_relative_pose required error, got %v", err)
+	}
+}
+
 func TestValidate_DynamicCupPickup_DefaultsMaxDistance(t *testing.T) {
-	cfg := validBaseConfig()
-	cfg.DynamicCupPickup = true
-	cfg.CupVisionServiceName = "vis"
-	cfg.SrcCameraName = "cam"
-	cfg.ExpectedCupPositionMm = &Vec3Mm{}
+	cfg := validDynamicConfig()
 	if _, _, err := cfg.Validate(""); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -72,11 +100,7 @@ func TestValidate_DynamicCupPickup_DefaultsMaxDistance(t *testing.T) {
 }
 
 func TestValidate_DynamicCupPickup_PreservesExplicitMaxDistance(t *testing.T) {
-	cfg := validBaseConfig()
-	cfg.DynamicCupPickup = true
-	cfg.CupVisionServiceName = "vis"
-	cfg.SrcCameraName = "cam"
-	cfg.ExpectedCupPositionMm = &Vec3Mm{}
+	cfg := validDynamicConfig()
 	cfg.CupMaxDistanceFromTargetMm = 500
 	if _, _, err := cfg.Validate(""); err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -87,11 +111,7 @@ func TestValidate_DynamicCupPickup_PreservesExplicitMaxDistance(t *testing.T) {
 }
 
 func TestValidate_DynamicCupPickup_RejectsNegativeRetries(t *testing.T) {
-	cfg := validBaseConfig()
-	cfg.DynamicCupPickup = true
-	cfg.CupVisionServiceName = "vis"
-	cfg.SrcCameraName = "cam"
-	cfg.ExpectedCupPositionMm = &Vec3Mm{}
+	cfg := validDynamicConfig()
 	cfg.CupDetectionRetries = -1
 	_, _, err := cfg.Validate("")
 	if err == nil || !strings.Contains(err.Error(), "cup_detection_retries") {
@@ -100,11 +120,7 @@ func TestValidate_DynamicCupPickup_RejectsNegativeRetries(t *testing.T) {
 }
 
 func TestValidate_DynamicCupPickup_AppendsDeps(t *testing.T) {
-	cfg := validBaseConfig()
-	cfg.DynamicCupPickup = true
-	cfg.CupVisionServiceName = "vis"
-	cfg.SrcCameraName = "cam"
-	cfg.ExpectedCupPositionMm = &Vec3Mm{}
+	cfg := validDynamicConfig()
 	req, _, err := cfg.Validate("")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
