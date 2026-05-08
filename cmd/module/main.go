@@ -5,6 +5,7 @@ import (
 	"beanjamin/customerdetector"
 	"beanjamin/dialcontrolmotion"
 	"beanjamin/multiposesexecutionswitch"
+	"beanjamin/tactileprobe"
 	"beanjamin/texttospeech"
 
 	"go.viam.com/rdk/components/sensor"
@@ -23,5 +24,6 @@ func main() {
 		resource.APIModel{API: sensor.API, Model: beanjamin.OrderSensor},
 		resource.APIModel{API: generic.API, Model: dialcontrolmotion.Model},
 		resource.APIModel{API: generic.API, Model: customerdetector.Model},
+		resource.APIModel{API: generic.API, Model: tactileprobe.Model},
 	)
 }

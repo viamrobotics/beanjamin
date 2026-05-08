@@ -2,6 +2,7 @@ package multiposesexecutionswitch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	vmodutils "github.com/erh/vmodutils"
 	"github.com/golang/geo/r3"
 	commonpb "go.viam.com/api/common/v1"
 	"go.viam.com/rdk/module/trace"
@@ -19,6 +21,7 @@ import (
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/services/motion"
 	"go.viam.com/rdk/spatialmath"
+	"go.viam.com/rdk/utils"
 )
 
 var Model = resource.NewModel("viam", "beanjamin", "multi-poses-execution-switch")
@@ -302,6 +305,12 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 		}, nil
 	}
 
+	if rawSet, ok := cmd["set_pose_value"]; ok {
+		_, cmdSpan := trace.StartSpan(ctx, "multi-poses-execution-switch::set_pose_value")
+		defer cmdSpan.End()
+		return s.handleSetPoseValue(ctx, rawSet)
+	}
+
 	if name, ok := cmd["get_pose_by_name"].(string); ok {
 		_, cmdSpan := trace.StartSpan(ctx, "multi-poses-execution-switch::get_pose_by_name["+name+"]")
 		defer cmdSpan.End()
@@ -326,9 +335,108 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 		return nil, err
 	}
 
-	err := fmt.Errorf("unknown command, supported commands: set_position_by_name, get_current_position_name, get_pose_by_name")
+	err := fmt.Errorf("unknown command, supported commands: set_position_by_name, get_current_position_name, get_pose_by_name, set_pose_value")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
+}
+
+// handleSetPoseValue replaces an existing pose (or appends a new one) with an
+// absolute pose_value. Any baseline / translation / orientation overrides on a
+// replaced entry are dropped — the entry becomes purely absolute. Persists the
+// updated config back to the cloud so the change survives a rebuild.
+//
+// Body shape (flat or nested):
+//
+//	{"name": "...", "x": .., "y": .., "z": .., "o_x": .., "o_y": .., "o_z": .., "theta": ..}
+//	{"name": "...", "pose_value": {x, y, z, o_x, o_y, o_z, theta}}
+func (s *multiPosesExecutionSwitch) handleSetPoseValue(ctx context.Context, raw interface{}) (map[string]interface{}, error) {
+	body, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("set_pose_value: expected object, got %T", raw)
+	}
+	name, _ := body["name"].(string)
+	if name == "" {
+		return nil, fmt.Errorf("set_pose_value: name is required")
+	}
+	pv, err := extractPoseValue(body)
+	if err != nil {
+		return nil, fmt.Errorf("set_pose_value: %w", err)
+	}
+
+	s.mu.Lock()
+	idx := -1
+	for i, p := range s.cfg.Poses {
+		if p.PoseName == name {
+			idx = i
+			break
+		}
+	}
+	if idx >= 0 {
+		s.cfg.Poses[idx] = PoseConf{PoseName: name, PoseValue: pv}
+	} else {
+		s.cfg.Poses = append(s.cfg.Poses, PoseConf{PoseName: name, PoseValue: pv})
+		s.poseNames = append(s.poseNames, name)
+	}
+	s.resolvedPoses = resolvePoses(s.cfg.Poses)
+	cfgCopy := *s.cfg
+	cfgCopy.Poses = append([]PoseConf(nil), s.cfg.Poses...)
+	s.mu.Unlock()
+
+	if err := s.persistConfig(ctx, &cfgCopy); err != nil {
+		return nil, fmt.Errorf("persist config: %w", err)
+	}
+
+	s.logger.Infof("set_pose_value: %q -> (%.2f, %.2f, %.2f | %.3f, %.3f, %.3f, %.2f°)",
+		name, pv.X, pv.Y, pv.Z, pv.OX, pv.OY, pv.OZ, pv.Theta)
+	return map[string]interface{}{
+		"success":  true,
+		"name":     name,
+		"replaced": idx >= 0,
+	}, nil
+}
+
+func extractPoseValue(body map[string]interface{}) (*commonpb.Pose, error) {
+	if nested, ok := body["pose_value"].(map[string]interface{}); ok {
+		body = nested
+	}
+	get := func(key string) (float64, error) {
+		v, ok := body[key]
+		if !ok {
+			return 0, fmt.Errorf("missing field %q", key)
+		}
+		f, ok := v.(float64)
+		if !ok {
+			return 0, fmt.Errorf("field %q must be numeric, got %T", key, v)
+		}
+		return f, nil
+	}
+	pv := &commonpb.Pose{}
+	for _, kv := range []struct {
+		k    string
+		dest *float64
+	}{
+		{"x", &pv.X}, {"y", &pv.Y}, {"z", &pv.Z},
+		{"o_x", &pv.OX}, {"o_y", &pv.OY}, {"o_z", &pv.OZ}, {"theta", &pv.Theta},
+	} {
+		v, err := get(kv.k)
+		if err != nil {
+			return nil, err
+		}
+		*kv.dest = v
+	}
+	return pv, nil
+}
+
+func (s *multiPosesExecutionSwitch) persistConfig(ctx context.Context, cfg *Config) error {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	var attrMap utils.AttributeMap
+	if err := json.Unmarshal(b, &attrMap); err != nil {
+		return fmt.Errorf("attribute map: %w", err)
+	}
+	return vmodutils.UpdateComponentCloudAttributesFromModuleEnv(ctx, s.name, attrMap, s.logger)
 }
 
 func (s *multiPosesExecutionSwitch) GetNumberOfPositions(ctx context.Context, extra map[string]interface{}) (uint32, []string, error) {

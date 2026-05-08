@@ -4,12 +4,13 @@ go 1.25.1
 
 require (
 	cloud.google.com/go/texttospeech v1.16.0
+	github.com/erh/vmodutils v0.3.11
 	github.com/golang/geo v0.0.0-20230421003525-6adc56603217
 	github.com/google/uuid v1.6.0
 	github.com/viam-labs/motion-tools v1.15.1
-	go.viam.com/api v0.1.533
-	go.viam.com/rdk v0.119.2
-	go.viam.com/utils v0.4.13
+	go.viam.com/api v0.1.539
+	go.viam.com/rdk v0.122.0-rc0.0.20260416213600-4e6f5fa40ff2
+	go.viam.com/utils v0.4.19
 	gonum.org/v1/gonum v0.16.0
 	google.golang.org/api v0.247.0
 )

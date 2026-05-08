@@ -44,6 +44,12 @@
       "api": "rdk:service:generic",
       "model": "viam:beanjamin:customer-detector",
       "short_description": "Identifies return customers via facial recognition using the face-identification vision service."
+    },
+    {
+      "api": "rdk:service:generic",
+      "model": "viam:beanjamin:tactile-probe",
+      "short_description": "Tactile touch-off calibration: probe surfaces with the arm and write computed poses to a multi-poses-execution-switch.",
+      "markdown_link": "README.md#model-viambeanjamintactile-probe"
     }
   ],
   "entrypoint": "bin/beanjamin",

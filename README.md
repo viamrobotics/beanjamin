@@ -9,6 +9,7 @@ The `viam:beanjamin` module provides these models for arm-based automation workf
 5. **`viam:beanjamin:order-sensor`** - A sensor that yields one reading per completed order (start/end timestamps and outcome) when wired from the coffee service.
 6. **`viam:beanjamin:dial-control-motion`** - A generic service that translates Stream Deck dial inputs into relative arm motions.
 7. **`viam:beanjamin:customer-detector`** - A generic service that identifies return customers via facial recognition using the [`viam:vision:face-identification`](https://github.com/viam-modules/viam-face-identification) vision service.
+8. **`viam:beanjamin:tactile-probe`** - A generic service that performs tactile touch-off calibration: probe surfaces with the arm and persist computed poses into a `multi-poses-execution-switch`.
 
 ---
 
@@ -177,6 +178,34 @@ Returns:
   "component_name": "my-arm"
 }
 ```
+
+**`set_pose_value`** - Replace an existing pose's absolute coordinates, or append a new pose. The change is persisted to the cloud config so it survives restarts. Used by calibration services to write computed poses into the switch.
+
+When replacing an existing entry, any `baseline` / `translation` / `orientation` overrides on that entry are dropped — the entry becomes purely absolute.
+
+```json
+{
+  "set_pose_value": {
+    "name": "button",
+    "x": 245.1, "y": 0.0, "z": 312.7,
+    "o_x": 1, "o_y": 0, "o_z": 0,
+    "theta": 0
+  }
+}
+```
+
+A nested `pose_value` object is also accepted, matching the configuration schema:
+
+```json
+{
+  "set_pose_value": {
+    "name": "button",
+    "pose_value": { "x": 245.1, "y": 0.0, "z": 312.7, "o_x": 1, "o_y": 0, "o_z": 0, "theta": 0 }
+  }
+}
+```
+
+Returns `{"success": true, "name": "...", "replaced": true|false}`. `replaced` is `false` when the call appended a new pose entry.
 
 ---
 
@@ -760,4 +789,125 @@ viam robot part motion set-pose \
 Note: Only the pose values specified will be modified. Example if you only set `-x 100`, it will move the component by just changing the X value of its current pose
 
 Once you've found the right poses, add them to your `multi-poses-execution-switch` configuration.
+
+---
+
+## Model: `viam:beanjamin:tactile-probe`
+
+**API:** `rdk:service:generic`
+
+Tactile touch-off calibration. The service drives the arm in a chosen direction and treats a `MoveToPosition` failure as a contact event — reading the EEF position at the moment of failure as the contact point. It can probe a single surface or run a full calibration: probe down to find a bottom index surface, probe both sides at a fixed clearance to find the horizontal centerline, then compute a button pose from a configured object profile and (optionally) write it into a `multi-poses-execution-switch` via that switch's `set_pose_value` command.
+
+> **Contact detection requirement.** This model assumes the arm halts (and `MoveToPosition` returns an error) on physical contact above some force threshold. On most ufactory arms this is configured via collision-sensitivity settings on the arm component itself; tune those before running calibration.
+
+### Configuration
+
+```json
+{
+  "arm_name": "my-arm",
+  "pose_switcher_name": "filter-poses-switch",
+  "probe_max_travel_mm": 100,
+  "contact_retract_mm": 5,
+  "profiles": {
+    "espresso-machine": {
+      "button_height_above_bottom_mm": 38,
+      "side_probe_above_bottom_mm": 5,
+      "max_width_mm": 90,
+      "bottom_axis": "-z",
+      "center_axis": "y",
+      "probe_count": 3
+    }
+  }
+}
+```
+
+| Name                 | Type   | Required | Default | Description                                                                                                                       |
+| -------------------- | ------ | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `arm_name`           | string | Yes      | —       | Arm component to probe with.                                                                                                      |
+| `pose_switcher_name` | string | No       | —       | If set, `calibrate {save_as: ...}` writes the computed pose into this `multi-poses-execution-switch` via its `set_pose_value` command. |
+| `probe_max_travel_mm`| float  | No       | `100`   | Upper bound on per-probe travel. Probe aborts if no contact is registered within this distance.                                   |
+| `contact_retract_mm` | float  | No       | `5`     | Distance the arm retracts after registering a contact, before moving on to the next motion.                                       |
+| `profiles`           | object | No       | `{}`    | Named object profiles. Each profile describes the geometry of one machine/object the calibration will be run on.                   |
+
+#### Profile fields
+
+| Name                            | Type   | Required | Default | Description                                                                                                  |
+| ------------------------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------------------------------------ |
+| `button_height_above_bottom_mm` | float  | Yes      | —       | Vertical offset of the button above the bottom index surface.                                                |
+| `side_probe_above_bottom_mm`    | float  | No       | `5`     | Clearance above the just-found bottom at which the side probes happen.                                       |
+| `max_width_mm`                  | float  | No       | —       | Caps per-side probe travel. Falls back to the service-level `probe_max_travel_mm` when zero.                 |
+| `bottom_axis`                   | string | No       | `-z`    | Direction the arm probes to find the bottom index surface. One of `+x, -x, +y, -y, +z, -z`.                  |
+| `center_axis`                   | string | No       | `y`     | Axis along which the arm probes both directions to find the object's centerline. The probe is run as `+axis` then `-axis`. |
+| `probe_count`                   | int    | No       | `1`     | How many times each surface is probed; results are averaged.                                                 |
+
+### DoCommand
+
+**`set_profile`** — Add or replace a named profile. Persists to the cloud config so the change survives restarts.
+
+```json
+{
+  "set_profile": true,
+  "name": "espresso-machine",
+  "profile": {
+    "button_height_above_bottom_mm": 38,
+    "max_width_mm": 90,
+    "probe_count": 3
+  }
+}
+```
+
+**`delete_profile`** — Remove a profile by name.
+
+```json
+{ "delete_profile": true, "name": "espresso-machine" }
+```
+
+**`list_profiles`** — Return all configured profiles.
+
+```json
+{ "list_profiles": true }
+```
+
+**`probe_bottom`** — Run only the bottom-axis probe `probe_count` times. Returns the per-iteration contacts and their mean. Useful for verifying contact detection works before a full calibration. The `profile` field can be either a string (name from config) or an inline object.
+
+```json
+{ "probe_bottom": true, "profile": "espresso-machine" }
+```
+
+**`probe_width`** — At the current arm height, run the +center and -center probes and return the midpoint. Caller is responsible for first positioning the arm at the desired probe height (typically a fixed clearance above a previously-found bottom).
+
+```json
+{ "probe_width": true, "profile": "espresso-machine" }
+```
+
+**`calibrate`** — Run the full sequence from the current arm pose:
+
+1. Probe `bottom_axis` `probe_count` times. Average → bottom point.
+2. Move to a side-probe pose: same coords as the start, but with the bottom-axis component set to the just-found bottom plus `side_probe_above_bottom_mm` of clearance.
+3. Probe `+center_axis`, then `-center_axis`, each `probe_count` times. Average → centerline.
+4. Compose the button pose: center-axis = found centerline, bottom-axis = found bottom + `button_height_above_bottom_mm`, all other components and orientation inherited from the start pose.
+5. Move the arm back to the start pose.
+6. If `save_as` is set and `pose_switcher_name` is configured, call `set_pose_value` on the switch to persist the pose under that name.
+
+```json
+{ "calibrate": true, "profile": "espresso-machine", "save_as": "espresso-button" }
+```
+
+Returns:
+
+```json
+{
+  "button_pose":  {"x": 245.1, "y": 0.0, "z": 312.7, "o_x": 1, "o_y": 0, "o_z": 0, "theta": 0},
+  "bottom_mean":  {"x": 245.1, "y": 0.0, "z": 274.7},
+  "center_value": 0.0,
+  "profile":      "espresso-machine",
+  "saved_as":     "espresso-button"
+}
+```
+
+### Workflow
+
+1. Drive the arm — using the dial controller or pose presets — to a known "start pose" near the object: directly above where you want to probe down, with the tool oriented as it will need to be when pressing the button.
+2. Call `calibrate {profile: "...", save_as: "..."}`.
+3. The arm probes bottom, sides, computes the button pose, returns to start, and (if `save_as` was given) the new pose is now an absolute entry on the configured pose switcher — usable via `set_position_by_name` and visible in the cloud config.
 
