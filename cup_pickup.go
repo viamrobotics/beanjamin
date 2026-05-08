@@ -123,19 +123,9 @@ func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, er
 		return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: no cups detected after %d attempts", maxAttempts)
 	}
 
-	// Frame system inputs are only needed when we lift camera-frame detections
-	// into world. Skip the lookup entirely when the operator has declared
-	// detections already arrive in world frame.
-	var fs *referenceframe.FrameSystem
-	var fsInputs referenceframe.FrameSystemInputs
-	if !s.cfg.DetectionsAreWorldFrame {
-		var err error
-		fs, fsInputs, err = s.currentInputs(ctx)
-		if err != nil {
-			return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %w", err)
-		}
-	} else {
-		s.logger.Infof("dynamic cup pickup: detections_are_world_frame=true — skipping camera-to-world transform")
+	fs, fsInputs, err := s.currentInputs(ctx)
+	if err != nil {
+		return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %w", err)
 	}
 
 	centroids := make([]r3.Vector, 0, len(objects))
@@ -144,15 +134,9 @@ func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, er
 			continue
 		}
 		local := obj.Geometry.Pose().Point()
-		var world r3.Vector
-		if s.cfg.DetectionsAreWorldFrame {
-			world = local
-		} else {
-			var err error
-			world, err = cameraToWorld(fs, fsInputs, s.cupCameraName, local)
-			if err != nil {
-				return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %w", err)
-			}
+		world, err := cameraToWorld(fs, fsInputs, s.cupCameraName, local)
+		if err != nil {
+			return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %w", err)
 		}
 		if floor := s.cfg.CupCentroidMinZMm; floor != 0 && world.Z < floor {
 			s.logger.Infof("dynamic cup pickup: flooring centroid Z from %.1f to %.1f (cup_centroid_min_z_mm)",
