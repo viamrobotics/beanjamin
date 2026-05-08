@@ -112,7 +112,9 @@ export default function Home() {
         .catch((e) =>
           console.error("failed to load customer leaderboard:", e)
         );
-      loadLeaderboard(currentClient, "data.readings.drink")
+      loadLeaderboard(currentClient, "data.readings.drink", {
+        "data.readings.order_ok": true,
+      })
         .then((d) => !cancelled && setDrinkLeaderboard(d))
         .catch((e) =>
           console.error("failed to load drink leaderboard:", e)

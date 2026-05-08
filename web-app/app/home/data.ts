@@ -18,6 +18,7 @@ export interface RobotDayRow {
   robotId: string;
   robotName: string;
   count: number;
+  errorCount: number;
 }
 
 export interface DailyOrderCount {
@@ -165,6 +166,7 @@ export async function loadDailyOrderCounts(
   const results = await runMQL<{
     time: Date | string;
     robot_id: string;
+    order_ok: boolean | null;
     value: number;
   }>(client, [
     {
@@ -186,6 +188,7 @@ export async function loadDailyOrderCounts(
             },
           },
           robot_id: "$robot_id",
+          order_ok: "$data.readings.order_ok",
         },
         value: { $sum: 1 },
       },
@@ -195,32 +198,38 @@ export async function loadDailyOrderCounts(
         _id: 0,
         time: "$_id.time",
         robot_id: "$_id.robot_id",
+        order_ok: "$_id.order_ok",
         value: 1,
       },
     },
     { $sort: { time: -1 } },
   ]);
 
-  const byDay = new Map<number, Map<string, number>>();
+  type Tally = { count: number; errorCount: number };
+  const byDay = new Map<number, Map<string, Tally>>();
   for (const row of results) {
     if (!nameById.has(row.robot_id)) continue;
     const t = row.time instanceof Date ? row.time : new Date(row.time);
     const key = t.getTime();
     let perRobot = byDay.get(key);
     if (!perRobot) {
-      perRobot = new Map<string, number>();
+      perRobot = new Map<string, Tally>();
       byDay.set(key, perRobot);
     }
-    perRobot.set(row.robot_id, (perRobot.get(row.robot_id) ?? 0) + row.value);
+    const tally = perRobot.get(row.robot_id) ?? { count: 0, errorCount: 0 };
+    tally.count += row.value;
+    if (row.order_ok === false) tally.errorCount += row.value;
+    perRobot.set(row.robot_id, tally);
   }
   return [...byDay.entries()]
     .map(([ms, perRobot]) => ({
       day: new Date(ms),
       rows: [...perRobot.entries()]
-        .map(([robotId, count]) => ({
+        .map(([robotId, tally]) => ({
           robotId,
           robotName: nameById.get(robotId) ?? robotId,
-          count,
+          count: tally.count,
+          errorCount: tally.errorCount,
         }))
         .sort((a, b) => a.robotName.localeCompare(b.robotName)),
     }))
@@ -229,7 +238,8 @@ export async function loadDailyOrderCounts(
 
 export async function loadLeaderboard(
   client: VIAM.ViamClient,
-  groupByField: string
+  groupByField: string,
+  extraMatch: Record<string, unknown> = {}
 ): Promise<LeaderboardEntry[]> {
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const results = await runMQL<{ name: string | null; value: number }>(client, [
@@ -238,6 +248,7 @@ export async function loadLeaderboard(
         location_id: LOCATION_ID,
         component_name: RESOURCE_NAME,
         time_received: { $gte: since },
+        ...extraMatch,
       },
     },
     {

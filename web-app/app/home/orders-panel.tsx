@@ -37,6 +37,15 @@ type VideoEntry =
       items: { id: string; url: string; capturedAt: Date | null }[];
     };
 
+function formatDuration(ms: number): string {
+  if (ms <= 0) return "—";
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
+}
+
 function compareOrders(
   a: OrderRecord,
   b: OrderRecord,
@@ -217,11 +226,7 @@ function OrderTable({
                 </td>
                 <td className="px-2 py-1">{o.customerName || "—"}</td>
                 <td className="px-2 py-1">{o.drink || "—"}</td>
-                <td className="px-2 py-1">
-                  {o.durationMs
-                    ? `${(o.durationMs / 1000).toFixed(1)}s`
-                    : "—"}
-                </td>
+                <td className="px-2 py-1">{formatDuration(o.durationMs)}</td>
                 <td className="px-2 py-1">
                   {o.ok ? (
                     <span className="text-green-600">OK</span>
