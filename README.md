@@ -816,6 +816,7 @@ Tactile touch-off calibration. The service drives the arm in a chosen direction 
   "load_threshold": 1.0,
   "load_baseline_samples": 10,
   "load_baseline_alpha": 0.1,
+  "load_settle_ms": 100,
   "profiles": {
     "espresso-machine": {
       "button_height_above_bottom_mm": 38,
@@ -839,6 +840,7 @@ Tactile touch-off calibration. The service drives the arm in a chosen direction 
 | `load_threshold`       | float  | No       | `0`     | Per-joint absolute load delta (Nm) above the running baseline that signals contact. When `0`, load-based detection is disabled and the probe relies solely on `MoveToPosition` returning an error. Set non-zero (e.g. `1.0`) to enable detection via `arm.DoCommand({"load": true})` polling between substeps. |
 | `load_baseline_samples`| int    | No       | `10`    | Number of stationary load readings taken at the start of each probe to establish the per-joint baseline.                            |
 | `load_baseline_alpha`  | float  | No       | `0.1`   | EWMA factor in `(0, 1]` used to drift the baseline as probing progresses, so gradual gravity-load shifts (caused by the arm changing pose) get absorbed instead of triggering false contact. Smaller = slower drift = more sensitive to sustained load changes. |
+| `load_settle_ms`       | int    | No       | `100`   | Sleep before each load reading (both baseline samples and per-substep samples). Lets the arm physically settle from the previous motion so the load reading reflects steady-state, not residual oscillation. Without this, motion artifacts look indistinguishable from contact. |
 | `profiles`             | object | No       | `{}`    | Named object profiles. Each profile describes the geometry of one machine/object the calibration will be run on.                   |
 
 #### Profile fields

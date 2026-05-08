@@ -46,6 +46,7 @@ const (
 
 	defaultLoadBaselineSamples = 10
 	defaultLoadBaselineAlpha   = 0.1
+	defaultLoadSettleMs        = 100
 )
 
 func init() {
@@ -82,6 +83,11 @@ type Config struct {
 	// arm pose changes during probing (so gradual gravity-load shifts don't
 	// trigger false contact). Range (0, 1]; default 0.1 (gentle drift).
 	LoadBaselineAlpha float64 `json:"load_baseline_alpha,omitempty"`
+	// LoadSettleMs is how long to wait before each load reading so the arm
+	// has time to physically settle from the previous motion. Without this,
+	// load readings capture residual oscillation and decel artifacts that
+	// look indistinguishable from real contact. Default 100ms.
+	LoadSettleMs int `json:"load_settle_ms,omitempty"`
 
 	Profiles map[string]ObjectProfile `json:"profiles,omitempty"`
 }
@@ -171,6 +177,12 @@ func (c *Config) loadBaselineAlpha() float64 {
 		return c.LoadBaselineAlpha
 	}
 	return defaultLoadBaselineAlpha
+}
+func (c *Config) loadSettle() time.Duration {
+	if c.LoadSettleMs > 0 {
+		return time.Duration(c.LoadSettleMs) * time.Millisecond
+	}
+	return time.Duration(defaultLoadSettleMs) * time.Millisecond
 }
 
 func (p ObjectProfile) bottomAxis() string {
@@ -422,7 +434,7 @@ func (s *service) driveSubsteps(
 		}
 
 		if usingLoad {
-			load, err := s.readLoad(ctx)
+			load, err := s.readSettledLoad(ctx)
 			if err != nil {
 				s.logger.Warnf("probe substep %d: read_load failed: %v", i, err)
 			} else if len(load) != len(baseline) {
@@ -453,6 +465,20 @@ func (s *service) driveSubsteps(
 		}
 	}
 	return nil, fmt.Errorf("no contact within %.2f mm (%d substeps)", maxTravel, nSteps)
+}
+
+// readSettledLoad sleeps load_settle_ms (so the arm physically settles after
+// the most recent motion) and then reads the load.
+func (s *service) readSettledLoad(ctx context.Context) ([]float64, error) {
+	settle := s.cfg.loadSettle()
+	if settle > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(settle):
+		}
+	}
+	return s.readLoad(ctx)
 }
 
 // readLoad calls arm.DoCommand({"load": true}) and parses the numeric array.
@@ -493,7 +519,7 @@ func (s *service) establishLoadBaseline(ctx context.Context, n int) ([]float64, 
 			return nil, ctx.Err()
 		default:
 		}
-		load, err := s.readLoad(ctx)
+		load, err := s.readSettledLoad(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("baseline sample %d/%d: %w", i+1, n, err)
 		}
