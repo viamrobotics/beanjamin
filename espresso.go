@@ -115,7 +115,7 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 	return map[string]interface{}{"status": "complete", "action": name}, nil
 }
 
-func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName string) error {
+func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName string, batchIndex, batchSize int) error {
 	ctx, span := trace.StartSpan(ctx, "beanjamin::prepareDrink["+drink+"]")
 	defer span.End()
 
@@ -222,7 +222,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		if err != nil {
 			return err
 		}
-		if err := s.sayAlways(ctx, pickDrinkReady(drink, customerName)); err != nil {
+		if err := s.sayAlways(ctx, pickDrinkReady(drink, customerName, batchIndex, batchSize)); err != nil {
 			s.logger.Warnf("failed to say drink-ready: %v", err)
 		}
 	} else {

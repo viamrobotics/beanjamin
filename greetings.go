@@ -65,6 +65,21 @@ var drinkReadyNamed = []string{
 	"%[1]s for %[2]s is served!",
 }
 
+// drinkReadyBatch templates are spoken at cup handoff for orders that are
+// part of a multi-drink batch. Format verbs: %[1]s drink, %[2]s name,
+// %[3]d batch index (1-based), %[4]d batch size.
+var drinkReadyBatchAnonymous = []string{
+	"Your %[1]s is ready — number %[3]d of %[4]d.",
+	"Here you go, fresh %[1]s. That's %[3]d of %[4]d.",
+	"%[1]s up — %[3]d out of %[4]d.",
+}
+
+var drinkReadyBatchNamed = []string{
+	"%[2]s, your %[1]s is ready — number %[3]d of %[4]d.",
+	"Here you go %[2]s, fresh %[1]s. That's %[3]d of %[4]d.",
+	"%[1]s number %[3]d for %[2]s — %[4]d total.",
+}
+
 var unsupportedDrink = []string{
 	// polite
 	"I'm sorry, I cannot make a %s at the moment. May I offer you an espresso or a lungo instead?",
@@ -96,12 +111,46 @@ func pickOrderReceived(drink, customerName string) string {
 	return fmt.Sprintf(orderReceivedAnonymous[rand.Intn(len(orderReceivedAnonymous))], drink)
 }
 
+// orderReceivedBatch templates fire once per batch (count > 1), replacing
+// the per-order pickOrderReceived line that would otherwise speak N-1 times
+// in rapid succession at enqueue time. Format verbs: %[1]d count,
+// %[2]s drink-plural, %[3]s name.
+var orderReceivedBatchAnonymous = []string{
+	"%[1]d %[2]s queued — first one's coming right up.",
+	"Got it — %[1]d %[2]s in line.",
+	"%[1]d %[2]s, on the way.",
+}
+
+var orderReceivedBatchNamed = []string{
+	"%[1]d %[2]s for %[3]s — first one's coming up.",
+	"On it %[3]s — %[1]d %[2]s queued.",
+	"%[3]s, %[1]d %[2]s in the queue. Starting on the first now.",
+}
+
+func pickOrderReceivedBatch(drink, customerName string, count int) string {
+	plural := speakableDrink(drink) + "s"
+	if customerName != "" {
+		return fmt.Sprintf(orderReceivedBatchNamed[rand.Intn(len(orderReceivedBatchNamed))], count, plural, customerName)
+	}
+	return fmt.Sprintf(orderReceivedBatchAnonymous[rand.Intn(len(orderReceivedBatchAnonymous))], count, plural)
+}
+
 func pickAlmostReady() string {
 	return almostReadyAnonymous[rand.Intn(len(almostReadyAnonymous))]
 }
 
-func pickDrinkReady(drink, customerName string) string {
+// pickDrinkReady picks a cup-handoff line. When batchSize > 1, the order is
+// part of a multi-drink batch and the spoken line names the position
+// (e.g. "2 of 3") so the customer can track progress; otherwise the original
+// single-drink templates are used.
+func pickDrinkReady(drink, customerName string, batchIndex, batchSize int) string {
 	drink = speakableDrink(drink)
+	if batchSize > 1 {
+		if customerName != "" {
+			return fmt.Sprintf(drinkReadyBatchNamed[rand.Intn(len(drinkReadyBatchNamed))], drink, customerName, batchIndex, batchSize)
+		}
+		return fmt.Sprintf(drinkReadyBatchAnonymous[rand.Intn(len(drinkReadyBatchAnonymous))], drink, customerName, batchIndex, batchSize)
+	}
 	if customerName != "" {
 		return fmt.Sprintf(drinkReadyNamed[rand.Intn(len(drinkReadyNamed))], drink, customerName)
 	}

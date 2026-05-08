@@ -1,9 +1,15 @@
 package beanjamin
 
 import (
+	"context"
+	"math"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/resource"
 )
 
 func TestQueue_SetStep_UpdatesOrder(t *testing.T) {
@@ -239,6 +245,201 @@ func TestQueue_Clear_ClearsBothPendingAndRecent(t *testing.T) {
 	}
 	if got := q.Len(); got != 0 {
 		t.Errorf("Len after Clear = %d, want 0", got)
+	}
+}
+
+// fakeSpeech records say_async calls dispatched through s.say so tests can
+// assert how many announcements enqueueOrder produced.
+type fakeSpeech struct {
+	resource.AlwaysRebuild
+	mu   sync.Mutex
+	said []string
+}
+
+func (f *fakeSpeech) Name() resource.Name { return resource.Name{} }
+func (f *fakeSpeech) DoCommand(_ context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	if t, ok := cmd["say_async"].(string); ok {
+		f.mu.Lock()
+		f.said = append(f.said, t)
+		f.mu.Unlock()
+	}
+	return map[string]interface{}{}, nil
+}
+func (f *fakeSpeech) Close(_ context.Context) error { return nil }
+func (f *fakeSpeech) Status(_ context.Context) (map[string]interface{}, error) {
+	return map[string]interface{}{}, nil
+}
+func (f *fakeSpeech) calls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.said))
+	copy(out, f.said)
+	return out
+}
+
+// newTestCoffee builds a minimal *beanjaminCoffee suitable for exercising
+// enqueueOrder. Real motion/arm wiring is intentionally absent — only the
+// fields enqueueOrder touches are populated.
+func newTestCoffee(t *testing.T, cfg *Config) (*beanjaminCoffee, *fakeSpeech) {
+	t.Helper()
+	if cfg == nil {
+		cfg = &Config{CanServeDecaf: true}
+	}
+	speech := &fakeSpeech{}
+	return &beanjaminCoffee{
+		logger: logging.NewTestLogger(t),
+		cfg:    cfg,
+		queue:  NewOrderQueue(),
+		speech: speech,
+	}, speech
+}
+
+func TestEnqueueOrder_DefaultsCountToOne(t *testing.T) {
+	c, _ := newTestCoffee(t, nil)
+	resp, err := c.enqueueOrder(context.Background(), map[string]interface{}{
+		"drink":         "espresso",
+		"customer_name": "Alice",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := resp["count"].(int); got != 1 {
+		t.Errorf("count = %v, want 1", resp["count"])
+	}
+	ids, _ := resp["order_ids"].([]string)
+	if len(ids) != 1 {
+		t.Fatalf("order_ids length = %d, want 1", len(ids))
+	}
+	if id, _ := resp["order_id"].(string); id != ids[0] {
+		t.Errorf("order_id %q must match order_ids[0] %q", id, ids[0])
+	}
+	if c.queue.Len() != 1 {
+		t.Errorf("queue length = %d, want 1", c.queue.Len())
+	}
+}
+
+func TestEnqueueOrder_BatchEnqueuesN(t *testing.T) {
+	c, _ := newTestCoffee(t, nil)
+	resp, err := c.enqueueOrder(context.Background(), map[string]interface{}{
+		"drink":         "espresso",
+		"customer_name": "Esha",
+		"count":         float64(3),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, _ := resp["count"].(int); got != 3 {
+		t.Errorf("count = %v, want 3", resp["count"])
+	}
+	ids, _ := resp["order_ids"].([]string)
+	if len(ids) != 3 {
+		t.Fatalf("order_ids length = %d, want 3", len(ids))
+	}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if id == "" {
+			t.Errorf("empty UUID in order_ids")
+		}
+		if seen[id] {
+			t.Errorf("duplicate UUID %q in order_ids", id)
+		}
+		seen[id] = true
+	}
+	if c.queue.Len() != 3 {
+		t.Errorf("queue length = %d, want 3", c.queue.Len())
+	}
+	if pos, _ := resp["queue_position"].(int); pos != 1 {
+		t.Errorf("queue_position = %v, want 1 (first order)", resp["queue_position"])
+	}
+}
+
+func TestEnqueueOrder_RejectsBadCount(t *testing.T) {
+	cases := []struct {
+		name string
+		v    interface{}
+	}{
+		{"zero", float64(0)},
+		{"negative", float64(-1)},
+		{"fractional", 1.5},
+		{"string", "5"},
+		{"nan", math.NaN()},
+		{"inf", math.Inf(1)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := newTestCoffee(t, nil)
+			_, err := c.enqueueOrder(context.Background(), map[string]interface{}{
+				"drink": "espresso",
+				"count": tc.v,
+			})
+			if err == nil {
+				t.Fatalf("expected error for count=%v, got nil", tc.v)
+			}
+			if c.queue.Len() != 0 {
+				t.Errorf("queue should stay empty after rejection, got len=%d", c.queue.Len())
+			}
+		})
+	}
+}
+
+func TestEnqueueOrder_RejectsAboveCap(t *testing.T) {
+	c, _ := newTestCoffee(t, &Config{CanServeDecaf: true, MaxBatchSize: 5})
+	if _, err := c.enqueueOrder(context.Background(), map[string]interface{}{
+		"drink": "espresso",
+		"count": float64(5),
+	}); err != nil {
+		t.Fatalf("count=cap should be allowed; got error: %v", err)
+	}
+	if c.queue.Len() != 5 {
+		t.Errorf("queue length after at-cap batch = %d, want 5", c.queue.Len())
+	}
+
+	c2, _ := newTestCoffee(t, &Config{CanServeDecaf: true, MaxBatchSize: 5})
+	if _, err := c2.enqueueOrder(context.Background(), map[string]interface{}{
+		"drink": "espresso",
+		"count": float64(6),
+	}); err == nil {
+		t.Fatal("count=cap+1 should be rejected; got nil error")
+	}
+	if c2.queue.Len() != 0 {
+		t.Errorf("queue should stay empty after over-cap rejection, got len=%d", c2.queue.Len())
+	}
+}
+
+func TestEnqueueOrder_BatchSuppressesPerOrderAnnouncement(t *testing.T) {
+	c, sp := newTestCoffee(t, &Config{CanServeDecaf: true, Conversational: true})
+	// Pre-populate the queue so the single-order path would normally fire
+	// pickOrderReceived (pos > 1). The batch path should fire exactly one
+	// pickOrderReceivedBatch line instead.
+	c.queue.Enqueue(NewOrder("lungo", "Bob", "", ""))
+
+	if _, err := c.enqueueOrder(context.Background(), map[string]interface{}{
+		"drink":         "espresso",
+		"customer_name": "Esha",
+		"count":         float64(5),
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	calls := sp.calls()
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly 1 speech call for batch, got %d: %v", len(calls), calls)
+	}
+	// The consolidated batch line mentions the count and the (plural) drink.
+	if !strings.Contains(calls[0], "5") || !strings.Contains(calls[0], "espressos") {
+		t.Errorf("batch line %q should reference count=5 and 'espressos'", calls[0])
+	}
+}
+
+func TestEnqueueOrder_RejectsBatchOfUnsupportedDrink(t *testing.T) {
+	c, _ := newTestCoffee(t, &Config{CanServeDecaf: false})
+	if _, err := c.enqueueOrder(context.Background(), map[string]interface{}{
+		"drink": "decaf",
+		"count": float64(3),
+	}); err == nil {
+		t.Fatal("expected rejection for decaf when can_serve_decaf=false")
+	}
+	if c.queue.Len() != 0 {
+		t.Errorf("queue should stay empty after pre-loop rejection, got len=%d", c.queue.Len())
 	}
 }
 

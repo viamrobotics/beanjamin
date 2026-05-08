@@ -253,6 +253,7 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
 | `cup_detection_retries`               | int    | No       | Number of additional vision calls if the first returns 0 detections. Default 0. |
 | `cup_detection_retry_sleep_ms`        | int    | No       | Sleep between detection retries in milliseconds. Default 250. |
 | `cup_centroid_min_z_mm`               | float  | No       | Minimum world-frame Z for each detection. If a detected centroid's Z is below this, it is clamped up to this value before pose composition; values above are left alone. Use to recover from depth noise that would otherwise produce a too-low approach pose and trip the planner. Default `0` disables clamping. |
+| `max_batch_size`           | int    | No       | Cap on `prepare_order.count` — how many identical drinks one DoCommand may enqueue at once. Defaults to 10 when unset. Protects the queue against runaway voice commands or LLM hallucinations. |
 
 **Dynamic cup pickup — required pose on the claws pose switcher (`claws_pose_switcher_name`):**
 
@@ -272,12 +273,15 @@ When `dynamic_cup_pickup` is enabled, one additional named pose must exist on th
     "drink": "espresso",
     "customer_name": "Alice",
     "initial_greeting": "optional custom greeting",
-    "completion_statement": "optional custom completion message"
+    "completion_statement": "optional custom completion message",
+    "count": 3
   }
 }
 ```
 
 Only `drink` is required. If `initial_greeting` is omitted, a random greeting is generated. If `customer_name` is provided, it personalizes the greeting and completion messages. Orders are added to a queue and processed sequentially.
+
+`count` is an optional positive integer (default 1) that enqueues N identical orders in one call — each gets its own UUID. The cap is `max_batch_size` (default 10). When `count > 1`, the response also includes `order_ids: [...]` (one per enqueued order) and `count`; existing `order_id` and `queue_position` keys still refer to the first order so existing callers keep working. To keep audio sane, the per-order "Order received…" line is replaced with a single consolidated batch announcement at submission time; the per-cup drink-ready announcement at cup handoff still fires once per order as each cup completes.
 
 **`execute_action`** - Run a single coffee-making action by name. Available actions: `grind_coffee`, `tamp_ground`, `lock_portafilter`, `unlock_portafilter`.
 

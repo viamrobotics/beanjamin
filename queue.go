@@ -3,6 +3,7 @@ package beanjamin
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -34,6 +35,13 @@ type Order struct {
 	Greeting     string    `json:"greeting"`
 	Completion   string    `json:"completion"`
 	EnqueuedAt   time.Time `json:"enqueued_at"`
+
+	// BatchIndex / BatchSize identify this order's slot within a multi-drink
+	// batch (1-based, e.g. "2 of 3"). Both zero for single orders. Set at
+	// enqueue time; immutable afterward. Used by the drink-ready announcement
+	// to call out batch position so customers can track progress.
+	BatchIndex int `json:"batch_index,omitempty"`
+	BatchSize  int `json:"batch_size,omitempty"`
 
 	RawStep     string      `json:"raw_step"`
 	StepHistory []StepEntry `json:"step_history"`
@@ -315,7 +323,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) e
 		}
 	}
 
-	if err := s.prepareDrink(ctx, order.Drink, order.CustomerName); err != nil {
+	if err := s.prepareDrink(ctx, order.Drink, order.CustomerName, order.BatchIndex, order.BatchSize); err != nil {
 		s.logger.Errorf("order %s for %s failed: %v", order.ID, order.CustomerName, err)
 		return err
 	}
@@ -342,14 +350,17 @@ func (s *beanjaminCoffee) notifyOrderReading(order Order, execErr error, started
 }
 
 // enqueueOrder validates the order and adds it to the queue.
-// It returns immediately with the queue position.
+// It returns immediately with the queue position. When the optional
+// "count" field is > 1, N identical orders are enqueued back-to-back
+// (each with its own UUID) and the per-order "Order received" line is
+// replaced with a single consolidated batch announcement.
 func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}) (map[string]interface{}, error) {
 	s.logger.Infof("received order request")
 
 	order, ok := orderRaw.(map[string]interface{})
 	if !ok {
 		s.logger.Warnf("rejected order: invalid payload type %T", orderRaw)
-		return nil, fmt.Errorf("prepare_order value must be an object with keys: drink, customer_name, initial_greeting, completion_statement")
+		return nil, fmt.Errorf("prepare_order value must be an object with keys: drink, customer_name, initial_greeting, completion_statement, count")
 	}
 
 	drink, _ := order["drink"].(string)
@@ -379,25 +390,84 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}
 	initialGreeting, _ := order["initial_greeting"].(string)
 	completionStatement, _ := order["completion_statement"].(string)
 
-	if initialGreeting == "" {
-		initialGreeting = pickGreeting(drink, customerName)
+	count, err := s.parseOrderCount(order["count"])
+	if err != nil {
+		s.logger.Warnf("rejected order: %v", err)
+		return nil, err
 	}
 
-	o := NewOrder(drink, customerName, initialGreeting, completionStatement)
-	pos := s.queue.Enqueue(o)
+	ids := make([]string, 0, count)
+	var firstPos int
+	for i := 0; i < count; i++ {
+		// For single orders, auto-pick a brew-start greeting if one wasn't
+		// supplied. For batches we deliberately leave Greeting empty: the
+		// consolidated batch announcement at submission already covered
+		// "we got your order", so executeQueuedOrder speaking another
+		// "let me whip up your espresso!" before each of N cups is just
+		// noise. (executeQueuedOrder skips the speech when Greeting is "".)
+		greeting := initialGreeting
+		if greeting == "" && count == 1 {
+			greeting = pickGreeting(drink, customerName)
+		}
+		o := NewOrder(drink, customerName, greeting, completionStatement)
+		if count > 1 {
+			o.BatchIndex = i + 1
+			o.BatchSize = count
+		}
+		pos := s.queue.Enqueue(o)
+		if i == 0 {
+			firstPos = pos
+		}
+		ids = append(ids, o.ID)
+		s.logger.Infof("order %s queued at position %d for %s (batch %d/%d)",
+			o.ID, pos, customerName, i+1, count)
+	}
 
-	s.logger.Infof("order %s queued at position %d for %s (queue depth: %d)", o.ID, pos, customerName, pos)
-
-	if pos > 1 {
+	// Single-order path keeps the original "Order received…" announcement
+	// gated on pos > 1. Batch path replaces it with one consolidated
+	// pickOrderReceivedBatch line so we don't fire N-1 blocking TTS calls
+	// back-to-back.
+	switch {
+	case count == 1 && firstPos > 1:
 		if err := s.say(ctx, pickOrderReceived(drink, customerName)); err != nil {
-			s.logger.Warnf("failed to announce order %s: %v", o.ID, err)
+			s.logger.Warnf("failed to announce order %s: %v", ids[0], err)
+		}
+	case count > 1:
+		if err := s.say(ctx, pickOrderReceivedBatch(drink, customerName, count)); err != nil {
+			s.logger.Warnf("failed to announce batch: %v", err)
 		}
 	}
 
 	return map[string]interface{}{
 		"status":         "queued",
-		"order_id":       o.ID,
-		"queue_position": pos,
+		"order_id":       ids[0],
+		"queue_position": firstPos,
 		"customer_name":  customerName,
+		"order_ids":      ids,
+		"count":          count,
 	}, nil
+}
+
+// parseOrderCount validates and coerces the optional "count" field on a
+// prepare_order payload. Absent/nil → 1. Non-numeric, fractional,
+// out-of-range values → error. Caller should reject before any enqueue.
+func (s *beanjaminCoffee) parseOrderCount(v interface{}) (int, error) {
+	if v == nil {
+		return 1, nil
+	}
+	f, ok := v.(float64)
+	if !ok {
+		return 0, fmt.Errorf("count must be a number, got %T", v)
+	}
+	if math.IsNaN(f) || math.IsInf(f, 0) || f != math.Trunc(f) {
+		return 0, fmt.Errorf("count must be a whole number, got %v", f)
+	}
+	if f < 1 {
+		return 0, fmt.Errorf("count must be >= 1, got %v", f)
+	}
+	limit := s.maxBatchSize()
+	if f > float64(limit) {
+		return 0, fmt.Errorf("count must be <= %d, got %v", limit, f)
+	}
+	return int(f), nil
 }

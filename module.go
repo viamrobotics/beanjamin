@@ -126,6 +126,24 @@ type Config struct {
 	// ufactory gripper. Set true on fake-hardware test machines; leave
 	// unset on the real bot.
 	FakeMode bool `json:"fake_mode,omitempty"`
+
+	// MaxBatchSize caps how many drinks a single prepare_order call may
+	// enqueue via the optional "count" field. Protects the queue from a
+	// runaway voice command ("a hundred lattes") and from an LLM
+	// hallucinating a huge count. Defaults to 10 when unset or non-positive.
+	MaxBatchSize int `json:"max_batch_size,omitempty"`
+}
+
+// defaultMaxBatchSize is used when Config.MaxBatchSize is unset or zero.
+const defaultMaxBatchSize = 10
+
+// maxBatchSize returns the configured cap on prepare_order count, falling
+// back to defaultMaxBatchSize.
+func (s *beanjaminCoffee) maxBatchSize() int {
+	if s.cfg != nil && s.cfg.MaxBatchSize > 0 {
+		return s.cfg.MaxBatchSize
+	}
+	return defaultMaxBatchSize
 }
 
 // Vec3Mm is a 3D point in millimeters used for world-frame configuration.
