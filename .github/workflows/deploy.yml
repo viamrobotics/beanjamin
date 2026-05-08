@@ -1,5 +1,12 @@
 name: Deploy Module and App
 on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'README.md'
+      - 'DEVELOPER_GUIDE.md'
+      - 'docs/**'
+      - '**/*.md'
   release:
     types: [published]
   workflow_dispatch:
@@ -9,10 +16,45 @@ on:
         required: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  compute-version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      # actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Bump rc tag
+        id: bump
+        if: github.event_name == 'push'
+        # mathieudutour/github-tag-action@v6.2
+        uses: mathieudutour/github-tag-action@a22cf08638b34d5badda920f9daf6e72c477b07b
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Release tags come from the release event; main pushes only produce rc tags.
+          release_branches: __none__
+          pre_release_branches: main
+          append_to_pre_release_tag: rc
+          default_bump: patch
+
+      - name: Resolve version
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION="${{ steps.bump.outputs.new_tag }}"
+          else
+            VERSION="${{ inputs.version || github.ref_name }}"
+          fi
+          echo "Resolved version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
   publish-module:
+    needs: [compute-version]
     runs-on: ubuntu-24.04
     steps:
       # actions/checkout@v6.0.2
@@ -22,13 +64,14 @@ jobs:
         # viamrobotics/build-action@v1.7
         uses: viamrobotics/build-action@cd35d596eabba93e9b6776f708c54865ec1c8360
         with:
-          version: ${{ inputs.version || github.ref_name }}
+          version: ${{ needs.compute-version.outputs.version }}
           ref: ${{ github.sha }}
           key-id: ${{ secrets.viam_key_id }}
           key-value: ${{ secrets.viam_key_secret }}
           token: ${{ github.token }}
 
   publish-app:
+    needs: [compute-version]
     runs-on: ubuntu-24.04
     steps:
       # actions/checkout@v6.0.2
@@ -56,22 +99,44 @@ jobs:
           meta-path: web-app/meta.json
           module-path: web-app/module.tar.gz
           platform: any
-          version: ${{ inputs.version || github.ref_name }}
+          version: ${{ needs.compute-version.outputs.version }}
           key-id: ${{ secrets.viam_key_id }}
           key-value: ${{ secrets.viam_key_secret }}
-          do-update: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+          do-update: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && !github.event.release.prerelease) }}
           do-upload: true
 
   send-slack-msg:
     name: Send Slack Message
-    needs: [publish-module, publish-app]
+    needs: [compute-version, publish-module, publish-app]
     runs-on: ubuntu-24.04
     if: always()
     steps:
-      - name: Generate success value
-        id: success-value
+      - name: Generate metadata
+        id: meta
         run: |
-          echo "result=${{ (needs.publish-module.result == 'success' && needs.publish-app.result == 'success') && 'success' || 'failure' }}" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          VERSION="${{ needs.compute-version.outputs.version }}"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            KIND="rc build"
+            LINK_URL="${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
+            LINK_LABEL="commit ${GITHUB_SHA:0:7}"
+          else
+            KIND="release"
+            LINK_URL="${{ github.server_url }}/${{ github.repository }}/releases/tag/${VERSION}"
+            LINK_LABEL="Release ${VERSION}"
+          fi
+          if [ "${{ needs.publish-module.result }}" = "success" ] && [ "${{ needs.publish-app.result }}" = "success" ]; then
+            RESULT="success"
+          else
+            RESULT="failure"
+          fi
+          {
+            echo "version=$VERSION"
+            echo "kind=$KIND"
+            echo "link_url=$LINK_URL"
+            echo "link_label=$LINK_LABEL"
+            echo "result=$RESULT"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Send slack message
         # slackapi/slack-github-action@v2.1.1
@@ -82,13 +147,13 @@ jobs:
           payload: |
             {
               "channel": "${{ secrets.SLACK_CHANNEL_ID }}",
-              "text": "Deploy ${{ inputs.version || github.ref_name }} ${{ steps.success-value.outputs.result == 'success' && '*succeeded* :white_check_mark:' || '*failed* :x:'}}",
+              "text": "Deploy ${{ steps.meta.outputs.version }} (${{ steps.meta.outputs.kind }}) ${{ steps.meta.outputs.result == 'success' && '*succeeded* :white_check_mark:' || '*failed* :x:'}}",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "${{ steps.success-value.outputs.result == 'success' && format('Deploy *{0}* *succeeded* :white_check_mark:\n\t<{1}/{2}/releases/tag/{0}|Release {0}>', inputs.version || github.ref_name, github.server_url, github.repository) || format('Deploy *{0}* *failed* :x:', inputs.version || github.ref_name) }}\n\tModule: ${{ needs.publish-module.result }}\n\tWeb app: ${{ needs.publish-app.result }}\n\t<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Workflow run>"
+                    "text": "${{ steps.meta.outputs.result == 'success' && format('Deploy *{0}* ({1}) *succeeded* :white_check_mark:\n\t<{2}|{3}>', steps.meta.outputs.version, steps.meta.outputs.kind, steps.meta.outputs.link_url, steps.meta.outputs.link_label) || format('Deploy *{0}* ({1}) *failed* :x:\n\t<{2}|{3}>', steps.meta.outputs.version, steps.meta.outputs.kind, steps.meta.outputs.link_url, steps.meta.outputs.link_label) }}\n\tModule: ${{ needs.publish-module.result }}\n\tWeb app: ${{ needs.publish-app.result }}\n\t<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Workflow run>"
                   }
                 }
               ]
