@@ -142,6 +142,15 @@ type ObjectProfile struct {
 	// dimension, signed natively) of the bottom surface measured by the last
 	// `calibrate` call. Includes ProbeAxisOffsetMM.
 	ProbeAxisValueMM float64 `json:"probe_axis_value_mm,omitempty"`
+
+	// Overrides is a map of world-axis name ("x"/"y"/"z") to fixed value.
+	// When present, the corresponding component of the saved button pose is
+	// replaced with this value, taking precedence over both the calibrated
+	// bottom-axis result and the start-pose-inherited values for the other
+	// axes. Useful when you have an exact expected coordinate from CAD or
+	// prior calibration and want to lock it in regardless of the probing
+	// outcome.
+	Overrides map[string]float64 `json:"overrides,omitempty"`
 }
 
 func (c *Config) Validate(path string) ([]string, []string, error) {
@@ -711,13 +720,32 @@ func (s *service) handleCalibrate(ctx context.Context, cmd map[string]interface{
 		Z: bottomEEFMean.Z + bottomDir.Z*profile.ProbeAxisOffsetMM,
 	}
 
-	// 2. Compose button pose. The bottom-axis EEF component is just
-	//    contact + button_height (in -bottom_axis direction); the probe-axis
-	//    offset cancels because the same probe geometry is used for probing
-	//    and pressing.
+	// 2. Compose button pose. Saved pose's bottom-axis component:
+	//        contact_eef + button_height - probe_axis_offset
+	//    which equals surface + button_height = the button's world coord
+	//    (because surface = contact_eef - probe_axis_offset along the probe
+	//    direction). The saved pose thus represents the button's location;
+	//    downstream callers (or a press motion) handle any further offset
+	//    needed to actually contact the button with the tip.
 	buttonPt := startPt
-	bottomEEFVal := componentAlong(bottomDir, bottomEEFMean) - profile.ButtonHeightAboveBottomMM
+	bottomEEFVal := componentAlong(bottomDir, bottomEEFMean) -
+		profile.ButtonHeightAboveBottomMM +
+		profile.ProbeAxisOffsetMM
 	buttonPt = setAlong(bottomDir, buttonPt, bottomEEFVal)
+
+	// Apply manual per-axis overrides from the profile. Overridden values
+	// take precedence over both calibrated (bottom_axis) and inherited
+	// (start-pose) values. Keyed by axis name in world frame: "x", "y", "z".
+	if v, ok := profile.Overrides["x"]; ok {
+		buttonPt.X = v
+	}
+	if v, ok := profile.Overrides["y"]; ok {
+		buttonPt.Y = v
+	}
+	if v, ok := profile.Overrides["z"]; ok {
+		buttonPt.Z = v
+	}
+
 	buttonPose := spatialmath.NewPose(buttonPt, start.Orientation())
 
 	// 3. Move arm back to start.

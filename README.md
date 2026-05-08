@@ -847,7 +847,7 @@ Tactile touch-off calibration. The service drives the arm in a chosen direction 
 | Name                            | Type   | Required | Default | Description                                                                                                  |
 | ------------------------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------------------------------------ |
 | `button_height_above_bottom_mm` | float  | Yes      | —       | Vertical offset of the button above the bottom index surface.                                                |
-| `probe_axis_offset_mm`          | float  | No       | `0`     | Scalar distance the probe tip extends past the EEF origin in the probing direction. Affects the **reported** surface position; the **saved** button-EEF pose is unaffected (the offset cancels because the same probe geometry probes and presses). |
+| `probe_axis_offset_mm`          | float  | No       | `0`     | Scalar distance the probe tip extends past the EEF origin in the probing direction. Subtracted from the saved pose's bottom-axis component so the saved pose represents the **button's actual world coordinate** rather than the EEF position needed for the tip to touch it. See the geometry note below. |
 | `bottom_axis`                   | string | No       | `-z`    | Direction the arm probes to find the bottom index surface. One of `+x, -x, +y, -y, +z, -z`.                  |
 | `center_axis`                   | string | No       | `y`     | World axis the operator visually centers the probe along before calling `calibrate`. The start pose's coordinate along this axis is captured into `center_axis_value_mm`. Also used by the standalone `probe_width` command. |
 | `probe_count`                   | int    | No       | `1`     | How many times each surface is probed; results are averaged.                                                 |
@@ -855,6 +855,7 @@ Tactile touch-off calibration. The service drives the arm in a chosen direction 
 | `max_width_mm`                  | float  | No       | —       | Caps per-side probe travel for `probe_width`. Falls back to `probe_max_travel_mm` when zero. Unused by `calibrate`. |
 | `center_axis_value_mm`          | float  | output   | —       | **Auto-populated by `calibrate`.** World-frame coordinate (along `center_axis`) of the start pose at the time of the last calibration. Reflects whatever position the operator visually centered the probe at. |
 | `probe_axis_value_mm`           | float  | output   | —       | **Auto-populated by `calibrate`.** World-frame coordinate (along the `bottom_axis` dimension) of the bottom surface measured by the last calibration. Includes `probe_axis_offset_mm`. |
+| `overrides`                     | object | No       | `{}`    | Map of world-axis name (`"x"`/`"y"`/`"z"`) to fixed value. When present, the corresponding component of the saved button pose is replaced with this value — overrides both the calibrated bottom-axis result and the start-pose-inherited values for other axes. Use to lock in coordinates known from CAD or prior calibration regardless of the probing outcome. |
 
 ### DoCommand
 
@@ -900,7 +901,7 @@ Tactile touch-off calibration. The service drives the arm in a chosen direction 
 
 1. Record the start pose. The start pose's orientation and non-bottom-axis coordinates carry into the saved button pose, so position the arm exactly as it should be when pressing the button — except for the bottom-axis coordinate, which `calibrate` will fill in.
 2. Probe along `bottom_axis` `probe_count` times. Average the EEF contacts; subtract the probe-axis offset to get the surface position.
-3. Compose the button pose: bottom-axis component = `contact + button_height_above_bottom_mm`, all other components and orientation inherited from the start pose. (The probe-axis offset cancels — see the geometry note below.)
+3. Compose the button pose: bottom-axis component = `contact + button_height_above_bottom_mm − probe_axis_offset_mm` (this puts the EEF coordinate at the button's *actual* location), all other components and orientation inherited from the start pose. Apply any `overrides` from the profile last — they win over both calibrated and inherited values.
 4. Move the arm back to the start pose.
 5. If the profile was passed by name, update the named profile's `center_axis_value_mm` (start pose's coord along `center_axis`) and `probe_axis_value_mm` (surface coord along the `bottom_axis` dimension), then persist to cloud config.
 6. If `save_as` is set and `pose_switcher_name` is configured, call `set_pose_value` on the switch to persist the EEF pose under that name.
@@ -931,18 +932,13 @@ Returns:
 
 ### Geometry note
 
-For a probe attached rigidly to the EEF, the probe-axis offset is the distance from the EEF origin to the probe tip along the probe direction. When `calibrate` runs:
+For a probe attached rigidly to the EEF, the probe-axis offset is the distance from the EEF origin to the probe tip along the probe direction.
 
-- The EEF descends until the probe tip contacts the surface.
-- `contact_mean.z` is the EEF's z-position at that moment.
-- The actual surface is `probe_axis_offset_mm` farther along the probe direction (i.e. `surface.z = contact.z - offset` for `bottom_axis="-z"`).
+- `arm.EndPosition()` reports the EEF position. The tip is `probe_axis_offset_mm` past it along `bottom_axis`.
+- At contact, the EEF is at `contact.z`, so the actual surface is at `surface.z = contact.z − offset` (for `bottom_axis="-z"`).
+- The button is `button_height_above_bottom_mm` above the surface: `button.z = surface.z + button_height = contact.z − offset + button_height`.
 
-For the saved button pose, the offset cancels:
-
-- Button position (where the tip needs to go) = surface + button_height.
-- For the EEF to put the tip there, EEF position = button + offset = (surface + button_height) + offset = (contact - offset) + button_height + offset = **contact + button_height**.
-
-So you pay the cost of measuring the offset once for accurate `surface_mean` and `probe_axis_value` reporting, but the saved EEF pose is correct regardless.
+The saved pose's bottom-axis component equals the **button's world coordinate** — i.e. `contact + button_height − offset`. Moving the arm to that pose puts the EEF at the button's location; the tip extends past it by `offset`. Use `overrides` to pin any axis to a known value (e.g. CAD-derived coordinates) instead of letting the calibration determine it.
 
 ### Workflow
 
