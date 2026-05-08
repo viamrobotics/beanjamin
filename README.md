@@ -243,6 +243,24 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
 | `data_dir`                 | string | No       | Directory for persistent module data. When set alongside `cam_storage_mux_name`, pending-clip records are written under `<data_dir>/pending-clips` when each order starts and removed on completion; use with a Viam scheduled job calling `cleanup_pending_clips` to recover clips from interrupted orders. |
 | `input_range_override`     | object | No       | Narrows joint limits on named frames before motion planning. Outer key is the frame name (typically the arm); inner key is either the joint name or its stringified index (e.g. `"5"` for the last joint of a 6-DoF arm). Each value is `{ "min_degs": number, "max_degs": number }`. |
 | `conversational`           | bool   | No       | When true, the coffee service speaks its own greetings, almost-ready prompts, order-received lines, and rejection quips through `speech_service_name`. When false (default), the service stays silent except for the drink-ready announcement at cup handoff — leaving the rest of the talking to an external orchestrator (e.g. `viam:conversation-bundle:voice-command`). |
+| `dynamic_cup_pickup`                  | bool   | No       | Enables vision-guided cup pickup. When `true`, the arm uses a vision service to detect cups in the workspace rather than picking from the static `empty_cup` pose. Default `false`. |
+| `cup_vision_service_name`             | string | When `dynamic_cup_pickup` is enabled | Name of a `rdk:service:vision` segmenter that returns cup detections via `GetObjectPointClouds`. |
+| `src_camera_name`                     | string | When `dynamic_cup_pickup` is enabled | Source camera the vision service segments from. Must be present in the frame system. |
+| `expected_cup_position_mm`            | object | When `dynamic_cup_pickup` is enabled | World-frame heuristic point `{ "x": number, "y": number, "z": number }`. The detection closest to this point wins. |
+| `cup_approach_relative_pose`          | object | When `dynamic_cup_pickup` is enabled | 6-DoF offset composed onto the detected cup centroid for the pre-grab pose. Shape `{ "x", "y", "z", "o_x", "o_y", "o_z", "theta" }`; same gripper orientation as the grab pose but translated further back from the cup. **Not** stored on the pose switch — it's an offset, not a real world-frame pose. |
+| `cup_grab_relative_pose`              | object | When `dynamic_cup_pickup` is enabled | 6-DoF offset composed onto the detected cup centroid for the final grab pose. Same shape as `cup_approach_relative_pose`; gripper orientation for a side-grab with a small translation onto the cup. |
+| `cup_max_distance_from_target_mm`     | float  | No       | Hard cutoff: detections beyond this distance from `expected_cup_position_mm` are dropped. Default 300 mm. |
+| `cup_detection_retries`               | int    | No       | Number of additional vision calls if the first returns 0 detections. Default 0. |
+| `cup_detection_retry_sleep_ms`        | int    | No       | Sleep between detection retries in milliseconds. Default 250. |
+| `cup_centroid_min_z_mm`               | float  | No       | Minimum world-frame Z for each detection. If a detected centroid's Z is below this, it is clamped up to this value before pose composition; values above are left alone. Use to recover from depth noise that would otherwise produce a too-low approach pose and trip the planner. Default `0` disables clamping. |
+
+**Dynamic cup pickup — required pose on the claws pose switcher (`claws_pose_switcher_name`):**
+
+When `dynamic_cup_pickup` is enabled, one additional named pose must exist on the claws pose switch:
+
+| Pose name           | Type                | Description |
+| ------------------- | ------------------- | ----------- |
+| `cup_observe`       | Absolute world pose | Arm moves here before querying the vision service to get a clear view of the cup workspace. |
 
 ### DoCommand
 

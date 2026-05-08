@@ -12,7 +12,7 @@ import (
 
 	viz "github.com/viam-labs/motion-tools/client/client"
 	"go.viam.com/rdk/components/arm"
-
+	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/components/gripper"
 	"go.viam.com/rdk/components/sensor"
 	toggleswitch "go.viam.com/rdk/components/switch"
@@ -22,6 +22,7 @@ import (
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot/framesystem"
 	generic "go.viam.com/rdk/services/generic"
+	"go.viam.com/rdk/services/vision"
 
 	// Register the multi-poses-execution-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
@@ -100,6 +101,24 @@ type Config struct {
 	// to handle.
 	Conversational bool `json:"conversational,omitempty"`
 
+	// Dynamic cup pickup. When true, setCupForCoffee uses vision-driven
+	// detection to find the cup; when false, the existing static pickup
+	// (empty_cup_approach -> empty_cup) is used.
+	DynamicCupPickup           bool          `json:"dynamic_cup_pickup,omitempty"`
+	CupVisionServiceName       string        `json:"cup_vision_service_name,omitempty"`
+	SrcCameraName              string        `json:"src_camera_name,omitempty"`
+	ExpectedCupPositionMm      *Vec3Mm       `json:"expected_cup_position_mm,omitempty"`
+	CupApproachRelativePose    *RelativePose `json:"cup_approach_relative_pose,omitempty"`
+	CupGrabRelativePose        *RelativePose `json:"cup_grab_relative_pose,omitempty"`
+	CupMaxDistanceFromTargetMm float64       `json:"cup_max_distance_from_target_mm,omitempty"`
+	CupDetectionRetries        int           `json:"cup_detection_retries,omitempty"`
+	CupDetectionRetrySleepMs   int           `json:"cup_detection_retry_sleep_ms,omitempty"`
+	// CupCentroidMinZMm clamps each detection's world-frame Z up to this
+	// value when the detected Z falls below it. Use to recover from depth
+	// noise that puts the centroid slightly below the physical cup base
+	// and trips the planner. Zero (default) disables clamping.
+	CupCentroidMinZMm float64 `json:"cup_centroid_min_z_mm,omitempty"`
+
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
 
 	// FakeMode skips AllowedCollision entries that reference gripper
@@ -107,6 +126,31 @@ type Config struct {
 	// ufactory gripper. Set true on fake-hardware test machines; leave
 	// unset on the real bot.
 	FakeMode bool `json:"fake_mode,omitempty"`
+}
+
+// Vec3Mm is a 3D point in millimeters used for world-frame configuration.
+type Vec3Mm struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+}
+
+// RelativePose is a 6-DoF offset (translation in millimeters + orientation as
+// OrientationVectorDegrees) composed onto a runtime point. Used for
+// cup_approach_relative_pose and cup_grab_relative_pose under dynamic cup
+// pickup, where the offset is applied to the detected cup centroid rather
+// than being a world-frame pose. Kept here (not on the pose switch) so that
+// switch-aware tooling (e.g. the test card) doesn't try to drive the arm to
+// these as if they were world-frame goals. If a similar offset concept turns
+// up in another model later, this can move to a shared package.
+type RelativePose struct {
+	X     float64 `json:"x"`
+	Y     float64 `json:"y"`
+	Z     float64 `json:"z"`
+	OX    float64 `json:"o_x"`
+	OY    float64 `json:"o_y"`
+	OZ    float64 `json:"o_z"`
+	Theta float64 `json:"theta"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
@@ -133,6 +177,34 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 	if cfg.CamStorageMuxName != "" {
 		optDeps = append(optDeps, generic.Named(cfg.CamStorageMuxName).String())
+	}
+
+	if cfg.DynamicCupPickup {
+		if cfg.CupVisionServiceName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_vision_service_name")
+		}
+		if cfg.SrcCameraName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "src_camera_name")
+		}
+		if cfg.ExpectedCupPositionMm == nil {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "expected_cup_position_mm")
+		}
+		if cfg.CupApproachRelativePose == nil {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_approach_relative_pose")
+		}
+		if cfg.CupGrabRelativePose == nil {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_grab_relative_pose")
+		}
+		if cfg.CupDetectionRetries < 0 {
+			return nil, nil, fmt.Errorf("%s: cup_detection_retries must be >= 0", path)
+		}
+		if cfg.CupMaxDistanceFromTargetMm == 0 {
+			cfg.CupMaxDistanceFromTargetMm = 300
+		}
+		reqDeps = append(reqDeps,
+			vision.Named(cfg.CupVisionServiceName).String(),
+			camera.Named(cfg.SrcCameraName).String(),
+		)
 	}
 
 	return reqDeps, optDeps, nil
@@ -165,6 +237,8 @@ type beanjaminCoffee struct {
 	queueStop              chan struct{}
 	paused                 atomic.Bool
 	orderSensorSink        orderSensorSink // optional; named order-sensor from deps, nil if unset
+	cupVision              vision.Service  // optional; nil when DynamicCupPickup=false
+	cupCameraName          string          // SrcCameraName, validated to exist in cachedFS
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -227,6 +301,23 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	if err := applyJointLimits(logger, cachedFS, conf.InputRangeOverride); err != nil {
 		cancelFunc()
 		return nil, fmt.Errorf("apply joint limits: %w", err)
+	}
+
+	var cupVision vision.Service
+	var cupCameraName string
+	if conf.DynamicCupPickup {
+		visRes, err := vision.FromProvider(deps, conf.CupVisionServiceName)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("cup vision service %q: %w", conf.CupVisionServiceName, err)
+		}
+		cupVision = visRes
+		if cachedFS.Frame(conf.SrcCameraName) == nil {
+			cancelFunc()
+			return nil, fmt.Errorf("src_camera_name %q not found in frame system — add the camera to the frame system fragment", conf.SrcCameraName)
+		}
+		cupCameraName = conf.SrcCameraName
+		logger.Infof("dynamic cup pickup enabled (vision=%q, camera=%q)", conf.CupVisionServiceName, conf.SrcCameraName)
 	}
 
 	var speech resource.Resource
@@ -308,6 +399,8 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		queue:                NewOrderQueue(),
 		queueStop:            make(chan struct{}),
 		orderSensorSink:      sink,
+		cupVision:            cupVision,
+		cupCameraName:        cupCameraName,
 	}
 	go s.processQueue()
 	return s, nil
