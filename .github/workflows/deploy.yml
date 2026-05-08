@@ -1,7 +1,7 @@
 name: Deploy Module and App
 on:
   push:
-    branches: [main]
+    branches: [test/auto-deploy]
     paths-ignore:
       - 'README.md'
       - 'DEVELOPER_GUIDE.md'
@@ -41,6 +41,7 @@ jobs:
           pre_release_branches: main
           append_to_pre_release_tag: rc
           default_bump: patch
+          dry_run: true
 
       - name: Resolve version
         id: resolve
@@ -55,6 +56,7 @@ jobs:
 
   publish-module:
     needs: [compute-version]
+    if: false
     runs-on: ubuntu-24.04
     steps:
       # actions/checkout@v6.0.2
@@ -72,6 +74,7 @@ jobs:
 
   publish-app:
     needs: [compute-version]
+    if: false
     runs-on: ubuntu-24.04
     steps:
       # actions/checkout@v6.0.2
@@ -109,7 +112,7 @@ jobs:
     name: Send Slack Message
     needs: [compute-version, publish-module, publish-app]
     runs-on: ubuntu-24.04
-    if: always()
+    if: false
     steps:
       - name: Generate metadata
         id: meta
