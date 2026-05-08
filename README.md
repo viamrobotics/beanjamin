@@ -807,7 +807,8 @@ Tactile touch-off calibration. The service drives the arm in a chosen direction 
   "arm_name": "my-arm",
   "pose_switcher_name": "filter-poses-switch",
   "probe_max_travel_mm": 100,
-  "contact_retract_mm": 5,
+  "probe_step_mm": 1,
+  "probe_step_pause_ms": 0,
   "profiles": {
     "espresso-machine": {
       "button_height_above_bottom_mm": 38,
@@ -823,11 +824,12 @@ Tactile touch-off calibration. The service drives the arm in a chosen direction 
 
 | Name                 | Type   | Required | Default | Description                                                                                                                       |
 | -------------------- | ------ | -------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `arm_name`           | string | Yes      | —       | Arm component to probe with.                                                                                                      |
-| `pose_switcher_name` | string | No       | —       | If set, `calibrate {save_as: ...}` writes the computed pose into this `multi-poses-execution-switch` via its `set_pose_value` command. |
-| `probe_max_travel_mm`| float  | No       | `100`   | Upper bound on per-probe travel. Probe aborts if no contact is registered within this distance.                                   |
-| `contact_retract_mm` | float  | No       | `5`     | Distance the arm retracts after registering a contact, before moving on to the next motion.                                       |
-| `profiles`           | object | No       | `{}`    | Named object profiles. Each profile describes the geometry of one machine/object the calibration will be run on.                   |
+| `arm_name`             | string | Yes      | —       | Arm component to probe with.                                                                                                       |
+| `pose_switcher_name`   | string | No       | —       | If set, `calibrate {save_as: ...}` writes the computed pose into this `multi-poses-execution-switch` via its `set_pose_value` command. |
+| `probe_max_travel_mm`  | float  | No       | `100`   | Upper bound on per-probe travel. Probe aborts if no contact is registered within this distance.                                    |
+| `probe_step_mm`        | float  | No       | `1`     | Substep size. Each probe is executed as a sequence of `MoveToPosition` calls, each travelling at most this many mm. Smaller values give finer contact resolution and slower effective speed; larger values reach the surface faster but overshoot more on contact. |
+| `probe_step_pause_ms`  | int    | No       | `0`     | Optional sleep between substeps (milliseconds). Combined with `probe_step_mm`, gives a rough effective probe speed of `step / (move + pause)`. Use a non-zero value if your arm's per-call speed is too high to halt cleanly on contact. |
+| `profiles`             | object | No       | `{}`    | Named object profiles. Each profile describes the geometry of one machine/object the calibration will be run on.                   |
 
 #### Profile fields
 

@@ -16,8 +16,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
+	"time"
 
 	vmodutils "github.com/erh/vmodutils"
 	"github.com/golang/geo/r3"
@@ -35,7 +37,8 @@ var Model = resource.NewModel("viam", "beanjamin", "tactile-probe")
 
 const (
 	defaultProbeMaxTravelMM     = 100.0
-	defaultContactRetractMM     = 5.0
+	defaultProbeStepMM          = 1.0
+	defaultProbeStepPauseMs     = 0
 	defaultSideProbeAboveBottom = 5.0
 	defaultProbeCount           = 1
 	defaultBottomAxis           = "-z"
@@ -55,7 +58,14 @@ type Config struct {
 	PoseSwitcherName string `json:"pose_switcher_name,omitempty"`
 
 	ProbeMaxTravelMM float64 `json:"probe_max_travel_mm,omitempty"`
-	ContactRetractMM float64 `json:"contact_retract_mm,omitempty"`
+	// ProbeStepMM is how far the arm moves per substep during a probe. Smaller
+	// values give finer contact resolution and slower effective speed (each
+	// step incurs MoveToPosition + planner latency); larger values reach the
+	// surface faster but overshoot more.
+	ProbeStepMM float64 `json:"probe_step_mm,omitempty"`
+	// ProbeStepPauseMs is an optional sleep between substeps. Combined with
+	// ProbeStepMM, gives a rough effective probe speed of step / (move + pause).
+	ProbeStepPauseMs int `json:"probe_step_pause_ms,omitempty"`
 
 	Profiles map[string]ObjectProfile `json:"profiles,omitempty"`
 }
@@ -121,11 +131,17 @@ func (c *Config) probeMaxTravel() float64 {
 	}
 	return defaultProbeMaxTravelMM
 }
-func (c *Config) contactRetract() float64 {
-	if c.ContactRetractMM > 0 {
-		return c.ContactRetractMM
+func (c *Config) probeStep() float64 {
+	if c.ProbeStepMM > 0 {
+		return c.ProbeStepMM
 	}
-	return defaultContactRetractMM
+	return defaultProbeStepMM
+}
+func (c *Config) probeStepPause() time.Duration {
+	if c.ProbeStepPauseMs > 0 {
+		return time.Duration(c.ProbeStepPauseMs) * time.Millisecond
+	}
+	return time.Duration(defaultProbeStepPauseMs) * time.Millisecond
 }
 
 func (p ObjectProfile) bottomAxis() string {
@@ -297,52 +313,82 @@ func (s *service) handleListProfiles() (map[string]interface{}, error) {
 
 // --- probe primitives ---
 
-// probeOnce drives the arm `dir * maxTravel` mm from the current pose. The
-// move is expected to fail when the arm contacts something; the EEF pose at
-// that moment is returned as the contact point. If the move completes
-// without contact, the arm is sent back to the start and an error is
-// returned. After contact, the arm retracts `retract` mm along -dir.
-func (s *service) probeOnce(ctx context.Context, dir r3.Vector, maxTravel, retract float64) (spatialmath.Pose, error) {
+// probeOnce drives the arm up to `dir * maxTravel` mm from the current pose,
+// in substeps of `probe_step_mm`. The first substep that errors is treated
+// as a contact event; the EEF pose at that moment is returned. Whether
+// contact happens or not, the arm is finally moved back to the original
+// `start` pose so subsequent probe iterations start from a known position.
+func (s *service) probeOnce(ctx context.Context, dir r3.Vector, maxTravel float64) (spatialmath.Pose, error) {
 	start, err := s.arm.EndPosition(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("EndPosition (start): %w", err)
 	}
-	target := translatePose(start, dir.Mul(maxTravel))
 
-	moveErr := s.arm.MoveToPosition(ctx, target, nil)
-	contact, posErr := s.arm.EndPosition(ctx, nil)
-	if posErr != nil {
-		return nil, fmt.Errorf("EndPosition (after probe): %w", posErr)
-	}
+	step := s.cfg.probeStep()
+	pause := s.cfg.probeStepPause()
+	nSteps := int(math.Ceil(maxTravel / step))
 
-	if moveErr == nil {
-		// No contact within max travel. Move back to start and abort.
-		s.logger.Warnf("probe completed full %.2f mm travel without contact", maxTravel)
-		if err := s.arm.MoveToPosition(ctx, start, nil); err != nil {
-			s.logger.Warnf("probe: failed to return to start after no-contact: %v", err)
+	contact, err := s.driveSubsteps(ctx, start, dir, step, maxTravel, nSteps, pause)
+
+	// Always retract to start, regardless of outcome.
+	if retErr := s.arm.MoveToPosition(ctx, start, nil); retErr != nil {
+		s.logger.Warnf("probe: failed to retract to start: %v", retErr)
+		// If the substep loop already returned an error, prefer that.
+		if err == nil {
+			return nil, fmt.Errorf("retract to start: %w", retErr)
 		}
-		return nil, fmt.Errorf("no contact within %.2f mm", maxTravel)
 	}
+	return contact, err
+}
 
-	s.logger.Infof("probe contact: %s (move error: %v)", formatPoint(contact.Point()), moveErr)
+// driveSubsteps does the inner loop: walk along dir in step-sized increments,
+// returning the contact pose on the first errored substep, or an error if the
+// full max travel completed without contact.
+func (s *service) driveSubsteps(
+	ctx context.Context,
+	start spatialmath.Pose,
+	dir r3.Vector,
+	step, maxTravel float64,
+	nSteps int,
+	pause time.Duration,
+) (spatialmath.Pose, error) {
+	for i := 1; i <= nSteps; i++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
 
-	retractTarget := translatePose(contact, dir.Mul(-retract))
-	if err := s.arm.MoveToPosition(ctx, retractTarget, nil); err != nil {
-		return nil, fmt.Errorf("retract: %w", err)
+		traveled := math.Min(float64(i)*step, maxTravel)
+		target := translatePose(start, dir.Mul(traveled))
+
+		if err := s.arm.MoveToPosition(ctx, target, nil); err != nil {
+			contact, posErr := s.arm.EndPosition(ctx, nil)
+			if posErr != nil {
+				return nil, fmt.Errorf("EndPosition (after contact at substep %d/%d): %w", i, nSteps, posErr)
+			}
+			s.logger.Infof("probe contact at substep %d/%d: requested %s, recorded %s (move error: %v)",
+				i, nSteps, formatPoint(target.Point()), formatPoint(contact.Point()), err)
+			return contact, nil
+		}
+
+		if pause > 0 {
+			time.Sleep(pause)
+		}
 	}
-	return contact, nil
+	return nil, fmt.Errorf("no contact within %.2f mm (%d substeps)", maxTravel, nSteps)
 }
 
 // probeRepeat runs probeOnce `count` times and returns the per-iteration
-// contact poses. Caller decides how to combine them (typically averaging the
-// relevant axis only).
-func (s *service) probeRepeat(ctx context.Context, dir r3.Vector, maxTravel, retract float64, count int) ([]spatialmath.Pose, error) {
+// contact poses. Each iteration retracts to its own start, so subsequent
+// iterations begin from the same pose as the first.
+func (s *service) probeRepeat(ctx context.Context, dir r3.Vector, maxTravel float64, count int) ([]spatialmath.Pose, error) {
 	if count < 1 {
 		count = 1
 	}
 	out := make([]spatialmath.Pose, 0, count)
 	for i := 0; i < count; i++ {
-		p, err := s.probeOnce(ctx, dir, maxTravel, retract)
+		p, err := s.probeOnce(ctx, dir, maxTravel)
 		if err != nil {
 			return nil, fmt.Errorf("probe iteration %d/%d: %w", i+1, count, err)
 		}
@@ -359,7 +405,7 @@ func (s *service) handleProbeBottom(ctx context.Context, cmd map[string]interfac
 		return nil, err
 	}
 	dir, _ := axisVector(profile.bottomAxis())
-	contacts, err := s.probeRepeat(ctx, dir, s.cfg.probeMaxTravel(), s.cfg.contactRetract(), profile.probeCount())
+	contacts, err := s.probeRepeat(ctx, dir, s.cfg.probeMaxTravel(), profile.probeCount())
 	if err != nil {
 		return nil, err
 	}
@@ -384,11 +430,11 @@ func (s *service) handleProbeWidth(ctx context.Context, cmd map[string]interface
 		maxTravel = profile.MaxWidthMM
 	}
 
-	posContacts, err := s.probeRepeat(ctx, dirPos, maxTravel, s.cfg.contactRetract(), profile.probeCount())
+	posContacts, err := s.probeRepeat(ctx, dirPos, maxTravel, profile.probeCount())
 	if err != nil {
 		return nil, fmt.Errorf("+%s probe: %w", profile.centerAxis(), err)
 	}
-	negContacts, err := s.probeRepeat(ctx, dirNeg, maxTravel, s.cfg.contactRetract(), profile.probeCount())
+	negContacts, err := s.probeRepeat(ctx, dirNeg, maxTravel, profile.probeCount())
 	if err != nil {
 		return nil, fmt.Errorf("-%s probe: %w", profile.centerAxis(), err)
 	}
@@ -422,7 +468,7 @@ func (s *service) handleCalibrate(ctx context.Context, cmd map[string]interface{
 
 	// 1. Probe bottom.
 	bottomDir, _ := axisVector(profile.bottomAxis())
-	bottomContacts, err := s.probeRepeat(ctx, bottomDir, s.cfg.probeMaxTravel(), s.cfg.contactRetract(), profile.probeCount())
+	bottomContacts, err := s.probeRepeat(ctx, bottomDir, s.cfg.probeMaxTravel(), profile.probeCount())
 	if err != nil {
 		return nil, fmt.Errorf("bottom probe: %w", err)
 	}
@@ -449,11 +495,11 @@ func (s *service) handleCalibrate(ctx context.Context, cmd map[string]interface{
 	if profile.MaxWidthMM > 0 && profile.MaxWidthMM < maxWidth {
 		maxWidth = profile.MaxWidthMM
 	}
-	posContacts, err := s.probeRepeat(ctx, centerDir, maxWidth, s.cfg.contactRetract(), profile.probeCount())
+	posContacts, err := s.probeRepeat(ctx, centerDir, maxWidth, profile.probeCount())
 	if err != nil {
 		return nil, fmt.Errorf("+%s probe: %w", profile.centerAxis(), err)
 	}
-	negContacts, err := s.probeRepeat(ctx, centerDir.Mul(-1), maxWidth, s.cfg.contactRetract(), profile.probeCount())
+	negContacts, err := s.probeRepeat(ctx, centerDir.Mul(-1), maxWidth, profile.probeCount())
 	if err != nil {
 		return nil, fmt.Errorf("-%s probe: %w", profile.centerAxis(), err)
 	}
