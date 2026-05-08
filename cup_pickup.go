@@ -2,7 +2,7 @@
 //
 // pickCupDynamic replaces the static empty_cup grab in setCupForCoffee
 // when dynamic_cup_pickup is enabled. It moves the arm to the configured
-// cup_observe_pose (a real world-frame pose on the claws pose switch),
+// cup_observe (a real world-frame pose on the claws pose switch),
 // calls a vision service for cup detections, lifts each centroid into
 // world frame, picks the closest detection within range, composes the
 // configured approach/grab relative poses (from Config — they are
@@ -174,7 +174,7 @@ func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, er
 	return chosen, nil
 }
 
-// pickCupDynamic moves the arm to the configured cup_observe_pose, observes
+// pickCupDynamic moves the arm to the configured cup_observe, observes
 // the closest cup via the vision service, and executes a side-grab using
 // the cup_approach_relative_pose / cup_grab_relative_pose offsets from
 // Config composed onto the detected centroid. Called by setCupForCoffee
@@ -195,7 +195,7 @@ func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 	}
 
 	// 1. Move to observe pose.
-	observeStep := Step{PoseName: "cup_observe_pose", Component: "coffee-claws-middle", Pause: shortPause}
+	observeStep := Step{PoseName: "cup_observe", Component: "coffee-claws-middle", Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, observeStep); err != nil {
 		return fmt.Errorf("dynamic_cup_pickup: observe: %w", err)
 	}

@@ -260,7 +260,7 @@ When `dynamic_cup_pickup` is enabled, one additional named pose must exist on th
 
 | Pose name           | Type                | Description |
 | ------------------- | ------------------- | ----------- |
-| `cup_observe_pose`  | Absolute world pose | Arm moves here before querying the vision service to get a clear view of the cup workspace. |
+| `cup_observe`       | Absolute world pose | Arm moves here before querying the vision service to get a clear view of the cup workspace. |
 
 ### DoCommand
 
