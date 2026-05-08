@@ -798,7 +798,11 @@ Once you've found the right poses, add them to your `multi-poses-execution-switc
 
 Tactile touch-off calibration. The service drives the arm in a chosen direction and treats a `MoveToPosition` failure as a contact event — reading the EEF position at the moment of failure as the contact point. It can probe a single surface or run a full calibration: probe down to find a bottom index surface, probe both sides at a fixed clearance to find the horizontal centerline, then compute a button pose from a configured object profile and (optionally) write it into a `multi-poses-execution-switch` via that switch's `set_pose_value` command.
 
-> **Contact detection requirement.** This model assumes the arm halts (and `MoveToPosition` returns an error) on physical contact above some force threshold. On most ufactory arms this is configured via collision-sensitivity settings on the arm component itself; tune those before running calibration.
+> **Contact detection.** Two complementary mechanisms:
+> 1. **MoveToPosition halt.** When the arm controller halts a move (because of its built-in collision sensitivity), `MoveToPosition` returns an error and the service treats that as contact.
+> 2. **Joint-load polling.** If `load_threshold` is set, the service polls `arm.DoCommand({"load": true})` between substeps and declares contact when any joint's load deviates from a rolling baseline by more than the threshold (Nm). This is generally more sensitive than the controller's built-in halt — useful when the arm is willing to push through a soft contact without erroring.
+> 
+> Whichever fires first wins. Tune via `load_threshold` and the arm component's own collision-sensitivity setting.
 
 ### Configuration
 
@@ -809,6 +813,9 @@ Tactile touch-off calibration. The service drives the arm in a chosen direction 
   "probe_max_travel_mm": 100,
   "probe_step_mm": 1,
   "probe_step_pause_ms": 0,
+  "load_threshold": 1.0,
+  "load_baseline_samples": 10,
+  "load_baseline_alpha": 0.1,
   "profiles": {
     "espresso-machine": {
       "button_height_above_bottom_mm": 38,
@@ -829,6 +836,9 @@ Tactile touch-off calibration. The service drives the arm in a chosen direction 
 | `probe_max_travel_mm`  | float  | No       | `100`   | Upper bound on per-probe travel. Probe aborts if no contact is registered within this distance.                                    |
 | `probe_step_mm`        | float  | No       | `1`     | Substep size. Each probe is executed as a sequence of `MoveToPosition` calls, each travelling at most this many mm. Smaller values give finer contact resolution and slower effective speed; larger values reach the surface faster but overshoot more on contact. |
 | `probe_step_pause_ms`  | int    | No       | `0`     | Optional sleep between substeps (milliseconds). Combined with `probe_step_mm`, gives a rough effective probe speed of `step / (move + pause)`. Use a non-zero value if your arm's per-call speed is too high to halt cleanly on contact. |
+| `load_threshold`       | float  | No       | `0`     | Per-joint absolute load delta (Nm) above the running baseline that signals contact. When `0`, load-based detection is disabled and the probe relies solely on `MoveToPosition` returning an error. Set non-zero (e.g. `1.0`) to enable detection via `arm.DoCommand({"load": true})` polling between substeps. |
+| `load_baseline_samples`| int    | No       | `10`    | Number of stationary load readings taken at the start of each probe to establish the per-joint baseline.                            |
+| `load_baseline_alpha`  | float  | No       | `0.1`   | EWMA factor in `(0, 1]` used to drift the baseline as probing progresses, so gradual gravity-load shifts (caused by the arm changing pose) get absorbed instead of triggering false contact. Smaller = slower drift = more sensitive to sustained load changes. |
 | `profiles`             | object | No       | `{}`    | Named object profiles. Each profile describes the geometry of one machine/object the calibration will be run on.                   |
 
 #### Profile fields

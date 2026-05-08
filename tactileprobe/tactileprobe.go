@@ -343,21 +343,34 @@ func (s *service) handleListProfiles() (map[string]interface{}, error) {
 // --- probe primitives ---
 
 // probeOnce drives the arm up to `dir * maxTravel` mm from the current pose,
-// in substeps of `probe_step_mm`. The first substep that errors is treated
-// as a contact event; the EEF pose at that moment is returned. Whether
-// contact happens or not, the arm is finally moved back to the original
-// `start` pose so subsequent probe iterations start from a known position.
+// in substeps of `probe_step_mm`. Contact is detected by either:
+//   - MoveToPosition returning an error (the arm's built-in collision halt), or
+//   - the joint-load reading rising above a baseline by more than
+//     `load_threshold` Nm (only if load_threshold > 0).
+//
+// The EEF pose at the moment of contact is returned. Whether contact happens
+// or not, the arm is finally moved back to the original `start` pose so
+// subsequent probe iterations start from a known position.
 func (s *service) probeOnce(ctx context.Context, dir r3.Vector, maxTravel float64) (spatialmath.Pose, error) {
 	start, err := s.arm.EndPosition(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("EndPosition (start): %w", err)
 	}
 
+	var baseline []float64
+	if s.cfg.loadEnabled() {
+		baseline, err = s.establishLoadBaseline(ctx, s.cfg.loadBaselineSamples())
+		if err != nil {
+			return nil, fmt.Errorf("establish load baseline: %w", err)
+		}
+		s.logger.Infof("probe load baseline (n=%d): %v", s.cfg.loadBaselineSamples(), baseline)
+	}
+
 	step := s.cfg.probeStep()
 	pause := s.cfg.probeStepPause()
 	nSteps := int(math.Ceil(maxTravel / step))
 
-	contact, err := s.driveSubsteps(ctx, start, dir, step, maxTravel, nSteps, pause)
+	contact, err := s.driveSubsteps(ctx, start, dir, step, maxTravel, nSteps, pause, baseline)
 
 	// Always retract to start, regardless of outcome.
 	if retErr := s.arm.MoveToPosition(ctx, start, nil); retErr != nil {
@@ -370,9 +383,11 @@ func (s *service) probeOnce(ctx context.Context, dir r3.Vector, maxTravel float6
 	return contact, err
 }
 
-// driveSubsteps does the inner loop: walk along dir in step-sized increments,
-// returning the contact pose on the first errored substep, or an error if the
-// full max travel completed without contact.
+// driveSubsteps walks along dir in step-sized increments, returning the
+// contact pose on the first substep where either MoveToPosition errors or the
+// joint-load reading exceeds the baseline by more than load_threshold. If
+// `baseline` is nil, load polling is skipped. Returns an error if full max
+// travel completed without contact.
 func (s *service) driveSubsteps(
 	ctx context.Context,
 	start spatialmath.Pose,
@@ -380,7 +395,12 @@ func (s *service) driveSubsteps(
 	step, maxTravel float64,
 	nSteps int,
 	pause time.Duration,
+	baseline []float64,
 ) (spatialmath.Pose, error) {
+	threshold := s.cfg.LoadThreshold
+	alpha := s.cfg.loadBaselineAlpha()
+	usingLoad := baseline != nil
+
 	for i := 1; i <= nSteps; i++ {
 		select {
 		case <-ctx.Done():
@@ -396,9 +416,36 @@ func (s *service) driveSubsteps(
 			if posErr != nil {
 				return nil, fmt.Errorf("EndPosition (after contact at substep %d/%d): %w", i, nSteps, posErr)
 			}
-			s.logger.Infof("probe contact at substep %d/%d: requested %s, recorded %s (move error: %v)",
+			s.logger.Infof("probe contact (move error) at substep %d/%d: requested %s, recorded %s (err: %v)",
 				i, nSteps, formatPoint(target.Point()), formatPoint(contact.Point()), err)
 			return contact, nil
+		}
+
+		if usingLoad {
+			load, err := s.readLoad(ctx)
+			if err != nil {
+				s.logger.Warnf("probe substep %d: read_load failed: %v", i, err)
+			} else if len(load) != len(baseline) {
+				s.logger.Warnf("probe substep %d: load length %d != baseline length %d", i, len(load), len(baseline))
+			} else {
+				maxAbsDelta, joint := maxAbsDelta(load, baseline)
+				s.logger.Debugf("probe substep %d/%d: load=%v baseline=%v max_delta=%.3f Nm (j%d)",
+					i, nSteps, load, baseline, maxAbsDelta, joint)
+				if maxAbsDelta > threshold {
+					contact, posErr := s.arm.EndPosition(ctx, nil)
+					if posErr != nil {
+						return nil, fmt.Errorf("EndPosition (after load contact at substep %d/%d): %w", i, nSteps, posErr)
+					}
+					s.logger.Infof("probe contact (load) at substep %d/%d: requested %s, recorded %s (j%d delta=%.3f Nm > threshold %.3f)",
+						i, nSteps, formatPoint(target.Point()), formatPoint(contact.Point()), joint, maxAbsDelta, threshold)
+					return contact, nil
+				}
+				// No contact — drift baseline toward the latest sample so
+				// gradual gravity-load shifts get absorbed.
+				for j := range baseline {
+					baseline[j] = (1-alpha)*baseline[j] + alpha*load[j]
+				}
+			}
 		}
 
 		if pause > 0 {
@@ -406,6 +453,78 @@ func (s *service) driveSubsteps(
 		}
 	}
 	return nil, fmt.Errorf("no contact within %.2f mm (%d substeps)", maxTravel, nSteps)
+}
+
+// readLoad calls arm.DoCommand({"load": true}) and parses the numeric array.
+func (s *service) readLoad(ctx context.Context) ([]float64, error) {
+	resp, err := s.arm.DoCommand(ctx, map[string]interface{}{"load": true})
+	if err != nil {
+		return nil, fmt.Errorf("arm.DoCommand: %w", err)
+	}
+	raw, ok := resp["load"]
+	if !ok {
+		return nil, fmt.Errorf("response missing %q key (got %v)", "load", resp)
+	}
+	arr, ok := raw.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("load field is %T, expected []interface{}", raw)
+	}
+	out := make([]float64, len(arr))
+	for i, v := range arr {
+		f, ok := v.(float64)
+		if !ok {
+			return nil, fmt.Errorf("load[%d] is %T, expected float64", i, v)
+		}
+		out[i] = f
+	}
+	return out, nil
+}
+
+// establishLoadBaseline takes n stationary load readings and returns the mean
+// per joint. The arm should be at rest (post-positioning, pre-probe).
+func (s *service) establishLoadBaseline(ctx context.Context, n int) ([]float64, error) {
+	if n < 1 {
+		n = 1
+	}
+	var sum []float64
+	for i := 0; i < n; i++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+		load, err := s.readLoad(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("baseline sample %d/%d: %w", i+1, n, err)
+		}
+		if sum == nil {
+			sum = make([]float64, len(load))
+		} else if len(load) != len(sum) {
+			return nil, fmt.Errorf("baseline sample %d: load length changed (%d → %d)", i+1, len(sum), len(load))
+		}
+		for j, v := range load {
+			sum[j] += v
+		}
+	}
+	for j := range sum {
+		sum[j] /= float64(n)
+	}
+	return sum, nil
+}
+
+// maxAbsDelta returns max over j of |a[j]-b[j]| and the index of the joint
+// where it occurred. Slices are assumed equal-length and non-empty.
+func maxAbsDelta(a, b []float64) (float64, int) {
+	max := 0.0
+	idx := 0
+	for j := range a {
+		d := math.Abs(a[j] - b[j])
+		if d > max {
+			max = d
+			idx = j
+		}
+	}
+	return max, idx
 }
 
 // probeRepeat runs probeOnce `count` times and returns the per-iteration
