@@ -30,11 +30,6 @@ import (
 
 var Model = resource.NewModel("viam", "beanjamin", "dial-control-motion")
 
-// ModuleVersion is a hand-bumped marker that proves which iteration of this
-// model is actually running. Bump it whenever you change behavior so a
-// machine's logs reveal whether the new code is loaded.
-const ModuleVersion = "v10-body-frame-rotation-2026-05-07"
-
 const (
 	axisModeTranslation = "translation"
 	axisModeRotation    = "rotation"
@@ -265,7 +260,6 @@ func newDialControlMotion(_ context.Context, deps resource.Dependencies, rawConf
 	}
 
 	logger.Infow("dial-control-motion starting",
-		"module_version", ModuleVersion,
 		"vcs_revision", buildRevision(),
 		"drain_interval_ms", conf.DrainIntervalMs,
 		"accel_threshold_count", conf.AccelThresholdCount,
@@ -375,7 +369,7 @@ func (s *dialControlMotion) toggleAxisMode() (map[string]interface{}, error) {
 	}
 	mode := s.axisMode
 	s.dialMu.Unlock()
-	s.logger.Infow("axis mode toggled", "module_version", ModuleVersion, "axis_mode", mode)
+	s.logger.Infow("axis mode toggled", "axis_mode", mode)
 	return map[string]interface{}{"status": "toggled", "axis_mode": mode}, nil
 }
 
@@ -390,7 +384,7 @@ func (s *dialControlMotion) setAxisMode(v interface{}) (map[string]interface{}, 
 	s.dialMu.Lock()
 	s.axisMode = requested
 	s.dialMu.Unlock()
-	s.logger.Infow("axis mode set", "module_version", ModuleVersion, "axis_mode", requested)
+	s.logger.Infow("axis mode set", "axis_mode", requested)
 	return map[string]interface{}{"status": "set", "axis_mode": requested}, nil
 }
 
@@ -491,7 +485,6 @@ func (s *dialControlMotion) handleDialMove(axis string, dialValue interface{}) (
 	s.pendingMu.Unlock()
 
 	s.logger.Debugw("dial detent queued",
-		"module_version", ModuleVersion,
 		"axis", axis,
 		"dial_value", dialVal,
 		"delta", delta,
@@ -535,7 +528,6 @@ func (s *dialControlMotion) drainLoop() {
 				multipliers[axis] = s.accelMultiplier(s.smoothedCounts[axis], axis)
 			}
 			s.logger.Debugw("dial drain flush",
-				"module_version", ModuleVersion,
 				"pending", pending,
 				"counts", counts,
 				"smoothed", s.smoothedCounts,

@@ -344,26 +344,26 @@ Translates Stream Deck dial inputs into relative arm motions. Each dial tick con
 }
 ```
 
-| Name                       | Type   | Required | Description                                                                                                                            |
-| -------------------------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `arm_name`                 | string | Yes      | Name of the arm component to move.                                                                                                     |
-| `dial_move_x_mm`           | float  | No       | Base millimeters per dial detent on the X axis. Defaults to `1`.                                                                       |
-| `dial_move_y_mm`           | float  | No       | Base millimeters per dial detent on the Y axis. Defaults to `1`.                                                                       |
-| `dial_move_z_mm`           | float  | No       | Base millimeters per dial detent on the Z axis. Defaults to `1`.                                                                       |
-| `dial_move_orientation_mm` | float  | No       | Base millimeters per dial detent along the tool's orientation vector. Defaults to `1`.                                                 |
-| `dial_move_rx_deg`         | float  | No       | Base degrees per dial detent rotating around world X. Defaults to `1`.                                                                 |
-| `dial_move_ry_deg`         | float  | No       | Base degrees per dial detent rotating around world Y. Defaults to `1`.                                                                 |
-| `dial_move_rz_deg`         | float  | No       | Base degrees per dial detent rotating around world Z. Defaults to `1`.                                                                 |
-| `dial_max_position`        | float  | No       | Maximum dial position value, used for rollover detection. Defaults to `100`.                                                           |
-| `drain_interval_ms`        | int    | No       | Flush cadence in milliseconds. Detents arriving within a window are summed before being applied. Defaults to `20` (50 Hz).             |
-| `accel_threshold_count`    | float  | No       | Translation: smoothed-detent count at which multiplier reaches `1×`. Below this it's pinned to `1×`. Defaults to `1` so acceleration ramps from the first detent.                          |
-| `accel_max_multiplier`     | float  | No       | Translation: upper bound on the acceleration multiplier at high spin rates. Defaults to `10`.                                                       |
-| `accel_exponent`           | float  | No       | Translation: curve shape, `1` linear, `2` quadratic. Defaults to `1.5`. Multiplier = `clamp((smoothed/threshold)^exponent, 1, max)`.                |
-| `accel_smoothing_alpha`    | float  | No       | Translation: EWMA factor in `(0, 1]` applied to the per-axis detent count across drain windows. `1` = no smoothing (instant); smaller = smoother / laggier. Defaults to `0.4`. |
-| `accel_rotation_threshold_count` | float | No   | Rotation override for `accel_threshold_count`. If unset, falls back to the translation value.                                          |
-| `accel_rotation_max_multiplier`  | float | No   | Rotation override for `accel_max_multiplier`. If unset, falls back to the translation value.                                           |
-| `accel_rotation_exponent`        | float | No   | Rotation override for `accel_exponent`. If unset, falls back to the translation value.                                                 |
-| `accel_rotation_smoothing_alpha` | float | No   | Rotation override for `accel_smoothing_alpha`. If unset, falls back to the translation value.                                          |
+| Name                              | Type   | Required | Default        | Description                                                                                                                            |
+| --------------------------------- | ------ | -------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `arm_name`                        | string | Yes      | —              | Name of the arm component to move.                                                                                                     |
+| `dial_move_x_mm`                  | float  | No       | `1`            | Base millimeters per dial detent on the X axis.                                                                                        |
+| `dial_move_y_mm`                  | float  | No       | `1`            | Base millimeters per dial detent on the Y axis.                                                                                        |
+| `dial_move_z_mm`                  | float  | No       | `1`            | Base millimeters per dial detent on the Z axis.                                                                                        |
+| `dial_move_orientation_mm`        | float  | No       | `1`            | Base millimeters per dial detent along the tool's orientation vector.                                                                  |
+| `dial_move_rx_deg`                | float  | No       | `1`            | Base degrees per dial detent rotating around the body's local X.                                                                       |
+| `dial_move_ry_deg`                | float  | No       | `1`            | Base degrees per dial detent rotating around the body's local Y.                                                                       |
+| `dial_move_rz_deg`                | float  | No       | `1`            | Base degrees per dial detent rotating around the body's local Z.                                                                       |
+| `dial_max_position`               | float  | No       | `100`          | Maximum dial position value, used for rollover detection.                                                                              |
+| `drain_interval_ms`               | int    | No       | `20` (50 Hz)   | Flush cadence in milliseconds. Detents arriving within a window are summed before being applied.                                       |
+| `accel_threshold_count`           | float  | No       | `1`            | Translation: smoothed-detent count at which multiplier reaches `1×`. Below this it's pinned to `1×`. Default of `1` ramps from the first detent. |
+| `accel_max_multiplier`            | float  | No       | `10`           | Translation: upper bound on the acceleration multiplier at high spin rates.                                                            |
+| `accel_exponent`                  | float  | No       | `1.5`          | Translation: curve shape, `1` linear, `2` quadratic. Multiplier = `clamp((smoothed/threshold)^exponent, 1, max)`.                      |
+| `accel_smoothing_alpha`           | float  | No       | `0.4`          | Translation: EWMA factor in `(0, 1]` across drain windows. `1` = no smoothing (instant); smaller = smoother / laggier.                 |
+| `accel_rotation_threshold_count`  | float  | No       | translation    | Rotation override for `accel_threshold_count`. Falls back to the translation value if unset.                                           |
+| `accel_rotation_max_multiplier`   | float  | No       | translation    | Rotation override for `accel_max_multiplier`. Falls back to the translation value if unset.                                            |
+| `accel_rotation_exponent`         | float  | No       | translation    | Rotation override for `accel_exponent`. Falls back to the translation value if unset.                                                  |
+| `accel_rotation_smoothing_alpha`  | float  | No       | translation    | Rotation override for `accel_smoothing_alpha`. Falls back to the translation value if unset.                                           |
 
 ### DoCommand
 
