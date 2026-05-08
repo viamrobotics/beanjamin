@@ -43,6 +43,9 @@ const (
 	defaultProbeCount           = 1
 	defaultBottomAxis           = "-z"
 	defaultCenterAxis           = "y"
+
+	defaultLoadBaselineSamples = 10
+	defaultLoadBaselineAlpha   = 0.1
 )
 
 func init() {
@@ -66,6 +69,19 @@ type Config struct {
 	// ProbeStepPauseMs is an optional sleep between substeps. Combined with
 	// ProbeStepMM, gives a rough effective probe speed of step / (move + pause).
 	ProbeStepPauseMs int `json:"probe_step_pause_ms,omitempty"`
+
+	// LoadThreshold (Nm) is the abs-delta from the rolling baseline at which a
+	// joint load reading is treated as a contact event. If zero, load-based
+	// contact detection is disabled and the probe relies solely on
+	// MoveToPosition returning an error to declare contact.
+	LoadThreshold float64 `json:"load_threshold,omitempty"`
+	// LoadBaselineSamples is how many readings are taken before probing begins
+	// to establish the joint-load baseline. Default 10.
+	LoadBaselineSamples int `json:"load_baseline_samples,omitempty"`
+	// LoadBaselineAlpha is the EWMA factor used to drift the baseline as the
+	// arm pose changes during probing (so gradual gravity-load shifts don't
+	// trigger false contact). Range (0, 1]; default 0.1 (gentle drift).
+	LoadBaselineAlpha float64 `json:"load_baseline_alpha,omitempty"`
 
 	Profiles map[string]ObjectProfile `json:"profiles,omitempty"`
 }
@@ -142,6 +158,19 @@ func (c *Config) probeStepPause() time.Duration {
 		return time.Duration(c.ProbeStepPauseMs) * time.Millisecond
 	}
 	return time.Duration(defaultProbeStepPauseMs) * time.Millisecond
+}
+func (c *Config) loadEnabled() bool { return c.LoadThreshold > 0 }
+func (c *Config) loadBaselineSamples() int {
+	if c.LoadBaselineSamples > 0 {
+		return c.LoadBaselineSamples
+	}
+	return defaultLoadBaselineSamples
+}
+func (c *Config) loadBaselineAlpha() float64 {
+	if c.LoadBaselineAlpha > 0 && c.LoadBaselineAlpha <= 1 {
+		return c.LoadBaselineAlpha
+	}
+	return defaultLoadBaselineAlpha
 }
 
 func (p ObjectProfile) bottomAxis() string {
