@@ -154,6 +154,11 @@ func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, er
 				return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %w", err)
 			}
 		}
+		if floor := s.cfg.CupCentroidMinZMm; floor != 0 && world.Z < floor {
+			s.logger.Infof("dynamic cup pickup: flooring centroid Z from %.1f to %.1f (cup_centroid_min_z_mm)",
+				world.Z, floor)
+			world.Z = floor
+		}
 		s.logger.Debugf("dynamic cup pickup: detection at camera-local %v -> world %v", local, world)
 		centroids = append(centroids, world)
 	}

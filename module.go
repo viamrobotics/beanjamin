@@ -104,6 +104,11 @@ type Config struct {
 	CupMaxDistanceFromTargetMm float64       `json:"cup_max_distance_from_target_mm,omitempty"`
 	CupDetectionRetries        int           `json:"cup_detection_retries,omitempty"`
 	CupDetectionRetrySleepMs   int           `json:"cup_detection_retry_sleep_ms,omitempty"`
+	// CupCentroidMinZMm clamps each detection's world-frame Z up to this
+	// value when the detected Z falls below it. Use to recover from depth
+	// noise that puts the centroid slightly below the physical cup base
+	// and trips the planner. Zero (default) disables clamping.
+	CupCentroidMinZMm float64 `json:"cup_centroid_min_z_mm,omitempty"`
 	// DetectionsAreWorldFrame skips the camera->world transform on vision
 	// detections when true. The default-false path is correct for vision
 	// services like detections-to-segments that return centroids in the
