@@ -820,8 +820,7 @@ Tactile touch-off calibration. The service drives the arm in a chosen direction 
   "profiles": {
     "espresso-machine": {
       "button_height_above_bottom_mm": 38,
-      "side_probe_above_bottom_mm": 5,
-      "max_width_mm": 90,
+      "probe_axis_offset_mm": 50,
       "bottom_axis": "-z",
       "center_axis": "y",
       "probe_count": 3
@@ -848,11 +847,14 @@ Tactile touch-off calibration. The service drives the arm in a chosen direction 
 | Name                            | Type   | Required | Default | Description                                                                                                  |
 | ------------------------------- | ------ | -------- | ------- | ------------------------------------------------------------------------------------------------------------ |
 | `button_height_above_bottom_mm` | float  | Yes      | —       | Vertical offset of the button above the bottom index surface.                                                |
-| `side_probe_above_bottom_mm`    | float  | No       | `5`     | Clearance above the just-found bottom at which the side probes happen.                                       |
-| `max_width_mm`                  | float  | No       | —       | Caps per-side probe travel. Falls back to the service-level `probe_max_travel_mm` when zero.                 |
+| `probe_axis_offset_mm`          | float  | No       | `0`     | Scalar distance the probe tip extends past the EEF origin in the probing direction. Affects the **reported** surface position; the **saved** button-EEF pose is unaffected (the offset cancels because the same probe geometry probes and presses). |
 | `bottom_axis`                   | string | No       | `-z`    | Direction the arm probes to find the bottom index surface. One of `+x, -x, +y, -y, +z, -z`.                  |
-| `center_axis`                   | string | No       | `y`     | Axis along which the arm probes both directions to find the object's centerline. The probe is run as `+axis` then `-axis`. |
+| `center_axis`                   | string | No       | `y`     | World axis the operator visually centers the probe along before calling `calibrate`. The start pose's coordinate along this axis is captured into `center_axis_value_mm`. Also used by the standalone `probe_width` command. |
 | `probe_count`                   | int    | No       | `1`     | How many times each surface is probed; results are averaged.                                                 |
+| `side_probe_above_bottom_mm`    | float  | No       | `5`     | Clearance above the just-found bottom at which `probe_width` operates. Unused by `calibrate`.                |
+| `max_width_mm`                  | float  | No       | —       | Caps per-side probe travel for `probe_width`. Falls back to `probe_max_travel_mm` when zero. Unused by `calibrate`. |
+| `center_axis_value_mm`          | float  | output   | —       | **Auto-populated by `calibrate`.** World-frame coordinate (along `center_axis`) of the start pose at the time of the last calibration. Reflects whatever position the operator visually centered the probe at. |
+| `probe_axis_value_mm`           | float  | output   | —       | **Auto-populated by `calibrate`.** World-frame coordinate (along the `bottom_axis` dimension) of the bottom surface measured by the last calibration. Includes `probe_axis_offset_mm`. |
 
 ### DoCommand
 
@@ -894,14 +896,14 @@ Tactile touch-off calibration. The service drives the arm in a chosen direction 
 { "probe_width": true, "profile": "espresso-machine" }
 ```
 
-**`calibrate`** — Run the full sequence from the current arm pose:
+**`calibrate`** — Single-axis calibration. The operator centers the probe horizontally by eye, the arm probes vertically, and the result is baked into the profile (and optionally the pose switcher).
 
-1. Probe `bottom_axis` `probe_count` times. Average → bottom point.
-2. Move to a side-probe pose: same coords as the start, but with the bottom-axis component set to the just-found bottom plus `side_probe_above_bottom_mm` of clearance.
-3. Probe `+center_axis`, then `-center_axis`, each `probe_count` times. Average → centerline.
-4. Compose the button pose: center-axis = found centerline, bottom-axis = found bottom + `button_height_above_bottom_mm`, all other components and orientation inherited from the start pose.
-5. Move the arm back to the start pose.
-6. If `save_as` is set and `pose_switcher_name` is configured, call `set_pose_value` on the switch to persist the pose under that name.
+1. Record the start pose. The start pose's orientation and non-bottom-axis coordinates carry into the saved button pose, so position the arm exactly as it should be when pressing the button — except for the bottom-axis coordinate, which `calibrate` will fill in.
+2. Probe along `bottom_axis` `probe_count` times. Average the EEF contacts; subtract the probe-axis offset to get the surface position.
+3. Compose the button pose: bottom-axis component = `contact + button_height_above_bottom_mm`, all other components and orientation inherited from the start pose. (The probe-axis offset cancels — see the geometry note below.)
+4. Move the arm back to the start pose.
+5. If the profile was passed by name, update the named profile's `center_axis_value_mm` (start pose's coord along `center_axis`) and `probe_axis_value_mm` (surface coord along the `bottom_axis` dimension), then persist to cloud config.
+6. If `save_as` is set and `pose_switcher_name` is configured, call `set_pose_value` on the switch to persist the EEF pose under that name.
 
 ```json
 { "calibrate": true, "profile": "espresso-machine", "save_as": "espresso-button" }
@@ -911,17 +913,43 @@ Returns:
 
 ```json
 {
-  "button_pose":  {"x": 245.1, "y": 0.0, "z": 312.7, "o_x": 1, "o_y": 0, "o_z": 0, "theta": 0},
-  "bottom_mean":  {"x": 245.1, "y": 0.0, "z": 274.7},
-  "center_value": 0.0,
-  "profile":      "espresso-machine",
-  "saved_as":     "espresso-button"
+  "button_pose":         {"x": 245.1, "y": -78.32, "z": 312.7, "o_x": 1, "o_y": 0, "o_z": 0, "theta": 0},
+  "contact_mean":        {"x": 245.1, "y": -78.32, "z": 274.7},
+  "surface_mean":        {"x": 245.1, "y": -78.32, "z": 224.7},
+  "center_axis":         "y",
+  "center_axis_value":   -78.32,
+  "bottom_axis":         "-z",
+  "probe_axis_value":    224.7,
+  "probe_axis_offset":   50,
+  "profile":             "espresso-machine",
+  "profile_updated":     true,
+  "saved_as":            "espresso-button"
 }
 ```
 
+`contact_mean` is the EEF position at contact; `surface_mean` is `contact_mean + bottom_axis · probe_axis_offset_mm` — the actual surface location.
+
+### Geometry note
+
+For a probe attached rigidly to the EEF, the probe-axis offset is the distance from the EEF origin to the probe tip along the probe direction. When `calibrate` runs:
+
+- The EEF descends until the probe tip contacts the surface.
+- `contact_mean.z` is the EEF's z-position at that moment.
+- The actual surface is `probe_axis_offset_mm` farther along the probe direction (i.e. `surface.z = contact.z - offset` for `bottom_axis="-z"`).
+
+For the saved button pose, the offset cancels:
+
+- Button position (where the tip needs to go) = surface + button_height.
+- For the EEF to put the tip there, EEF position = button + offset = (surface + button_height) + offset = (contact - offset) + button_height + offset = **contact + button_height**.
+
+So you pay the cost of measuring the offset once for accurate `surface_mean` and `probe_axis_value` reporting, but the saved EEF pose is correct regardless.
+
 ### Workflow
 
-1. Drive the arm — using the dial controller or pose presets — to a known "start pose" near the object: directly above where you want to probe down, with the tool oriented as it will need to be when pressing the button.
+1. Drive the arm — using the dial controller or pose presets — to a known "start pose" near the object:
+   - Visually center the probe along the configured `center_axis` over the target.
+   - Park at a probing height above the bottom surface.
+   - Hold the orientation you want for pressing.
 2. Call `calibrate {profile: "...", save_as: "..."}`.
-3. The arm probes bottom, sides, computes the button pose, returns to start, and (if `save_as` was given) the new pose is now an absolute entry on the configured pose switcher — usable via `set_position_by_name` and visible in the cloud config.
+3. The arm probes the bottom, computes the button pose, returns to start. The named profile gets updated with the captured `center_axis_value_mm` and `probe_axis_value_mm`, and (if `save_as` was given) the new pose is now an absolute entry on the configured pose switcher — usable via `set_position_by_name` and visible in the cloud config.
 

@@ -93,31 +93,55 @@ type Config struct {
 }
 
 type ObjectProfile struct {
+	// --- geometry ---
+
 	// ButtonHeightAboveBottomMM is the vertical offset of the button above the
-	// bottom index surface. Required.
+	// bottom index surface (along -bottom_axis). Required.
 	ButtonHeightAboveBottomMM float64 `json:"button_height_above_bottom_mm"`
 
+	// ProbeAxisOffsetMM is the scalar distance the probe tip extends past the
+	// EEF origin in the probing direction. With bottom_axis=-z and offset=50,
+	// the tip is 50mm below the EEF center; reported "surface" positions and
+	// any pose/coord output of `calibrate` that refers to the surface are
+	// adjusted by this offset. The button-EEF pose itself is unaffected
+	// (offset cancels: probing-down lowers the EEF by `offset` more than the
+	// surface, so the saved EEF pose for pressing ends up offset-independent).
+	ProbeAxisOffsetMM float64 `json:"probe_axis_offset_mm,omitempty"`
+
 	// SideProbeAboveBottomMM is the clearance above the just-found bottom at
-	// which the side probes happen.
+	// which the side probes happen. Used by `probe_width` only; `calibrate`
+	// no longer side-probes.
 	SideProbeAboveBottomMM float64 `json:"side_probe_above_bottom_mm,omitempty"`
 
-	// MaxWidthMM caps the per-side probe travel so the arm doesn't fly past
-	// the object if collision detection somehow misses. Falls back to the
-	// service-level ProbeMaxTravelMM when zero.
+	// MaxWidthMM caps the per-side probe travel for `probe_width`. Falls back
+	// to the service-level ProbeMaxTravelMM when zero. Unused by `calibrate`.
 	MaxWidthMM float64 `json:"max_width_mm,omitempty"`
 
 	// BottomAxis is the direction the arm probes to find the bottom index
 	// surface. Default "-z".
 	BottomAxis string `json:"bottom_axis,omitempty"`
 
-	// CenterAxis is the axis along which the arm probes to find the object's
-	// horizontal centerline. The probe is run in both +CenterAxis and
-	// -CenterAxis directions; their midpoint is the center. Default "y".
+	// CenterAxis is the world axis along which the operator visually centers
+	// the probe over the target before calling `calibrate`. The start pose's
+	// coordinate along this axis is captured into CenterAxisValueMM.
+	// `probe_width` also probes ±this axis. Default "y".
 	CenterAxis string `json:"center_axis,omitempty"`
 
 	// ProbeCount is how many times each surface is probed; results are
 	// averaged. Default 1.
 	ProbeCount int `json:"probe_count,omitempty"`
+
+	// --- calibration outputs (auto-populated by `calibrate`) ---
+
+	// CenterAxisValueMM is the world-frame coordinate (along CenterAxis) of
+	// the start pose at the time `calibrate` last ran. Reflects whatever
+	// position the operator visually centered the probe at.
+	CenterAxisValueMM float64 `json:"center_axis_value_mm,omitempty"`
+
+	// ProbeAxisValueMM is the world-frame coordinate (along the BottomAxis
+	// dimension, signed natively) of the bottom surface measured by the last
+	// `calibrate` call. Includes ProbeAxisOffsetMM.
+	ProbeAxisValueMM float64 `json:"probe_axis_value_mm,omitempty"`
 }
 
 func (c *Config) Validate(path string) ([]string, []string, error) {
@@ -584,11 +608,21 @@ func (s *service) handleProbeBottom(ctx context.Context, cmd map[string]interfac
 		return nil, err
 	}
 	mean := meanPoint(contacts)
+	// Adjust by probe-axis offset to report the actual surface position. The
+	// EEF contact and the surface differ by `offset` along the probe direction.
+	surface := r3.Vector{
+		X: mean.X + dir.X*profile.ProbeAxisOffsetMM,
+		Y: mean.Y + dir.Y*profile.ProbeAxisOffsetMM,
+		Z: mean.Z + dir.Z*profile.ProbeAxisOffsetMM,
+	}
 	return map[string]interface{}{
-		"contact_mean": pointToMap(mean),
-		"contacts":     pointsToMaps(contacts),
-		"axis":         profile.bottomAxis(),
-		"probe_count":  len(contacts),
+		"contact_mean":             pointToMap(mean),
+		"contacts":                 pointsToMaps(contacts),
+		"surface_mean":             pointToMap(surface),
+		"surface_value":            worldCoordAlong(dir, surface),
+		"axis":                     profile.bottomAxis(),
+		"probe_axis_offset_mm":     profile.ProbeAxisOffsetMM,
+		"probe_count":              len(contacts),
 	}, nil
 }
 
@@ -628,7 +662,26 @@ func (s *service) handleProbeWidth(ctx context.Context, cmd map[string]interface
 	}, nil
 }
 
+// handleCalibrate runs the simplified single-probe calibration. The operator
+// is expected to have visually centered the probe over the target along
+// `center_axis` and parked the arm at the desired probing pose+orientation
+// before calling this. The service:
+//
+//  1. Records the start pose (orientation + non-bottom-axis coordinates carry
+//     into the saved button pose).
+//  2. Probes along `bottom_axis` until contact (averaged over `probe_count`).
+//  3. Composes the button pose: bottom-axis component = contact + button
+//     height (the probe-axis offset cancels for the EEF coords); all other
+//     components and orientation inherited from the start pose.
+//  4. Returns the arm to the start pose.
+//  5. Updates the named profile in cloud config with the captured
+//     `center_axis_value` (start pose's coord along center_axis) and
+//     `probe_axis_value` (the surface coord along bottom_axis, including the
+//     probe-axis offset). Skipped if the profile was passed inline.
+//  6. Optionally writes the button pose into the configured switch under
+//     `save_as`.
 func (s *service) handleCalibrate(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	profileName, _ := cmd["profile"].(string)
 	profile, err := s.resolveProfile(cmd)
 	if err != nil {
 		return nil, err
@@ -639,75 +692,72 @@ func (s *service) handleCalibrate(ctx context.Context, cmd map[string]interface{
 	if err != nil {
 		return nil, fmt.Errorf("EndPosition (start): %w", err)
 	}
+	startPt := start.Point()
+
+	bottomDir, _ := axisVector(profile.bottomAxis())
+	centerDir, _ := axisVector(profile.centerAxis())
 
 	// 1. Probe bottom.
-	bottomDir, _ := axisVector(profile.bottomAxis())
 	bottomContacts, err := s.probeRepeat(ctx, bottomDir, s.cfg.probeMaxTravel(), profile.probeCount())
 	if err != nil {
 		return nil, fmt.Errorf("bottom probe: %w", err)
 	}
-	bottomMean := meanPoint(bottomContacts)
+	bottomEEFMean := meanPoint(bottomContacts)
 
-	// 2. Move to side-probe height. Take the start XY, replace the bottom-axis
-	//    coord with the just-found bottom value, then offset by
-	//    sideProbeAbove in the opposite of the probe direction (i.e. "up").
-	startPt := start.Point()
-	sideHeightPt := replaceAlong(bottomDir, startPt, bottomMean)
-	sideHeightOffset := bottomDir.Mul(-profile.sideProbeAbove())
-	sideHeightPt = r3.Vector{
-		X: sideHeightPt.X + sideHeightOffset.X,
-		Y: sideHeightPt.Y + sideHeightOffset.Y,
-		Z: sideHeightPt.Z + sideHeightOffset.Z,
-	}
-	if err := s.arm.MoveToPosition(ctx, spatialmath.NewPose(sideHeightPt, start.Orientation()), nil); err != nil {
-		return nil, fmt.Errorf("move to side-probe height: %w", err)
+	// Surface position = EEF contact + bottom_axis * probe_axis_offset.
+	surface := r3.Vector{
+		X: bottomEEFMean.X + bottomDir.X*profile.ProbeAxisOffsetMM,
+		Y: bottomEEFMean.Y + bottomDir.Y*profile.ProbeAxisOffsetMM,
+		Z: bottomEEFMean.Z + bottomDir.Z*profile.ProbeAxisOffsetMM,
 	}
 
-	// 3. Probe both sides along center axis.
-	centerDir, _ := axisVector(profile.centerAxis())
-	maxWidth := s.cfg.probeMaxTravel()
-	if profile.MaxWidthMM > 0 && profile.MaxWidthMM < maxWidth {
-		maxWidth = profile.MaxWidthMM
-	}
-	posContacts, err := s.probeRepeat(ctx, centerDir, maxWidth, profile.probeCount())
-	if err != nil {
-		return nil, fmt.Errorf("+%s probe: %w", profile.centerAxis(), err)
-	}
-	negContacts, err := s.probeRepeat(ctx, centerDir.Mul(-1), maxWidth, profile.probeCount())
-	if err != nil {
-		return nil, fmt.Errorf("-%s probe: %w", profile.centerAxis(), err)
-	}
-	posMean := meanPoint(posContacts)
-	negMean := meanPoint(negContacts)
-
-	// Center along the configured axis. Other components are taken from start.
-	centerVal := (componentAlong(centerDir, posMean) + componentAlong(centerDir, negMean)) / 2
-
-	// 4. Compose button pose:
-	//    - center axis component = centerVal
-	//    - bottom axis component = bottomMean.<axis> + ButtonHeightAboveBottomMM * (-bottomDir)
-	//    - other axis component = start
-	//    - orientation = start
+	// 2. Compose button pose. The bottom-axis EEF component is just
+	//    contact + button_height (in -bottom_axis direction); the probe-axis
+	//    offset cancels because the same probe geometry is used for probing
+	//    and pressing.
 	buttonPt := startPt
-	buttonPt = setAlong(centerDir, buttonPt, centerVal)
-	bottomVal := componentAlong(bottomDir, bottomMean) + profile.ButtonHeightAboveBottomMM*(-1)
-	buttonPt = setAlong(bottomDir, buttonPt, bottomVal)
-
+	bottomEEFVal := componentAlong(bottomDir, bottomEEFMean) - profile.ButtonHeightAboveBottomMM
+	buttonPt = setAlong(bottomDir, buttonPt, bottomEEFVal)
 	buttonPose := spatialmath.NewPose(buttonPt, start.Orientation())
 
-	// 5. Move arm back to start (clean exit, regardless of save_as).
+	// 3. Move arm back to start.
 	if err := s.arm.MoveToPosition(ctx, start, nil); err != nil {
 		s.logger.Warnf("calibrate: failed to return to start: %v", err)
 	}
 
+	// 4. Capture calibration values.
+	centerAxisValue := worldCoordAlong(centerDir, startPt)
+	probeAxisValue := worldCoordAlong(bottomDir, surface)
+
 	result := map[string]interface{}{
-		"button_pose":  poseToMap(buttonPose),
-		"bottom_mean":  pointToMap(bottomMean),
-		"center_value": centerVal,
-		"profile":      profileNameOrEmpty(cmd),
+		"button_pose":         poseToMap(buttonPose),
+		"contact_mean":        pointToMap(bottomEEFMean),
+		"surface_mean":        pointToMap(surface),
+		"center_axis":         profile.centerAxis(),
+		"center_axis_value":   centerAxisValue,
+		"bottom_axis":         profile.bottomAxis(),
+		"probe_axis_value":    probeAxisValue,
+		"probe_axis_offset":   profile.ProbeAxisOffsetMM,
+		"profile":             profileName,
 	}
 
-	// 6. Optional persist via switch.set_pose_value.
+	// 5. Update the named profile with the captured values, and persist.
+	if profileName != "" {
+		s.cfgMu.Lock()
+		p := s.cfg.Profiles[profileName]
+		p.CenterAxisValueMM = centerAxisValue
+		p.ProbeAxisValueMM = probeAxisValue
+		s.cfg.Profiles[profileName] = p
+		s.cfgMu.Unlock()
+		if err := s.persistConfig(ctx); err != nil {
+			s.logger.Warnf("calibrate: failed to persist updated profile: %v", err)
+			result["profile_persist_error"] = err.Error()
+		} else {
+			result["profile_updated"] = true
+		}
+	}
+
+	// 6. Optional persist of the button pose into the switch.
 	if saveAs != "" {
 		if s.switch_ == nil {
 			return result, fmt.Errorf("save_as requested but pose_switcher_name is not configured")
@@ -721,11 +771,6 @@ func (s *service) handleCalibrate(ctx context.Context, cmd map[string]interface{
 		result["saved_as"] = saveAs
 	}
 	return result, nil
-}
-
-func profileNameOrEmpty(cmd map[string]interface{}) string {
-	n, _ := cmd["profile"].(string)
-	return n
 }
 
 // resolveProfile reads either a profile name (must exist) or an inline profile
@@ -803,6 +848,23 @@ func componentAlong(axis r3.Vector, v r3.Vector) float64 {
 	return axis.X*v.X + axis.Y*v.Y + axis.Z*v.Z
 }
 
+// worldCoordAlong returns the world-frame coordinate of v along the dimension
+// pointed at by axis (signed natively, ignoring axis's sign). E.g. for axis
+// = -z and v.Z = 277, returns 277 (not -277). Used for output values that the
+// human will read as a coordinate ("the surface is at z=277") rather than as
+// a directional projection.
+func worldCoordAlong(axis r3.Vector, v r3.Vector) float64 {
+	switch {
+	case axis.X != 0:
+		return v.X
+	case axis.Y != 0:
+		return v.Y
+	case axis.Z != 0:
+		return v.Z
+	}
+	return 0
+}
+
 // setAlong replaces the component of `pt` along `axis` so that the projection
 // becomes `value`. Other components are left untouched. Assumes `axis` is a
 // unit vector along one of x/y/z (which axisVector enforces).
@@ -816,21 +878,6 @@ func setAlong(axis r3.Vector, pt r3.Vector, value float64) r3.Vector {
 		pt.Z = value * axis.Z
 	}
 	return pt
-}
-
-// replaceAlong returns a copy of `target`'s position with the `axis` component
-// replaced with that of `source`. Used to move the arm to the same horizontal
-// XY as the start pose but with the just-found Z (or whatever axis is "down").
-func replaceAlong(axis r3.Vector, target, source r3.Vector) r3.Vector {
-	switch {
-	case axis.X != 0:
-		target.X = source.X
-	case axis.Y != 0:
-		target.Y = source.Y
-	case axis.Z != 0:
-		target.Z = source.Z
-	}
-	return target
 }
 
 func meanPoint(poses []spatialmath.Pose) r3.Vector {
