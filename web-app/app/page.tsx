@@ -239,9 +239,20 @@ export default function Home() {
         </button>
       </div>
       <ul className="m-0 p-0 list-none mb-8 space-y-2">
-        {machines.map((m) => (
-          <MachineRow key={m.id} m={m} queue={machineQueues.get(m.id)} />
-        ))}
+        {[...machines]
+          .sort((a, b) => {
+            const score = (m: Machine) => {
+              const q = machineQueues.get(m.id);
+              if (q && q.is_busy && q.orders.some((o) => o.completed_at === ""))
+                return 2;
+              if (m.online) return 1;
+              return 0;
+            };
+            return score(b) - score(a);
+          })
+          .map((m) => (
+            <MachineRow key={m.id} m={m} queue={machineQueues.get(m.id)} />
+          ))}
       </ul>
 
       <Leaderboard
@@ -299,6 +310,7 @@ export default function Home() {
                 orders={panelOrders}
                 error={panelError}
                 onClose={closePanel}
+                viamClient={viamClient}
               />
             )}
           </>
