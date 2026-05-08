@@ -2,6 +2,16 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { getQueue, type ViamConnection, type QueueOrder } from "../lib/viamClient";
+import { DRINKS } from "./drinks";
+
+function drinkLabel(drinkId: string): string {
+  const found = DRINKS.find((d) => d.id === drinkId);
+  if (found) return found.label;
+  if (!drinkId) return "";
+  return drinkId
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 // --- Step display rules -------------------------------------------------
 //
@@ -157,6 +167,7 @@ interface OrderCardProps {
 }
 
 function OrderCard({ order, cardClass, statusKind, label }: OrderCardProps) {
+  const drink = drinkLabel(order.drink);
   return (
     <div className={cardClass}>
       <div className="flex items-baseline justify-between gap-2">
@@ -170,6 +181,11 @@ function OrderCard({ order, cardClass, statusKind, label }: OrderCardProps) {
           {order.id.slice(0, 8)}
         </span>
       </div>
+      {drink && (
+        <p className="text-xs font-mono text-neutral-500 mt-0.5">
+          {drink}
+        </p>
+      )}
       {statusKind === "ready" ? (
         <div className="flex items-center gap-2 mt-1">
           <span className="text-emerald-500 text-sm">&#10003;</span>
