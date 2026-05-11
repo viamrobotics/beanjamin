@@ -15,9 +15,9 @@ import (
 	"path/filepath"
 	"sync"
 
-	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/resource"
 	generic "go.viam.com/rdk/services/generic"
 	"go.viam.com/rdk/services/vision"

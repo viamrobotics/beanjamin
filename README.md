@@ -243,6 +243,25 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
 | `data_dir`                 | string | No       | Directory for persistent module data. When set alongside `cam_storage_mux_name`, pending-clip records are written under `<data_dir>/pending-clips` when each order starts and removed on completion; use with a Viam scheduled job calling `cleanup_pending_clips` to recover clips from interrupted orders. |
 | `input_range_override`     | object | No       | Narrows joint limits on named frames before motion planning. Outer key is the frame name (typically the arm); inner key is either the joint name or its stringified index (e.g. `"5"` for the last joint of a 6-DoF arm). Each value is `{ "min_degs": number, "max_degs": number }`. |
 | `conversational`           | bool   | No       | When true, the coffee service speaks its own greetings, almost-ready prompts, order-received lines, and rejection quips through `speech_service_name`. When false (default), the service stays silent except for the drink-ready announcement at cup handoff — leaving the rest of the talking to an external orchestrator (e.g. `viam:conversation-bundle:voice-command`). |
+| `dynamic_cup_pickup`                  | bool   | No       | Enables vision-guided cup pickup. When `true`, the arm uses a vision service to detect cups in the workspace rather than picking from the static `empty_cup` pose. Default `false`. |
+| `cup_vision_service_name`             | string | When `dynamic_cup_pickup` is enabled | Name of a `rdk:service:vision` segmenter that returns cup detections via `GetObjectPointClouds`. |
+| `src_camera_name`                     | string | When `dynamic_cup_pickup` is enabled | Source camera the vision service segments from. Must be present in the frame system. |
+| `expected_cup_position_mm`            | object | When `dynamic_cup_pickup` is enabled | World-frame heuristic point `{ "x": number, "y": number, "z": number }`. The detection closest to this point wins. |
+| `cup_approach_relative_pose`          | object | When `dynamic_cup_pickup` is enabled | 6-DoF offset composed onto the detected cup centroid for the pre-grab pose. Shape `{ "x", "y", "z", "o_x", "o_y", "o_z", "theta" }`; same gripper orientation as the grab pose but translated further back from the cup. **Not** stored on the pose switch — it's an offset, not a real world-frame pose. |
+| `cup_grab_relative_pose`              | object | When `dynamic_cup_pickup` is enabled | 6-DoF offset composed onto the detected cup centroid for the final grab pose. Same shape as `cup_approach_relative_pose`; gripper orientation for a side-grab with a small translation onto the cup. |
+| `cup_max_distance_from_target_mm`     | float  | No       | Hard cutoff: detections beyond this distance from `expected_cup_position_mm` are dropped. Default 300 mm. |
+| `cup_detection_retries`               | int    | No       | Number of additional vision calls if the first returns 0 detections. Default 0. |
+| `cup_detection_retry_sleep_ms`        | int    | No       | Sleep between detection retries in milliseconds. Default 250. |
+| `cup_centroid_min_z_mm`               | float  | No       | Minimum world-frame Z for each detection. If a detected centroid's Z is below this, it is clamped up to this value before pose composition; values above are left alone. Use to recover from depth noise that would otherwise produce a too-low approach pose and trip the planner. Default `0` disables clamping. |
+| `max_batch_size`           | int    | No       | Cap on `prepare_order.count` — how many identical drinks one DoCommand may enqueue at once. Defaults to 10 when unset. Protects the queue against runaway voice commands or LLM hallucinations. |
+
+**Dynamic cup pickup — required pose on the claws pose switcher (`claws_pose_switcher_name`):**
+
+When `dynamic_cup_pickup` is enabled, one additional named pose must exist on the claws pose switch:
+
+| Pose name           | Type                | Description |
+| ------------------- | ------------------- | ----------- |
+| `cup_observe`       | Absolute world pose | Arm moves here before querying the vision service to get a clear view of the cup workspace. |
 
 ### DoCommand
 
@@ -254,12 +273,15 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
     "drink": "espresso",
     "customer_name": "Alice",
     "initial_greeting": "optional custom greeting",
-    "completion_statement": "optional custom completion message"
+    "completion_statement": "optional custom completion message",
+    "count": 3
   }
 }
 ```
 
 Only `drink` is required. If `initial_greeting` is omitted, a random greeting is generated. If `customer_name` is provided, it personalizes the greeting and completion messages. Orders are added to a queue and processed sequentially.
+
+`count` is an optional positive integer (default 1) that enqueues N identical orders in one call — each gets its own UUID. The cap is `max_batch_size` (default 10). When `count > 1`, the response also includes `order_ids: [...]` (one per enqueued order) and `count`; existing `order_id` and `queue_position` keys still refer to the first order so existing callers keep working. To keep audio sane, the per-order "Order received…" line is replaced with a single consolidated batch announcement at submission time; the per-cup drink-ready announcement at cup handoff still fires once per order as each cup completes.
 
 **`execute_action`** - Run a single coffee-making action by name. Available actions: `grind_coffee`, `tamp_ground`, `lock_portafilter`, `unlock_portafilter`.
 
@@ -331,7 +353,7 @@ Returns `{"status": "opened"}` or `{"status": "closed", "grabbed": true}`.
 
 **API:** `rdk:service:generic`
 
-Translates Stream Deck dial inputs into relative arm motions. Each dial tick moves the arm by a configurable number of millimeters along the X, Y, or Z axis, or along the tool's orientation vector. The service tracks the absolute dial position between calls to determine direction (handling rollover at the dial range boundaries).
+Translates Stream Deck dial inputs into relative arm motions. Each dial tick contributes a step (mm for translations, degrees for rotations) along the chosen axis. The service tracks the absolute dial position between calls to determine direction (handling rollover at the dial range boundaries) and accumulates pending motion in a per-axis bucket. A background drain loop flushes accumulated motion to the arm at `drain_interval_ms`, applying a per-axis acceleration multiplier — single detents stay at 1× for fine control, while rapid spinning amplifies motion non-linearly.
 
 ### Configuration
 
@@ -342,42 +364,86 @@ Translates Stream Deck dial inputs into relative arm motions. Each dial tick mov
   "dial_move_y_mm": 5,
   "dial_move_z_mm": 5,
   "dial_move_orientation_mm": 5,
-  "dial_max_position": 100
+  "dial_move_rx_deg": 2,
+  "dial_move_ry_deg": 2,
+  "dial_move_rz_deg": 2,
+  "dial_max_position": 100,
+  "drain_interval_ms": 20,
+  "accel_threshold_count": 1,
+  "accel_max_multiplier": 10,
+  "accel_exponent": 1.5,
+  "accel_smoothing_alpha": 0.4
 }
 ```
 
-| Name                       | Type   | Required | Description                                                                                    |
-| -------------------------- | ------ | -------- | ---------------------------------------------------------------------------------------------- |
-| `arm_name`                 | string | Yes      | Name of the arm component to move.                                                             |
-| `dial_move_x_mm`           | float  | No       | Millimeters to move per dial tick on the X axis. Defaults to `1`.                              |
-| `dial_move_y_mm`           | float  | No       | Millimeters to move per dial tick on the Y axis. Defaults to `1`.                              |
-| `dial_move_z_mm`           | float  | No       | Millimeters to move per dial tick on the Z axis. Defaults to `1`.                              |
-| `dial_move_orientation_mm` | float  | No       | Millimeters to move per dial tick along the tool's orientation vector. Defaults to `1`.        |
-| `dial_max_position`        | float  | No       | Maximum dial position value, used for rollover detection. Defaults to `100`.                   |
+| Name                              | Type   | Required | Default        | Description                                                                                                                            |
+| --------------------------------- | ------ | -------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `arm_name`                        | string | Yes      | —              | Name of the arm component to move.                                                                                                     |
+| `dial_move_x_mm`                  | float  | No       | `1`            | Base millimeters per dial detent on the X axis.                                                                                        |
+| `dial_move_y_mm`                  | float  | No       | `1`            | Base millimeters per dial detent on the Y axis.                                                                                        |
+| `dial_move_z_mm`                  | float  | No       | `1`            | Base millimeters per dial detent on the Z axis.                                                                                        |
+| `dial_move_orientation_mm`        | float  | No       | `1`            | Base millimeters per dial detent along the tool's orientation vector.                                                                  |
+| `dial_move_rx_deg`                | float  | No       | `1`            | Base degrees per dial detent rotating around the body's local X.                                                                       |
+| `dial_move_ry_deg`                | float  | No       | `1`            | Base degrees per dial detent rotating around the body's local Y.                                                                       |
+| `dial_move_rz_deg`                | float  | No       | `1`            | Base degrees per dial detent rotating around the body's local Z.                                                                       |
+| `dial_max_position`               | float  | No       | `100`          | Maximum dial position value, used for rollover detection.                                                                              |
+| `drain_interval_ms`               | int    | No       | `20` (50 Hz)   | Flush cadence in milliseconds. Detents arriving within a window are summed before being applied.                                       |
+| `accel_threshold_count`           | float  | No       | `1`            | Translation: smoothed-detent count at which multiplier reaches `1×`. Below this it's pinned to `1×`. Default of `1` ramps from the first detent. |
+| `accel_max_multiplier`            | float  | No       | `10`           | Translation: upper bound on the acceleration multiplier at high spin rates.                                                            |
+| `accel_exponent`                  | float  | No       | `1.5`          | Translation: curve shape, `1` linear, `2` quadratic. Multiplier = `clamp((smoothed/threshold)^exponent, 1, max)`.                      |
+| `accel_smoothing_alpha`           | float  | No       | `0.4`          | Translation: EWMA factor in `(0, 1]` across drain windows. `1` = no smoothing (instant); smaller = smoother / laggier.                 |
+| `accel_rotation_threshold_count`  | float  | No       | translation    | Rotation override for `accel_threshold_count`. Falls back to the translation value if unset.                                           |
+| `accel_rotation_max_multiplier`   | float  | No       | translation    | Rotation override for `accel_max_multiplier`. Falls back to the translation value if unset.                                            |
+| `accel_rotation_exponent`         | float  | No       | translation    | Rotation override for `accel_exponent`. Falls back to the translation value if unset.                                                  |
+| `accel_rotation_smoothing_alpha`  | float  | No       | translation    | Rotation override for `accel_smoothing_alpha`. Falls back to the translation value if unset.                                           |
 
 ### DoCommand
 
-**`dial_move_x`** / **`dial_move_y`** / **`dial_move_z`** - Move the arm along an axis using a Stream Deck dial value. The first call for a given axis calibrates the dial position and does not move the arm.
+**`dial_move_x`** / **`dial_move_y`** / **`dial_move_z`** - Enqueue a translation along the named axis from a Stream Deck dial value. The first call for a given axis calibrates the dial position and does not move the arm.
 
 ```json
 {"dial_move_x": 50}
 ```
 
-Returns `{"status": "moved", "axis": "x", "mm": 5.0}` or `{"status": "dial_initialized", "axis": "x", "position": 50}` on first call (calibration).
+Returns `{"status": "queued", "axis": "x", "step": 5.0}` or `{"status": "dial_initialized", "axis": "x", "position": 50}` on first call.
 
-**`dial_move_orientation`** - Move the arm along its current tool orientation vector.
+**`dial_move_orientation`** - Enqueue a translation along the current tool orientation vector.
 
 ```json
 {"dial_move_orientation": 50}
 ```
 
-**`dial_move_speed`** - Adjust dial movement speed. Updates `dial_move_x_mm`, `dial_move_y_mm`, `dial_move_z_mm`, and `dial_move_orientation_mm` based on dial input.
+**`dial_move_rx`** / **`dial_move_ry`** / **`dial_move_rz`** - Enqueue a rotation around the named world axis. Step magnitude is in degrees per detent.
 
 ```json
-{"dial_move_speed": 75}
+{"dial_move_rx": 50}
 ```
 
-Returns `{"status": "speed_updated", "dial_move_x_mm": 7.5, "dial_move_y_mm": 7.5, "dial_move_z_mm": 7.5, "dial_move_orientation_mm": 7.5}`.
+**`toggle_axis_mode`** - Flip the dial-mode for X/Y/Z dials between translation and rotation. Bind this to a Stream Deck button to repurpose the dials live. While in rotation mode, `dial_move_x` is routed to `rx` (and similarly for y/z); `dial_move_orientation` is unaffected.
+
+```json
+{"toggle_axis_mode": true}
+```
+
+Returns `{"status": "toggled", "axis_mode": "rotation"}`.
+
+**`set_axis_mode`** - Set the mode explicitly (idempotent). Value must be `"translation"` or `"rotation"`.
+
+```json
+{"set_axis_mode": "rotation"}
+```
+
+Returns `{"status": "set", "axis_mode": "rotation"}`.
+
+**`get_axis_mode`** - Read the current mode without changing it.
+
+```json
+{"get_axis_mode": true}
+```
+
+Returns `{"axis_mode": "translation"}`.
+
+> **Removed:** `dial_move_speed` no longer exists. The new acceleration model (`accel_threshold_count` / `accel_max_multiplier` / `accel_exponent`) replaces it. Stream Deck profiles bound to `dial_move_speed` will receive an error and need to be remapped.
 
 ---
 

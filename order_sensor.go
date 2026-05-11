@@ -5,10 +5,10 @@ import (
 	"sync"
 	"time"
 
-	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/components/sensor"
 	"go.viam.com/rdk/data"
 	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/resource"
 )
 
