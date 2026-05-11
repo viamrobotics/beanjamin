@@ -102,7 +102,10 @@ func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, er
 
 	var objects []*viz.Object
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		objs, err := s.cupVision.GetObjectPointClouds(ctx, s.cupCameraName, nil)
+		// Pass an empty camera name so the vision service falls back to its own
+		// configured default camera. s.cupCameraName is still used below to
+		// transform detection centroids from the camera frame into world coords.
+		objs, err := s.cupVision.GetObjectPointClouds(ctx, "", nil)
 		if err != nil {
 			return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: detect: %w", err)
 		}
