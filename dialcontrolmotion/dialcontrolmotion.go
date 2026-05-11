@@ -245,14 +245,14 @@ func newDialControlMotion(_ context.Context, deps resource.Dependencies, rawConf
 
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 	s := &dialControlMotion{
-		name:          rawConf.ResourceName(),
-		logger:        logger,
-		cfg:           conf,
-		arm:           armComp,
-		cancelCtx:     cancelCtx,
-		cancelFunc:    cancelFunc,
-		lastDial:      make(map[string]*float64),
-		lastDirection: make(map[string]float64),
+		name:           rawConf.ResourceName(),
+		logger:         logger,
+		cfg:            conf,
+		arm:            armComp,
+		cancelCtx:      cancelCtx,
+		cancelFunc:     cancelFunc,
+		lastDial:       make(map[string]*float64),
+		lastDirection:  make(map[string]float64),
 		pendingMoves:   make(map[string]float64),
 		pendingCounts:  make(map[string]int),
 		smoothedCounts: make(map[string]float64),

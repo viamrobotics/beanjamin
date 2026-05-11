@@ -113,6 +113,11 @@ type Config struct {
 	CupMaxDistanceFromTargetMm float64       `json:"cup_max_distance_from_target_mm,omitempty"`
 	CupDetectionRetries        int           `json:"cup_detection_retries,omitempty"`
 	CupDetectionRetrySleepMs   int           `json:"cup_detection_retry_sleep_ms,omitempty"`
+	// CupPickupMaxAttempts caps how many full observe-and-grab attempts
+	// pickCupDynamic will make per order. Each attempt re-detects, then
+	// walks the candidate list (closest first), falling through to the
+	// next candidate on planning failures. Defaults to 3.
+	CupPickupMaxAttempts int `json:"cup_pickup_max_attempts,omitempty"`
 	// CupCentroidMinZMm clamps each detection's world-frame Z up to this
 	// value when the detected Z falls below it. Use to recover from depth
 	// noise that puts the centroid slightly below the physical cup base
@@ -144,6 +149,19 @@ func (s *beanjaminCoffee) maxBatchSize() int {
 		return s.cfg.MaxBatchSize
 	}
 	return defaultMaxBatchSize
+}
+
+// defaultCupPickupMaxAttempts is used when Config.CupPickupMaxAttempts is
+// unset or zero.
+const defaultCupPickupMaxAttempts = 3
+
+// cupPickupMaxAttempts returns the configured cap on full observe-and-grab
+// attempts per order, falling back to defaultCupPickupMaxAttempts.
+func (s *beanjaminCoffee) cupPickupMaxAttempts() int {
+	if s.cfg != nil && s.cfg.CupPickupMaxAttempts > 0 {
+		return s.cfg.CupPickupMaxAttempts
+	}
+	return defaultCupPickupMaxAttempts
 }
 
 // Vec3Mm is a 3D point in millimeters used for world-frame configuration.
@@ -215,6 +233,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 		if cfg.CupDetectionRetries < 0 {
 			return nil, nil, fmt.Errorf("%s: cup_detection_retries must be >= 0", path)
+		}
+		if cfg.CupPickupMaxAttempts < 0 {
+			return nil, nil, fmt.Errorf("%s: cup_pickup_max_attempts must be >= 0", path)
 		}
 		if cfg.CupMaxDistanceFromTargetMm == 0 {
 			cfg.CupMaxDistanceFromTargetMm = 300

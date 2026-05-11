@@ -119,6 +119,15 @@ func TestValidate_DynamicCupPickup_RejectsNegativeRetries(t *testing.T) {
 	}
 }
 
+func TestValidate_DynamicCupPickup_RejectsNegativeMaxAttempts(t *testing.T) {
+	cfg := validDynamicConfig()
+	cfg.CupPickupMaxAttempts = -1
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "cup_pickup_max_attempts") {
+		t.Fatalf("expected cup_pickup_max_attempts error, got %v", err)
+	}
+}
+
 func TestValidate_DynamicCupPickup_AppendsDeps(t *testing.T) {
 	cfg := validDynamicConfig()
 	req, _, err := cfg.Validate("")

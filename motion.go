@@ -3,6 +3,7 @@ package beanjamin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -21,6 +22,12 @@ import (
 	"go.viam.com/rdk/components/arm"
 	toggleswitch "go.viam.com/rdk/components/switch"
 )
+
+// errMotionPlanning is wrapped around armplanning.PlanMotion failures in
+// moveToRawPose so callers with a recovery path (e.g. dynamic cup pickup
+// falling back to another candidate cup) can use errors.Is to distinguish
+// planning failures from execution errors.
+var errMotionPlanning = errors.New("motion planning failed")
 
 var defaultApproachConstraint = &StepLinearConstraint{
 	LineToleranceMm:          1,
@@ -457,7 +464,7 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	s.savePlanRequest(req, "move")
 	plan, _, err := armplanning.PlanMotion(ctx, s.logger, req)
 	if err != nil {
-		return fmt.Errorf("plan motion: %w", err)
+		return fmt.Errorf("%w: %w", errMotionPlanning, err)
 	}
 	s.savePlanResponse(plan, "move")
 

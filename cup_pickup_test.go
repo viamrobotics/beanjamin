@@ -1,7 +1,6 @@
 package beanjamin
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/golang/geo/r3"
@@ -9,106 +8,119 @@ import (
 	"go.viam.com/rdk/spatialmath"
 )
 
-func TestSelectCupCentroid_Empty(t *testing.T) {
-	_, idx, err := selectCupCentroid(nil, r3.Vector{}, 100)
-	if err == nil {
-		t.Fatalf("expected error on empty input")
-	}
-	if idx != -1 {
-		t.Fatalf("expected idx -1 on error, got %d", idx)
+func TestRankCupCentroids_Empty(t *testing.T) {
+	got := rankCupCentroids(nil, r3.Vector{}, 100)
+	if len(got) != 0 {
+		t.Fatalf("expected empty slice, got %v", got)
 	}
 }
 
-func TestSelectCupCentroid_SingleInRange(t *testing.T) {
+func TestRankCupCentroids_SingleInRange(t *testing.T) {
 	c := []r3.Vector{{X: 110, Y: 0, Z: 0}}
-	got, idx, err := selectCupCentroid(c, r3.Vector{X: 100, Y: 0, Z: 0}, 50)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if idx != 0 {
-		t.Fatalf("expected index 0, got %d", idx)
-	}
-	if got != c[0] {
-		t.Fatalf("expected centroid %v, got %v", c[0], got)
+	got := rankCupCentroids(c, r3.Vector{X: 100, Y: 0, Z: 0}, 50)
+	if len(got) != 1 || got[0] != c[0] {
+		t.Fatalf("expected [%v], got %v", c[0], got)
 	}
 }
 
-func TestSelectCupCentroid_SingleOutOfRange(t *testing.T) {
+func TestRankCupCentroids_SingleOutOfRange(t *testing.T) {
 	c := []r3.Vector{{X: 1000, Y: 0, Z: 0}}
-	_, idx, err := selectCupCentroid(c, r3.Vector{}, 100)
-	if err == nil || !strings.Contains(err.Error(), "within") {
-		t.Fatalf("expected 'within' error, got %v", err)
-	}
-	if idx != -1 {
-		t.Fatalf("expected idx -1 on error, got %d", idx)
+	got := rankCupCentroids(c, r3.Vector{}, 100)
+	if len(got) != 0 {
+		t.Fatalf("expected empty slice (out of range), got %v", got)
 	}
 }
 
-func TestSelectCupCentroid_PicksClosest(t *testing.T) {
+func TestRankCupCentroids_SortsClosestFirst(t *testing.T) {
 	c := []r3.Vector{
-		{X: 200, Y: 0, Z: 0}, // 100mm from target — farther
-		{X: 110, Y: 0, Z: 0}, // 10mm from target — closer
-		{X: 150, Y: 0, Z: 0}, // 50mm from target
+		{X: 200, Y: 0, Z: 0}, // 100mm from target
+		{X: 110, Y: 0, Z: 0}, // 10mm
+		{X: 150, Y: 0, Z: 0}, // 50mm
 	}
 	target := r3.Vector{X: 100, Y: 0, Z: 0}
-	got, idx, err := selectCupCentroid(c, target, 300)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+	got := rankCupCentroids(c, target, 300)
+	want := []r3.Vector{c[1], c[2], c[0]}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d candidates, got %d (%v)", len(want), len(got), got)
 	}
-	if idx != 1 {
-		t.Fatalf("expected index 1, got %d", idx)
-	}
-	if got != c[1] {
-		t.Fatalf("expected centroid %v, got %v", c[1], got)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("rank[%d] = %v, want %v", i, got[i], want[i])
+		}
 	}
 }
 
-func TestSelectCupCentroid_AllOutOfRange(t *testing.T) {
+func TestRankCupCentroids_AllOutOfRange(t *testing.T) {
 	c := []r3.Vector{
 		{X: 1000, Y: 0, Z: 0},
 		{X: 2000, Y: 0, Z: 0},
 	}
-	_, idx, err := selectCupCentroid(c, r3.Vector{}, 100)
-	if err == nil || !strings.Contains(err.Error(), "within") {
-		t.Fatalf("expected 'within' error, got %v", err)
-	}
-	if idx != -1 {
-		t.Fatalf("expected idx -1 on error, got %d", idx)
+	got := rankCupCentroids(c, r3.Vector{}, 100)
+	if len(got) != 0 {
+		t.Fatalf("expected empty slice, got %v", got)
 	}
 }
 
-func TestSelectCupCentroid_ZeroMaxMeansNoCutoff(t *testing.T) {
+func TestRankCupCentroids_DropsOutOfRangeKeepsRest(t *testing.T) {
+	c := []r3.Vector{
+		{X: 1000, Y: 0, Z: 0}, // out
+		{X: 110, Y: 0, Z: 0},  // in (10mm)
+		{X: 200, Y: 0, Z: 0},  // in (100mm)
+	}
+	target := r3.Vector{X: 100, Y: 0, Z: 0}
+	got := rankCupCentroids(c, target, 150)
+	want := []r3.Vector{c[1], c[2]}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d candidates, got %d (%v)", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("rank[%d] = %v, want %v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestRankCupCentroids_ZeroMaxMeansNoCutoff(t *testing.T) {
 	c := []r3.Vector{
 		{X: 1e6, Y: 0, Z: 0},
 		{X: 100, Y: 0, Z: 0},
 	}
-	got, idx, err := selectCupCentroid(c, r3.Vector{}, 0)
-	if err != nil {
-		t.Fatalf("expected no error with maxDistMm=0, got %v", err)
+	got := rankCupCentroids(c, r3.Vector{}, 0)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 candidates with maxDistMm=0, got %d", len(got))
 	}
-	if idx != 1 {
-		t.Fatalf("expected index 1, got %d", idx)
-	}
-	if got != c[1] {
-		t.Fatalf("expected closest centroid, got %v", got)
+	if got[0] != c[1] || got[1] != c[0] {
+		t.Fatalf("expected closer-first ordering, got %v", got)
 	}
 }
 
-func TestSelectCupCentroid_TieBreaksFirst(t *testing.T) {
+func TestRankCupCentroids_TiesStable(t *testing.T) {
 	c := []r3.Vector{
-		{X: 110, Y: 0, Z: 0},
-		{X: 90, Y: 0, Z: 0}, // both 10mm from target
+		{X: 110, Y: 0, Z: 0}, // 10mm
+		{X: 90, Y: 0, Z: 0},  // 10mm — tie
 	}
 	target := r3.Vector{X: 100, Y: 0, Z: 0}
-	got, idx, err := selectCupCentroid(c, target, 50)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+	got := rankCupCentroids(c, target, 50)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(got))
 	}
-	if idx != 0 {
-		t.Fatalf("expected first-wins (index 0), got %d", idx)
+	if got[0] != c[0] || got[1] != c[1] {
+		t.Fatalf("expected stable order on ties, got %v", got)
 	}
-	if got != c[0] {
-		t.Fatalf("expected first centroid, got %v", got)
+}
+
+func TestRankCupCentroids_DoesNotMutateInput(t *testing.T) {
+	c := []r3.Vector{
+		{X: 200, Y: 0, Z: 0},
+		{X: 110, Y: 0, Z: 0},
+		{X: 150, Y: 0, Z: 0},
+	}
+	orig := append([]r3.Vector(nil), c...)
+	_ = rankCupCentroids(c, r3.Vector{X: 100, Y: 0, Z: 0}, 300)
+	for i := range orig {
+		if c[i] != orig[i] {
+			t.Fatalf("input mutated at index %d: got %v, want %v", i, c[i], orig[i])
+		}
 	}
 }
 

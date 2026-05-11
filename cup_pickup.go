@@ -4,15 +4,23 @@
 // when dynamic_cup_pickup is enabled. It moves the arm to the configured
 // cup_observe (a real world-frame pose on the claws pose switch),
 // calls a vision service for cup detections, lifts each centroid into
-// world frame, picks the closest detection within range, composes the
+// world frame, ranks detections by distance from the configured
+// expected position (within the configured cutoff), composes the
 // configured approach/grab relative poses (from Config — they are
-// offsets, not switch-resident world-frame poses) onto the centroid,
-// and feeds the resulting world poses to moveToRawPose.
+// offsets, not switch-resident world-frame poses) onto the chosen
+// centroid, and feeds the resulting world poses to moveToRawPose.
+//
+// On failure, pickCupDynamic falls through to the next candidate cup
+// (planning failures) or re-observes and starts a fresh attempt
+// (missed-grab where the gripper closes on empty air), bounded by
+// CupPickupMaxAttempts.
 package beanjamin
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/golang/geo/r3"
@@ -22,31 +30,28 @@ import (
 	viz "go.viam.com/rdk/vision"
 )
 
-// selectCupCentroid returns the centroid in `centroids` closest to `target`
-// (Euclidean distance), provided it is within maxDistMm. maxDistMm == 0
-// disables the cutoff. Returns the chosen centroid and its original index
-// (for log correlation), or an error if the input is empty or no centroid
-// is within range.
-func selectCupCentroid(centroids []r3.Vector, target r3.Vector, maxDistMm float64) (r3.Vector, int, error) {
-	if len(centroids) == 0 {
-		return r3.Vector{}, -1, fmt.Errorf("no centroids")
-	}
-	bestIdx := -1
-	bestDist := 0.0
-	for i, c := range centroids {
-		d := c.Sub(target).Norm()
-		if maxDistMm > 0 && d > maxDistMm {
+// errCupGrabMissed is returned by tryGrabCup when the gripper closes
+// without detecting an object — the cup moved between observation and
+// descent, or the detection was off. Triggers a fresh observation in the
+// outer pickCupDynamic loop.
+var errCupGrabMissed = errors.New("gripper closed without grabbing a cup")
+
+// rankCupCentroids returns centroids sorted by distance to target ascending,
+// dropping any beyond maxDistMm. maxDistMm == 0 disables the cutoff. The
+// returned slice is a new allocation; the input is not mutated. Ties keep
+// their original relative order (stable sort).
+func rankCupCentroids(centroids []r3.Vector, target r3.Vector, maxDistMm float64) []r3.Vector {
+	inRange := make([]r3.Vector, 0, len(centroids))
+	for _, c := range centroids {
+		if maxDistMm > 0 && c.Sub(target).Norm() > maxDistMm {
 			continue
 		}
-		if bestIdx == -1 || d < bestDist {
-			bestIdx = i
-			bestDist = d
-		}
+		inRange = append(inRange, c)
 	}
-	if bestIdx == -1 {
-		return r3.Vector{}, -1, fmt.Errorf("none within %.0fmm of expected position", maxDistMm)
-	}
-	return centroids[bestIdx], bestIdx, nil
+	sort.SliceStable(inRange, func(i, j int) bool {
+		return inRange[i].Sub(target).Norm() < inRange[j].Sub(target).Norm()
+	})
+	return inRange
 }
 
 // composeCupPose builds a world-frame target pose by composing a relative
@@ -87,13 +92,13 @@ func cameraToWorld(
 	return worldPose.Pose().Point(), nil
 }
 
-// observeCupCentroid calls the vision service for cup detections, retries
+// observeCupCandidates calls the vision service for cup detections, retries
 // on empty results per the configured retry policy, lifts each detection's
-// centroid into world coordinates, and returns the closest in-range
-// centroid (per selectCupCentroid). Returns an error if no cups are found
-// after all retries, or if all detections fall outside the configured
-// max distance.
-func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, error) {
+// centroid into world coordinates, filters out detections beyond
+// CupMaxDistanceFromTargetMm, and returns the survivors sorted by distance to
+// ExpectedCupPositionMm (closest first). Returns an error if no usable
+// in-range centroids remain.
+func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector, error) {
 	maxAttempts := s.cfg.CupDetectionRetries + 1
 	sleep := time.Duration(s.cfg.CupDetectionRetrySleepMs) * time.Millisecond
 	if sleep <= 0 {
@@ -107,7 +112,7 @@ func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, er
 		// transform detection centroids from the camera frame into world coords.
 		objs, err := s.cupVision.GetObjectPointClouds(ctx, "", nil)
 		if err != nil {
-			return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: detect: %w", err)
+			return nil, fmt.Errorf("dynamic_cup_pickup: detect: %w", err)
 		}
 		s.logger.Infof("dynamic cup pickup: attempt %d/%d, found %d detections", attempt, maxAttempts, len(objs))
 		if len(objs) > 0 {
@@ -118,17 +123,17 @@ func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, er
 			select {
 			case <-time.After(sleep):
 			case <-ctx.Done():
-				return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: cancelled during retry: %w", ctx.Err())
+				return nil, fmt.Errorf("dynamic_cup_pickup: cancelled during retry: %w", ctx.Err())
 			}
 		}
 	}
 	if len(objects) == 0 {
-		return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: no cups detected after %d attempts", maxAttempts)
+		return nil, fmt.Errorf("dynamic_cup_pickup: no cups detected after %d attempts", maxAttempts)
 	}
 
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
-		return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %w", err)
+		return nil, fmt.Errorf("dynamic_cup_pickup: %w", err)
 	}
 
 	centroids := make([]r3.Vector, 0, len(objects))
@@ -139,7 +144,7 @@ func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, er
 		local := obj.Geometry.Pose().Point()
 		world, err := cameraToWorld(fs, fsInputs, s.cupCameraName, local)
 		if err != nil {
-			return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %w", err)
+			return nil, fmt.Errorf("dynamic_cup_pickup: %w", err)
 		}
 		if floor := s.cfg.CupCentroidMinZMm; floor != 0 && world.Z < floor {
 			s.logger.Infof("dynamic cup pickup: flooring centroid Z from %.1f to %.1f (cup_centroid_min_z_mm)",
@@ -150,12 +155,12 @@ func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, er
 		centroids = append(centroids, world)
 	}
 	if len(centroids) == 0 {
-		return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %d detection(s) had no usable geometry", len(objects))
+		return nil, fmt.Errorf("dynamic_cup_pickup: %d detection(s) had no usable geometry", len(objects))
 	}
 
 	target := r3.Vector{X: s.cfg.ExpectedCupPositionMm.X, Y: s.cfg.ExpectedCupPositionMm.Y, Z: s.cfg.ExpectedCupPositionMm.Z}
 	cutoff := s.cfg.CupMaxDistanceFromTargetMm
-	s.logger.Infof("dynamic cup pickup: target=(x=%.1f, y=%.1f, z=%.1f) cutoff=%.0fmm — %d candidate(s):",
+	s.logger.Infof("dynamic cup pickup: target=(x=%.1f, y=%.1f, z=%.1f) cutoff=%.0fmm — %d raw candidate(s):",
 		target.X, target.Y, target.Z, cutoff, len(centroids))
 	for i, c := range centroids {
 		d := c.Sub(target).Norm()
@@ -167,21 +172,132 @@ func (s *beanjaminCoffee) observeCupCentroid(ctx context.Context) (r3.Vector, er
 			i, c.X, c.Y, c.Z, d, annotation)
 	}
 
-	chosen, idx, err := selectCupCentroid(centroids, target, cutoff)
-	if err != nil {
-		return r3.Vector{}, fmt.Errorf("dynamic_cup_pickup: %d detection(s) found but %w", len(centroids), err)
+	ranked := rankCupCentroids(centroids, target, cutoff)
+	if len(ranked) == 0 {
+		return nil, fmt.Errorf("dynamic_cup_pickup: %d detection(s) found but none within %.0fmm of target", len(centroids), cutoff)
 	}
-	dist := chosen.Sub(target).Norm()
-	s.logger.Infof("dynamic cup pickup: chose centroid %d at (x=%.1f, y=%.1f, z=%.1f) — %.1fmm from target",
-		idx, chosen.X, chosen.Y, chosen.Z, dist)
-	return chosen, nil
+	s.logger.Infof("dynamic cup pickup: %d in-range candidate(s) (closest first):", len(ranked))
+	for i, c := range ranked {
+		s.logger.Infof("  rank[%d] world=(x=%.1f, y=%.1f, z=%.1f) distance=%.1fmm",
+			i, c.X, c.Y, c.Z, c.Sub(target).Norm())
+	}
+	return ranked, nil
 }
 
-// pickCupDynamic moves the arm to the configured cup_observe, observes
-// the closest cup via the vision service, and executes a side-grab using
-// the cup_approach_relative_pose / cup_grab_relative_pose offsets from
-// Config composed onto the detected centroid. Called by setCupForCoffee
-// when DynamicCupPickup=true.
+// tryGrabCup attempts a full approach-grab-retreat cycle on one candidate
+// centroid. On failure after the approach step, it best-effort restores the
+// arm to cup_observe so the caller can attempt a different candidate from a
+// known good state.
+//
+// Returned errors fall into three categories the caller distinguishes via
+// errors.Is:
+//   - wraps errMotionPlanning → planning failure; try a different candidate.
+//   - wraps errCupGrabMissed → gripper closed on empty air; re-observe.
+//   - anything else → execution error or operator cancel; bubble up.
+func (s *beanjaminCoffee) tryGrabCup(ctx, cancelCtx context.Context, centroid r3.Vector) error {
+	approachPD := &poseData{
+		pose:          composeCupPose(centroid, relativePoseToSpatial(s.cfg.CupApproachRelativePose)),
+		refFrame:      referenceframe.World,
+		componentName: "coffee-claws-middle",
+	}
+	grabPD := &poseData{
+		pose:          composeCupPose(centroid, relativePoseToSpatial(s.cfg.CupGrabRelativePose)),
+		refFrame:      referenceframe.World,
+		componentName: "coffee-claws-middle",
+	}
+
+	// 1. Approach (free planning). On failure the arm has not moved.
+	if err := s.moveToRawPose(ctx, approachPD, nil, nil, nil); err != nil {
+		return fmt.Errorf("approach centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
+	}
+
+	// 2. Open gripper before descending.
+	if err := s.gripper.Open(ctx, nil); err != nil {
+		s.recoverToObserve(ctx, cancelCtx)
+		return fmt.Errorf("open gripper for grab: %w", err)
+	}
+	time.Sleep(gripperPause)
+
+	// 3. Linear descent to grab pose.
+	if err := s.moveToRawPose(ctx, grabPD, defaultApproachConstraint, nil, nil); err != nil {
+		s.recoverToObserve(ctx, cancelCtx)
+		return fmt.Errorf("grab centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
+	}
+
+	// 4. Close the gripper, wait for the close to settle, then ask the
+	// gripper whether it actually has something. The bool returned from
+	// Grab is not reliable on the real ufactory gripper — it can report
+	// success before the claws have closed enough to detect an object.
+	// IsHoldingSomething queried after gripperPause is authoritative.
+	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		s.recoverToObserve(ctx, cancelCtx)
+		return fmt.Errorf("close gripper on cup: %w", err)
+	}
+	time.Sleep(gripperPause)
+	if missed, err := s.cupGrabMissed(ctx, centroid); err != nil {
+		s.recoverToObserve(ctx, cancelCtx)
+		return fmt.Errorf("verify grab: %w", err)
+	} else if missed {
+		// Gripper closed but reports nothing held. Open and recover so the
+		// caller can re-observe and try again.
+		if openErr := s.gripper.Open(ctx, nil); openErr != nil {
+			s.logger.Warnf("dynamic cup pickup: failed to reopen gripper after missed grab: %v", openErr)
+		}
+		time.Sleep(gripperPause)
+		s.recoverToObserve(ctx, cancelCtx)
+		return fmt.Errorf("%w at centroid (x=%.1f, y=%.1f, z=%.1f)", errCupGrabMissed, centroid.X, centroid.Y, centroid.Z)
+	}
+
+	// 5. Linear retreat with the cup in hand. A failure here is fatal — we
+	// can't drop the cup safely by recovering to observe. Strip the
+	// errMotionPlanning chain (%v, not %w) so the caller does not treat this
+	// as a try-another-cup planning failure.
+	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, nil, nil); err != nil {
+		return fmt.Errorf("retreat with cup grabbed (centroid x=%.1f, y=%.1f, z=%.1f): %v", centroid.X, centroid.Y, centroid.Z, err)
+	}
+	return nil
+}
+
+// cupGrabMissed reports whether the gripper closed on empty air, queried
+// via the gripper's IsHoldingSomething API after the post-Grab settle pause.
+// In FakeMode the check is skipped (the fake gripper always reports
+// not-holding) and the caller is assumed to have grabbed successfully.
+func (s *beanjaminCoffee) cupGrabMissed(ctx context.Context, centroid r3.Vector) (bool, error) {
+	if s.cfg.FakeMode {
+		return false, nil
+	}
+	status, err := s.gripper.IsHoldingSomething(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("query gripper holding status: %w", err)
+	}
+	s.logger.Infof("dynamic cup pickup: gripper IsHoldingSomething=%t after grab at centroid (x=%.1f, y=%.1f, z=%.1f)",
+		status.IsHoldingSomething, centroid.X, centroid.Y, centroid.Z)
+	return !status.IsHoldingSomething, nil
+}
+
+// recoverToObserve best-effort returns the arm to cup_observe so the next
+// candidate (or the next observation) starts from a known state. Errors are
+// logged, not returned — the caller is already returning an error.
+func (s *beanjaminCoffee) recoverToObserve(ctx, cancelCtx context.Context) {
+	// Close the gripper to a safe configuration before traversing back. A
+	// stray open gripper has a larger collision silhouette than a closed one.
+	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		s.logger.Warnf("dynamic cup pickup: recover: close gripper: %v", err)
+	}
+	time.Sleep(gripperPause)
+
+	observeStep := Step{PoseName: "cup_observe", Component: "coffee-claws-middle", Pause: shortPause}
+	if err := s.executeStep(ctx, cancelCtx, observeStep); err != nil {
+		s.logger.Warnf("dynamic cup pickup: recover to cup_observe: %v", err)
+	}
+}
+
+// pickCupDynamic moves the arm to cup_observe, observes the cup workspace,
+// and walks the ranked candidate list grabbing the first reachable cup.
+// Falls through to the next candidate on planning failures and re-observes
+// (up to CupPickupMaxAttempts attempts) when the gripper closes on empty air
+// or all candidates in a batch fail planning. Called by setCupForCoffee when
+// DynamicCupPickup=true.
 func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 	ctx, span := trace.StartSpan(ctx, "beanjamin::dynamic_cup_pickup")
 	defer span.End()
@@ -197,57 +313,55 @@ func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("dynamic_cup_pickup: no gripper configured")
 	}
 
-	// 1. Move to observe pose.
-	observeStep := Step{PoseName: "cup_observe", Component: "coffee-claws-middle", Pause: shortPause}
-	if err := s.executeStep(ctx, cancelCtx, observeStep); err != nil {
-		return fmt.Errorf("dynamic_cup_pickup: observe: %w", err)
-	}
+	maxAttempts := s.cupPickupMaxAttempts()
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Move to observe pose at the start of every attempt. Redundant on
+		// attempts that follow a recoverToObserve, but harmless — the plan
+		// to a pose the arm already occupies is trivial.
+		observeStep := Step{PoseName: "cup_observe", Component: "coffee-claws-middle", Pause: shortPause}
+		if err := s.executeStep(ctx, cancelCtx, observeStep); err != nil {
+			return fmt.Errorf("dynamic_cup_pickup: observe: %w", err)
+		}
 
-	// 2. Observe.
-	detectCtx, detectSpan := trace.StartSpan(ctx, "beanjamin::dynamic_cup_pickup::detect")
-	centroidWorld, err := s.observeCupCentroid(detectCtx)
-	detectSpan.End()
-	if err != nil {
-		return err
-	}
+		detectCtx, detectSpan := trace.StartSpan(ctx, "beanjamin::dynamic_cup_pickup::detect")
+		candidates, err := s.observeCupCandidates(detectCtx)
+		detectSpan.End()
+		if err != nil {
+			// Either no detections or none in range — re-observing won't
+			// reveal cups that aren't there. Bail.
+			return err
+		}
 
-	// 3. Compose configured offsets onto the centroid → world-frame *poseData.
-	approachPD := &poseData{
-		pose:          composeCupPose(centroidWorld, relativePoseToSpatial(s.cfg.CupApproachRelativePose)),
-		refFrame:      referenceframe.World,
-		componentName: "coffee-claws-middle",
-	}
-	grabPD := &poseData{
-		pose:          composeCupPose(centroidWorld, relativePoseToSpatial(s.cfg.CupGrabRelativePose)),
-		refFrame:      referenceframe.World,
-		componentName: "coffee-claws-middle",
-	}
+		s.logger.Infof("dynamic cup pickup: attempt %d/%d — %d candidate(s) to try", attempt, maxAttempts, len(candidates))
+		var reobserve bool
+		for i, centroid := range candidates {
+			err := s.tryGrabCup(ctx, cancelCtx, centroid)
+			if err == nil {
+				return nil
+			}
+			lastErr = err
 
-	// 5. Approach (free planning).
-	if err := s.moveToRawPose(ctx, approachPD, nil, nil, nil); err != nil {
-		return fmt.Errorf("dynamic_cup_pickup: approach: %w", err)
-	}
+			// Operator cancel always wins.
+			if ctx.Err() != nil {
+				return fmt.Errorf("dynamic_cup_pickup: cancelled: %w", err)
+			}
 
-	// 6. Open the gripper before descending.
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("dynamic_cup_pickup: open gripper: %w", err)
+			switch {
+			case errors.Is(err, errCupGrabMissed):
+				s.logger.Warnf("dynamic cup pickup: attempt %d, candidate %d/%d missed grab — will re-observe: %v",
+					attempt, i+1, len(candidates), err)
+				reobserve = true
+			case errors.Is(err, errMotionPlanning):
+				s.logger.Warnf("dynamic cup pickup: attempt %d, candidate %d/%d planning failed — trying next: %v",
+					attempt, i+1, len(candidates), err)
+			default:
+				return err
+			}
+			if reobserve {
+				break
+			}
+		}
 	}
-	time.Sleep(gripperPause)
-
-	// 7. Linear move to grab pose.
-	if err := s.moveToRawPose(ctx, grabPD, defaultApproachConstraint, nil, nil); err != nil {
-		return fmt.Errorf("dynamic_cup_pickup: grab: %w", err)
-	}
-
-	// 8. Close the gripper.
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		return fmt.Errorf("dynamic_cup_pickup: grab gripper: %w", err)
-	}
-	time.Sleep(gripperPause)
-
-	// 9. Linear retreat back to the approach pose.
-	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, nil, nil); err != nil {
-		return fmt.Errorf("dynamic_cup_pickup: retreat: %w", err)
-	}
-	return nil
+	return fmt.Errorf("dynamic_cup_pickup: exhausted %d attempt(s); last error: %w", maxAttempts, lastErr)
 }

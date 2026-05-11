@@ -252,6 +252,7 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
 | `cup_max_distance_from_target_mm`     | float  | No       | Hard cutoff: detections beyond this distance from `expected_cup_position_mm` are dropped. Default 300 mm. |
 | `cup_detection_retries`               | int    | No       | Number of additional vision calls if the first returns 0 detections. Default 0. |
 | `cup_detection_retry_sleep_ms`        | int    | No       | Sleep between detection retries in milliseconds. Default 250. |
+| `cup_pickup_max_attempts`             | int    | No       | Cap on full observe-and-grab attempts per order. Each attempt re-detects and walks the candidate list (closest first), falling through to the next candidate on planning failures and re-observing when the gripper closes on empty air. Default 3. |
 | `cup_centroid_min_z_mm`               | float  | No       | Minimum world-frame Z for each detection. If a detected centroid's Z is below this, it is clamped up to this value before pose composition; values above are left alone. Use to recover from depth noise that would otherwise produce a too-low approach pose and trip the planner. Default `0` disables clamping. |
 | `max_batch_size`           | int    | No       | Cap on `prepare_order.count` — how many identical drinks one DoCommand may enqueue at once. Defaults to 10 when unset. Protects the queue against runaway voice commands or LLM hallucinations. |
 
