@@ -10,10 +10,9 @@
 // offsets, not switch-resident world-frame poses) onto the chosen
 // centroid, and feeds the resulting world poses to moveToRawPose.
 //
-// On failure, pickCupDynamic falls through to the next candidate cup
-// (planning failures) or re-observes and starts a fresh attempt
-// (missed-grab where the gripper closes on empty air), bounded by
-// CupPickupMaxAttempts.
+// On a planning failure, pickCupDynamic falls through to the next
+// candidate cup and re-observes the workspace after each batch is
+// exhausted, bounded by CupPickupMaxAttempts.
 package beanjamin
 
 import (
@@ -29,12 +28,6 @@ import (
 	"go.viam.com/rdk/spatialmath"
 	viz "go.viam.com/rdk/vision"
 )
-
-// errCupGrabMissed is returned by tryGrabCup when the gripper closes
-// without detecting an object — the cup moved between observation and
-// descent, or the detection was off. Triggers a fresh observation in the
-// outer pickCupDynamic loop.
-var errCupGrabMissed = errors.New("gripper closed without grabbing a cup")
 
 // rankCupCentroids returns centroids sorted by distance to target ascending,
 // dropping any beyond maxDistMm. maxDistMm == 0 disables the cutoff. The
@@ -189,10 +182,9 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector
 // arm to cup_observe so the caller can attempt a different candidate from a
 // known good state.
 //
-// Returned errors fall into three categories the caller distinguishes via
+// Returned errors fall into two categories the caller distinguishes via
 // errors.Is:
 //   - wraps errMotionPlanning → planning failure; try a different candidate.
-//   - wraps errCupGrabMissed → gripper closed on empty air; re-observe.
 //   - anything else → execution error or operator cancel; bubble up.
 func (s *beanjaminCoffee) tryGrabCup(ctx, cancelCtx context.Context, centroid r3.Vector) error {
 	approachPD := &poseData{
@@ -224,29 +216,17 @@ func (s *beanjaminCoffee) tryGrabCup(ctx, cancelCtx context.Context, centroid r3
 		return fmt.Errorf("grab centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
 
-	// 4. Close the gripper, wait for the close to settle, then ask the
-	// gripper whether it actually has something. The bool returned from
-	// Grab is not reliable on the real ufactory gripper — it can report
-	// success before the claws have closed enough to detect an object.
-	// IsHoldingSomething queried after gripperPause is authoritative.
+	// 4. Close the gripper on the cup.
+	//
+	// TODO: verify the gripper actually picked up a cup before continuing.
+	// gripper.IsHoldingSomething is not usable here because the real robot
+	// permanently grips the claws extension, so the call returns true
+	// regardless of whether a cup is between the claws. 
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		s.recoverToObserve(ctx, cancelCtx)
 		return fmt.Errorf("close gripper on cup: %w", err)
 	}
 	time.Sleep(gripperPause)
-	if missed, err := s.cupGrabMissed(ctx, centroid); err != nil {
-		s.recoverToObserve(ctx, cancelCtx)
-		return fmt.Errorf("verify grab: %w", err)
-	} else if missed {
-		// Gripper closed but reports nothing held. Open and recover so the
-		// caller can re-observe and try again.
-		if openErr := s.gripper.Open(ctx, nil); openErr != nil {
-			s.logger.Warnf("dynamic cup pickup: failed to reopen gripper after missed grab: %v", openErr)
-		}
-		time.Sleep(gripperPause)
-		s.recoverToObserve(ctx, cancelCtx)
-		return fmt.Errorf("%w at centroid (x=%.1f, y=%.1f, z=%.1f)", errCupGrabMissed, centroid.X, centroid.Y, centroid.Z)
-	}
 
 	// 5. Linear retreat with the cup in hand. A failure here is fatal — we
 	// can't drop the cup safely by recovering to observe. Strip the
@@ -256,23 +236,6 @@ func (s *beanjaminCoffee) tryGrabCup(ctx, cancelCtx context.Context, centroid r3
 		return fmt.Errorf("retreat with cup grabbed (centroid x=%.1f, y=%.1f, z=%.1f): %v", centroid.X, centroid.Y, centroid.Z, err)
 	}
 	return nil
-}
-
-// cupGrabMissed reports whether the gripper closed on empty air, queried
-// via the gripper's IsHoldingSomething API after the post-Grab settle pause.
-// In FakeMode the check is skipped (the fake gripper always reports
-// not-holding) and the caller is assumed to have grabbed successfully.
-func (s *beanjaminCoffee) cupGrabMissed(ctx context.Context, centroid r3.Vector) (bool, error) {
-	if s.cfg.FakeMode {
-		return false, nil
-	}
-	status, err := s.gripper.IsHoldingSomething(ctx, nil)
-	if err != nil {
-		return false, fmt.Errorf("query gripper holding status: %w", err)
-	}
-	s.logger.Infof("dynamic cup pickup: gripper IsHoldingSomething=%t after grab at centroid (x=%.1f, y=%.1f, z=%.1f)",
-		status.IsHoldingSomething, centroid.X, centroid.Y, centroid.Z)
-	return !status.IsHoldingSomething, nil
 }
 
 // recoverToObserve best-effort returns the arm to cup_observe so the next
@@ -334,7 +297,6 @@ func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 		}
 
 		s.logger.Infof("dynamic cup pickup: attempt %d/%d — %d candidate(s) to try", attempt, maxAttempts, len(candidates))
-		var reobserve bool
 		for i, centroid := range candidates {
 			err := s.tryGrabCup(ctx, cancelCtx, centroid)
 			if err == nil {
@@ -347,20 +309,11 @@ func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 				return fmt.Errorf("dynamic_cup_pickup: cancelled: %w", err)
 			}
 
-			switch {
-			case errors.Is(err, errCupGrabMissed):
-				s.logger.Warnf("dynamic cup pickup: attempt %d, candidate %d/%d missed grab — will re-observe: %v",
-					attempt, i+1, len(candidates), err)
-				reobserve = true
-			case errors.Is(err, errMotionPlanning):
-				s.logger.Warnf("dynamic cup pickup: attempt %d, candidate %d/%d planning failed — trying next: %v",
-					attempt, i+1, len(candidates), err)
-			default:
+			if !errors.Is(err, errMotionPlanning) {
 				return err
 			}
-			if reobserve {
-				break
-			}
+			s.logger.Warnf("dynamic cup pickup: attempt %d, candidate %d/%d planning failed — trying next: %v",
+				attempt, i+1, len(candidates), err)
 		}
 	}
 	return fmt.Errorf("dynamic_cup_pickup: exhausted %d attempt(s); last error: %w", maxAttempts, lastErr)
