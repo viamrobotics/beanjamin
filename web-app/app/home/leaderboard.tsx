@@ -38,7 +38,7 @@ export function Leaderboard({
   drinks: LeaderboardEntry[] | null;
 }) {
   return (
-    <section className="mb-8">
+    <section className="mb-6">
       <h2 className="text-xl font-semibold text-neutral-900 mb-3">
         🏆 Leaderboard · last 7 days
       </h2>

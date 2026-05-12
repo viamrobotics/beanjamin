@@ -240,7 +240,7 @@ export default function Home() {
           ↻ Refresh
         </button>
       </div>
-      <ul className="m-0 p-0 list-none mb-8 space-y-2">
+      <ul className="m-0 p-0 list-none mb-6 space-y-2">
         {[...machines]
           .sort((a, b) => {
             const score = (m: Machine) => {
@@ -262,7 +262,7 @@ export default function Home() {
         drinks={drinkLeaderboard}
       />
 
-      <section className="mb-8">
+      <section className="mb-6">
         <h2 className="text-xl font-semibold text-neutral-900 mb-3">Orders</h2>
         {orderCounts === null ? (
           <p className="text-neutral-500">Loading order counts…</p>

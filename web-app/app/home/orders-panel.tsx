@@ -293,7 +293,6 @@ export function OrdersPanel({
   viamClient: VIAM.ViamClient | null;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const hasScrolledRef = useRef(false);
   const [videoCounts, setVideoCounts] = useState<Map<string, number> | null>(
     null
   );
@@ -321,19 +320,18 @@ export function OrdersPanel({
     };
   }, [orders, viamClient]);
 
+  // Scrolls once on mount (loading indicator visible) and once more when
+  // content fully loads. `[ready]` fires on initial mount + ready flip.
   useEffect(() => {
-    if (ready && !hasScrolledRef.current) {
-      hasScrolledRef.current = true;
-      panelRef.current?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-    }
+    const raf = requestAnimationFrame(() => {
+      panelRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    });
+    return () => cancelAnimationFrame(raf);
   }, [ready]);
   return (
     <div
       ref={panelRef}
-      className="mt-4 p-4 border border-neutral-200 rounded-lg bg-neutral-50"
+      className="mt-4 p-4 border border-neutral-200 rounded-lg bg-neutral-50 scroll-mb-6"
     >
       <div className="flex justify-between items-center mb-3">
         <strong className="text-neutral-900">{panelTitle(panel)}</strong>

@@ -366,7 +366,7 @@ export function OrdersChart({
   }
 
   const width = 800;
-  const height = 280;
+  const height = 230;
   const margin = { top: 20, right: 16, bottom: 44, left: 40 };
   const plotW = width - margin.left - margin.right;
   const plotH = height - margin.top - margin.bottom;
