@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as VIAM from "@viamrobotics/sdk";
 import {
   type OrderRecord,
@@ -95,9 +95,11 @@ function VideoExpansion({ entry }: { entry: VideoEntry | undefined }) {
 function OrderTable({
   orders,
   viamClient,
+  videoCountByOrder,
 }: {
   orders: OrderRecord[];
   viamClient: VIAM.ViamClient | null;
+  videoCountByOrder: Map<string, number>;
 }) {
   const [page, setPage] = useState(0);
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({
@@ -108,9 +110,6 @@ function OrderTable({
   const [videoByOrder, setVideoByOrder] = useState<Map<string, VideoEntry>>(
     new Map()
   );
-  const [videoCountByOrder, setVideoCountByOrder] = useState<
-    Map<string, number | null>
-  >(new Map());
 
   const sorted = [...orders].sort((a, b) => compareOrders(a, b, sort));
   const pageCount = Math.ceil(orders.length / ORDERS_PER_PAGE);
@@ -118,38 +117,6 @@ function OrderTable({
     page * ORDERS_PER_PAGE,
     page * ORDERS_PER_PAGE + ORDERS_PER_PAGE
   );
-
-  useEffect(() => {
-    if (!viamClient) return;
-    let cancelled = false;
-    const targets = pageRows.filter(
-      (o) => !!o.orderId && !videoCountByOrder.has(o.orderId)
-    );
-    if (targets.length === 0) return;
-    setVideoCountByOrder((prev) => {
-      const next = new Map(prev);
-      for (const o of targets) {
-        if (!next.has(o.orderId)) next.set(o.orderId, null);
-      }
-      return next;
-    });
-    countVideosForOrders(viamClient, targets)
-      .then((counts) => {
-        if (cancelled) return;
-        setVideoCountByOrder((prev) => {
-          const next = new Map(prev);
-          for (const [id, count] of counts) next.set(id, count);
-          return next;
-        });
-      })
-      .catch((e) => {
-        console.error("failed to count videos:", e);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders, viamClient, page, sort.key, sort.dir]);
 
   const toggleVideo = (order: OrderRecord) => {
     const orderId = order.orderId;
@@ -324,8 +291,49 @@ export function OrdersPanel({
   onClose: () => void;
   viamClient: VIAM.ViamClient | null;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const hasScrolledRef = useRef(false);
+  const [videoCounts, setVideoCounts] = useState<Map<string, number> | null>(
+    null
+  );
+  const loaded = orders !== null || error !== null;
+  const noTable = orders === null || orders.length === 0 || error !== null;
+  const needsCounts = !!orders && orders.some((o) => !!o.orderId);
+  const tableReady = !needsCounts || videoCounts !== null;
+  const ready = loaded && (noTable || tableReady);
+
+  useEffect(() => {
+    if (!viamClient || !orders) return;
+    const targets = orders.filter((o) => !!o.orderId);
+    if (targets.length === 0) return;
+    let cancelled = false;
+    countVideosForOrders(viamClient, targets)
+      .then((counts) => {
+        if (!cancelled) setVideoCounts(counts);
+      })
+      .catch((e) => {
+        console.error("failed to count videos:", e);
+        if (!cancelled) setVideoCounts(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [orders, viamClient]);
+
+  useEffect(() => {
+    if (ready && !hasScrolledRef.current) {
+      hasScrolledRef.current = true;
+      panelRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }
+  }, [ready]);
   return (
-    <div className="mt-4 p-4 border border-neutral-200 rounded-lg bg-neutral-50">
+    <div
+      ref={panelRef}
+      className="mt-4 p-4 border border-neutral-200 rounded-lg bg-neutral-50"
+    >
       <div className="flex justify-between items-center mb-3">
         <strong className="text-neutral-900">{panelTitle(panel)}</strong>
         <button
@@ -342,8 +350,14 @@ export function OrdersPanel({
         <p className="text-neutral-500">Loading orders…</p>
       ) : orders.length === 0 ? (
         <p className="text-neutral-500">{panelEmptyMsg(panel)}</p>
+      ) : !tableReady ? (
+        <p className="text-neutral-500">Loading orders…</p>
       ) : (
-        <OrderTable orders={orders} viamClient={viamClient} />
+        <OrderTable
+          orders={orders}
+          viamClient={viamClient}
+          videoCountByOrder={videoCounts ?? new Map()}
+        />
       )}
     </div>
   );

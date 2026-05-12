@@ -385,7 +385,7 @@ export async function countVideosForOrders(
 
   const result = await client.dataClient.binaryDataByFilter(
     filter,
-    100,
+    500,
     undefined,
     undefined,
     false,
