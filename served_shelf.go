@@ -36,14 +36,14 @@ const (
 	// shelf top surface. The anchor plays the same role as the detected cup
 	// centroid at pickup: it is composed with CupGrabRelativePose to derive
 	// the world-frame claws pose used for the drop.
-	shelfDropZOffsetMm    = 40.0
+	shelfDropZOffsetMm    = 30.0
 	shelfApproachZExtraMm = 80.0
 	// shelfOccupancyBufferMm is the collision clearance buffer used to decide
 	// whether a tile is free: a tile is occupied iff at least one detected
 	// cup geometry is within this many millimeters of the tile-center point.
 	// Sized so a placed cup of typical diameter has comfortable clearance
 	// from neighbors at shelfTileSpacingMm spacing.
-	shelfOccupancyBufferMm = 80.0
+	shelfOccupancyBufferMm = 50.0
 )
 
 // servedShelfTilePick records the world-frame target tile chosen at
