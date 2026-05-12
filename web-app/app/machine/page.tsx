@@ -4,7 +4,7 @@ import { Suspense, useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
-import { DRINKS } from "../order/drinks";
+import { drinkLabel } from "../order/drinks";
 import { ChooseDrink } from "../order/choose-drink";
 import { EnterName } from "../order/enter-name";
 import dynamic from "next/dynamic";
@@ -173,10 +173,9 @@ function Kiosk() {
     // Non-espresso: call prepare_order so the robot speaks the rejection
     if (connected && viamConn) {
       try {
-        const drink = DRINKS.find((d) => d.id === selectedDrink);
         await prepareOrder(viamConn, {
           drink: selectedDrink,
-          drinkLabel: drink?.label ?? selectedDrink,
+          drinkLabel: drinkLabel(selectedDrink),
           customerName: "",
         });
       } catch (err) {
@@ -209,11 +208,10 @@ function Kiosk() {
       return;
     }
 
-    const drink = DRINKS.find((d) => d.id === selectedDrink);
     try {
       await prepareOrder(viamConn, {
         drink: selectedDrink!,
-        drinkLabel: drink?.label ?? selectedDrink!,
+        drinkLabel: drinkLabel(selectedDrink!),
         customerName: misspelledName,
         pronunciation: undefined,
       });
@@ -285,12 +283,11 @@ function Kiosk() {
     }
 
     if (step === "confirmation") {
-      const drink = DRINKS.find((d) => d.id === selectedDrink);
       return (
         <OrderConfirmation
           misspelled={misspelled}
           actualName={name}
-          drinkLabel={drink?.label ?? ""}
+          drinkLabel={drinkLabel(selectedDrink ?? "")}
           onDismiss={handleConfirmationDismiss}
           showBack={!kioskMode}
         />

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { type Machine } from "./data";
 import { type QueueStatus } from "../lib/viamClient";
+import { drinkLabel } from "../order/drinks";
 
 function renderQueueStatus(queue: QueueStatus | null | undefined): string {
   if (queue === undefined) return "loading queue…";
@@ -14,7 +15,7 @@ function renderQueueStatus(queue: QueueStatus | null | undefined): string {
   const parts: string[] = [];
   if (current) {
     const step = current.raw_step || queue.current_step;
-    const label = `making ${current.drink} for ${current.customer_name || "?"}`;
+    const label = `making ${drinkLabel(current.drink) || current.drink} for ${current.customer_name || "?"}`;
     parts.push(step ? `${label} · ${step}` : label);
   }
   if (waiting > 0) parts.push(`${waiting} in queue`);

@@ -2,16 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { getQueue, type ViamConnection, type QueueOrder } from "../lib/viamClient";
-import { DRINKS } from "./drinks";
-
-function drinkLabel(drinkId: string): string {
-  const found = DRINKS.find((d) => d.id === drinkId);
-  if (found) return found.label;
-  if (!drinkId) return "";
-  return drinkId
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
+import { drinkLabel } from "./drinks";
 
 // --- Step display rules -------------------------------------------------
 //

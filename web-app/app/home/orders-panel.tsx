@@ -13,6 +13,7 @@ import {
   getVideoSignedUrl,
   countVideosForOrders,
 } from "./data";
+import { drinkLabel } from "../order/drinks";
 
 const PAGER_BUTTON =
   "px-3 py-1 rounded-md border border-neutral-200 bg-white text-neutral-900 hover:bg-neutral-100 transition-colors disabled:bg-neutral-50 disabled:text-neutral-400 disabled:cursor-not-allowed";
@@ -58,7 +59,7 @@ function compareOrders(
     case "customer":
       return sign * a.customerName.localeCompare(b.customerName);
     case "drink":
-      return sign * a.drink.localeCompare(b.drink);
+      return sign * drinkLabel(a.drink).localeCompare(drinkLabel(b.drink));
     case "duration":
       return sign * (a.durationMs - b.durationMs);
     case "status":
@@ -192,7 +193,7 @@ function OrderTable({
                   })}
                 </td>
                 <td className="px-2 py-1">{o.customerName || "—"}</td>
-                <td className="px-2 py-1">{o.drink || "—"}</td>
+                <td className="px-2 py-1">{drinkLabel(o.drink) || "—"}</td>
                 <td className="px-2 py-1">{formatDuration(o.durationMs)}</td>
                 <td className="px-2 py-1">
                   {o.ok ? (
