@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/module/trace"
+	"go.viam.com/rdk/referenceframe"
 )
 
 const (
@@ -215,9 +217,14 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 
 	if s.cfg.PlaceCup {
 		s.setStep("Serving")
-		s.logger.Infof("step 6b/9: giving full cup to customer (place_cup=true)")
+		s.logger.Infof("step 6b/9: serving cup (place_cup=true, place_cup_on_shelf=%t)", s.cfg.PlaceCupOnShelf)
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::serving")
-		err := s.giveFullCupToCustomer(ctx, cancelCtx)
+		var err error
+		if s.cfg.PlaceCupOnShelf {
+			err = s.placeFullCupOnShelf(ctx, cancelCtx)
+		} else {
+			err = s.giveFullCupToCustomer(ctx, cancelCtx)
+		}
 		stepSpan.End()
 		if err != nil {
 			return err
@@ -477,6 +484,96 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	// Close the gripper after moving away.
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: close gripper: %w", err)
+	}
+	time.Sleep(gripperPause)
+	return nil
+}
+
+// placeFullCupOnShelf retrieves the brewed cup from cup_ready_for_coffee and
+// drops it on the served-drinks shelf at the tile chosen earlier by
+// selectShelfTile. Replaces giveFullCupToCustomer when PlaceCupOnShelf=true.
+//
+// The grab phase mirrors giveFullCupToCustomer (approach -> open -> linear
+// descent + grab -> linear retreat). The placement phase plans to a
+// world-frame approach pose above the chosen tile, descends linearly to the
+// drop pose (claws-middle = shelfTopZ + shelfDropZOffsetMm), opens the
+// gripper to release, then retreats linearly and closes the gripper.
+func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) error {
+	if s.gripper == nil {
+		return fmt.Errorf("place_full_cup_on_shelf: no gripper configured")
+	}
+
+	pickRaw := s.servedShelfTile.Load()
+	pick, ok := pickRaw.(servedShelfTilePick)
+	if !ok || !pick.ok {
+		return fmt.Errorf("place_full_cup_on_shelf: no shelf tile selected — selectShelfTile must run during pickup observation")
+	}
+
+	// 1. Retrieve the brewed cup (mirrors giveFullCupToCustomer).
+	approachStep := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", Pause: shortPause}
+	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
+		return fmt.Errorf("place_full_cup_on_shelf: %w", err)
+	}
+	if err := s.gripper.Open(ctx, nil); err != nil {
+		return fmt.Errorf("place_full_cup_on_shelf: open gripper: %w", err)
+	}
+	time.Sleep(gripperPause)
+	grabStep := Step{PoseName: "cup_ready_for_coffee", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
+		return fmt.Errorf("place_full_cup_on_shelf: %w", err)
+	}
+	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		return fmt.Errorf("place_full_cup_on_shelf: grab gripper: %w", err)
+	}
+	time.Sleep(gripperPause)
+	retreatStep := Step{PoseName: "cup_under_machine_approach", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
+		return fmt.Errorf("place_full_cup_on_shelf: %w", err)
+	}
+
+	// 2. Compose drop + approach poses in world frame. CupGrabRelativePose is
+	// the same relative offset used at pickup (composed onto the detected
+	// cup centroid) — composing it onto the placement anchor here keeps the
+	// claws-to-cup geometry identical between grab and release, so the cup
+	// lands centered on the chosen tile.
+	dropAnchor := r3.Vector{
+		X: pick.tileWorld.X,
+		Y: pick.tileWorld.Y,
+		Z: pick.shelfTopZ + shelfDropZOffsetMm,
+	}
+	dropPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.CupGrabRelativePose))
+	approachPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.CupApproachRelativePose))
+
+	approachPD := &poseData{pose: approachPose, refFrame: referenceframe.World, componentName: "coffee-claws-middle"}
+	dropPD := &poseData{pose: dropPose, refFrame: referenceframe.World, componentName: "coffee-claws-middle"}
+
+	s.logger.Infof("shelf placement: anchor world drop_pose=%v approach_pose=%v",
+		dropPose, approachPose)
+
+	// 3. Free planning to the approach pose.
+	if err := s.moveToRawPose(ctx, approachPD, nil, nil, nil); err != nil {
+		return fmt.Errorf("place_full_cup_on_shelf: approach: %w", err)
+	}
+
+	// 4. Linear descent to the drop pose.
+	if err := s.moveToRawPose(ctx, dropPD, defaultApproachConstraint, nil, nil); err != nil {
+		return fmt.Errorf("place_full_cup_on_shelf: descend: %w", err)
+	}
+
+	// 5. Release the cup.
+	if err := s.gripper.Open(ctx, nil); err != nil {
+		return fmt.Errorf("place_full_cup_on_shelf: open gripper: %w", err)
+	}
+	time.Sleep(gripperPause)
+
+	// 6. Linear retreat back to the approach pose.
+	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, nil, nil); err != nil {
+		return fmt.Errorf("place_full_cup_on_shelf: retreat: %w", err)
+	}
+
+	// 7. Close the gripper for the next move.
+	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		return fmt.Errorf("place_full_cup_on_shelf: close gripper: %w", err)
 	}
 	time.Sleep(gripperPause)
 	return nil

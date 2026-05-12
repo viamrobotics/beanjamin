@@ -129,6 +129,27 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector
 		return nil, fmt.Errorf("dynamic_cup_pickup: %w", err)
 	}
 
+	// When PlaceCupOnShelf is enabled, look up the shelf top once so we can
+	// (a) partition detections into pickup vs on-shelf by Z and (b) pass
+	// the shelf pose/dims to selectShelfTile without a second lookup.
+	var (
+		shelfPose    spatialmath.Pose
+		shelfDims    r3.Vector
+		shelfTopZ    float64
+		onShelfCups  []spatialmath.Geometry
+		hasShelfCfg  = s.cfg.PlaceCupOnShelf
+	)
+	if hasShelfCfg {
+		pose, dims, err := s.shelfTopGeometry(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("dynamic_cup_pickup: %w", err)
+		}
+		shelfPose = pose
+		shelfDims = dims
+		shelfTopZ = pose.Point().Z + dims.Z/2
+		onShelfCups = make([]spatialmath.Geometry, 0, len(objects))
+	}
+
 	centroids := make([]r3.Vector, 0, len(objects))
 	for _, obj := range objects {
 		if obj.Geometry == nil {
@@ -144,10 +165,41 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector
 				world.Z, floor)
 			world.Z = floor
 		}
+
+		// Detections whose centroid sits above the shelf top surface are
+		// already-served cups; lift their geometry to world frame for the
+		// shelf-tile occupancy check and exclude them from pickup ranking.
+		if hasShelfCfg && world.Z > shelfTopZ {
+			gif := referenceframe.NewGeometriesInFrame(s.cupCameraName, []spatialmath.Geometry{obj.Geometry})
+			worldGifTF, err := fs.Transform(fsInputs.ToLinearInputs(), gif, referenceframe.World)
+			if err != nil {
+				return nil, fmt.Errorf("dynamic_cup_pickup: transform geometry to world: %w", err)
+			}
+			geos := worldGifTF.(*referenceframe.GeometriesInFrame).Geometries()
+			if len(geos) > 0 {
+				onShelfCups = append(onShelfCups, geos[0])
+			}
+			s.logger.Debugf("dynamic cup pickup: detection world=%v above shelf-top Z=%.1fmm — on-shelf, excluded from pickup",
+				world, shelfTopZ)
+			continue
+		}
+
 		s.logger.Debugf("dynamic cup pickup: detection at camera-local %v -> world %v", local, world)
 		centroids = append(centroids, world)
 	}
+
+	if hasShelfCfg {
+		s.logger.Infof("dynamic cup pickup: shelf partition — %d pickup candidate(s), %d on-shelf cup(s) (threshold Z=%.1fmm)",
+			len(centroids), len(onShelfCups), shelfTopZ)
+		if err := s.selectShelfTile(shelfPose, shelfDims, onShelfCups); err != nil {
+			return nil, err
+		}
+	}
+
 	if len(centroids) == 0 {
+		if hasShelfCfg && len(onShelfCups) > 0 {
+			return nil, fmt.Errorf("dynamic_cup_pickup: all %d detection(s) classified as on-shelf (above Z=%.1fmm); no empty-cup candidate", len(onShelfCups), shelfTopZ)
+		}
 		return nil, fmt.Errorf("dynamic_cup_pickup: %d detection(s) had no usable geometry", len(objects))
 	}
 
@@ -221,7 +273,7 @@ func (s *beanjaminCoffee) tryGrabCup(ctx, cancelCtx context.Context, centroid r3
 	// TODO: verify the gripper actually picked up a cup before continuing.
 	// gripper.IsHoldingSomething is not usable here because the real robot
 	// permanently grips the claws extension, so the call returns true
-	// regardless of whether a cup is between the claws. 
+	// regardless of whether a cup is between the claws.
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		s.recoverToObserve(ctx, cancelCtx)
 		return fmt.Errorf("close gripper on cup: %w", err)
