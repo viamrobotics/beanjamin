@@ -6,6 +6,15 @@ export interface Drink {
   available: boolean;
 }
 
+export function drinkLabel(drinkId: string): string {
+  if (!drinkId) return "";
+  const found = DRINKS.find((d) => d.id === drinkId);
+  if (found) return found.label;
+  return drinkId
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export const DRINKS: Drink[] = [
   {
     id: "espresso",

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import * as VIAM from "@viamrobotics/sdk";
 import {
   type OrderRecord,
   type Panel,
@@ -8,7 +9,11 @@ import {
   type SortDir,
   panelTitle,
   panelEmptyMsg,
+  loadVideosForOrder,
+  getVideoSignedUrl,
+  countVideosForOrders,
 } from "./data";
+import { drinkLabel } from "../order/drinks";
 
 const PAGER_BUTTON =
   "px-3 py-1 rounded-md border border-neutral-200 bg-white text-neutral-900 hover:bg-neutral-100 transition-colors disabled:bg-neutral-50 disabled:text-neutral-400 disabled:cursor-not-allowed";
@@ -23,6 +28,25 @@ const ORDER_COLUMNS = [
   { key: "status", label: "Status", defaultDir: "asc" },
 ] as const;
 
+const TABLE_COL_COUNT = ORDER_COLUMNS.length + 1; // +1 for the video column
+
+type VideoEntry =
+  | { state: "loading" }
+  | { state: "error"; message: string }
+  | {
+      state: "ready";
+      items: { id: string; url: string; capturedAt: Date | null }[];
+    };
+
+function formatDuration(ms: number): string {
+  if (ms <= 0) return "—";
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return `${minutes}m ${seconds}s`;
+}
+
 function compareOrders(
   a: OrderRecord,
   b: OrderRecord,
@@ -35,7 +59,7 @@ function compareOrders(
     case "customer":
       return sign * a.customerName.localeCompare(b.customerName);
     case "drink":
-      return sign * a.drink.localeCompare(b.drink);
+      return sign * drinkLabel(a.drink).localeCompare(drinkLabel(b.drink));
     case "duration":
       return sign * (a.durationMs - b.durationMs);
     case "status":
@@ -43,12 +67,50 @@ function compareOrders(
   }
 }
 
-function OrderTable({ orders }: { orders: OrderRecord[] }) {
+function VideoExpansion({ entry }: { entry: VideoEntry | undefined }) {
+  if (!entry || entry.state === "loading") {
+    return <p className="text-neutral-500 m-0">Loading video…</p>;
+  }
+  if (entry.state === "error") {
+    return <p className="text-red-500 m-0">Error: {entry.message}</p>;
+  }
+  if (entry.items.length === 0) {
+    return (
+      <p className="text-neutral-500 m-0">No clip available yet.</p>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      {entry.items.map((item) => (
+        <video
+          key={item.id}
+          controls
+          src={item.url}
+          className="max-w-full rounded-md border border-neutral-200"
+        />
+      ))}
+    </div>
+  );
+}
+
+function OrderTable({
+  orders,
+  viamClient,
+  videoCountByOrder,
+}: {
+  orders: OrderRecord[];
+  viamClient: VIAM.ViamClient | null;
+  videoCountByOrder: Map<string, number>;
+}) {
   const [page, setPage] = useState(0);
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({
     key: "time",
     dir: "desc",
   });
+  const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
+  const [videoByOrder, setVideoByOrder] = useState<Map<string, VideoEntry>>(
+    new Map()
+  );
 
   const sorted = [...orders].sort((a, b) => compareOrders(a, b, sort));
   const pageCount = Math.ceil(orders.length / ORDERS_PER_PAGE);
@@ -56,6 +118,38 @@ function OrderTable({ orders }: { orders: OrderRecord[] }) {
     page * ORDERS_PER_PAGE,
     page * ORDERS_PER_PAGE + ORDERS_PER_PAGE
   );
+
+  const toggleVideo = (order: OrderRecord) => {
+    const orderId = order.orderId;
+    if (expandedOrder === orderId) {
+      setExpandedOrder(null);
+      return;
+    }
+    setExpandedOrder(orderId);
+    if (videoByOrder.has(orderId) || !viamClient) return;
+    setVideoByOrder((prev) => new Map(prev).set(orderId, { state: "loading" }));
+    (async () => {
+      try {
+        const videos = await loadVideosForOrder(viamClient, order);
+        const items = await Promise.all(
+          videos.map(async (v) => ({
+            id: v.binaryDataId,
+            url: await getVideoSignedUrl(viamClient, v.binaryDataId),
+            capturedAt: v.capturedAt,
+          }))
+        );
+        setVideoByOrder((prev) =>
+          new Map(prev).set(orderId, { state: "ready", items })
+        );
+      } catch (e) {
+        console.error("failed to load videos:", e);
+        const message = e instanceof Error ? e.message : String(e);
+        setVideoByOrder((prev) =>
+          new Map(prev).set(orderId, { state: "error", message })
+        );
+      }
+    })();
+  };
 
   return (
     <>
@@ -82,38 +176,82 @@ function OrderTable({ orders }: { orders: OrderRecord[] }) {
                 </th>
               );
             })}
+            <th className="px-2 py-1 font-medium">Video</th>
           </tr>
         </thead>
         <tbody>
-          {pageRows.map((o) => (
-            <tr
-              key={o.orderId || o.startTime.toISOString()}
-              className="border-t border-neutral-200"
-            >
-              <td className="px-2 py-1">
-                {o.startTime.toLocaleTimeString(undefined, {
-                  hour: "numeric",
-                  minute: "2-digit",
-                })}
-              </td>
-              <td className="px-2 py-1">{o.customerName || "—"}</td>
-              <td className="px-2 py-1">{o.drink || "—"}</td>
-              <td className="px-2 py-1">
-                {o.durationMs
-                  ? `${(o.durationMs / 1000).toFixed(1)}s`
-                  : "—"}
-              </td>
-              <td className="px-2 py-1">
-                {o.ok ? (
-                  <span className="text-green-600">OK</span>
-                ) : (
-                  <span className="text-red-500" title={o.errorMessage}>
-                    {o.errorMessage || "Failed"}
-                  </span>
-                )}
-              </td>
-            </tr>
-          ))}
+          {pageRows.flatMap((o) => {
+            const rowKey = o.orderId || o.startTime.toISOString();
+            const canWatch = !!o.orderId;
+            const isExpanded = canWatch && expandedOrder === o.orderId;
+            const rows = [
+              <tr key={rowKey} className="border-t border-neutral-200">
+                <td className="px-2 py-1">
+                  {o.startTime.toLocaleTimeString(undefined, {
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </td>
+                <td className="px-2 py-1">{o.customerName || "—"}</td>
+                <td className="px-2 py-1">{drinkLabel(o.drink) || "—"}</td>
+                <td className="px-2 py-1">{formatDuration(o.durationMs)}</td>
+                <td className="px-2 py-1">
+                  {o.ok ? (
+                    <span className="text-green-600">OK</span>
+                  ) : (
+                    <span className="text-red-500" title={o.errorMessage}>
+                      {o.errorMessage || "Failed"}
+                    </span>
+                  )}
+                </td>
+                <td className="px-2 py-1">
+                  {(() => {
+                    if (!canWatch) return "—";
+                    const count = videoCountByOrder.get(o.orderId);
+                    if (isExpanded) {
+                      return (
+                        <button
+                          onClick={() => toggleVideo(o)}
+                          className="text-blue-600 hover:underline"
+                        >
+                          Hide
+                        </button>
+                      );
+                    }
+                    if (count === undefined || count === null) {
+                      return (
+                        <span className="text-neutral-400">▶ …</span>
+                      );
+                    }
+                    if (count === 0) {
+                      return <span className="text-neutral-400">no clip</span>;
+                    }
+                    return (
+                      <button
+                        onClick={() => toggleVideo(o)}
+                        className="text-blue-600 hover:underline"
+                      >
+                        ▶ Watch ({count})
+                      </button>
+                    );
+                  })()}
+                </td>
+              </tr>,
+            ];
+            if (isExpanded) {
+              rows.push(
+                <tr
+                  key={`${rowKey}-video`}
+                  className="border-t border-neutral-200 bg-white"
+                >
+                  <td colSpan={TABLE_COL_COUNT} className="px-2 py-3">
+                    <VideoExpansion entry={videoByOrder.get(o.orderId)} />
+                  </td>
+                </tr>
+              );
+            }
+            return rows;
+          })}
         </tbody>
       </table>
       {orders.length > ORDERS_PER_PAGE && (
@@ -146,14 +284,55 @@ export function OrdersPanel({
   orders,
   error,
   onClose,
+  viamClient,
 }: {
   panel: Panel;
   orders: OrderRecord[] | null;
   error: string | null;
   onClose: () => void;
+  viamClient: VIAM.ViamClient | null;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [videoCounts, setVideoCounts] = useState<Map<string, number> | null>(
+    null
+  );
+  const loaded = orders !== null || error !== null;
+  const noTable = orders === null || orders.length === 0 || error !== null;
+  const needsCounts = !!orders && orders.some((o) => !!o.orderId);
+  const tableReady = !needsCounts || videoCounts !== null;
+  const ready = loaded && (noTable || tableReady);
+
+  useEffect(() => {
+    if (!viamClient || !orders) return;
+    const targets = orders.filter((o) => !!o.orderId);
+    if (targets.length === 0) return;
+    let cancelled = false;
+    countVideosForOrders(viamClient, targets)
+      .then((counts) => {
+        if (!cancelled) setVideoCounts(counts);
+      })
+      .catch((e) => {
+        console.error("failed to count videos:", e);
+        if (!cancelled) setVideoCounts(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [orders, viamClient]);
+
+  // Scrolls once on mount (loading indicator visible) and once more when
+  // content fully loads. `[ready]` fires on initial mount + ready flip.
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      panelRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [ready]);
   return (
-    <div className="mt-4 p-4 border border-neutral-200 rounded-lg bg-neutral-50">
+    <div
+      ref={panelRef}
+      className="mt-4 p-4 border border-neutral-200 rounded-lg bg-neutral-50 scroll-mb-6"
+    >
       <div className="flex justify-between items-center mb-3">
         <strong className="text-neutral-900">{panelTitle(panel)}</strong>
         <button
@@ -170,8 +349,14 @@ export function OrdersPanel({
         <p className="text-neutral-500">Loading orders…</p>
       ) : orders.length === 0 ? (
         <p className="text-neutral-500">{panelEmptyMsg(panel)}</p>
+      ) : !tableReady ? (
+        <p className="text-neutral-500">Loading orders…</p>
       ) : (
-        <OrderTable orders={orders} />
+        <OrderTable
+          orders={orders}
+          viamClient={viamClient}
+          videoCountByOrder={videoCounts ?? new Map()}
+        />
       )}
     </div>
   );

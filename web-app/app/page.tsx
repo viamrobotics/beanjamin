@@ -112,7 +112,9 @@ export default function Home() {
         .catch((e) =>
           console.error("failed to load customer leaderboard:", e)
         );
-      loadLeaderboard(currentClient, "data.readings.drink")
+      loadLeaderboard(currentClient, "data.readings.drink", {
+        "data.readings.order_ok": true,
+      })
         .then((d) => !cancelled && setDrinkLeaderboard(d))
         .catch((e) =>
           console.error("failed to load drink leaderboard:", e)
@@ -238,10 +240,21 @@ export default function Home() {
           ↻ Refresh
         </button>
       </div>
-      <ul className="m-0 p-0 list-none mb-8 space-y-2">
-        {machines.map((m) => (
-          <MachineRow key={m.id} m={m} queue={machineQueues.get(m.id)} />
-        ))}
+      <ul className="m-0 p-0 list-none mb-6 space-y-2">
+        {[...machines]
+          .sort((a, b) => {
+            const score = (m: Machine) => {
+              const q = machineQueues.get(m.id);
+              if (q && q.is_busy && q.orders.some((o) => o.completed_at === ""))
+                return 2;
+              if (m.online) return 1;
+              return 0;
+            };
+            return score(b) - score(a);
+          })
+          .map((m) => (
+            <MachineRow key={m.id} m={m} queue={machineQueues.get(m.id)} />
+          ))}
       </ul>
 
       <Leaderboard
@@ -249,23 +262,8 @@ export default function Home() {
         drinks={drinkLeaderboard}
       />
 
-      <section className="mb-8">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-xl font-semibold text-neutral-900">Orders</h2>
-          <button
-            onClick={() => {
-              if (!viamClient) return;
-              togglePanel({ kind: "errors" }, () =>
-                loadErrorsLast7Days(viamClient)
-              );
-            }}
-            className={
-              panel?.kind === "errors" ? PILL_DANGER_ACTIVE : PILL_NEUTRAL
-            }
-          >
-            ⚠ Errors · last 7 days
-          </button>
-        </div>
+      <section className="mb-6">
+        <h2 className="text-xl font-semibold text-neutral-900 mb-3">Orders</h2>
         {orderCounts === null ? (
           <p className="text-neutral-500">Loading order counts…</p>
         ) : orderCounts.length === 0 ? (
@@ -292,6 +290,21 @@ export default function Home() {
                 );
               }}
             />
+            <div className="mt-3">
+              <button
+                onClick={() => {
+                  if (!viamClient) return;
+                  togglePanel({ kind: "errors" }, () =>
+                    loadErrorsLast7Days(viamClient)
+                  );
+                }}
+                className={
+                  panel?.kind === "errors" ? PILL_DANGER_ACTIVE : PILL_NEUTRAL
+                }
+              >
+                ⚠ Expand errors - last 7 days
+              </button>
+            </div>
             {panel && (
               <OrdersPanel
                 key={panelKey(panel)}
@@ -299,6 +312,7 @@ export default function Home() {
                 orders={panelOrders}
                 error={panelError}
                 onClose={closePanel}
+                viamClient={viamClient}
               />
             )}
           </>

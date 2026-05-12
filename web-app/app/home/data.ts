@@ -18,6 +18,7 @@ export interface RobotDayRow {
   robotId: string;
   robotName: string;
   count: number;
+  errorCount: number;
 }
 
 export interface DailyOrderCount {
@@ -160,16 +161,19 @@ export async function loadDailyOrderCounts(
 ): Promise<DailyOrderCount[]> {
   const nameById = new Map(machines.map((m) => [m.id, m.name]));
   const tz = browserTimezone();
+  const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
 
   const results = await runMQL<{
     time: Date | string;
     robot_id: string;
+    order_ok: boolean | null;
     value: number;
   }>(client, [
     {
       $match: {
         location_id: LOCATION_ID,
         component_name: RESOURCE_NAME,
+        time_received: { $gte: since },
       },
     },
     {
@@ -184,6 +188,7 @@ export async function loadDailyOrderCounts(
             },
           },
           robot_id: "$robot_id",
+          order_ok: "$data.readings.order_ok",
         },
         value: { $sum: 1 },
       },
@@ -193,32 +198,38 @@ export async function loadDailyOrderCounts(
         _id: 0,
         time: "$_id.time",
         robot_id: "$_id.robot_id",
+        order_ok: "$_id.order_ok",
         value: 1,
       },
     },
     { $sort: { time: -1 } },
   ]);
 
-  const byDay = new Map<number, Map<string, number>>();
+  type Tally = { count: number; errorCount: number };
+  const byDay = new Map<number, Map<string, Tally>>();
   for (const row of results) {
     if (!nameById.has(row.robot_id)) continue;
     const t = row.time instanceof Date ? row.time : new Date(row.time);
     const key = t.getTime();
     let perRobot = byDay.get(key);
     if (!perRobot) {
-      perRobot = new Map<string, number>();
+      perRobot = new Map<string, Tally>();
       byDay.set(key, perRobot);
     }
-    perRobot.set(row.robot_id, (perRobot.get(row.robot_id) ?? 0) + row.value);
+    const tally = perRobot.get(row.robot_id) ?? { count: 0, errorCount: 0 };
+    tally.count += row.value;
+    if (row.order_ok === false) tally.errorCount += row.value;
+    perRobot.set(row.robot_id, tally);
   }
   return [...byDay.entries()]
     .map(([ms, perRobot]) => ({
       day: new Date(ms),
       rows: [...perRobot.entries()]
-        .map(([robotId, count]) => ({
+        .map(([robotId, tally]) => ({
           robotId,
           robotName: nameById.get(robotId) ?? robotId,
-          count,
+          count: tally.count,
+          errorCount: tally.errorCount,
         }))
         .sort((a, b) => a.robotName.localeCompare(b.robotName)),
     }))
@@ -227,7 +238,8 @@ export async function loadDailyOrderCounts(
 
 export async function loadLeaderboard(
   client: VIAM.ViamClient,
-  groupByField: string
+  groupByField: string,
+  extraMatch: Record<string, unknown> = {}
 ): Promise<LeaderboardEntry[]> {
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const results = await runMQL<{ name: string | null; value: number }>(client, [
@@ -236,6 +248,7 @@ export async function loadLeaderboard(
         location_id: LOCATION_ID,
         component_name: RESOURCE_NAME,
         time_received: { $gte: since },
+        ...extraMatch,
       },
     },
     {
@@ -264,31 +277,128 @@ export async function loadOrdersForDay(
   robotId: string,
   day: Date
 ): Promise<OrderRecord[]> {
-  const tz = browserTimezone();
+  const dayEnd = new Date(day.getTime() + 24 * 60 * 60 * 1000);
   const results = await runMQL<RawOrderRow>(client, [
     {
       $match: {
         location_id: LOCATION_ID,
         component_name: RESOURCE_NAME,
         robot_id: robotId,
-        $expr: {
-          $eq: [
-            {
-              $dateTrunc: {
-                date: "$time_received",
-                unit: "day",
-                binSize: 1,
-                timezone: tz,
-              },
-            },
-            day,
-          ],
-        },
+        time_received: { $gte: day, $lt: dayEnd },
       },
     },
     { $sort: { time_received: 1 } },
   ]);
   return parseOrderResults(results);
+}
+
+export interface OrderVideo {
+  binaryDataId: string;
+  fileName: string;
+  capturedAt: Date | null;
+}
+
+const VIDEO_TIME_BUFFER_MS = 5 * 60 * 1000;
+
+interface OrderTimeBounds {
+  orderId: string;
+  startTime: Date;
+  endTime: Date;
+}
+
+function buildVideoFilter(order: OrderTimeBounds): VIAM.dataApi.Filter {
+  const start = new Date(order.startTime.getTime() - VIDEO_TIME_BUFFER_MS);
+  const end = new Date(order.endTime.getTime() + VIDEO_TIME_BUFFER_MS);
+  return {
+    locationIds: [LOCATION_ID],
+    tagsFilter: { tags: [order.orderId] },
+    startTime: start,
+    endTime: end,
+  } as unknown as VIAM.dataApi.Filter;
+}
+
+export async function loadVideosForOrder(
+  client: VIAM.ViamClient,
+  order: OrderTimeBounds
+): Promise<OrderVideo[]> {
+  const result = await client.dataClient.binaryDataByFilter(
+    buildVideoFilter(order),
+    100,
+    undefined,
+    undefined,
+    false,
+    false,
+    false
+  );
+  return result.data
+    .filter((d) => d.metadata?.binaryDataId)
+    .map((d) => ({
+      binaryDataId: d.metadata!.binaryDataId,
+      fileName: d.metadata!.fileName,
+      capturedAt: d.metadata!.timeReceived?.toDate() ?? null,
+    }));
+}
+
+export async function getVideoSignedUrl(
+  client: VIAM.ViamClient,
+  binaryDataId: string
+): Promise<string> {
+  return client.dataClient.createBinaryDataSignedURL(binaryDataId);
+}
+
+export async function countVideosForOrder(
+  client: VIAM.ViamClient,
+  order: OrderTimeBounds
+): Promise<number> {
+  const result = await client.dataClient.binaryDataByFilter(
+    buildVideoFilter(order),
+    undefined,
+    undefined,
+    undefined,
+    false,
+    true,
+    false
+  );
+  return Number(result.count);
+}
+
+export async function countVideosForOrders(
+  client: VIAM.ViamClient,
+  orders: OrderTimeBounds[]
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  for (const o of orders) counts.set(o.orderId, 0);
+  if (orders.length === 0) return counts;
+
+  let minStart = orders[0].startTime.getTime();
+  let maxEnd = orders[0].endTime.getTime();
+  for (const o of orders) {
+    minStart = Math.min(minStart, o.startTime.getTime());
+    maxEnd = Math.max(maxEnd, o.endTime.getTime());
+  }
+  const filter = {
+    locationIds: [LOCATION_ID],
+    tagsFilter: { tags: orders.map((o) => o.orderId) },
+    startTime: new Date(minStart - VIDEO_TIME_BUFFER_MS),
+    endTime: new Date(maxEnd + VIDEO_TIME_BUFFER_MS),
+  } as unknown as VIAM.dataApi.Filter;
+
+  const result = await client.dataClient.binaryDataByFilter(
+    filter,
+    500,
+    undefined,
+    undefined,
+    false,
+    false,
+    false
+  );
+  for (const item of result.data) {
+    const itemTags = item.metadata?.captureMetadata?.tags ?? [];
+    for (const t of itemTags) {
+      if (counts.has(t)) counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+  }
+  return counts;
 }
 
 export async function loadErrorsLast7Days(
