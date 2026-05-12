@@ -332,13 +332,13 @@ Returns `{"status": "cleared", "removed": 2}`.
 
 Returns `{"saved": 1, "skipped": 0}`.
 
-**`reset_world`** - Rebuild the cached frame system from the framesystem service, discarding any mid-cycle mutations (e.g. a portafilter frame that was reparented to world by `lock_portafilter`). Useful after a `cancel` leaves the world in a state where the portafilter is "stuck" attached to the world at wherever the arm abandoned it. Only callable when nothing is running AND the queue is paused (i.e. after `cancel`, or during an inter-order cleanup pause when `clean_after_use` is false). Does not move the arm — if you want to re-home, run `execute_action` afterward.
+**`reset_world`** - Recover the service to a clean idle state from anywhere. In order: cancels any running sequence (waiting for it to actually stop), clears the queue (pending + recently completed), rebuilds the cached frame system from the framesystem service (discarding mid-cycle mutations like a portafilter frame reparented to world by `lock_portafilter`), and releases the cancel-induced queue pause. Safe to call from any state — each step is skipped when not applicable. Does not move the arm — if you want to re-home, run `execute_action` afterward.
 
 ```json
 {"reset_world": true}
 ```
 
-Returns `{"status": "reset"}`.
+Returns `{"status": "reset", "cancelled": true, "cleared": 2, "unpaused": true}` — fields reflect which steps actually fired.
 
 **`action`** - Control the gripper. Supported values: `"open_gripper"`, `"close_gripper"`.
 

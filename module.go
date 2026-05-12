@@ -601,33 +601,91 @@ func (s *beanjaminCoffee) clearQueue() (map[string]interface{}, error) {
 	return map[string]interface{}{"status": "cleared", "removed": removed}, nil
 }
 
-// resetWorld rebuilds the cached frame system so any mid-cycle mutations (e.g.
-// a portafilter frame reparented to world by lockFilterFrame) are discarded.
-// Only callable while nothing is moving AND the queue is paused — i.e. after
-// the operator has pressed cancel, or during an inter-order cleanup pause.
+// resetCancelWaitTimeout caps how long resetWorld waits for a running sequence
+// to observe its cancelled context and return. Generous enough to cover any
+// motion-plan cleanup; if exceeded, something is wedged and the operator
+// should look at logs rather than have reset_world appear to "succeed".
+const resetCancelWaitTimeout = 30 * time.Second
+
+// resetWorld brings the service back to an idle state from anywhere: cancels a
+// running sequence (waiting for it to actually stop), clears any pending and
+// recently-completed orders, rebuilds the cached frame system from the service
+// (discarding mid-cycle mutations like a portafilter frame reparented to world
+// by lockFilterFrame), and releases the cancel-induced queue pause so
+// processQueue is ready for new orders. Each step is best-effort and skipped
+// when not applicable, so it is safe to call from any state.
 func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]interface{}, error) {
-	if s.running.Load() {
-		return nil, errors.New("reset_world: a sequence is running — send 'cancel' first")
+	cancelled := s.signalCancel()
+	if cancelled {
+		if err := s.waitForIdle(ctx, resetCancelWaitTimeout); err != nil {
+			return nil, fmt.Errorf("reset_world: %w", err)
+		}
 	}
-	if !s.paused.Load() {
-		return nil, errors.New("reset_world: nothing to reset — run this only after 'cancel' if the portafilter frame is stuck")
-	}
+
+	removed := s.queue.Clear()
+
 	if err := s.resetFrameSystem(ctx); err != nil {
 		return nil, fmt.Errorf("reset_world: %w", err)
 	}
-	s.logger.Infof("reset_world: frame system rebuilt from service — portafilter and all mutated frames restored to config defaults")
-	return map[string]interface{}{"status": "reset"}, nil
+
+	unpaused := false
+	if s.paused.Load() {
+		select {
+		case s.queue.proceed <- struct{}{}:
+		default:
+			// Buffered slot is full — a proceed signal is already pending and
+			// will be consumed by processQueue. Either way, the unpause was
+			// requested.
+		}
+		unpaused = true
+	}
+
+	s.logger.Infof("reset_world: cancelled=%v cleared=%d unpaused=%v frame_system_reset=true",
+		cancelled, removed, unpaused)
+	return map[string]interface{}{
+		"status":    "reset",
+		"cancelled": cancelled,
+		"cleared":   removed,
+		"unpaused":  unpaused,
+	}, nil
 }
 
-func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
+// signalCancel interrupts any in-flight motion by cancelling the shared
+// cancelCtx and pausing the queue. Returns true if a sequence was running.
+// Does not wait for the running goroutine to observe the cancellation.
+func (s *beanjaminCoffee) signalCancel() bool {
 	if !s.running.Load() {
-		return nil, errors.New("no sequence in progress")
+		return false
 	}
 	s.paused.Store(true)
 	s.mu.Lock()
 	s.cancelFunc()
 	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
 	s.mu.Unlock()
+	return true
+}
+
+// waitForIdle polls until s.running flips back to false (meaning the cancelled
+// sequence has fully unwound through its defers) or the timeout / ctx expires.
+func (s *beanjaminCoffee) waitForIdle(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for s.running.Load() {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out after %s waiting for sequence to stop", timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	return nil
+}
+
+func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
+	if !s.signalCancel() {
+		return nil, errors.New("no sequence in progress")
+	}
 	s.logger.Infof("sequence cancelled — queue paused, send 'proceed' to resume")
 	return map[string]interface{}{"status": "cancelled", "queue": "paused"}, nil
 }
