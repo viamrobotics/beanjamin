@@ -263,22 +263,7 @@ export default function Home() {
       />
 
       <section className="mb-8">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-xl font-semibold text-neutral-900">Orders</h2>
-          <button
-            onClick={() => {
-              if (!viamClient) return;
-              togglePanel({ kind: "errors" }, () =>
-                loadErrorsLast7Days(viamClient)
-              );
-            }}
-            className={
-              panel?.kind === "errors" ? PILL_DANGER_ACTIVE : PILL_NEUTRAL
-            }
-          >
-            ⚠ Errors · last 7 days
-          </button>
-        </div>
+        <h2 className="text-xl font-semibold text-neutral-900 mb-3">Orders</h2>
         {orderCounts === null ? (
           <p className="text-neutral-500">Loading order counts…</p>
         ) : orderCounts.length === 0 ? (
@@ -305,6 +290,21 @@ export default function Home() {
                 );
               }}
             />
+            <div className="mt-3">
+              <button
+                onClick={() => {
+                  if (!viamClient) return;
+                  togglePanel({ kind: "errors" }, () =>
+                    loadErrorsLast7Days(viamClient)
+                  );
+                }}
+                className={
+                  panel?.kind === "errors" ? PILL_DANGER_ACTIVE : PILL_NEUTRAL
+                }
+              >
+                ⚠ Expand errors - last 7 days
+              </button>
+            </div>
             {panel && (
               <OrdersPanel
                 key={panelKey(panel)}
