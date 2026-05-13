@@ -73,6 +73,11 @@ var cupGrabCollisions = []AllowedCollision{
 }
 
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {
+	giveCupFunc := s.giveFullCupToCustomer
+	if s.cfg.PlaceCupOnShelf {
+		giveCupFunc = s.placeFullCupOnShelf
+	}
+
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
 		"grind_coffee":              s.grindCoffee,
 		"grind_decaf":               s.grindDecaf,
@@ -85,7 +90,7 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 		"turn_coffee_button_off":    s.turnCoffeeButtonOff,
 		"brew_coffee":               s.brewCoffee,
 		"set_cup_for_coffee":        s.setCupForCoffee,
-		"give_full_cup_to_customer": s.giveFullCupToCustomer,
+		"give_full_cup_to_customer": giveCupFunc,
 		"clean_portafilter":         s.cleanPortafilter,
 	}
 
