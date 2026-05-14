@@ -13,7 +13,7 @@ endif
 # 	GOOS=$(VIAM_BUILD_OS) GOARCH=$(VIAM_BUILD_ARCH) $(GO_BUILD_ENV) time go build -x -v $(GO_BUILD_FLAGS) -o $(MODULE_BINARY) cmd/module/main.go 2>&1 | tee /tmp/gobuild.log
 
 $(MODULE_BINARY): Makefile go.mod *.go cmd/module/*.go
-	bash -C 'time go build -x -v $(GO_BUILD_FLAGS) -o $(MODULE_BINARY) cmd/module/main.go' 2>&1 | tee /tmp/gobuild.log
+	bash -c 'time go build -x -v $(GO_BUILD_FLAGS) -o $(MODULE_BINARY) cmd/module/main.go' 2>&1 | tee /tmp/gobuild.log
 
 lint:
 	gofmt -s -w .
