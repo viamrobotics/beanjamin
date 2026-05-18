@@ -16,12 +16,14 @@ import {
   type OrderRecord,
   type LeaderboardEntry,
   type Panel,
+  type RobotTotal,
   panelKey,
   listMachines,
   loadDailyOrderCounts,
   loadLeaderboard,
   loadOrdersForDay,
   loadErrorsLast7Days,
+  loadRobotTotalsLastNDays,
 } from "./home/data";
 import { OrdersChart } from "./home/chart";
 import { OrdersPanel } from "./home/orders-panel";
@@ -38,6 +40,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [machines, setMachines] = useState<Machine[]>([]);
   const [orderCounts, setOrderCounts] = useState<DailyOrderCount[] | null>(null);
+  const [totals14d, setTotals14d] = useState<RobotTotal[]>([]);
   const [customerLeaderboard, setCustomerLeaderboard] = useState<
     LeaderboardEntry[] | null
   >(null);
@@ -106,6 +109,11 @@ export default function Home() {
         .then((d) => !cancelled && setOrderCounts(d))
         .catch((e) =>
           console.error("failed to load daily order counts:", e)
+        );
+      loadRobotTotalsLastNDays(currentClient, currentMachines, 14)
+        .then((d) => !cancelled && setTotals14d(d))
+        .catch((e) =>
+          console.error("failed to load 14-day robot totals:", e)
         );
       loadLeaderboard(currentClient, "data.readings.customer_name")
         .then((d) => !cancelled && setCustomerLeaderboard(d))
@@ -272,6 +280,7 @@ export default function Home() {
           <>
             <OrdersChart
               data={orderCounts}
+              totals14d={totals14d}
               selected={
                 panel?.kind === "day"
                   ? { dayMs: panel.day.getTime(), robotId: panel.robotId }

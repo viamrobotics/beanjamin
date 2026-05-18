@@ -21,6 +21,13 @@ export interface RobotDayRow {
   errorCount: number;
 }
 
+export interface RobotTotal {
+  robotId: string;
+  robotName: string;
+  count: number;
+  errorCount: number;
+}
+
 export interface DailyOrderCount {
   day: Date;
   rows: RobotDayRow[];
@@ -161,7 +168,7 @@ export async function loadDailyOrderCounts(
 ): Promise<DailyOrderCount[]> {
   const nameById = new Map(machines.map((m) => [m.id, m.name]));
   const tz = browserTimezone();
-  const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
   const results = await runMQL<{
     time: Date | string;
@@ -234,6 +241,64 @@ export async function loadDailyOrderCounts(
         .sort((a, b) => a.robotName.localeCompare(b.robotName)),
     }))
     .sort((a, b) => b.day.getTime() - a.day.getTime());
+}
+
+export async function loadRobotTotalsLastNDays(
+  client: VIAM.ViamClient,
+  machines: Machine[],
+  days: number
+): Promise<RobotTotal[]> {
+  const nameById = new Map(machines.map((m) => [m.id, m.name]));
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+  const results = await runMQL<{
+    robot_id: string;
+    order_ok: boolean | null;
+    value: number;
+  }>(client, [
+    {
+      $match: {
+        location_id: LOCATION_ID,
+        component_name: RESOURCE_NAME,
+        time_received: { $gte: since },
+      },
+    },
+    {
+      $group: {
+        _id: {
+          robot_id: "$robot_id",
+          order_ok: "$data.readings.order_ok",
+        },
+        value: { $sum: 1 },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        robot_id: "$_id.robot_id",
+        order_ok: "$_id.order_ok",
+        value: 1,
+      },
+    },
+  ]);
+
+  type Tally = { count: number; errorCount: number };
+  const byRobot = new Map<string, Tally>();
+  for (const row of results) {
+    if (!nameById.has(row.robot_id)) continue;
+    const tally = byRobot.get(row.robot_id) ?? { count: 0, errorCount: 0 };
+    tally.count += row.value;
+    if (row.order_ok === false) tally.errorCount += row.value;
+    byRobot.set(row.robot_id, tally);
+  }
+  return [...byRobot.entries()]
+    .map(([robotId, tally]) => ({
+      robotId,
+      robotName: nameById.get(robotId) ?? robotId,
+      count: tally.count,
+      errorCount: tally.errorCount,
+    }))
+    .sort((a, b) => a.robotName.localeCompare(b.robotName));
 }
 
 export async function loadLeaderboard(

@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   type DailyOrderCount,
   type RobotDayRow,
+  type RobotTotal,
   formatDay,
 } from "./data";
 
@@ -290,38 +291,31 @@ function HoverTooltip({
 // --- Legend ---
 
 interface ChartLegendProps {
-  robotNames: string[];
-  colorByRobot: Map<string, string>;
-  totalByRobot: Map<string, number>;
-  errorsByRobot: Map<string, number>;
+  title: string;
+  totals: RobotTotal[];
 }
 
-function ChartLegend({
-  robotNames,
-  colorByRobot,
-  totalByRobot,
-  errorsByRobot,
-}: ChartLegendProps) {
-  const sorted = [...robotNames].sort(
-    (a, b) => (totalByRobot.get(b) ?? 0) - (totalByRobot.get(a) ?? 0)
+function ChartLegend({ title, totals }: ChartLegendProps) {
+  const sorted = [...totals].sort(
+    (a, b) => b.count - b.errorCount - (a.count - a.errorCount)
   );
   return (
     <div className="text-sm shrink-0 md:w-44">
-      <div className="text-neutral-900 font-medium">Last 7 days</div>
+      <div className="text-neutral-900 font-medium">{title}</div>
       <div className="text-xs text-neutral-500 mb-2">Successes (Errors)</div>
       <ul className="flex flex-col gap-1.5">
-        {sorted.map((name) => {
-          const errors = errorsByRobot.get(name) ?? 0;
+        {sorted.map((t) => {
+          const okCount = Math.max(0, t.count - t.errorCount);
           return (
-            <li key={name} className="inline-flex items-center gap-1.5">
+            <li key={t.robotId} className="inline-flex items-center gap-1.5">
               <span
                 className="inline-block w-3 h-3 rounded-sm shrink-0"
-                style={{ background: colorByRobot.get(name) }}
+                style={{ background: colorFor(t.robotName) }}
               />
               <span className="truncate">
-                {name}: <strong>{totalByRobot.get(name) ?? 0}</strong>
-                {errors > 0 && (
-                  <span className="text-neutral-500"> ({errors})</span>
+                {t.robotName}: <strong>{okCount}</strong>
+                {t.errorCount > 0 && (
+                  <span className="text-neutral-500"> ({t.errorCount})</span>
                 )}
               </span>
             </li>
@@ -336,34 +330,49 @@ function ChartLegend({
 
 export function OrdersChart({
   data,
+  totals14d,
   onBarClick,
   selected,
 }: {
   data: DailyOrderCount[];
+  totals14d: RobotTotal[];
   onBarClick: (day: Date, row: RobotDayRow) => void;
   selected: { dayMs: number; robotId: string } | null;
 }) {
   const [hover, setHover] = useState<HoverInfo | null>(null);
 
-  const days = [...data].slice(0, 7).reverse();
+  const dayMap = new Map(data.map((d) => [d.day.getTime(), d]));
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const firstDay = new Date(today);
+  firstDay.setDate(firstDay.getDate() - 7);
+  const days: DailyOrderCount[] = [];
+  for (let dt = new Date(firstDay); dt.getTime() <= today.getTime(); ) {
+    const dayDate = new Date(dt);
+    days.push(dayMap.get(dayDate.getTime()) ?? { day: dayDate, rows: [] });
+    dt.setDate(dt.getDate() + 1);
+  }
   const robotNames = [
     ...new Set(days.flatMap((d) => d.rows.map((r) => r.robotName))),
   ].sort();
   const colorByRobot = new Map(
     robotNames.map((name) => [name, colorFor(name)])
   );
-  const totalByRobot = new Map<string, number>();
-  const errorsByRobot = new Map<string, number>();
+  const totals7dByRobot = new Map<string, RobotTotal>();
   for (const d of days) {
     for (const r of d.rows) {
-      const okCount = Math.max(0, r.count - r.errorCount);
-      totalByRobot.set(r.robotName, (totalByRobot.get(r.robotName) ?? 0) + okCount);
-      errorsByRobot.set(
-        r.robotName,
-        (errorsByRobot.get(r.robotName) ?? 0) + r.errorCount
-      );
+      const cur = totals7dByRobot.get(r.robotId) ?? {
+        robotId: r.robotId,
+        robotName: r.robotName,
+        count: 0,
+        errorCount: 0,
+      };
+      cur.count += r.count;
+      cur.errorCount += r.errorCount;
+      totals7dByRobot.set(r.robotId, cur);
     }
   }
+  const totals7d = [...totals7dByRobot.values()];
 
   const width = 800;
   const height = 230;
@@ -511,12 +520,10 @@ export function OrdersChart({
         )}
       </svg>
 
-      <ChartLegend
-        robotNames={robotNames}
-        colorByRobot={colorByRobot}
-        totalByRobot={totalByRobot}
-        errorsByRobot={errorsByRobot}
-      />
+      <div className="flex flex-row gap-4">
+        <ChartLegend title="Last 7 days" totals={totals7d} />
+        <ChartLegend title="Last 14 days" totals={totals14d} />
+      </div>
     </div>
   );
 }
