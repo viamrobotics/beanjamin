@@ -101,6 +101,7 @@ func newTextToSpeech(ctx context.Context, deps resource.Dependencies, rawConf re
 	}
 
 	ttsClient, err := texttospeech.NewClient(ctx,
+		//nolint:staticcheck // SA1019: this model is deprecated; rewrite when migrating to viam:conversation-bundle:text-to-speech.
 		option.WithCredentialsJSON(credBytes),
 	)
 	if err != nil {
