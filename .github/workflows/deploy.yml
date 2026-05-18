@@ -61,8 +61,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Build and upload to Viam Registry
-        # viamrobotics/build-action@v1.7.1
-        uses: viamrobotics/build-action@f1f354096f5d65236d700cf3a08fa532133702bc
+        # viamrobotics/build-action@v1.7.2
+        uses: viamrobotics/build-action@68c0a3cef8247f2324a6de7107b09fa9e9ef8b49
         with:
           version: ${{ needs.compute-version.outputs.version }}
           ref: ${{ github.sha }}
