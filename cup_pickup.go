@@ -133,11 +133,11 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector
 	// (a) partition detections into pickup vs on-shelf by Z and (b) pass
 	// the shelf pose/dims to selectShelfTile without a second lookup.
 	var (
-		shelfPose    spatialmath.Pose
-		shelfDims    r3.Vector
-		shelfTopZ    float64
-		onShelfCups  []spatialmath.Geometry
-		hasShelfCfg  = s.cfg.PlaceCupOnShelf
+		shelfPose   spatialmath.Pose
+		shelfDims   r3.Vector
+		shelfTopZ   float64
+		onShelfCups []spatialmath.Geometry
+		hasShelfCfg = s.cfg.PlaceCupOnShelf
 	)
 	if hasShelfCfg {
 		pose, dims, err := s.shelfTopGeometry(ctx)

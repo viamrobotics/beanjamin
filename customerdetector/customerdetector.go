@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"go.viam.com/rdk/components/camera"
+	"go.viam.com/rdk/data"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/resource"
@@ -312,7 +313,11 @@ func (cd *customerDetector) identifyCustomer(ctx context.Context) (map[string]in
 		return nil, fmt.Errorf("captured image has zero area")
 	}
 
-	detections, err := vis.Detections(ctx, img, nil)
+	namedImg, err := camera.NamedImageFromImage(img, "", "", data.Annotations{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to wrap image: %w", err)
+	}
+	detections, err := vis.Detections(ctx, &namedImg, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get detections: %w", err)
 	}
