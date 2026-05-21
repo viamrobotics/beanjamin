@@ -113,9 +113,10 @@ type Config struct {
 	CupMaxDistanceFromTargetMm float64       `json:"cup_max_distance_from_target_mm,omitempty"`
 	CupDetectionRetries        int           `json:"cup_detection_retries,omitempty"`
 	CupDetectionRetrySleepMs   int           `json:"cup_detection_retry_sleep_ms,omitempty"`
-	// CupObserveOffsets are extra observation vantages, each composed onto
-	// cup_observe in its local frame ({x:60} = 60mm along the camera's X).
-	CupObserveOffsets []RelativePose `json:"cup_observe_offsets,omitempty"`
+	// CupObserveAlternates are additional named poses on the claws pose
+	// switch visited in order after cup_observe to widen detection
+	// coverage. Each entry must exist on claws_pose_switcher_name.
+	CupObserveAlternates []string `json:"cup_observe_alternates,omitempty"`
 	// CupPickupMaxAttempts caps how many full observe-and-grab attempts
 	// pickCupDynamic will make per order. Each attempt re-detects, then
 	// walks the candidate list (closest first), falling through to the
@@ -243,6 +244,11 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 		if cfg.CupPickupMaxAttempts < 0 {
 			return nil, nil, fmt.Errorf("%s: cup_pickup_max_attempts must be >= 0", path)
+		}
+		for i, name := range cfg.CupObserveAlternates {
+			if name == "" {
+				return nil, nil, fmt.Errorf("%s: cup_observe_alternates[%d] is empty", path, i)
+			}
 		}
 		if cfg.CupMaxDistanceFromTargetMm == 0 {
 			cfg.CupMaxDistanceFromTargetMm = 300
