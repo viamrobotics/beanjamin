@@ -295,6 +295,9 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 }
 
 func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
+	// Mark before any motion: any cancel from here onward must clean the
+	// filter before going home, in case the grinder dispensed any grounds.
+	s.portafilterHasGrounds.Store(true)
 	steps := []Step{
 		{PoseName: "grinder_approach", Component: "filter", Pause: shortPause},
 		{PoseName: "grinder_activate", Component: "filter", Pause: shortPause, LinearConstraint: defaultApproachConstraint},
@@ -313,6 +316,9 @@ func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 }
 
 func (s *beanjaminCoffee) grindDecaf(ctx, cancelCtx context.Context) error {
+	// Mark before any motion: any cancel from here onward must clean the
+	// filter before going home, in case the grinder dispensed any grounds.
+	s.portafilterHasGrounds.Store(true)
 	steps := []Step{
 		{PoseName: "decaf_grinder_approach", Component: "filter", Pause: shortPause},
 		{PoseName: "decaf_grinder_activate", Component: "filter", Pause: shortPause, LinearConstraint: defaultApproachConstraint},
@@ -391,6 +397,9 @@ func (s *beanjaminCoffee) releaseFilter(ctx, cancelCtx context.Context) error {
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		return fmt.Errorf("release_filter: open gripper: %w", err)
 	}
+	// Bayonet now holds the filter; arm is committed to leaving it behind.
+	// Set the flag before motion so a mid-move cancel still triggers recovery.
+	s.portafilterInMachine.Store(true)
 	step := Step{PoseName: "filter_released", Component: "coffee-claws-middle", LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterGrabCollisions}
 	if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 		return fmt.Errorf("release_filter: %w", err)
@@ -424,6 +433,8 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("grab_filter: grab gripper: %w", err)
 	}
+	// Filter is firmly back in the claws; cancel no longer needs to recover.
+	s.portafilterInMachine.Store(false)
 	time.Sleep(gripperPause)
 	return nil
 }
@@ -746,6 +757,7 @@ func (s *beanjaminCoffee) cleanPortafilter(ctx, cancelCtx context.Context) error
 			return fmt.Errorf("clean_portafilter: %w", err)
 		}
 	}
+	s.portafilterHasGrounds.Store(false)
 	return nil
 }
 
