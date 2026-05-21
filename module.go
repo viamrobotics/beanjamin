@@ -113,13 +113,8 @@ type Config struct {
 	CupMaxDistanceFromTargetMm float64       `json:"cup_max_distance_from_target_mm,omitempty"`
 	CupDetectionRetries        int           `json:"cup_detection_retries,omitempty"`
 	CupDetectionRetrySleepMs   int           `json:"cup_detection_retry_sleep_ms,omitempty"`
-	// CupObserveOffsets are relative poses composed onto the configured
-	// cup_observe pose. Each entry adds one extra observation from a
-	// different vantage; detections across all observations are merged
-	// (with near-duplicates collapsed) before pickup ranking and shelf-tile
-	// selection. Offsets are interpreted in cup_observe's local frame, so
-	// {x:60} moves the camera 60mm along its own X axis. Empty (default) =
-	// single observation at cup_observe (today's behavior).
+	// CupObserveOffsets are extra observation vantages, each composed onto
+	// cup_observe in its local frame ({x:60} = 60mm along the camera's X).
 	CupObserveOffsets []RelativePose `json:"cup_observe_offsets,omitempty"`
 	// CupPickupMaxAttempts caps how many full observe-and-grab attempts
 	// pickCupDynamic will make per order. Each attempt re-detects, then

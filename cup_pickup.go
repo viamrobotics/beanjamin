@@ -29,6 +29,17 @@ import (
 	viz "go.viam.com/rdk/vision"
 )
 
+// errNoCupsDetected is returned by observeCupCandidates when every
+// vantage's vision call (including its zero-detection retries) yielded
+// zero detections. pickCupDynamic recognises this case via errors.Is and
+// recovers with a spoken "please place a cup" announcement + a wait
+// before re-observing, instead of failing the order outright.
+var errNoCupsDetected = errors.New("no cups detected")
+
+// noCupsRetryDelay is the wait between outer observation attempts when
+// observeCupCandidates reports zero detections.
+const noCupsRetryDelay = 15 * time.Second
+
 // cupObserveDedupMm is the merge radius used to collapse near-duplicate
 // detections across multi-vantage observations: two centroids closer than
 // this in world frame are treated as the same physical cup.
@@ -137,13 +148,13 @@ func cameraToWorld(
 	return worldPose.Pose().Point(), nil
 }
 
-// observeOnce runs one YOLO call at the arm's current pose with the
-// existing zero-detection retry policy, transforms each detection's
-// centroid into world frame, and partitions the results by shelf-top Z
-// (when hasShelfCfg). Returns (pickupCentroids, onShelfGeometriesInWorld).
-// Fresh framesystem inputs are captured immediately after the vision call
-// so detection centroids transform with arm joints AT capture time — this
-// matters when the caller drives the arm to a new vantage between passes.
+// observeOnce calls the vision service for cup detections at the arm's
+// current pose, retries on empty results per the configured retry policy,
+// lifts each detection's centroid into world coordinates, and partitions
+// the results by shelf-top Z when hasShelfCfg is true. Returns the pickup
+// centroids and the on-shelf geometries (in world frame). Returns nil
+// results with no error when no detections remain after retries, so
+// observeCupCandidates can move on to the next vantage.
 func (s *beanjaminCoffee) observeOnce(ctx context.Context, shelfTopZ float64, hasShelfCfg bool) ([]r3.Vector, []spatialmath.Geometry, error) {
 	maxAttempts := s.cfg.CupDetectionRetries + 1
 	sleep := time.Duration(s.cfg.CupDetectionRetrySleepMs) * time.Millisecond
@@ -153,6 +164,9 @@ func (s *beanjaminCoffee) observeOnce(ctx context.Context, shelfTopZ float64, ha
 
 	var objects []*viz.Object
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Pass an empty camera name so the vision service falls back to its own
+		// configured default camera. s.cupCameraName is still used below to
+		// transform detection centroids from the camera frame into world coords.
 		objs, err := s.cupVision.GetObjectPointClouds(ctx, "", nil)
 		if err != nil {
 			return nil, nil, fmt.Errorf("detect: %w", err)
@@ -200,6 +214,9 @@ func (s *beanjaminCoffee) observeOnce(ctx context.Context, shelfTopZ float64, ha
 			world.Z = floor
 		}
 
+		// Detections whose centroid sits above the shelf top surface are
+		// already-served cups; lift their geometry to world frame for the
+		// shelf-tile occupancy check and exclude them from pickup ranking.
 		if hasShelfCfg && world.Z > shelfTopZ {
 			gif := referenceframe.NewGeometriesInFrame(s.cupCameraName, []spatialmath.Geometry{obj.Geometry})
 			worldGifTF, err := fs.Transform(fsInputs.ToLinearInputs(), gif, referenceframe.World)
@@ -226,16 +243,12 @@ func (s *beanjaminCoffee) observeOnce(ctx context.Context, shelfTopZ float64, ha
 // detections across passes (collapsing near-duplicates within
 // cupObserveDedupMm in world frame), lifts everything into world
 // coordinates, filters by CupMaxDistanceFromTargetMm, and returns the
-// pickup candidates sorted by distance to ExpectedCupPositionMm. The
-// on-shelf bucket (detections above shelf top Z) is fed to selectShelfTile
-// before this function returns, so shelf occupancy benefits from the same
-// multi-vantage merge.
+// pickup candidates sorted by distance to ExpectedCupPositionMm.
 //
 // The caller is expected to have already moved the arm to cup_observe;
 // pass 0 reuses that position, and passes 1..N apply CupObserveOffsets
 // composed onto cup_observe in its local frame. An unreachable offset is
-// logged and skipped — partial multi-vantage data is preferred over
-// aborting the whole observation.
+// logged and skipped.
 func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector, error) {
 	hasShelfCfg := s.cfg.PlaceCupOnShelf
 	var (
@@ -310,7 +323,7 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector
 
 	if len(centroids) == 0 {
 		if totalDetections == 0 {
-			return nil, fmt.Errorf("dynamic_cup_pickup: no cups detected across %d vantage(s)", passes)
+			return nil, fmt.Errorf("dynamic_cup_pickup: %w across %d vantage(s)", errNoCupsDetected, passes)
 		}
 		if hasShelfCfg && len(onShelfCups) > 0 {
 			return nil, fmt.Errorf("dynamic_cup_pickup: all %d detection(s) classified as on-shelf (above Z=%.1fmm); no empty-cup candidate", len(onShelfCups), shelfTopZ)
@@ -458,8 +471,30 @@ func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 		candidates, err := s.observeCupCandidates(detectCtx)
 		detectSpan.End()
 		if err != nil {
-			// Either no detections or none in range — re-observing won't
-			// reveal cups that aren't there. Bail.
+			// "No cups detected" is recoverable: there may be no cups,
+			// or the vision service is having a bd ady. Announce + wait,
+			// thenre-observe on the next outer iteration. Bail on any
+			// other failure (out-of-range, all-on-shelf, etc.)
+			// — re-observing won't change those.
+			if errors.Is(err, errNoCupsDetected) && attempt < maxAttempts {
+				recoverStep := Step{PoseName: "cup_observe", Component: "coffee-claws-middle", Pause: shortPause}
+				if mvErr := s.executeStep(ctx, cancelCtx, recoverStep); mvErr != nil {
+					s.logger.Warnf("dynamic cup pickup: return to cup_observe before retry wait: %v", mvErr)
+				}
+				const msg = "I don't see a cup yet — please place one on the shelf. Trying again in 15 seconds."
+				if sayErr := s.sayAlways(ctx, msg); sayErr != nil {
+					s.logger.Warnf("dynamic cup pickup: announcement failed: %v", sayErr)
+				}
+				s.logger.Infof("dynamic cup pickup: no cups detected on attempt %d/%d — waiting %s before retry",
+					attempt, maxAttempts, noCupsRetryDelay)
+				select {
+				case <-time.After(noCupsRetryDelay):
+				case <-ctx.Done():
+					return fmt.Errorf("dynamic_cup_pickup: cancelled during no-cups wait: %w", ctx.Err())
+				}
+				lastErr = err
+				continue
+			}
 			return err
 		}
 
