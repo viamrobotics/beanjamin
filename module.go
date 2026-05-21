@@ -283,10 +283,19 @@ type beanjaminCoffee struct {
 	queue                  *OrderQueue
 	queueStop              chan struct{}
 	paused                 atomic.Bool
-	orderSensorSink        orderSensorSink // optional; named order-sensor from deps, nil if unset
-	cupVision              vision.Service  // optional; nil when DynamicCupPickup=false
-	cupCameraName          string          // SrcCameraName, validated to exist in cachedFS
-	servedShelfTile        atomic.Value    // servedShelfTile holds the latest servedShelfTilePick chosen by
+	// portafilterInMachine is true between releaseFilter and grabFilter:
+	// the bayonet holds the filter and the arm is free. Cancel uses this
+	// to decide whether recovery (re-grip + clean + home) is required.
+	portafilterInMachine atomic.Bool
+	// portafilterHasGrounds is true once grinding has put grounds in the
+	// filter, until cleanPortafilter clears them. Cancel uses this (when
+	// portafilterInMachine is false) to drive a clean + home recovery so
+	// the filter doesn't get stranded with grounds in it.
+	portafilterHasGrounds atomic.Bool
+	orderSensorSink       orderSensorSink // optional; named order-sensor from deps, nil if unset
+	cupVision             vision.Service  // optional; nil when DynamicCupPickup=false
+	cupCameraName         string          // SrcCameraName, validated to exist in cachedFS
+	servedShelfTile       atomic.Value    // servedShelfTile holds the latest servedShelfTilePick chosen by
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -539,9 +548,9 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		return res, err
 	}
 	if _, ok := cmd["cancel"]; ok {
-		_, cmdSpan := trace.StartSpan(ctx, "beanjamin::cancel")
+		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::cancel")
 		defer cmdSpan.End()
-		res, err := s.cancel()
+		res, err := s.cancel(ctx)
 		if err != nil {
 			s.logger.Errorw("DoCommand", "error", err)
 		}
@@ -633,6 +642,12 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]interface{
 
 	removed := s.queue.Clear()
 
+	// reset_world is an operator's "everything is fine, start over" button.
+	// Clear the portafilter state flags so a subsequent cancel doesn't try
+	// to run recovery against a state that no longer matches reality.
+	s.portafilterInMachine.Store(false)
+	s.portafilterHasGrounds.Store(false)
+
 	if err := s.resetFrameSystem(ctx); err != nil {
 		return nil, fmt.Errorf("reset_world: %w", err)
 	}
@@ -691,12 +706,105 @@ func (s *beanjaminCoffee) waitForIdle(ctx context.Context, timeout time.Duration
 	return nil
 }
 
-func (s *beanjaminCoffee) cancel() (map[string]interface{}, error) {
-	if !s.signalCancel() {
-		return nil, errors.New("no sequence in progress")
+const cancelAnnouncement = "Cancelling the current order. I'll clean up if needed and return to home. Click proceed when you're ready for the next order."
+
+// cancel interrupts any running sequence and drives whichever recovery the
+// current state requires so the operator does not need a follow-up reset_world:
+//   - portafilter locked in the machine (post-releaseFilter, pre-grabFilter):
+//     grab → unlock → clean → home.
+//   - portafilter held by the arm with grounds in it (post-grindCoffee,
+//     pre-cleanPortafilter, and not in the machine): clean → home.
+//   - otherwise: no recovery motion (queue paused, frame system reset).
+//
+// The frame system is rebuilt at the end to discard any lockFilterFrame
+// mutation. The queue is left paused with its pending orders intact; send
+// 'proceed' to resume. If recovery motion fails, the frame system is left
+// untouched and the flags remain set so a subsequent cancel can retry.
+//
+// Known limitation: a cancel that fires mid-lockPortaFilter (between the
+// motion entering the machine and releaseFilter's gripper.Open) may try to
+// route the arm away while the bayonet is partially engaged. There is no
+// safe automated recovery for that narrow window — the operator must
+// intervene manually.
+func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]interface{}, error) {
+	cancelled := s.signalCancel()
+	if cancelled {
+		if err := s.waitForIdle(ctx, resetCancelWaitTimeout); err != nil {
+			return nil, fmt.Errorf("cancel: %w", err)
+		}
 	}
-	s.logger.Infof("sequence cancelled — queue paused, send 'proceed' to resume")
-	return map[string]interface{}{"status": "cancelled", "queue": "paused"}, nil
+
+	// Take exclusive ownership of the arm before any recovery motion so
+	// other commands (execute_action, prepare_order consumer) can't race.
+	if !s.running.CompareAndSwap(false, true) {
+		return nil, errors.New("cancel: another sequence is running")
+	}
+	defer s.running.Store(false)
+
+	s.mu.Lock()
+	cancelCtx := s.cancelCtx
+	s.mu.Unlock()
+
+	// Announce the cancellation up front so the operator hears what's
+	// happening before any recovery motion begins. Only speak when there
+	// is something to actually cancel/recover — silence on a no-op cancel.
+	if cancelled || s.portafilterInMachine.Load() || s.portafilterHasGrounds.Load() {
+		if err := s.sayAlways(ctx, cancelAnnouncement); err != nil {
+			s.logger.Warnf("cancel: failed to announce cancellation: %v", err)
+		}
+	}
+
+	recovered := false
+	switch {
+	case s.portafilterInMachine.Load():
+		s.logger.Infof("cancel: portafilter is in the machine — running recovery (grab → unlock → clean → home)")
+		s.setStep("Recovering filter")
+		if err := s.grabFilter(ctx, cancelCtx); err != nil {
+			return nil, fmt.Errorf("cancel: recovery grab_filter: %w", err)
+		}
+		s.setStep("Unlocking portafilter")
+		if err := s.unlockPortaFilter(ctx, cancelCtx); err != nil {
+			return nil, fmt.Errorf("cancel: recovery unlock_portafilter: %w", err)
+		}
+		s.setStep("Cleaning")
+		if err := s.cleanPortafilter(ctx, cancelCtx); err != nil {
+			return nil, fmt.Errorf("cancel: recovery clean_portafilter: %w", err)
+		}
+		s.setStep("Finishing up")
+		homeStep := Step{PoseName: "home", Component: "filter"}
+		if err := s.executeStep(ctx, cancelCtx, homeStep); err != nil {
+			return nil, fmt.Errorf("cancel: recovery home: %w", err)
+		}
+		s.portafilterInMachine.Store(false)
+		recovered = true
+	case s.portafilterHasGrounds.Load():
+		s.logger.Infof("cancel: portafilter has grounds — running recovery (clean → home)")
+		s.setStep("Cleaning")
+		if err := s.cleanPortafilter(ctx, cancelCtx); err != nil {
+			return nil, fmt.Errorf("cancel: recovery clean_portafilter: %w", err)
+		}
+		s.setStep("Finishing up")
+		homeStep := Step{PoseName: "home", Component: "filter"}
+		if err := s.executeStep(ctx, cancelCtx, homeStep); err != nil {
+			return nil, fmt.Errorf("cancel: recovery home: %w", err)
+		}
+		// cleanPortafilter already cleared portafilterHasGrounds on success.
+		recovered = true
+	}
+
+	if err := s.resetFrameSystem(ctx); err != nil {
+		return nil, fmt.Errorf("cancel: %w", err)
+	}
+
+	s.currentStep.Store("")
+	s.logger.Infof("cancel: cancelled=%v recovered=%v — queue paused, send 'proceed' to resume",
+		cancelled, recovered)
+	return map[string]interface{}{
+		"status":    "cancelled",
+		"cancelled": cancelled,
+		"recovered": recovered,
+		"queue":     "paused",
+	}, nil
 }
 
 func (s *beanjaminCoffee) handleOpenGripper(ctx context.Context) (map[string]interface{}, error) {
