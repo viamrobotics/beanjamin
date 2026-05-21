@@ -31,10 +31,7 @@ import (
 
 // cupObserveDedupMm is the merge radius used to collapse near-duplicate
 // detections across multi-vantage observations: two centroids closer than
-// this in world frame are treated as the same physical cup. Picked smaller
-// than a typical cup diameter (~80mm) and the shelf occupancy buffer
-// (shelfOccupancyBufferMm = 50mm) so a single cup seen from two angles does
-// not artificially block adjacent shelf tiles.
+// this in world frame are treated as the same physical cup.
 const cupObserveDedupMm = 40.0
 
 // dedupeNearbyCentroids returns a copy of centroids with near-duplicates
