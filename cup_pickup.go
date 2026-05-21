@@ -286,6 +286,10 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector
 			offset := s.cfg.CupObserveOffsets[i-1]
 			targetPose := spatialmath.Compose(basePose, relativePoseToSpatial(&offset))
 			pd := &poseData{pose: targetPose, refFrame: referenceframe.World, componentName: "coffee-claws-middle"}
+			const msg = "I couldn't quite find the cup, looking harder."
+			if sayErr := s.sayAlways(ctx, msg); sayErr != nil {
+				s.logger.Warnf("dynamic cup pickup: announcement failed: %v", sayErr)
+			}
 			s.logger.Infof("dynamic cup pickup: pass %d/%d — moving to cup_observe + offset %+v", i+1, passes, offset)
 			if err := s.moveToRawPose(ctx, pd, nil, nil, nil); err != nil {
 				s.logger.Warnf("dynamic cup pickup: pass %d/%d — offset unreachable, skipping pass: %v", i+1, passes, err)
@@ -304,6 +308,18 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector
 			i+1, passes, len(passCentroids), len(passOnShelf))
 		allCentroids = append(allCentroids, passCentroids...)
 		allOnShelf = append(allOnShelf, passOnShelf...)
+
+		// Early-bail: if we already have a pickup candidate, the extra
+		// vantages aren't needed for the grab itself. The on-shelf bucket
+		// loses any data the unvisited vantages would have contributed,
+		// which can mask occluded shelf cups — but the alternative is
+		// always paying the multi-vantage motion cost on orders where the
+		// base view already saw the cup.
+		if len(allCentroids) > 0 && i < passes-1 {
+			s.logger.Infof("dynamic cup pickup: pass %d/%d found %d pickup candidate(s) — skipping remaining %d vantage(s)",
+				i+1, passes, len(allCentroids), passes-i-1)
+			break
+		}
 	}
 
 	centroids := dedupeNearbyCentroids(allCentroids, cupObserveDedupMm)
