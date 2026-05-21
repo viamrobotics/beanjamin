@@ -239,17 +239,17 @@ func (s *beanjaminCoffee) observeOnce(ctx context.Context, shelfTopZ float64, ha
 }
 
 // observeCupCandidates drives the arm through the configured cup_observe
-// pose plus any CupObserveOffsets vantages, calls vision at each, merges
+// pose plus any CupObserveAlternates poses, calls vision at each, merges
 // detections across passes (collapsing near-duplicates within
 // cupObserveDedupMm in world frame), lifts everything into world
 // coordinates, filters by CupMaxDistanceFromTargetMm, and returns the
 // pickup candidates sorted by distance to ExpectedCupPositionMm.
 //
 // The caller is expected to have already moved the arm to cup_observe;
-// pass 0 reuses that position, and passes 1..N apply CupObserveOffsets
-// composed onto cup_observe in its local frame. An unreachable offset is
+// pass 0 reuses that position, and passes 1..N drive to each named pose
+// in CupObserveAlternates via the claws switch. An unreachable pose is
 // logged and skipped.
-func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector, error) {
+func (s *beanjaminCoffee) observeCupCandidates(ctx, cancelCtx context.Context) ([]r3.Vector, error) {
 	hasShelfCfg := s.cfg.PlaceCupOnShelf
 	var (
 		shelfPose spatialmath.Pose
@@ -266,33 +266,21 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector
 		shelfTopZ = pose.Point().Z + dims.Z/2
 	}
 
-	// Look up the base cup_observe pose once so offsets compose against a
-	// stable reference rather than the (drifting) arm pose between passes.
-	var basePose spatialmath.Pose
-	if len(s.cfg.CupObserveOffsets) > 0 {
-		pd, err := s.fetchPose(ctx, "coffee-claws-middle", "cup_observe")
-		if err != nil {
-			return nil, fmt.Errorf("dynamic_cup_pickup: fetch cup_observe for offsets: %w", err)
-		}
-		basePose = pd.pose
-	}
-
-	passes := 1 + len(s.cfg.CupObserveOffsets)
+	passes := 1 + len(s.cfg.CupObserveAlternates)
 	allCentroids := make([]r3.Vector, 0)
 	allOnShelf := make([]spatialmath.Geometry, 0)
 	totalDetections := 0
 	for i := range passes {
 		if i > 0 {
-			offset := s.cfg.CupObserveOffsets[i-1]
-			targetPose := spatialmath.Compose(basePose, relativePoseToSpatial(&offset))
-			pd := &poseData{pose: targetPose, refFrame: referenceframe.World, componentName: "coffee-claws-middle"}
+			poseName := s.cfg.CupObserveAlternates[i-1]
 			const msg = "I couldn't quite find the cup, looking harder."
 			if sayErr := s.sayAlways(ctx, msg); sayErr != nil {
 				s.logger.Warnf("dynamic cup pickup: announcement failed: %v", sayErr)
 			}
-			s.logger.Infof("dynamic cup pickup: pass %d/%d — moving to cup_observe + offset %+v", i+1, passes, offset)
-			if err := s.moveToRawPose(ctx, pd, nil, nil, nil); err != nil {
-				s.logger.Warnf("dynamic cup pickup: pass %d/%d — offset unreachable, skipping pass: %v", i+1, passes, err)
+			s.logger.Infof("dynamic cup pickup: pass %d/%d — moving to %q", i+1, passes, poseName)
+			step := Step{PoseName: poseName, Component: "coffee-claws-middle", Pause: shortPause}
+			if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+				s.logger.Warnf("dynamic cup pickup: pass %d/%d — pose %q unreachable, skipping pass: %v", i+1, passes, poseName, err)
 				continue
 			}
 		} else {
@@ -484,7 +472,7 @@ func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 		}
 
 		detectCtx, detectSpan := trace.StartSpan(ctx, "beanjamin::dynamic_cup_pickup::detect")
-		candidates, err := s.observeCupCandidates(detectCtx)
+		candidates, err := s.observeCupCandidates(detectCtx, cancelCtx)
 		detectSpan.End()
 		if err != nil {
 			// "No cups detected" is recoverable: there may be no cups,
