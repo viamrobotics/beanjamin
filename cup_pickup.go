@@ -29,6 +29,61 @@ import (
 	viz "go.viam.com/rdk/vision"
 )
 
+// cupObserveDedupMm is the merge radius used to collapse near-duplicate
+// detections across multi-vantage observations: two centroids closer than
+// this in world frame are treated as the same physical cup. Picked smaller
+// than a typical cup diameter (~80mm) and the shelf occupancy buffer
+// (shelfOccupancyBufferMm = 50mm) so a single cup seen from two angles does
+// not artificially block adjacent shelf tiles.
+const cupObserveDedupMm = 40.0
+
+// dedupeNearbyCentroids returns a copy of centroids with near-duplicates
+// removed: any centroid within mm of a kept centroid is dropped. First
+// occurrence wins. Input is not mutated. mm <= 0 disables deduplication.
+func dedupeNearbyCentroids(centroids []r3.Vector, mm float64) []r3.Vector {
+	if mm <= 0 || len(centroids) <= 1 {
+		return append([]r3.Vector(nil), centroids...)
+	}
+	out := make([]r3.Vector, 0, len(centroids))
+	for _, c := range centroids {
+		dup := false
+		for _, k := range out {
+			if c.Sub(k).Norm() < mm {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// dedupeNearbyGeometries collapses geometries whose pose points sit within
+// mm of an already-kept geometry's pose point in world frame. Behaves like
+// dedupeNearbyCentroids; first occurrence wins. mm <= 0 disables.
+func dedupeNearbyGeometries(geoms []spatialmath.Geometry, mm float64) []spatialmath.Geometry {
+	if mm <= 0 || len(geoms) <= 1 {
+		return append([]spatialmath.Geometry(nil), geoms...)
+	}
+	out := make([]spatialmath.Geometry, 0, len(geoms))
+	for _, g := range geoms {
+		gp := g.Pose().Point()
+		dup := false
+		for _, k := range out {
+			if gp.Sub(k.Pose().Point()).Norm() < mm {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
 // rankCupCentroids returns centroids sorted by distance to target ascending,
 // dropping any beyond maxDistMm. maxDistMm == 0 disables the cutoff. The
 // returned slice is a new allocation; the input is not mutated. Ties keep
@@ -85,13 +140,14 @@ func cameraToWorld(
 	return worldPose.Pose().Point(), nil
 }
 
-// observeCupCandidates calls the vision service for cup detections, retries
-// on empty results per the configured retry policy, lifts each detection's
-// centroid into world coordinates, filters out detections beyond
-// CupMaxDistanceFromTargetMm, and returns the survivors sorted by distance to
-// ExpectedCupPositionMm (closest first). Returns an error if no usable
-// in-range centroids remain.
-func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector, error) {
+// observeOnce runs one YOLO call at the arm's current pose with the
+// existing zero-detection retry policy, transforms each detection's
+// centroid into world frame, and partitions the results by shelf-top Z
+// (when hasShelfCfg). Returns (pickupCentroids, onShelfGeometriesInWorld).
+// Fresh framesystem inputs are captured immediately after the vision call
+// so detection centroids transform with arm joints AT capture time — this
+// matters when the caller drives the arm to a new vantage between passes.
+func (s *beanjaminCoffee) observeOnce(ctx context.Context, shelfTopZ float64, hasShelfCfg bool) ([]r3.Vector, []spatialmath.Geometry, error) {
 	maxAttempts := s.cfg.CupDetectionRetries + 1
 	sleep := time.Duration(s.cfg.CupDetectionRetrySleepMs) * time.Millisecond
 	if sleep <= 0 {
@@ -100,14 +156,11 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector
 
 	var objects []*viz.Object
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		// Pass an empty camera name so the vision service falls back to its own
-		// configured default camera. s.cupCameraName is still used below to
-		// transform detection centroids from the camera frame into world coords.
 		objs, err := s.cupVision.GetObjectPointClouds(ctx, "", nil)
 		if err != nil {
-			return nil, fmt.Errorf("dynamic_cup_pickup: detect: %w", err)
+			return nil, nil, fmt.Errorf("detect: %w", err)
 		}
-		s.logger.Infof("dynamic cup pickup: attempt %d/%d, found %d detections", attempt, maxAttempts, len(objs))
+		s.logger.Infof("dynamic cup pickup: vision attempt %d/%d, found %d detections", attempt, maxAttempts, len(objs))
 		if len(objs) > 0 {
 			objects = objs
 			break
@@ -116,41 +169,25 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector
 			select {
 			case <-time.After(sleep):
 			case <-ctx.Done():
-				return nil, fmt.Errorf("dynamic_cup_pickup: cancelled during retry: %w", ctx.Err())
+				return nil, nil, fmt.Errorf("cancelled during retry: %w", ctx.Err())
 			}
 		}
 	}
 	if len(objects) == 0 {
-		return nil, fmt.Errorf("dynamic_cup_pickup: no cups detected after %d attempts", maxAttempts)
+		return nil, nil, nil
 	}
 
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("dynamic_cup_pickup: %w", err)
-	}
-
-	// When PlaceCupOnShelf is enabled, look up the shelf top once so we can
-	// (a) partition detections into pickup vs on-shelf by Z and (b) pass
-	// the shelf pose/dims to selectShelfTile without a second lookup.
-	var (
-		shelfPose   spatialmath.Pose
-		shelfDims   r3.Vector
-		shelfTopZ   float64
-		onShelfCups []spatialmath.Geometry
-		hasShelfCfg = s.cfg.PlaceCupOnShelf
-	)
-	if hasShelfCfg {
-		pose, dims, err := s.shelfTopGeometry(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("dynamic_cup_pickup: %w", err)
-		}
-		shelfPose = pose
-		shelfDims = dims
-		shelfTopZ = pose.Point().Z + dims.Z/2
-		onShelfCups = make([]spatialmath.Geometry, 0, len(objects))
+		return nil, nil, err
 	}
 
 	centroids := make([]r3.Vector, 0, len(objects))
+	var onShelfCups []spatialmath.Geometry
+	if hasShelfCfg {
+		onShelfCups = make([]spatialmath.Geometry, 0, len(objects))
+	}
+
 	for _, obj := range objects {
 		if obj.Geometry == nil {
 			continue
@@ -158,7 +195,7 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector
 		local := obj.Geometry.Pose().Point()
 		world, err := cameraToWorld(fs, fsInputs, s.cupCameraName, local)
 		if err != nil {
-			return nil, fmt.Errorf("dynamic_cup_pickup: %w", err)
+			return nil, nil, err
 		}
 		if floor := s.cfg.CupCentroidMinZMm; floor != 0 && world.Z < floor {
 			s.logger.Infof("dynamic cup pickup: flooring centroid Z from %.1f to %.1f (cup_centroid_min_z_mm)",
@@ -166,14 +203,11 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector
 			world.Z = floor
 		}
 
-		// Detections whose centroid sits above the shelf top surface are
-		// already-served cups; lift their geometry to world frame for the
-		// shelf-tile occupancy check and exclude them from pickup ranking.
 		if hasShelfCfg && world.Z > shelfTopZ {
 			gif := referenceframe.NewGeometriesInFrame(s.cupCameraName, []spatialmath.Geometry{obj.Geometry})
 			worldGifTF, err := fs.Transform(fsInputs.ToLinearInputs(), gif, referenceframe.World)
 			if err != nil {
-				return nil, fmt.Errorf("dynamic_cup_pickup: transform geometry to world: %w", err)
+				return nil, nil, fmt.Errorf("transform geometry to world: %w", err)
 			}
 			geos := worldGifTF.(*referenceframe.GeometriesInFrame).Geometries()
 			if len(geos) > 0 {
@@ -187,6 +221,87 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector
 		s.logger.Debugf("dynamic cup pickup: detection at camera-local %v -> world %v", local, world)
 		centroids = append(centroids, world)
 	}
+	return centroids, onShelfCups, nil
+}
+
+// observeCupCandidates drives the arm through the configured cup_observe
+// pose plus any CupObserveOffsets vantages, calls vision at each, merges
+// detections across passes (collapsing near-duplicates within
+// cupObserveDedupMm in world frame), lifts everything into world
+// coordinates, filters by CupMaxDistanceFromTargetMm, and returns the
+// pickup candidates sorted by distance to ExpectedCupPositionMm. The
+// on-shelf bucket (detections above shelf top Z) is fed to selectShelfTile
+// before this function returns, so shelf occupancy benefits from the same
+// multi-vantage merge.
+//
+// The caller is expected to have already moved the arm to cup_observe;
+// pass 0 reuses that position, and passes 1..N apply CupObserveOffsets
+// composed onto cup_observe in its local frame. An unreachable offset is
+// logged and skipped — partial multi-vantage data is preferred over
+// aborting the whole observation.
+func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector, error) {
+	hasShelfCfg := s.cfg.PlaceCupOnShelf
+	var (
+		shelfPose spatialmath.Pose
+		shelfDims r3.Vector
+		shelfTopZ float64
+	)
+	if hasShelfCfg {
+		pose, dims, err := s.shelfTopGeometry(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("dynamic_cup_pickup: %w", err)
+		}
+		shelfPose = pose
+		shelfDims = dims
+		shelfTopZ = pose.Point().Z + dims.Z/2
+	}
+
+	// Look up the base cup_observe pose once so offsets compose against a
+	// stable reference rather than the (drifting) arm pose between passes.
+	var basePose spatialmath.Pose
+	if len(s.cfg.CupObserveOffsets) > 0 {
+		pd, err := s.fetchPose(ctx, "coffee-claws-middle", "cup_observe")
+		if err != nil {
+			return nil, fmt.Errorf("dynamic_cup_pickup: fetch cup_observe for offsets: %w", err)
+		}
+		basePose = pd.pose
+	}
+
+	passes := 1 + len(s.cfg.CupObserveOffsets)
+	allCentroids := make([]r3.Vector, 0)
+	allOnShelf := make([]spatialmath.Geometry, 0)
+	totalDetections := 0
+	for i := range passes {
+		if i > 0 {
+			offset := s.cfg.CupObserveOffsets[i-1]
+			targetPose := spatialmath.Compose(basePose, relativePoseToSpatial(&offset))
+			pd := &poseData{pose: targetPose, refFrame: referenceframe.World, componentName: "coffee-claws-middle"}
+			s.logger.Infof("dynamic cup pickup: pass %d/%d — moving to cup_observe + offset %+v", i+1, passes, offset)
+			if err := s.moveToRawPose(ctx, pd, nil, nil, nil); err != nil {
+				s.logger.Warnf("dynamic cup pickup: pass %d/%d — offset unreachable, skipping pass: %v", i+1, passes, err)
+				continue
+			}
+		} else {
+			s.logger.Infof("dynamic cup pickup: pass %d/%d — observing at cup_observe", i+1, passes)
+		}
+
+		passCentroids, passOnShelf, err := s.observeOnce(ctx, shelfTopZ, hasShelfCfg)
+		if err != nil {
+			return nil, fmt.Errorf("dynamic_cup_pickup: pass %d: %w", i+1, err)
+		}
+		totalDetections += len(passCentroids) + len(passOnShelf)
+		s.logger.Infof("dynamic cup pickup: pass %d/%d contributed %d pickup, %d on-shelf",
+			i+1, passes, len(passCentroids), len(passOnShelf))
+		allCentroids = append(allCentroids, passCentroids...)
+		allOnShelf = append(allOnShelf, passOnShelf...)
+	}
+
+	centroids := dedupeNearbyCentroids(allCentroids, cupObserveDedupMm)
+	onShelfCups := dedupeNearbyGeometries(allOnShelf, cupObserveDedupMm)
+	if len(centroids) != len(allCentroids) || len(onShelfCups) != len(allOnShelf) {
+		s.logger.Infof("dynamic cup pickup: dedup collapsed %d->%d pickup, %d->%d on-shelf (radius=%.0fmm)",
+			len(allCentroids), len(centroids), len(allOnShelf), len(onShelfCups), cupObserveDedupMm)
+	}
 
 	if hasShelfCfg {
 		s.logger.Infof("dynamic cup pickup: shelf partition — %d pickup candidate(s), %d on-shelf cup(s) (threshold Z=%.1fmm)",
@@ -197,10 +312,13 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx context.Context) ([]r3.Vector
 	}
 
 	if len(centroids) == 0 {
+		if totalDetections == 0 {
+			return nil, fmt.Errorf("dynamic_cup_pickup: no cups detected across %d vantage(s)", passes)
+		}
 		if hasShelfCfg && len(onShelfCups) > 0 {
 			return nil, fmt.Errorf("dynamic_cup_pickup: all %d detection(s) classified as on-shelf (above Z=%.1fmm); no empty-cup candidate", len(onShelfCups), shelfTopZ)
 		}
-		return nil, fmt.Errorf("dynamic_cup_pickup: %d detection(s) had no usable geometry", len(objects))
+		return nil, fmt.Errorf("dynamic_cup_pickup: %d detection(s) had no usable geometry", totalDetections)
 	}
 
 	target := r3.Vector{X: s.cfg.ExpectedCupPositionMm.X, Y: s.cfg.ExpectedCupPositionMm.Y, Z: s.cfg.ExpectedCupPositionMm.Z}

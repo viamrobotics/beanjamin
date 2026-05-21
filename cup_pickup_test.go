@@ -124,6 +124,94 @@ func TestRankCupCentroids_DoesNotMutateInput(t *testing.T) {
 	}
 }
 
+func TestDedupeNearbyCentroids_Empty(t *testing.T) {
+	got := dedupeNearbyCentroids(nil, 40)
+	if len(got) != 0 {
+		t.Fatalf("expected empty, got %v", got)
+	}
+}
+
+func TestDedupeNearbyCentroids_NoNearDuplicates(t *testing.T) {
+	in := []r3.Vector{{X: 0}, {X: 100}, {X: 200}}
+	got := dedupeNearbyCentroids(in, 40)
+	if len(got) != 3 {
+		t.Fatalf("expected all kept, got %v", got)
+	}
+}
+
+func TestDedupeNearbyCentroids_CollapsesWithinRadius(t *testing.T) {
+	in := []r3.Vector{
+		{X: 0, Y: 0, Z: 0},
+		{X: 30, Y: 0, Z: 0}, // 30mm from [0] — collapsed
+		{X: 100, Y: 0, Z: 0},
+		{X: 110, Y: 0, Z: 0}, // 10mm from [2] — collapsed
+	}
+	got := dedupeNearbyCentroids(in, 40)
+	want := []r3.Vector{in[0], in[2]}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d, got %d (%v)", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("[%d] = %v, want %v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestDedupeNearbyCentroids_FirstOccurrenceWins(t *testing.T) {
+	in := []r3.Vector{{X: 0}, {X: 35}, {X: 70}}
+	// With radius 40: [0] kept. [1] within 40 of [0] -> dropped.
+	// [2] is 70 from [0] (kept) -> kept. If [1] had been kept,
+	// [2] would be 35 from [1] and dropped — so this asserts
+	// the "first wins" property.
+	got := dedupeNearbyCentroids(in, 40)
+	want := []r3.Vector{in[0], in[2]}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("expected %v, got %v", want, got)
+	}
+}
+
+func TestDedupeNearbyCentroids_ZeroRadiusDisables(t *testing.T) {
+	in := []r3.Vector{{X: 0}, {X: 0}, {X: 0}}
+	got := dedupeNearbyCentroids(in, 0)
+	if len(got) != 3 {
+		t.Fatalf("zero radius should keep all, got %v", got)
+	}
+}
+
+func TestDedupeNearbyCentroids_DoesNotMutateInput(t *testing.T) {
+	in := []r3.Vector{{X: 0}, {X: 10}, {X: 100}}
+	orig := append([]r3.Vector(nil), in...)
+	_ = dedupeNearbyCentroids(in, 40)
+	for i := range orig {
+		if in[i] != orig[i] {
+			t.Fatalf("input mutated at %d: %v != %v", i, in[i], orig[i])
+		}
+	}
+}
+
+func TestDedupeNearbyGeometries_CollapsesByPoseDistance(t *testing.T) {
+	a, err := spatialmath.NewSphere(spatialmath.NewPoseFromPoint(r3.Vector{X: 0}), 25, "a")
+	if err != nil {
+		t.Fatalf("sphere a: %v", err)
+	}
+	b, err := spatialmath.NewSphere(spatialmath.NewPoseFromPoint(r3.Vector{X: 30}), 25, "b")
+	if err != nil {
+		t.Fatalf("sphere b: %v", err)
+	}
+	c, err := spatialmath.NewSphere(spatialmath.NewPoseFromPoint(r3.Vector{X: 200}), 25, "c")
+	if err != nil {
+		t.Fatalf("sphere c: %v", err)
+	}
+	got := dedupeNearbyGeometries([]spatialmath.Geometry{a, b, c}, 40)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 after dedup, got %d", len(got))
+	}
+	if got[0].Label() != "a" || got[1].Label() != "c" {
+		t.Fatalf("expected first-wins {a,c}, got %v + %v", got[0].Label(), got[1].Label())
+	}
+}
+
 func TestComposeCupPose_IdentityRelative(t *testing.T) {
 	centroid := r3.Vector{X: 100, Y: 200, Z: 300}
 	relative := spatialmath.NewZeroPose()
