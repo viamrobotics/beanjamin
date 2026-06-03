@@ -44,6 +44,12 @@
       "api": "rdk:service:generic",
       "model": "viam:beanjamin:customer-detector",
       "short_description": "Identifies return customers via facial recognition using the face-identification vision service."
+    },
+    {
+      "api": "rdk:component:sensor",
+      "model": "viam:beanjamin:test-doc-model",
+      "short_description": "Test model entry — not registered by the binary; exists only to exercise markdown_link collection.",
+      "markdown_link": "docs/test-doc-model.md"
     }
   ],
   "entrypoint": "bin/beanjamin",
