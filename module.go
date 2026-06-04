@@ -97,6 +97,12 @@ type Config struct {
 	DataDir           string `json:"data_dir,omitempty"`
 	CanServeDecaf     bool   `json:"can_serve_decaf,omitempty"`
 
+	// Optional Slack notifier (viam:notifications:slack generic service). When
+	// set, the coffee service sends a best-effort Slack message via DoCommand
+	// for every non-successful order attempt — genuine faults and operator
+	// cancels alike. Unset disables notifications.
+	SlackNotifierName string `json:"slack_notifier_name,omitempty"`
+
 	// Conversational, when true, makes the coffee service speak its own
 	// status-narrating lines through speech_service_name — initial
 	// greetings, almost-ready prompts, order confirmations, rejection
@@ -235,6 +241,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.CamStorageMuxName != "" {
 		optDeps = append(optDeps, generic.Named(cfg.CamStorageMuxName).String())
 	}
+	if cfg.SlackNotifierName != "" {
+		optDeps = append(optDeps, generic.Named(cfg.SlackNotifierName).String())
+	}
 
 	if cfg.DynamicCupPickup {
 		if cfg.CupVisionServiceName == "" {
@@ -295,6 +304,8 @@ type beanjaminCoffee struct {
 	vizConsecutiveFailures int                         // auto-disables viz after repeated failures
 	gripper                gripper.Gripper
 	camStorage             generic.Service // optional; mux over video stores; nil if cam_storage_mux_name unset
+	slackNotifier          generic.Service // optional; viam:notifications:slack; nil if slack_notifier_name unset
+	machineLogsURL         string          // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
 	pendingOrderClipsDir   string          // optional; directory for pending-clip records to survive restarts
 	mu                     sync.Mutex
 	cancelCtx              context.Context
@@ -446,6 +457,17 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger.Infof("cam storage mux %q connected", conf.CamStorageMuxName)
 	}
 
+	var slackNotifier generic.Service
+	if conf.SlackNotifierName != "" {
+		notifier, err := generic.FromProvider(deps, conf.SlackNotifierName)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("slack_notifier_name %q: %w", conf.SlackNotifierName, err)
+		}
+		slackNotifier = notifier
+		logger.Infof("slack notifier %q connected", conf.SlackNotifierName)
+	}
+
 	var pendingOrderClipsDir string
 	if conf.DataDir != "" {
 		pendingOrderClipsDir = filepath.Join(conf.DataDir, "pending-clips")
@@ -507,6 +529,8 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		cachedFS:             cachedFS,
 		speech:               speech,
 		camStorage:           camStorage,
+		slackNotifier:        slackNotifier,
+		machineLogsURL:       buildMachineLogsURL(os.Getenv("VIAM_MACHINE_ID"), os.Getenv("VIAM_PRIMARY_ORG_ID")),
 		pendingOrderClipsDir: pendingOrderClipsDir,
 		gripper:              gripperComp,
 		vizEnabled:           vizEnabled,

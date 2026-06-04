@@ -377,6 +377,9 @@ func (s *beanjaminCoffee) notifyOrderReading(r orderReading) {
 	if s.orderSensorSink != nil {
 		s.orderSensorSink.pushOrderReading(r)
 	}
+	// Best-effort Slack alert on any non-successful attempt (faults + operator
+	// cancels). No-op when no slack_notifier_name is configured.
+	s.notifyOrderFailureSlack(r)
 }
 
 // traceIDFromContext returns the OTel trace ID for ctx, or "" if there is no
