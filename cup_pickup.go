@@ -45,10 +45,6 @@ const noCupsRetryDelay = 15 * time.Second
 // this in world frame are treated as the same physical cup.
 const cupObserveDedupMm = 40.0
 
-// cupObserveHomePose is the pose name on the camera-observe switch used as the
-// home / recovery position (it is also swept like any other observe pose).
-const cupObserveHomePose = "cup_observe"
-
 // mergeNearbyCentroids clusters centroids that fall within mm of an existing
 // cluster's running mean and returns one centroid per cluster: the mean of its
 // members. First-seen order determines cluster assignment. Input is not mutated.
@@ -85,8 +81,8 @@ func mergeNearbyCentroids(centroids []r3.Vector, mm float64) []r3.Vector {
 }
 
 // dedupeNearbyGeometries collapses geometries whose pose points sit within
-// mm of an already-kept geometry's pose point in world frame. Behaves like
-// dedupeNearbyCentroids; first occurrence wins. mm <= 0 disables.
+// mm of an already-kept geometry's pose point in world frame; first occurrence
+// wins. Input is not mutated. mm <= 0 disables.
 func dedupeNearbyGeometries(geoms []spatialmath.Geometry, mm float64) []spatialmath.Geometry {
 	if mm <= 0 || len(geoms) <= 1 {
 		return append([]spatialmath.Geometry(nil), geoms...)
@@ -280,7 +276,7 @@ func (s *beanjaminCoffee) observeAllVantages(ctx, cancelCtx context.Context, she
 		s.logger.Infof("dynamic cup pickup: pass %d/%d — moving to observe pose %q", i+1, passes, poseName)
 		// Pause briefly after arriving so the camera frame is stable before
 		// detection. "cam" routes the fetch to the camera-observe switch.
-		step := Step{PoseName: poseName, Component: "cam", Pause: shortPause}
+		step := Step{PoseName: poseName, Component: componentCam, Pause: shortPause}
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 			s.logger.Warnf("dynamic cup pickup: pass %d/%d — observe pose %q unreachable, skipping pass: %v", i+1, passes, poseName, err)
 			continue
@@ -450,7 +446,7 @@ func (s *beanjaminCoffee) recoverToObserve(ctx, cancelCtx context.Context) {
 	}
 	time.Sleep(gripperPause)
 
-	observeStep := Step{PoseName: cupObserveHomePose, Component: "cam", Pause: shortPause}
+	observeStep := Step{PoseName: camPoseCupObserve, Component: componentCam, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, observeStep); err != nil {
 		s.logger.Warnf("dynamic cup pickup: recover to cup_observe: %v", err)
 	}
@@ -492,7 +488,7 @@ func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 			// other failure (out-of-range, all-on-shelf, etc.)
 			// — re-observing won't change those.
 			if errors.Is(err, errNoCupsDetected) && attempt < maxAttempts {
-				recoverStep := Step{PoseName: cupObserveHomePose, Component: "cam", Pause: shortPause}
+				recoverStep := Step{PoseName: camPoseCupObserve, Component: componentCam, Pause: shortPause}
 				if mvErr := s.executeStep(ctx, cancelCtx, recoverStep); mvErr != nil {
 					s.logger.Warnf("dynamic cup pickup: return to cup_observe before retry wait: %v", mvErr)
 				}

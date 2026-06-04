@@ -45,7 +45,10 @@ const (
 	clawPoseEmptyCup                = "empty_cup"
 	clawPoseCupReadyForCoffee       = "cup_ready_for_coffee"
 	clawPoseCupUnderMachineApproach = "cup_under_machine_approach"
-	clawPoseCupObserve              = "cup_observe"
+
+	// camera pose switches (extra vantages live on
+	// the same switch and are enumerated at runtime).
+	camPoseCupObserve = "cup_observe"
 )
 
 const (
@@ -53,6 +56,7 @@ const (
 	// AllowedCollision frame names.
 	componentFilter = "filter"
 	componentClaws  = "coffee-claws-middle"
+	componentCam    = "cam"
 )
 
 // requiredPose pairs a switch pose name with the component (pose switch) it
@@ -118,11 +122,10 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 			requiredPose{componentClaws, clawPoseCupReadyForCoffee},
 		)
 		if s.cfg.DynamicCupPickup {
-			// pickCupDynamic observes from cup_observe plus any alternates.
-			poses = append(poses, requiredPose{componentClaws, clawPoseCupObserve})
-			for _, name := range s.cfg.CupObserveAlternates {
-				poses = append(poses, requiredPose{componentClaws, name})
-			}
+			// pickCupDynamic observes from the camera-observe switch. The extra
+			// vantages are enumerated at runtime, but cup_observe must exist as
+			// the home/recovery pose.
+			poses = append(poses, requiredPose{componentCam, camPoseCupObserve})
 		} else {
 			// Static pickup grabs from the fixed empty-cup poses.
 			poses = append(poses,
