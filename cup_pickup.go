@@ -51,10 +51,8 @@ const cupObserveHomePose = "cup_observe"
 
 // mergeNearbyCentroids clusters centroids that fall within mm of an existing
 // cluster's running mean and returns one centroid per cluster: the mean of its
-// members. Merging the detections of the same physical cup seen from several
-// vantages yields a better position estimate than any single detection. First-seen
-// order determines cluster assignment. Input is not mutated. mm <= 0 disables
-// merging and returns a copy.
+// members. First-seen order determines cluster assignment. Input is not mutated.
+// mm <= 0 disables merging and returns a copy.
 func mergeNearbyCentroids(centroids []r3.Vector, mm float64) []r3.Vector {
 	if mm <= 0 || len(centroids) <= 1 {
 		return append([]r3.Vector(nil), centroids...)
@@ -171,15 +169,12 @@ func cameraToWorld(
 // centroid into world coordinates, and partitions the results by shelf-top Z
 // when hasShelfCfg is true. Returns the pickup centroids and the on-shelf
 // geometries (in world frame). Returns nil results with no error when no frame
-// produced a detection, so findCupCandidates can move on to the next vantage.
+// produced a detection, so observeAllVantages can move on to the next vantage.
 func (s *beanjaminCoffee) observeVantage(ctx context.Context, shelfTopZ float64, hasShelfCfg bool) ([]r3.Vector, []spatialmath.Geometry, error) {
-	photos := s.cupPhotosPerVantage()
+	photosToTake := s.cupPhotosPerVantage()
 
-	// Capture cup_photos_per_vantage frames at this pose and accumulate every
-	// detection from all of them — feeding repeated detections of the same cup
-	// into the cross-vantage merge averages out per-frame centroid noise.
 	var objects []*viz.Object
-	for photo := 1; photo <= photos; photo++ {
+	for photo := 1; photo <= photosToTake; photo++ {
 		// Pass an empty camera name so the vision service falls back to its own
 		// configured default camera. s.cupCameraName is still used below to
 		// transform detection centroids from the camera frame into world coords.
@@ -187,7 +182,7 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, shelfTopZ float64,
 		if err != nil {
 			return nil, nil, fmt.Errorf("detect: %w", err)
 		}
-		s.logger.Infof("dynamic cup pickup: vision photo %d/%d, found %d detections", photo, photos, len(objs))
+		s.logger.Infof("dynamic cup pickup: vision photo %d/%d, found %d detections", photo, photosToTake, len(objs))
 		objects = append(objects, objs...)
 	}
 	if len(objects) == 0 {
@@ -244,22 +239,16 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, shelfTopZ float64,
 	return centroids, onShelfCups, nil
 }
 
-// cupObservations is the merged result of sweeping every observation vantage:
-// empty-cup pickup candidates (below the shelf split) and already-on-shelf cup
-// geometries (above it), each merged/deduped across vantages in world frame.
-// rawDetections is the count of usable detections summed across all vantages,
-// before the cross-vantage merge; vantages is the number of poses swept. Both
-// are used only for logging.
+// cupObservations is the empty-cup pickup candidates and already-on-shelf
+// cup geometries after merging/deduping all detections from every observation
+// vantage.
 type cupObservations struct {
-	pickup        []r3.Vector
-	onShelf       []spatialmath.Geometry
-	rawDetections int
-	vantages      int
+	pickup  []r3.Vector
+	onShelf []spatialmath.Geometry
 }
 
 // observationPoseNames returns the names of every pose on the camera-observe
-// switch. GetNumberOfPositions is the only switch API that exposes the labels,
-// so we call it and drop the position count.
+// switch.
 func (s *beanjaminCoffee) observationPoseNames(ctx context.Context) ([]string, error) {
 	if s.cameraObserveSw == nil {
 		return nil, fmt.Errorf("no camera observe pose switch configured")
@@ -276,11 +265,7 @@ func (s *beanjaminCoffee) observationPoseNames(ctx context.Context) ([]string, e
 
 // observeAllVantages drives the camera to every pose on the camera-observe
 // switch, calls observeVantage at each, and merges the detections across all
-// passes into a single cupObservations. It always visits every reachable
-// vantage so the on-shelf occupancy map and the pickup centroids reflect every
-// angle: a cup occluded from one view is still seen (and counted) from another.
-// This is what keeps us from dropping a fresh cup on top of one a single view
-// missed. An unreachable pose is logged and skipped.
+// passes into a single cupObservations. An unreachable pose is logged and skipped.
 func (s *beanjaminCoffee) observeAllVantages(ctx, cancelCtx context.Context, shelfTopZ float64, hasShelfCfg bool) (cupObservations, error) {
 	poseNames, err := s.observationPoseNames(ctx)
 	if err != nil {
@@ -316,7 +301,7 @@ func (s *beanjaminCoffee) observeAllVantages(ctx, cancelCtx context.Context, she
 	onShelf := dedupeNearbyGeometries(allOnShelf, cupObserveDedupMm)
 	s.logger.Infof("dynamic cup pickup: detected %d distinct cup(s) across %d vantage(s) — %d pickup candidate(s), %d on-shelf (raw %d before merge)",
 		len(pickup)+len(onShelf), passes, len(pickup), len(onShelf), totalDetections)
-	return cupObservations{pickup: pickup, onShelf: onShelf, rawDetections: totalDetections, vantages: passes}, nil
+	return cupObservations{pickup: pickup, onShelf: onShelf}, nil
 }
 
 // findCupCandidates resolves the shelf config, sweeps every vantage and merges
@@ -347,7 +332,7 @@ func (s *beanjaminCoffee) findCupCandidates(ctx, cancelCtx context.Context) ([]r
 	}
 	centroids := obs.pickup
 	onShelfCups := obs.onShelf
-	passes := obs.vantages
+	totalDetections := len(centroids) + len(onShelfCups)
 
 	if hasShelfCfg {
 		s.logger.Infof("dynamic cup pickup: shelf partition — %d pickup candidate(s), %d on-shelf cup(s) (threshold Z=%.1fmm)",
@@ -358,13 +343,13 @@ func (s *beanjaminCoffee) findCupCandidates(ctx, cancelCtx context.Context) ([]r
 	}
 
 	if len(centroids) == 0 {
-		if obs.rawDetections == 0 {
-			return nil, fmt.Errorf("dynamic_cup_pickup: %w across %d vantage(s)", errNoCupsDetected, passes)
+		if totalDetections == 0 {
+			return nil, fmt.Errorf("dynamic_cup_pickup: %w across all vantages", errNoCupsDetected)
 		}
 		if hasShelfCfg && len(onShelfCups) > 0 {
 			return nil, fmt.Errorf("dynamic_cup_pickup: all %d detection(s) classified as on-shelf (above Z=%.1fmm); no empty-cup candidate", len(onShelfCups), shelfTopZ)
 		}
-		return nil, fmt.Errorf("dynamic_cup_pickup: %d detection(s) had no usable geometry", obs.rawDetections)
+		return nil, fmt.Errorf("dynamic_cup_pickup: %d detection(s) had no usable geometry", totalDetections)
 	}
 
 	target := r3.Vector{X: s.cfg.ExpectedCupPositionMm.X, Y: s.cfg.ExpectedCupPositionMm.Y, Z: s.cfg.ExpectedCupPositionMm.Z}
