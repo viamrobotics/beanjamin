@@ -88,16 +88,10 @@ type Config struct {
 	SaveMotionRequestsDir     string  `json:"save_motion_requests_dir,omitempty"`
 	OrderSensorName           string  `json:"order_sensor_name,omitempty"`
 
-	// Optional usage sensors. Each, when configured, is updated during the
-	// brew lifecycle via a best-effort read-modify-write: the current value is
-	// read with Readings and a new value written with
-	// DoCommand({"set": {<field>: <value>}}). Failures log a warning and never
-	// fail the brew. See sensor_usage.go.
-	GrinderSensorName           string `json:"grinder_sensor_name,omitempty"`
-	DecafGrinderSensorName      string `json:"decaf_grinder_sensor_name,omitempty"`
-	WaterSensorName             string `json:"water_sensor_name,omitempty"`
-	CleanerSensorName           string `json:"cleaner_sensor_name,omitempty"`
-	ConsecutiveOrdersSensorName string `json:"consecutive_orders_sensor_name,omitempty"`
+	// Optional usage sensor updated during the brew lifecycle via a best-effort
+	// read-modify-write: each counter is read with Readings and written back
+	// with DoCommand({"set": {<key>: <value>}}).
+	UsageSensorName string `json:"usage_sensor_name,omitempty"`
 
 	CamStorageMuxName string `json:"cam_storage_mux_name,omitempty"`
 	DataDir           string `json:"data_dir,omitempty"`
@@ -230,16 +224,8 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.OrderSensorName != "" {
 		optDeps = append(optDeps, sensor.Named(cfg.OrderSensorName).String())
 	}
-	for _, name := range []string{
-		cfg.GrinderSensorName,
-		cfg.DecafGrinderSensorName,
-		cfg.WaterSensorName,
-		cfg.CleanerSensorName,
-		cfg.ConsecutiveOrdersSensorName,
-	} {
-		if name != "" {
-			optDeps = append(optDeps, sensor.Named(name).String())
-		}
+	if cfg.UsageSensorName != "" {
+		optDeps = append(optDeps, sensor.Named(cfg.UsageSensorName).String())
 	}
 	if cfg.CamStorageMuxName != "" {
 		optDeps = append(optDeps, generic.Named(cfg.CamStorageMuxName).String())
@@ -329,16 +315,14 @@ type beanjaminCoffee struct {
 	// the filter doesn't get stranded with grounds in it.
 	portafilterHasGrounds atomic.Bool
 	orderSensorSink       orderSensorSink // optional; named order-sensor from deps, nil if unset
-	// Optional usage sensors updated during the brew lifecycle (sensor_usage.go).
-	// Each is nil when its name is unset, in which case the update is a no-op.
-	grinderSensor           sensor.Sensor  // optional; "grinds" += 1 per non-decaf grind
-	decafGrinderSensor      sensor.Sensor  // optional; "grinds" += 1 per decaf grind
-	waterSensor             sensor.Sensor  // optional; "usage" += 1 (regular) / 1.5 (lungo) per brew
-	cleanerSensor           sensor.Sensor  // optional; "cleanings" += 1 per cleaning
-	consecutiveOrdersSensor sensor.Sensor  // optional; "successful_consecutive_orders" += 1 on success, set 0 on failure
-	cupVision               vision.Service // optional; nil when DynamicCupPickup=false
-	cupCameraName           string         // SrcCameraName, validated to exist in cachedFS
-	servedShelfTile         atomic.Value   // servedShelfTile holds the latest servedShelfTilePick chosen by
+	// Optional usage sensor updated during the brew lifecycle (sensor_usage.go).
+	// nil when usage_sensor_name is unset, in which case every update is a
+	// no-op. Holds all counters keyed by regular_grinds, decaf_grinds, usage,
+	// cleanings, and successful_consecutive_orders.
+	usageSensor     sensor.Sensor
+	cupVision       vision.Service // optional; nil when DynamicCupPickup=false
+	cupCameraName   string         // SrcCameraName, validated to exist in cachedFS
+	servedShelfTile atomic.Value   // servedShelfTile holds the latest servedShelfTilePick chosen by
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -480,72 +464,41 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger.Infof("order sensor %q connected", conf.OrderSensorName)
 	}
 
-	// Optional usage sensors. Resolve to the same component instance on the
+	// Optional usage sensor. Resolve to the same component instance on the
 	// robot; a configured-but-unresolvable name fails construction to surface
 	// misconfiguration early (an unset name simply stays nil).
-	resolveOptSensor := func(field, name string) (sensor.Sensor, error) {
-		if name == "" {
-			return nil, nil
-		}
-		sen, err := sensor.FromProvider(deps, name)
+	var usageSensor sensor.Sensor
+	if conf.UsageSensorName != "" {
+		usageSensor, err = sensor.FromProvider(deps, conf.UsageSensorName)
 		if err != nil {
-			return nil, fmt.Errorf("%s %q: %w", field, name, err)
+			cancelFunc()
+			return nil, fmt.Errorf("usage_sensor_name %q: %w", conf.UsageSensorName, err)
 		}
-		logger.Infof("usage sensor %q connected (%s)", name, field)
-		return sen, nil
-	}
-	grinderSensor, err := resolveOptSensor("grinder_sensor_name", conf.GrinderSensorName)
-	if err != nil {
-		cancelFunc()
-		return nil, err
-	}
-	decafGrinderSensor, err := resolveOptSensor("decaf_grinder_sensor_name", conf.DecafGrinderSensorName)
-	if err != nil {
-		cancelFunc()
-		return nil, err
-	}
-	waterSensor, err := resolveOptSensor("water_sensor_name", conf.WaterSensorName)
-	if err != nil {
-		cancelFunc()
-		return nil, err
-	}
-	cleanerSensor, err := resolveOptSensor("cleaner_sensor_name", conf.CleanerSensorName)
-	if err != nil {
-		cancelFunc()
-		return nil, err
-	}
-	consecutiveOrdersSensor, err := resolveOptSensor("consecutive_orders_sensor_name", conf.ConsecutiveOrdersSensorName)
-	if err != nil {
-		cancelFunc()
-		return nil, err
+		logger.Infof("usage sensor %q connected", conf.UsageSensorName)
 	}
 
 	s := &beanjaminCoffee{
-		name:                    name,
-		logger:                  logger,
-		cfg:                     conf,
-		filterSw:                filterSw,
-		clawsSw:                 clawSw,
-		arm:                     armComp,
-		fsSvc:                   fsSvc,
-		cachedFS:                cachedFS,
-		speech:                  speech,
-		camStorage:              camStorage,
-		pendingOrderClipsDir:    pendingOrderClipsDir,
-		gripper:                 gripperComp,
-		vizEnabled:              vizEnabled,
-		cancelCtx:               cancelCtx,
-		cancelFunc:              cancelFunc,
-		queue:                   NewOrderQueue(),
-		queueStop:               make(chan struct{}),
-		orderSensorSink:         sink,
-		grinderSensor:           grinderSensor,
-		decafGrinderSensor:      decafGrinderSensor,
-		waterSensor:             waterSensor,
-		cleanerSensor:           cleanerSensor,
-		consecutiveOrdersSensor: consecutiveOrdersSensor,
-		cupVision:               cupVision,
-		cupCameraName:           cupCameraName,
+		name:                 name,
+		logger:               logger,
+		cfg:                  conf,
+		filterSw:             filterSw,
+		clawsSw:              clawSw,
+		arm:                  armComp,
+		fsSvc:                fsSvc,
+		cachedFS:             cachedFS,
+		speech:               speech,
+		camStorage:           camStorage,
+		pendingOrderClipsDir: pendingOrderClipsDir,
+		gripper:              gripperComp,
+		vizEnabled:           vizEnabled,
+		cancelCtx:            cancelCtx,
+		cancelFunc:           cancelFunc,
+		queue:                NewOrderQueue(),
+		queueStop:            make(chan struct{}),
+		orderSensorSink:      sink,
+		usageSensor:          usageSensor,
+		cupVision:            cupVision,
+		cupCameraName:        cupCameraName,
 	}
 
 	// Fail fast if the enabled configuration references poses that are missing

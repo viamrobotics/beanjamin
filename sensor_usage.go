@@ -7,11 +7,15 @@ import (
 	"go.viam.com/rdk/components/sensor"
 )
 
-// Usage sensors track physical consumables and service health by mirroring a
-// counter into an external sensor resource. Each update is a best-effort
-// read-modify-write
-// Any failure logs a warning and is otherwise ignored so
-// telemetry never fails a brew.
+// The usage sensor tracks physical consumables and service health by mirroring
+// several counters — one per key (regular_grinds, decaf_grinds, usage,
+// cleanings, successful_consecutive_orders) — into a single external sensor
+// resource. Each update is a best-effort read-modify-write: read the current
+// value for a key with Readings, then write the new value with
+// DoCommand({"set": {<key>: <value>}}). Like the cam-storage clip save
+// (issueVideoSave), any failure logs a warning and is otherwise ignored so
+// telemetry never fails a brew. Only one order runs at a time, so these
+// read-modify-write sequences are never concurrent within the service.
 
 // incrementSensorReading adds delta to the sensor's `field` counter. A nil
 // sensor (unconfigured) is a no-op. If the current value can't be read, the

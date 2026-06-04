@@ -79,9 +79,9 @@ func (f *fakeUsageSensor) doCount() int {
 
 func TestIncrementSensorReading_ExistingValue(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	sen := newFakeUsageSensor(map[string]interface{}{"grinds": float64(4)})
-	s.incrementSensorReading(context.Background(), sen, "grinder", "grinds", 1)
-	if got := sen.lastSet(t, "grinds"); got != 5 {
+	sen := newFakeUsageSensor(map[string]interface{}{"regular_grinds": float64(4)})
+	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
+	if got := sen.lastSet(t, "regular_grinds"); got != 5 {
 		t.Fatalf("grinds = %v, want 5", got)
 	}
 }
@@ -89,25 +89,25 @@ func TestIncrementSensorReading_ExistingValue(t *testing.T) {
 func TestIncrementSensorReading_MissingFieldStartsAtZero(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
 	sen := newFakeUsageSensor(map[string]interface{}{})
-	s.incrementSensorReading(context.Background(), sen, "grinder", "grinds", 1)
-	if got := sen.lastSet(t, "grinds"); got != 1 {
+	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
+	if got := sen.lastSet(t, "regular_grinds"); got != 1 {
 		t.Fatalf("grinds = %v, want 1", got)
 	}
 }
 
 func TestIncrementSensorReading_IntFieldAccepted(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	sen := newFakeUsageSensor(map[string]interface{}{"grinds": 7})
-	s.incrementSensorReading(context.Background(), sen, "grinder", "grinds", 1)
-	if got := sen.lastSet(t, "grinds"); got != 8 {
+	sen := newFakeUsageSensor(map[string]interface{}{"regular_grinds": 7})
+	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
+	if got := sen.lastSet(t, "regular_grinds"); got != 8 {
 		t.Fatalf("grinds = %v, want 8", got)
 	}
 }
 
 func TestIncrementSensorReading_NonNumericSkipsWrite(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	sen := newFakeUsageSensor(map[string]interface{}{"grinds": "oops"})
-	s.incrementSensorReading(context.Background(), sen, "grinder", "grinds", 1)
+	sen := newFakeUsageSensor(map[string]interface{}{"regular_grinds": "oops"})
+	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
 	if n := sen.doCount(); n != 0 {
 		t.Fatalf("expected no DoCommand for non-numeric field, got %d", n)
 	}
@@ -115,18 +115,43 @@ func TestIncrementSensorReading_NonNumericSkipsWrite(t *testing.T) {
 
 func TestIncrementSensorReading_JSONNumberAccepted(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	sen := newFakeUsageSensor(map[string]interface{}{"grinds": json.Number("4")})
-	s.incrementSensorReading(context.Background(), sen, "grinder", "grinds", 1)
-	if got := sen.lastSet(t, "grinds"); got != 5 {
+	sen := newFakeUsageSensor(map[string]interface{}{"regular_grinds": json.Number("4")})
+	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
+	if got := sen.lastSet(t, "regular_grinds"); got != 5 {
 		t.Fatalf("grinds = %v, want 5", got)
+	}
+}
+
+func TestIncrementSensorReading_DistinctKeysOnOneSensor(t *testing.T) {
+	s, _ := newTestCoffee(t, nil)
+	// A single usage sensor carries every counter under its own key; each
+	// update reads and writes only that key.
+	sen := newFakeUsageSensor(map[string]interface{}{
+		"regular_grinds":                float64(2),
+		"decaf_grinds":                  float64(5),
+		"usage":                         float64(10),
+		"cleanings":                     float64(1),
+		"successful_consecutive_orders": float64(3),
+	})
+	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
+	if got := sen.lastSet(t, "regular_grinds"); got != 3 {
+		t.Fatalf("regular_grinds = %v, want 3", got)
+	}
+	s.incrementSensorReading(context.Background(), sen, "water", "usage", 1.5)
+	if got := sen.lastSet(t, "usage"); got != 11.5 {
+		t.Fatalf("usage = %v, want 11.5", got)
+	}
+	s.incrementSensorReading(context.Background(), sen, "decaf grinder", "decaf_grinds", 1)
+	if got := sen.lastSet(t, "decaf_grinds"); got != 6 {
+		t.Fatalf("decaf_grinds = %v, want 6", got)
 	}
 }
 
 func TestIncrementSensorReading_ReadErrorSkipsWrite(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	sen := newFakeUsageSensor(map[string]interface{}{"grinds": float64(4)})
+	sen := newFakeUsageSensor(map[string]interface{}{"regular_grinds": float64(4)})
 	sen.readErr = errors.New("boom")
-	s.incrementSensorReading(context.Background(), sen, "grinder", "grinds", 1)
+	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
 	if n := sen.doCount(); n != 0 {
 		t.Fatalf("expected no DoCommand on read error, got %d", n)
 	}
@@ -134,10 +159,10 @@ func TestIncrementSensorReading_ReadErrorSkipsWrite(t *testing.T) {
 
 func TestIncrementSensorReading_WriteErrorIsBestEffort(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	sen := newFakeUsageSensor(map[string]interface{}{"grinds": float64(4)})
+	sen := newFakeUsageSensor(map[string]interface{}{"regular_grinds": float64(4)})
 	sen.doErr = errors.New("boom")
 	// Must not panic or block; failure is swallowed.
-	s.incrementSensorReading(context.Background(), sen, "grinder", "grinds", 1)
+	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
 	if n := sen.doCount(); n != 1 {
 		t.Fatalf("expected one DoCommand attempt, got %d", n)
 	}
@@ -146,7 +171,7 @@ func TestIncrementSensorReading_WriteErrorIsBestEffort(t *testing.T) {
 func TestIncrementSensorReading_NilSensorNoOp(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
 	// Should not panic.
-	s.incrementSensorReading(context.Background(), nil, "grinder", "grinds", 1)
+	s.incrementSensorReading(context.Background(), nil, "grinder", "regular_grinds", 1)
 }
 
 func TestSetSensorReading_NilSensorNoOp(t *testing.T) {

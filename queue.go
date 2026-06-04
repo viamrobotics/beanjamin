@@ -327,9 +327,9 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 		// won't be cancelled. Consumable counters already incremented mid-brew
 		// are not rolled back — they reflect real physical use.
 		if execErr == nil {
-			s.incrementSensorReading(ctx, s.consecutiveOrdersSensor, "consecutive orders", "successful_consecutive_orders", 1)
+			s.incrementSensorReading(ctx, s.usageSensor, "consecutive orders", "successful_consecutive_orders", 1)
 		} else {
-			s.setSensorReading(ctx, s.consecutiveOrdersSensor, "consecutive orders", "successful_consecutive_orders", 0)
+			s.setSensorReading(ctx, s.usageSensor, "consecutive orders", "successful_consecutive_orders", 0)
 		}
 		s.saveOrderVideoAsync(order, videoFrom, execErr)
 		s.clearPendingSave(order.ID)

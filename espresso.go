@@ -328,7 +328,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		if err != nil {
 			return err
 		}
-		s.incrementSensorReading(ctx, s.decafGrinderSensor, "decaf grinder", "grinds", 1)
+		s.incrementSensorReading(ctx, s.usageSensor, "decaf grinder", "decaf_grinds", 1)
 	} else {
 		s.logger.Infof("step 1/9: grinding coffee")
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::grinding")
@@ -337,7 +337,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		if err != nil {
 			return err
 		}
-		s.incrementSensorReading(ctx, s.grinderSensor, "grinder", "grinds", 1)
+		s.incrementSensorReading(ctx, s.usageSensor, "grinder", "regular_grinds", 1)
 	}
 
 	s.setStep(stepTamping)
@@ -398,7 +398,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		if err != nil {
 			return err
 		}
-		s.incrementSensorReading(ctx, s.waterSensor, "water", "usage", waterDelta(drink))
+		s.incrementSensorReading(ctx, s.usageSensor, "water", "usage", waterDelta(drink))
 	}
 
 	if s.cfg.PlaceCup {
@@ -460,7 +460,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		if err != nil {
 			return err
 		}
-		s.incrementSensorReading(ctx, s.cleanerSensor, "cleaner", "cleanings", 1)
+		s.incrementSensorReading(ctx, s.usageSensor, "cleaner", "cleanings", 1)
 	} else {
 		s.logger.Infof("post: skipping cleaning (clean_after_use=false)")
 	}
