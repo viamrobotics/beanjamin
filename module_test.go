@@ -25,6 +25,7 @@ func validDynamicConfig() *Config {
 	cfg.DynamicCupPickup = true
 	cfg.CupVisionServiceName = "vis"
 	cfg.SrcCameraName = "cam"
+	cfg.CupObservePoseSwitcherName = "observe-switch"
 	cfg.ExpectedCupPositionMm = &Vec3Mm{}
 	cfg.CupApproachRelativePose = &RelativePose{}
 	cfg.CupGrabRelativePose = &RelativePose{}
@@ -60,11 +61,23 @@ func TestValidate_DynamicCupPickup_RequiresSrcCameraName(t *testing.T) {
 	}
 }
 
+func TestValidate_DynamicCupPickup_RequiresCupObservePoseSwitcher(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.DynamicCupPickup = true
+	cfg.CupVisionServiceName = "vis"
+	cfg.SrcCameraName = "cam"
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "cup_observe_pose_switcher_name") {
+		t.Fatalf("expected cup_observe_pose_switcher_name required error, got %v", err)
+	}
+}
+
 func TestValidate_DynamicCupPickup_RequiresExpectedCupPosition(t *testing.T) {
 	cfg := validBaseConfig()
 	cfg.DynamicCupPickup = true
 	cfg.CupVisionServiceName = "vis"
 	cfg.SrcCameraName = "cam"
+	cfg.CupObservePoseSwitcherName = "observe-switch"
 	_, _, err := cfg.Validate("")
 	if err == nil || !strings.Contains(err.Error(), "expected_cup_position_mm") {
 		t.Fatalf("expected expected_cup_position_mm required error, got %v", err)
@@ -153,7 +166,7 @@ func TestValidate_DynamicCupPickup_AppendsDeps(t *testing.T) {
 	}
 	wantVis := vision.Named("vis").String()
 	wantCam := camera.Named("cam").String()
-	var sawVision, sawCamera bool
+	var sawVision, sawCamera, sawObserveSwitch bool
 	for _, d := range req {
 		if d == wantVis {
 			sawVision = true
@@ -161,11 +174,17 @@ func TestValidate_DynamicCupPickup_AppendsDeps(t *testing.T) {
 		if d == wantCam {
 			sawCamera = true
 		}
+		if d == "observe-switch" {
+			sawObserveSwitch = true
+		}
 	}
 	if !sawVision {
 		t.Fatalf("expected vision dep in required deps, got %v", req)
 	}
 	if !sawCamera {
 		t.Fatalf("expected camera dep in required deps, got %v", req)
+	}
+	if !sawObserveSwitch {
+		t.Fatalf("expected cup observe switch dep in required deps, got %v", req)
 	}
 }

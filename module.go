@@ -113,10 +113,13 @@ type Config struct {
 	CupMaxDistanceFromTargetMm float64       `json:"cup_max_distance_from_target_mm,omitempty"`
 	CupDetectionRetries        int           `json:"cup_detection_retries,omitempty"`
 	CupDetectionRetrySleepMs   int           `json:"cup_detection_retry_sleep_ms,omitempty"`
-	// CupObserveAlternates are additional named poses on the claws pose
-	// switch visited in order after cup_observe to widen detection
-	// coverage. Each entry must exist on claws_pose_switcher_name.
-	CupObserveAlternates []string `json:"cup_observe_alternates,omitempty"`
+	// CupObservePoseSwitcherName is a dedicated multi-poses-execution-switch
+	// holding the cup-observation vantages. Every pose on this switch is
+	// visited and vision is run at each; their detections are merged in world
+	// frame. The switch must include a pose named "cup_observe", used as the
+	// home/recovery pose.Required when DynamicCupPickup=true. Its poses must
+	// target the coffee-claws-middle frame (component_name on the switch).
+	CupObservePoseSwitcherName string `json:"cup_observe_pose_switcher_name,omitempty"`
 	// CupPickupMaxAttempts caps how many full observe-and-grab attempts
 	// pickCupDynamic will make per order. Each attempt re-detects, then
 	// walks the candidate list (closest first), falling through to the
@@ -230,6 +233,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		if cfg.SrcCameraName == "" {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "src_camera_name")
 		}
+		if cfg.CupObservePoseSwitcherName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_observe_pose_switcher_name")
+		}
 		if cfg.ExpectedCupPositionMm == nil {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "expected_cup_position_mm")
 		}
@@ -245,17 +251,13 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		if cfg.CupPickupMaxAttempts < 0 {
 			return nil, nil, fmt.Errorf("%s: cup_pickup_max_attempts must be >= 0", path)
 		}
-		for i, name := range cfg.CupObserveAlternates {
-			if name == "" {
-				return nil, nil, fmt.Errorf("%s: cup_observe_alternates[%d] is empty", path, i)
-			}
-		}
 		if cfg.CupMaxDistanceFromTargetMm == 0 {
 			cfg.CupMaxDistanceFromTargetMm = 300
 		}
 		reqDeps = append(reqDeps,
 			vision.Named(cfg.CupVisionServiceName).String(),
 			camera.Named(cfg.SrcCameraName).String(),
+			cfg.CupObservePoseSwitcherName,
 		)
 	}
 
@@ -274,6 +276,7 @@ type beanjaminCoffee struct {
 	cfg                    *Config
 	filterSw               toggleswitch.Switch
 	clawsSw                toggleswitch.Switch
+	cupObserveSw           toggleswitch.Switch // optional; nil unless DynamicCupPickup. Holds the cup-observation vantages.
 	arm                    arm.Arm
 	fsSvc                  framesystem.Service
 	cachedFS               *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
@@ -376,6 +379,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 
 	var cupVision vision.Service
 	var cupCameraName string
+	var cupObserveSw toggleswitch.Switch
 	if conf.DynamicCupPickup {
 		visRes, err := vision.FromProvider(deps, conf.CupVisionServiceName)
 		if err != nil {
@@ -388,7 +392,19 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 			return nil, fmt.Errorf("src_camera_name %q not found in frame system — add the camera to the frame system fragment", conf.SrcCameraName)
 		}
 		cupCameraName = conf.SrcCameraName
-		logger.Infof("dynamic cup pickup enabled (vision=%q, camera=%q)", conf.CupVisionServiceName, conf.SrcCameraName)
+
+		obsSwRes, ok := deps[toggleswitch.Named(conf.CupObservePoseSwitcherName)]
+		if !ok {
+			cancelFunc()
+			return nil, fmt.Errorf("cup observe switch %q not found in dependencies", conf.CupObservePoseSwitcherName)
+		}
+		cupObserveSw, ok = obsSwRes.(toggleswitch.Switch)
+		if !ok {
+			cancelFunc()
+			return nil, fmt.Errorf("resource %q is not a switch", conf.CupObservePoseSwitcherName)
+		}
+		logger.Infof("dynamic cup pickup enabled (vision=%q, camera=%q, observe_switch=%q)",
+			conf.CupVisionServiceName, conf.SrcCameraName, conf.CupObservePoseSwitcherName)
 	}
 
 	var speech resource.Resource
@@ -457,6 +473,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		cfg:                  conf,
 		filterSw:             filterSw,
 		clawsSw:              clawSw,
+		cupObserveSw:         cupObserveSw,
 		arm:                  armComp,
 		fsSvc:                fsSvc,
 		cachedFS:             cachedFS,

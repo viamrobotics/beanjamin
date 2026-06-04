@@ -1,8 +1,8 @@
 // Package beanjamin: dynamic cup pickup.
 //
 // pickCupDynamic replaces the static empty_cup grab in setCupForCoffee
-// when dynamic_cup_pickup is enabled. It moves the arm to the configured
-// cup_observe (a real world-frame pose on the claws pose switch),
+// when dynamic_cup_pickup is enabled. It drives the arm through every pose on
+// the dedicated cup-observe switch (cup_observe_pose_switcher_name),
 // calls a vision service for cup detections, lifts each centroid into
 // world frame, ranks detections by distance from the configured
 // expected position (within the configured cutoff), composes the
@@ -44,6 +44,10 @@ const noCupsRetryDelay = 15 * time.Second
 // detections across multi-vantage observations: two centroids closer than
 // this in world frame are treated as the same physical cup.
 const cupObserveDedupMm = 40.0
+
+// cupObserveHomePose is the pose name on the cup-observe switch used as the
+// home / recovery position (it is also swept like any other observe pose).
+const cupObserveHomePose = "cup_observe"
 
 // mergeNearbyCentroids clusters centroids that fall within mm of an existing
 // cluster's running mean and returns one centroid per cluster: the mean of its
@@ -252,44 +256,50 @@ func (s *beanjaminCoffee) observeOnce(ctx context.Context, shelfTopZ float64, ha
 	return centroids, onShelfCups, nil
 }
 
-// cupObservations is the merged result of sweeping every configured vantage:
+// cupObservations is the merged result of sweeping every observation vantage:
 // empty-cup pickup candidates (below the shelf split) and already-on-shelf cup
 // geometries (above it), each merged/deduped across vantages in world frame.
 // rawDetections is the count of usable detections summed across all vantages,
-// before the cross-vantage merge — used only for logging.
+// before the cross-vantage merge; vantages is the number of poses swept. Both
+// are used only for logging.
 type cupObservations struct {
 	pickup        []r3.Vector
 	onShelf       []spatialmath.Geometry
 	rawDetections int
+	vantages      int
 }
 
-// observeAllVantages sweeps the base cup_observe pose plus every configured
-// CupObserveAlternates pose, calls observeOnce at each, and merges the
-// detections across all passes into a single cupObservations. It always
-// visits every reachable vantage — no early bail — so the on-shelf occupancy
-// map and the pickup centroids reflect every angle: a cup occluded from the
-// base view is still seen (and counted) from an alternate. This is what keeps
-// us from dropping a fresh cup on top of one the base view missed.
-//
-// The caller must have already moved the arm to cup_observe (pass 0 reuses
-// that position); passes 1..N drive to each named pose in CupObserveAlternates
-// via the claws switch. An unreachable pose is logged and skipped.
+// observeAllVantages drives the claws to every pose on the dedicated cup-observe
+// switch (CupObservePoseSwitcherName), calls observeOnce at each, and merges the
+// detections across all passes into a single cupObservations. It always visits
+// every reachable vantage so the on-shelf occupancy map and the pickup centroids
+// reflect every angle: a cup occluded from one view is still seen (and counted)
+// from another. This is what keeps us from dropping a fresh cup on top of one a
+// single view missed. An unreachable pose is logged and skipped.
 func (s *beanjaminCoffee) observeAllVantages(ctx, cancelCtx context.Context, shelfTopZ float64, hasShelfCfg bool) (cupObservations, error) {
-	passes := 1 + len(s.cfg.CupObserveAlternates)
+	if s.cupObserveSw == nil {
+		return cupObservations{}, fmt.Errorf("no cup observe pose switch configured")
+	}
+	_, poseNames, err := s.cupObserveSw.GetNumberOfPositions(ctx, nil)
+	if err != nil {
+		return cupObservations{}, fmt.Errorf("enumerate cup observe poses: %w", err)
+	}
+	if len(poseNames) == 0 {
+		return cupObservations{}, fmt.Errorf("cup observe pose switch has no positions")
+	}
+
+	passes := len(poseNames)
 	allCentroids := make([]r3.Vector, 0)
 	allOnShelf := make([]spatialmath.Geometry, 0)
 	totalDetections := 0
-	for i := range passes {
-		if i > 0 {
-			poseName := s.cfg.CupObserveAlternates[i-1]
-			s.logger.Infof("dynamic cup pickup: pass %d/%d — moving to %q", i+1, passes, poseName)
-			step := Step{PoseName: poseName, Component: "coffee-claws-middle", Pause: shortPause}
-			if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-				s.logger.Warnf("dynamic cup pickup: pass %d/%d — pose %q unreachable, skipping pass: %v", i+1, passes, poseName, err)
-				continue
-			}
-		} else {
-			s.logger.Infof("dynamic cup pickup: pass %d/%d — observing at cup_observe", i+1, passes)
+	for i, poseName := range poseNames {
+		s.logger.Infof("dynamic cup pickup: pass %d/%d — moving to observe pose %q", i+1, passes, poseName)
+		// Pause briefly after arriving so the camera frame is stable before
+		// detection. The selector routes the fetch to the cup-observe switch.
+		step := Step{PoseName: poseName, Component: s.cfg.CupObservePoseSwitcherName, Pause: shortPause}
+		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+			s.logger.Warnf("dynamic cup pickup: pass %d/%d — observe pose %q unreachable, skipping pass: %v", i+1, passes, poseName, err)
+			continue
 		}
 
 		passCentroids, passOnShelf, err := s.observeOnce(ctx, shelfTopZ, hasShelfCfg)
@@ -307,7 +317,7 @@ func (s *beanjaminCoffee) observeAllVantages(ctx, cancelCtx context.Context, she
 	onShelf := dedupeNearbyGeometries(allOnShelf, cupObserveDedupMm)
 	s.logger.Infof("dynamic cup pickup: detected %d distinct cup(s) across %d vantage(s) — %d pickup candidate(s), %d on-shelf (raw %d before merge)",
 		len(pickup)+len(onShelf), passes, len(pickup), len(onShelf), totalDetections)
-	return cupObservations{pickup: pickup, onShelf: onShelf, rawDetections: totalDetections}, nil
+	return cupObservations{pickup: pickup, onShelf: onShelf, rawDetections: totalDetections, vantages: passes}, nil
 }
 
 // observeCupCandidates orchestrates a full cup observation: it resolves the
@@ -315,8 +325,6 @@ func (s *beanjaminCoffee) observeAllVantages(ctx, cancelCtx context.Context, she
 // (observeAllVantages), selects a free shelf tile from the merged on-shelf set
 // when shelf placement is enabled, and returns the pickup candidates filtered
 // by CupMaxDistanceFromTargetMm and sorted by distance to ExpectedCupPositionMm.
-//
-// The caller is expected to have already moved the arm to cup_observe.
 func (s *beanjaminCoffee) observeCupCandidates(ctx, cancelCtx context.Context) ([]r3.Vector, error) {
 	hasShelfCfg := s.cfg.PlaceCupOnShelf
 	var (
@@ -340,7 +348,7 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx, cancelCtx context.Context) (
 	}
 	centroids := obs.pickup
 	onShelfCups := obs.onShelf
-	passes := 1 + len(s.cfg.CupObserveAlternates)
+	passes := obs.vantages
 
 	if hasShelfCfg {
 		s.logger.Infof("dynamic cup pickup: shelf partition — %d pickup candidate(s), %d on-shelf cup(s) (threshold Z=%.1fmm)",
@@ -458,7 +466,7 @@ func (s *beanjaminCoffee) recoverToObserve(ctx, cancelCtx context.Context) {
 	}
 	time.Sleep(gripperPause)
 
-	observeStep := Step{PoseName: clawPoseCupObserve, Component: componentClaws, Pause: shortPause}
+	observeStep := Step{PoseName: cupObserveHomePose, Component: s.cfg.CupObservePoseSwitcherName, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, observeStep); err != nil {
 		s.logger.Warnf("dynamic cup pickup: recover to cup_observe: %v", err)
 	}
@@ -488,25 +496,19 @@ func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 	maxAttempts := s.cupPickupMaxAttempts()
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		// Move to observe pose at the start of every attempt. Redundant on
-		// attempts that follow a recoverToObserve, but harmless — the plan
-		// to a pose the arm already occupies is trivial.
-		observeStep := Step{PoseName: clawPoseCupObserve, Component: componentClaws, Pause: shortPause}
-		if err := s.executeStep(ctx, cancelCtx, observeStep); err != nil {
-			return fmt.Errorf("dynamic_cup_pickup: observe: %w", err)
-		}
-
+		// observeCupCandidates drives the arm to every observe pose itself,
+		// so there is no separate pre-move here.
 		detectCtx, detectSpan := trace.StartSpan(ctx, "beanjamin::dynamic_cup_pickup::detect")
 		candidates, err := s.observeCupCandidates(detectCtx, cancelCtx)
 		detectSpan.End()
 		if err != nil {
 			// "No cups detected" is recoverable: there may be no cups,
-			// or the vision service is having a bd ady. Announce + wait,
-			// thenre-observe on the next outer iteration. Bail on any
+			// or the vision service is having a bad day. Announce + wait,
+			// then re-observe on the next outer iteration. Bail on any
 			// other failure (out-of-range, all-on-shelf, etc.)
 			// — re-observing won't change those.
 			if errors.Is(err, errNoCupsDetected) && attempt < maxAttempts {
-				recoverStep := Step{PoseName: clawPoseCupObserve, Component: componentClaws, Pause: shortPause}
+				recoverStep := Step{PoseName: cupObserveHomePose, Component: s.cfg.CupObservePoseSwitcherName, Pause: shortPause}
 				if mvErr := s.executeStep(ctx, cancelCtx, recoverStep); mvErr != nil {
 					s.logger.Warnf("dynamic cup pickup: return to cup_observe before retry wait: %v", mvErr)
 				}
