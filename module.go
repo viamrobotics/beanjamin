@@ -288,10 +288,15 @@ type beanjaminCoffee struct {
 	cancelFunc             func()
 	running                atomic.Bool
 	currentStep            atomic.Value // string: current step label for the active order (debug)
-	currentOrderID         atomic.Value // string: ID of the order currently being processed; "" when idle
-	queue                  *OrderQueue
-	queueStop              chan struct{}
-	paused                 atomic.Bool
+	// failedStep holds the step label the most recent order errored at,
+	// captured inside prepareDrink before `running` flips false so cancel
+	// recovery can't overwrite it. "" when the order succeeded. Reported on
+	// the order sensor; reset at the start of each order.
+	failedStep     atomic.Value
+	currentOrderID atomic.Value // string: ID of the order currently being processed; "" when idle
+	queue          *OrderQueue
+	queueStop      chan struct{}
+	paused         atomic.Bool
 	// portafilterInMachine is true between releaseFilter and grabFilter:
 	// the bayonet holds the filter and the arm is free. Cancel uses this
 	// to decide whether recovery (re-grip + clean + home) is required.
@@ -475,6 +480,24 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 func (s *beanjaminCoffee) Name() resource.Name {
 	return s.name
 }
+
+// Step labels surfaced through setStep -> get_queue, the order sensor's
+// failed_step, and the web tracker. Constants so the brew sequence
+// (espresso.go) and cancel recovery (cancel) reference the same strings.
+const (
+	stepGrinding             = "Grinding"
+	stepTamping              = "Tamping"
+	stepLockingPortafilter   = "Locking portafilter"
+	stepReleasingFilter      = "Releasing filter"
+	stepPlacingCup           = "Placing cup"
+	stepBrewing              = "Brewing"
+	stepServing              = "Serving"
+	stepGrabbingFilter       = "Grabbing filter"
+	stepUnlockingPortafilter = "Unlocking portafilter"
+	stepCleaning             = "Cleaning"
+	stepFinishingUp          = "Finishing up"
+	stepRecoveringFilter     = "Recovering filter"
+)
 
 func (s *beanjaminCoffee) setStep(step string) {
 	s.currentStep.Store(step)
@@ -767,19 +790,19 @@ func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]interface{}, e
 	switch {
 	case s.portafilterInMachine.Load():
 		s.logger.Infof("cancel: portafilter is in the machine — running recovery (grab → unlock → clean → home)")
-		s.setStep("Recovering filter")
+		s.setStep(stepRecoveringFilter)
 		if err := s.grabFilter(ctx, cancelCtx); err != nil {
 			return nil, fmt.Errorf("cancel: recovery grab_filter: %w", err)
 		}
-		s.setStep("Unlocking portafilter")
+		s.setStep(stepUnlockingPortafilter)
 		if err := s.unlockPortaFilter(ctx, cancelCtx); err != nil {
 			return nil, fmt.Errorf("cancel: recovery unlock_portafilter: %w", err)
 		}
-		s.setStep("Cleaning")
+		s.setStep(stepCleaning)
 		if err := s.cleanPortafilter(ctx, cancelCtx); err != nil {
 			return nil, fmt.Errorf("cancel: recovery clean_portafilter: %w", err)
 		}
-		s.setStep("Finishing up")
+		s.setStep(stepFinishingUp)
 		homeStep := Step{PoseName: "home", Component: "filter"}
 		if err := s.executeStep(ctx, cancelCtx, homeStep); err != nil {
 			return nil, fmt.Errorf("cancel: recovery home: %w", err)
@@ -788,11 +811,11 @@ func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]interface{}, e
 		recovered = true
 	case s.portafilterHasGrounds.Load():
 		s.logger.Infof("cancel: portafilter has grounds — running recovery (clean → home)")
-		s.setStep("Cleaning")
+		s.setStep(stepCleaning)
 		if err := s.cleanPortafilter(ctx, cancelCtx); err != nil {
 			return nil, fmt.Errorf("cancel: recovery clean_portafilter: %w", err)
 		}
-		s.setStep("Finishing up")
+		s.setStep(stepFinishingUp)
 		homeStep := Step{PoseName: "home", Component: "filter"}
 		if err := s.executeStep(ctx, cancelCtx, homeStep); err != nil {
 			return nil, fmt.Errorf("cancel: recovery home: %w", err)

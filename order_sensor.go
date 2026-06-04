@@ -30,9 +30,30 @@ func (cfg *OrderSensorConfig) Validate(string) ([]string, []string, error) {
 	return nil, nil, nil
 }
 
+// orderReading is the per-attempt observability record coffee hands to the
+// order sensor after each order finishes or fails. Grouped into a struct
+// rather than positional args so new fields don't churn every call site.
+type orderReading struct {
+	order      Order
+	execErr    error  // nil on success
+	failedStep string // step the order errored at; "" on success
+	// operatorCancelled is true when the failure was an operator cancel
+	// (context.Canceled propagated from cancelCtx), not a genuine fault.
+	// Filter these out of step error-rate metrics.
+	operatorCancelled bool
+	traceID           string // OTel trace ID; links the reading to the order's full trace
+	// Path flags: which conditional branches the order took. Explain why a
+	// given step ran (or didn't) without cross-referencing config.
+	placeCup      bool
+	cleanAfterUse bool
+	decaf         bool
+	startedAt     time.Time
+	endedAt       time.Time
+}
+
 // Implemented by orderSensor; coffee calls this after each order attempt.
 type orderSensorSink interface {
-	pushOrderReading(order Order, execErr error, startedAt, endedAt time.Time)
+	pushOrderReading(r orderReading)
 }
 
 type orderSensor struct {
@@ -88,22 +109,33 @@ func (*orderSensor) Close(context.Context) error {
 	return nil
 }
 
-func (s *orderSensor) pushOrderReading(order Order, execErr error, startedAt, endedAt time.Time) {
-	ok := execErr == nil
+func (s *orderSensor) pushOrderReading(r orderReading) {
+	ok := r.execErr == nil
 	errMsg := ""
-	if execErr != nil {
-		errMsg = execErr.Error()
+	if r.execErr != nil {
+		errMsg = r.execErr.Error()
+	}
+	// failedStep is the step label the order errored at; empty on success.
+	failedStep := r.failedStep
+	if ok {
+		failedStep = ""
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pending = append(s.pending, map[string]interface{}{
-		"order_id":      order.ID,
-		"drink":         order.Drink,
-		"customer_name": order.CustomerName,
-		"order_ok":      ok,
-		"error_message": errMsg,
-		"start_time":    startedAt.UTC().Format(time.RFC3339Nano),
-		"end_time":      endedAt.UTC().Format(time.RFC3339Nano),
-		"duration_ms":   float64(endedAt.Sub(startedAt).Milliseconds()),
+		"order_id":           r.order.ID,
+		"drink":              r.order.Drink,
+		"customer_name":      r.order.CustomerName,
+		"order_ok":           ok,
+		"operator_cancelled": r.operatorCancelled,
+		"error_message":      errMsg,
+		"failed_step":        failedStep,
+		"trace_id":           r.traceID,
+		"place_cup":          r.placeCup,
+		"clean_after_use":    r.cleanAfterUse,
+		"decaf":              r.decaf,
+		"start_time":         r.startedAt.UTC().Format(time.RFC3339Nano),
+		"end_time":           r.endedAt.UTC().Format(time.RFC3339Nano),
+		"duration_ms":        float64(r.endedAt.Sub(r.startedAt).Milliseconds()),
 	})
 }
