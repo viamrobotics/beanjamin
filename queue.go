@@ -321,6 +321,16 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 			startedAt:         startedAt,
 			endedAt:           time.Now(),
 		})
+		// Consecutive-successful-orders streak: bump on success, reset on any
+		// non-successful outcome (fault, panic, or operator cancel). ctx here
+		// derives from context.Background() (the brew has finished), so it
+		// won't be cancelled. Consumable counters already incremented mid-brew
+		// are not rolled back — they reflect real physical use.
+		if execErr == nil {
+			s.incrementSensorReading(ctx, s.consecutiveOrdersSensor, "consecutive orders", "successful_consecutive_orders", 1)
+		} else {
+			s.setSensorReading(ctx, s.consecutiveOrdersSensor, "consecutive orders", "successful_consecutive_orders", 0)
+		}
 		s.saveOrderVideoAsync(order, videoFrom, execErr)
 		s.clearPendingSave(order.ID)
 		span.End()
