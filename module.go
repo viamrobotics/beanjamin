@@ -113,6 +113,12 @@ type Config struct {
 	CupMaxDistanceFromTargetMm float64       `json:"cup_max_distance_from_target_mm,omitempty"`
 	CupDetectionRetries        int           `json:"cup_detection_retries,omitempty"`
 	CupDetectionRetrySleepMs   int           `json:"cup_detection_retry_sleep_ms,omitempty"`
+	// CupPhotosPerVantage is how many vision frames to capture at each
+	// observation pose. Every detection from every frame feeds the
+	// cross-vantage merge, so more photos average out per-frame centroid
+	// noise (unlike cup_detection_retries, which only re-shoots empty frames).
+	// Defaults to 1.
+	CupPhotosPerVantage int `json:"cup_photos_per_vantage,omitempty"`
 	// CupObservePoseSwitcherName is a dedicated multi-poses-execution-switch
 	// holding the cup-observation vantages. Every pose on this switch is
 	// visited and vision is run at each; their detections are merged in world
@@ -173,6 +179,15 @@ func (s *beanjaminCoffee) cupPickupMaxAttempts() int {
 		return s.cfg.CupPickupMaxAttempts
 	}
 	return defaultCupPickupMaxAttempts
+}
+
+// cupPhotosPerVantage returns the number of vision frames to capture at each
+// observation pose, defaulting to 1.
+func (s *beanjaminCoffee) cupPhotosPerVantage() int {
+	if s.cfg != nil && s.cfg.CupPhotosPerVantage > 1 {
+		return s.cfg.CupPhotosPerVantage
+	}
+	return 1
 }
 
 // Vec3Mm is a 3D point in millimeters used for world-frame configuration.
@@ -247,6 +262,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 		if cfg.CupDetectionRetries < 0 {
 			return nil, nil, fmt.Errorf("%s: cup_detection_retries must be >= 0", path)
+		}
+		if cfg.CupPhotosPerVantage < 0 {
+			return nil, nil, fmt.Errorf("%s: cup_photos_per_vantage must be >= 0", path)
 		}
 		if cfg.CupPickupMaxAttempts < 0 {
 			return nil, nil, fmt.Errorf("%s: cup_pickup_max_attempts must be >= 0", path)
@@ -583,6 +601,24 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 	return resp, nil
 }
 
+// parseCupFlowCount extracts the iteration count from a run_cup_flow command
+// value. A JSON number is the count; bool true means a single iteration.
+func parseCupFlowCount(v interface{}) (int, error) {
+	count := 1
+	switch n := v.(type) {
+	case bool:
+		// run_cup_flow: true → one iteration.
+	case float64:
+		count = int(n)
+	default:
+		return 0, fmt.Errorf("run_cup_flow must be an iteration count (number) or true, got %T", v)
+	}
+	if count < 1 {
+		return 0, fmt.Errorf("run_cup_flow count must be >= 1, got %d", count)
+	}
+	return count, nil
+}
+
 func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	ctx, span := trace.StartSpan(ctx, "beanjamin::DoCommand")
 	defer span.End()
@@ -643,6 +679,20 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 		}
 		return res, err
 	}
+	if countRaw, ok := cmd["run_cup_flow"]; ok {
+		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::run_cup_flow")
+		defer cmdSpan.End()
+		count, err := parseCupFlowCount(countRaw)
+		if err != nil {
+			s.logger.Errorw("DoCommand", "error", err)
+			return nil, err
+		}
+		res, err := s.runCupFlow(ctx, count)
+		if err != nil {
+			s.logger.Errorw("DoCommand", "error", err)
+		}
+		return res, err
+	}
 	// Stream deck key commands
 	if action, ok := cmd["action"].(string); ok {
 		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::action["+action+"]")
@@ -656,7 +706,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 			return nil, fmt.Errorf("unknown action %q", action)
 		}
 	}
-	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, action")
+	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }

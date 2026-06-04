@@ -253,6 +253,7 @@ The save request includes a `tags` entry with the order UUID (for cloud data fil
 | `cup_max_distance_from_target_mm`     | float  | No       | Hard cutoff: detections beyond this distance from `expected_cup_position_mm` are dropped. Default 300 mm. |
 | `cup_detection_retries`               | int    | No       | Number of additional vision calls if a given observe pose returns 0 detections. Applied per pose on the cup-observe switch. Default 0. |
 | `cup_detection_retry_sleep_ms`        | int    | No       | Sleep between detection retries in milliseconds. Default 250. |
+| `cup_photos_per_vantage`              | int    | No       | How many vision frames to capture at each observation pose. Every detection from every frame feeds the cross-vantage merge, so more photos average out per-frame centroid noise (distinct from `cup_detection_retries`, which only re-shoots empty frames). Default 1. |
 | `cup_pickup_max_attempts`             | int    | No       | Cap on full observe-and-grab attempts per order. Each attempt re-detects and walks the candidate list (closest first), falling through to the next candidate on planning failures and re-observing once the batch is exhausted. Default 3. |
 | `cup_centroid_min_z_mm`               | float  | No       | Minimum world-frame Z for each detection. If a detected centroid's Z is below this, it is clamped up to this value before pose composition; values above are left alone. Use to recover from depth noise that would otherwise produce a too-low approach pose and trip the planner. Default `0` disables clamping. |
 | `place_cup_on_shelf`                  | bool   | No       | When `true`, replaces the per-customer handoff with placement on a dedicated served-drinks shelf. Tile centers are tiled along the shelf's long axis (120 mm spacing, 60 mm margin from each end) on the midline of the shelf top; the placement anchor is 40 mm above the shelf top surface (composed with `cup_grab_relative_pose` to derive the actual claws pose, mirroring how the pickup uses the detected cup centroid). At observation time during pickup, detections are partitioned by world-frame Z relative to the shelf top: detections **above** the surface are treated as already-served cups (used to mark tiles as occupied; excluded from pickup ranking), and detections **at or below** the surface are pickup candidates. The first tile whose center point has no on-shelf cup within an 80 mm collision buffer is chosen. Requires `dynamic_cup_pickup=true`, a `shelf-top` (or `shelf-top_origin`) Box geometry in the framesystem, and a shelf physically mounted above the empty-cup pickup spot. The `cup_observe` camera view must cover both the pickup area and the shelf top. Default `false`. |
@@ -342,6 +343,16 @@ Returns `{"saved": 1, "skipped": 0}`.
 ```
 
 Returns `{"status": "reset", "cancelled": true, "cleared": 2, "unpaused": true}` — fields reflect which steps actually fired.
+
+**`run_cup_flow`** - Exercise the full cup-handling path without brewing, `count` times. Each iteration observes every cup-observe vantage (all photos, merged), picks the closest empty cup, sets it under the machine, retrieves it, and places it on the next free served-shelf tile. Because it re-observes at the start of every iteration, each placement accounts for the cups left by previous iterations. Intended for tuning multi-vantage detection and shelf placement on hardware.
+
+Requires `dynamic_cup_pickup=true` and `place_cup_on_shelf=true`. Assumes the portafilter has been **physically removed** from the claws — the flow never touches portafilter state. Honors `cancel`. The value is the iteration count (`>= 1`); `true` runs a single iteration.
+
+```json
+{"run_cup_flow": 5}
+```
+
+Returns `{"status": "complete", "iterations": 5}`.
 
 **`action`** - Control the gripper. Supported values: `"open_gripper"`, `"close_gripper"`.
 

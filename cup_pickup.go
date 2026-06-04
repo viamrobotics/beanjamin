@@ -174,33 +174,43 @@ func cameraToWorld(
 // results with no error when no detections remain after retries, so
 // observeCupCandidates can move on to the next vantage.
 func (s *beanjaminCoffee) observeOnce(ctx context.Context, shelfTopZ float64, hasShelfCfg bool) ([]r3.Vector, []spatialmath.Geometry, error) {
-	maxAttempts := s.cfg.CupDetectionRetries + 1
+	photos := s.cupPhotosPerVantage()
+	maxEmptyAttempts := s.cfg.CupDetectionRetries + 1
 	sleep := time.Duration(s.cfg.CupDetectionRetrySleepMs) * time.Millisecond
 	if sleep <= 0 {
 		sleep = 250 * time.Millisecond
 	}
 
+	// Take cup_photos_per_vantage frames at this pose and accumulate every
+	// detection from all of them — feeding repeated detections of the same cup
+	// into the cross-vantage merge averages out per-frame centroid noise. Within
+	// a single photo, retry up to CupDetectionRetries times if the frame comes
+	// back empty (a transient miss); a non-empty frame is used as-is.
 	var objects []*viz.Object
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		// Pass an empty camera name so the vision service falls back to its own
-		// configured default camera. s.cupCameraName is still used below to
-		// transform detection centroids from the camera frame into world coords.
-		objs, err := s.cupVision.GetObjectPointClouds(ctx, "", nil)
-		if err != nil {
-			return nil, nil, fmt.Errorf("detect: %w", err)
-		}
-		s.logger.Infof("dynamic cup pickup: vision attempt %d/%d, found %d detections", attempt, maxAttempts, len(objs))
-		if len(objs) > 0 {
-			objects = objs
-			break
-		}
-		if attempt < maxAttempts {
-			select {
-			case <-time.After(sleep):
-			case <-ctx.Done():
-				return nil, nil, fmt.Errorf("cancelled during retry: %w", ctx.Err())
+	for photo := 1; photo <= photos; photo++ {
+		var objs []*viz.Object
+		for attempt := 1; attempt <= maxEmptyAttempts; attempt++ {
+			// Pass an empty camera name so the vision service falls back to its own
+			// configured default camera. s.cupCameraName is still used below to
+			// transform detection centroids from the camera frame into world coords.
+			got, err := s.cupVision.GetObjectPointClouds(ctx, "", nil)
+			if err != nil {
+				return nil, nil, fmt.Errorf("detect: %w", err)
+			}
+			objs = got
+			if len(objs) > 0 {
+				break
+			}
+			if attempt < maxEmptyAttempts {
+				select {
+				case <-time.After(sleep):
+				case <-ctx.Done():
+					return nil, nil, fmt.Errorf("cancelled during retry: %w", ctx.Err())
+				}
 			}
 		}
+		s.logger.Infof("dynamic cup pickup: vision photo %d/%d, found %d detections", photo, photos, len(objs))
+		objects = append(objects, objs...)
 	}
 	if len(objects) == 0 {
 		return nil, nil, nil
