@@ -67,7 +67,7 @@ type poseData struct {
 	componentName string
 }
 
-// fetchPose retrieves a named pose from the switch selected by component.
+// fetchPose retrieves a named pose from the switch determined by component.
 func (s *beanjaminCoffee) fetchPose(ctx context.Context, component, poseName string) (*poseData, error) {
 	sw, err := s.switchForComponent(component)
 	if err != nil {
@@ -481,21 +481,17 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
 }
 
-// switchForComponent selects which pose switch holds a Step's poses, keyed by
-// Step.Component. The filter and claws switches are keyed by the frame their
-// poses move; the cup-observe switch is keyed by its own resource name, since
-// its poses move the same coffee-claws-middle frame as the claws switch.
 func (s *beanjaminCoffee) switchForComponent(componentName string) (toggleswitch.Switch, error) {
 	switch componentName {
 	case componentFilter:
 		return s.filterSw, nil
 	case componentClaws:
 		return s.clawsSw, nil
-	case s.cfg.CupObservePoseSwitcherName:
-		if s.cupObserveSw == nil {
-			return nil, fmt.Errorf("cup observe switch not configured")
+	case "cam":
+		if s.cameraObserveSw == nil {
+			return nil, fmt.Errorf("camera observe switch not configured")
 		}
-		return s.cupObserveSw, nil
+		return s.cameraObserveSw, nil
 	default:
 		return nil, fmt.Errorf("unknown reference frame %q", componentName)
 	}

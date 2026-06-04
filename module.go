@@ -111,21 +111,18 @@ type Config struct {
 	CupApproachRelativePose    *RelativePose `json:"cup_approach_relative_pose,omitempty"`
 	CupGrabRelativePose        *RelativePose `json:"cup_grab_relative_pose,omitempty"`
 	CupMaxDistanceFromTargetMm float64       `json:"cup_max_distance_from_target_mm,omitempty"`
-	CupDetectionRetries        int           `json:"cup_detection_retries,omitempty"`
-	CupDetectionRetrySleepMs   int           `json:"cup_detection_retry_sleep_ms,omitempty"`
 	// CupPhotosPerVantage is how many vision frames to capture at each
 	// observation pose. Every detection from every frame feeds the
 	// cross-vantage merge, so more photos average out per-frame centroid
-	// noise (unlike cup_detection_retries, which only re-shoots empty frames).
-	// Defaults to 1.
+	// noise. Defaults to 1.
 	CupPhotosPerVantage int `json:"cup_photos_per_vantage,omitempty"`
-	// CupObservePoseSwitcherName is a dedicated multi-poses-execution-switch
-	// holding the cup-observation vantages. Every pose on this switch is
-	// visited and vision is run at each; their detections are merged in world
-	// frame. The switch must include a pose named "cup_observe", used as the
-	// home/recovery pose.Required when DynamicCupPickup=true. Its poses must
-	// target the coffee-claws-middle frame (component_name on the switch).
-	CupObservePoseSwitcherName string `json:"cup_observe_pose_switcher_name,omitempty"`
+	// CameraObservePoseSwitcherName is a dedicated multi-poses-execution-switch
+	// holding the camera observation vantages for cup detection. Every pose on
+	// this switch is visited and vision is run at each; their detections are
+	// merged in world frame. The switch must include a pose named "cup_observe",
+	// used as the home/recovery pose. Required when DynamicCupPickup=true. Its
+	// poses move the camera frame "cam" (the switch's component_name).
+	CameraObservePoseSwitcherName string `json:"camera_observe_pose_switcher_name,omitempty"`
 	// CupPickupMaxAttempts caps how many full observe-and-grab attempts
 	// pickCupDynamic will make per order. Each attempt re-detects, then
 	// walks the candidate list (closest first), falling through to the
@@ -248,8 +245,8 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		if cfg.SrcCameraName == "" {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "src_camera_name")
 		}
-		if cfg.CupObservePoseSwitcherName == "" {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_observe_pose_switcher_name")
+		if cfg.CameraObservePoseSwitcherName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "camera_observe_pose_switcher_name")
 		}
 		if cfg.ExpectedCupPositionMm == nil {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "expected_cup_position_mm")
@@ -259,9 +256,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 		if cfg.CupGrabRelativePose == nil {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_grab_relative_pose")
-		}
-		if cfg.CupDetectionRetries < 0 {
-			return nil, nil, fmt.Errorf("%s: cup_detection_retries must be >= 0", path)
 		}
 		if cfg.CupPhotosPerVantage < 0 {
 			return nil, nil, fmt.Errorf("%s: cup_photos_per_vantage must be >= 0", path)
@@ -275,7 +269,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		reqDeps = append(reqDeps,
 			vision.Named(cfg.CupVisionServiceName).String(),
 			camera.Named(cfg.SrcCameraName).String(),
-			cfg.CupObservePoseSwitcherName,
+			cfg.CameraObservePoseSwitcherName,
 		)
 	}
 
@@ -294,7 +288,7 @@ type beanjaminCoffee struct {
 	cfg                    *Config
 	filterSw               toggleswitch.Switch
 	clawsSw                toggleswitch.Switch
-	cupObserveSw           toggleswitch.Switch // optional; nil unless DynamicCupPickup. Holds the cup-observation vantages.
+	cameraObserveSw        toggleswitch.Switch // optional; nil unless DynamicCupPickup. Holds the camera observation vantages.
 	arm                    arm.Arm
 	fsSvc                  framesystem.Service
 	cachedFS               *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
@@ -397,7 +391,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 
 	var cupVision vision.Service
 	var cupCameraName string
-	var cupObserveSw toggleswitch.Switch
+	var cameraObserveSw toggleswitch.Switch
 	if conf.DynamicCupPickup {
 		visRes, err := vision.FromProvider(deps, conf.CupVisionServiceName)
 		if err != nil {
@@ -411,18 +405,18 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		}
 		cupCameraName = conf.SrcCameraName
 
-		obsSwRes, ok := deps[toggleswitch.Named(conf.CupObservePoseSwitcherName)]
+		obsSwRes, ok := deps[toggleswitch.Named(conf.CameraObservePoseSwitcherName)]
 		if !ok {
 			cancelFunc()
-			return nil, fmt.Errorf("cup observe switch %q not found in dependencies", conf.CupObservePoseSwitcherName)
+			return nil, fmt.Errorf("camera observe switch %q not found in dependencies", conf.CameraObservePoseSwitcherName)
 		}
-		cupObserveSw, ok = obsSwRes.(toggleswitch.Switch)
+		cameraObserveSw, ok = obsSwRes.(toggleswitch.Switch)
 		if !ok {
 			cancelFunc()
-			return nil, fmt.Errorf("resource %q is not a switch", conf.CupObservePoseSwitcherName)
+			return nil, fmt.Errorf("resource %q is not a switch", conf.CameraObservePoseSwitcherName)
 		}
 		logger.Infof("dynamic cup pickup enabled (vision=%q, camera=%q, observe_switch=%q)",
-			conf.CupVisionServiceName, conf.SrcCameraName, conf.CupObservePoseSwitcherName)
+			conf.CupVisionServiceName, conf.SrcCameraName, conf.CameraObservePoseSwitcherName)
 	}
 
 	var speech resource.Resource
@@ -491,7 +485,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		cfg:                  conf,
 		filterSw:             filterSw,
 		clawsSw:              clawSw,
-		cupObserveSw:         cupObserveSw,
+		cameraObserveSw:      cameraObserveSw,
 		arm:                  armComp,
 		fsSvc:                fsSvc,
 		cachedFS:             cachedFS,

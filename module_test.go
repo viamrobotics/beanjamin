@@ -25,7 +25,7 @@ func validDynamicConfig() *Config {
 	cfg.DynamicCupPickup = true
 	cfg.CupVisionServiceName = "vis"
 	cfg.SrcCameraName = "cam"
-	cfg.CupObservePoseSwitcherName = "observe-switch"
+	cfg.CameraObservePoseSwitcherName = "observe-switch"
 	cfg.ExpectedCupPositionMm = &Vec3Mm{}
 	cfg.CupApproachRelativePose = &RelativePose{}
 	cfg.CupGrabRelativePose = &RelativePose{}
@@ -61,14 +61,14 @@ func TestValidate_DynamicCupPickup_RequiresSrcCameraName(t *testing.T) {
 	}
 }
 
-func TestValidate_DynamicCupPickup_RequiresCupObservePoseSwitcher(t *testing.T) {
+func TestValidate_DynamicCupPickup_RequiresCameraObservePoseSwitcher(t *testing.T) {
 	cfg := validBaseConfig()
 	cfg.DynamicCupPickup = true
 	cfg.CupVisionServiceName = "vis"
 	cfg.SrcCameraName = "cam"
 	_, _, err := cfg.Validate("")
-	if err == nil || !strings.Contains(err.Error(), "cup_observe_pose_switcher_name") {
-		t.Fatalf("expected cup_observe_pose_switcher_name required error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "camera_observe_pose_switcher_name") {
+		t.Fatalf("expected camera_observe_pose_switcher_name required error, got %v", err)
 	}
 }
 
@@ -77,7 +77,7 @@ func TestValidate_DynamicCupPickup_RequiresExpectedCupPosition(t *testing.T) {
 	cfg.DynamicCupPickup = true
 	cfg.CupVisionServiceName = "vis"
 	cfg.SrcCameraName = "cam"
-	cfg.CupObservePoseSwitcherName = "observe-switch"
+	cfg.CameraObservePoseSwitcherName = "observe-switch"
 	_, _, err := cfg.Validate("")
 	if err == nil || !strings.Contains(err.Error(), "expected_cup_position_mm") {
 		t.Fatalf("expected expected_cup_position_mm required error, got %v", err)
@@ -120,15 +120,6 @@ func TestValidate_DynamicCupPickup_PreservesExplicitMaxDistance(t *testing.T) {
 	}
 	if cfg.CupMaxDistanceFromTargetMm != 500 {
 		t.Fatalf("expected 500mm preserved, got %f", cfg.CupMaxDistanceFromTargetMm)
-	}
-}
-
-func TestValidate_DynamicCupPickup_RejectsNegativeRetries(t *testing.T) {
-	cfg := validDynamicConfig()
-	cfg.CupDetectionRetries = -1
-	_, _, err := cfg.Validate("")
-	if err == nil || !strings.Contains(err.Error(), "cup_detection_retries") {
-		t.Fatalf("expected cup_detection_retries error, got %v", err)
 	}
 }
 

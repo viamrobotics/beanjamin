@@ -198,7 +198,7 @@ func (s *beanjaminCoffee) shelfTopGeometry(ctx context.Context) (spatialmath.Pos
 //
 // onShelfCups is the set of detections that the caller has already
 // classified as belonging to the shelf (currently: detections whose world Z
-// is above shelfTopZ — see observeCupCandidates). Pose+dims are passed in to
+// is above shelfTopZ — see findCupCandidates). Pose+dims are passed in to
 // avoid a second framesystem lookup.
 //
 // Returns an error when the shelf is full — bubbled up to abort the order
