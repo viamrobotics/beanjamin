@@ -124,30 +124,31 @@ func TestRankCupCentroids_DoesNotMutateInput(t *testing.T) {
 	}
 }
 
-func TestDedupeNearbyCentroids_Empty(t *testing.T) {
-	got := dedupeNearbyCentroids(nil, 40)
+func TestMergeNearbyCentroids_Empty(t *testing.T) {
+	got := mergeNearbyCentroids(nil, 40)
 	if len(got) != 0 {
 		t.Fatalf("expected empty, got %v", got)
 	}
 }
 
-func TestDedupeNearbyCentroids_NoNearDuplicates(t *testing.T) {
+func TestMergeNearbyCentroids_NoNearDuplicates(t *testing.T) {
 	in := []r3.Vector{{X: 0}, {X: 100}, {X: 200}}
-	got := dedupeNearbyCentroids(in, 40)
+	got := mergeNearbyCentroids(in, 40)
 	if len(got) != 3 {
 		t.Fatalf("expected all kept, got %v", got)
 	}
 }
 
-func TestDedupeNearbyCentroids_CollapsesWithinRadius(t *testing.T) {
+func TestMergeNearbyCentroids_AveragesWithinRadius(t *testing.T) {
 	in := []r3.Vector{
 		{X: 0, Y: 0, Z: 0},
-		{X: 30, Y: 0, Z: 0}, // 30mm from [0] — collapsed
+		{X: 30, Y: 0, Z: 0}, // within 40 of cluster 0 -> merged
 		{X: 100, Y: 0, Z: 0},
-		{X: 110, Y: 0, Z: 0}, // 10mm from [2] — collapsed
+		{X: 110, Y: 0, Z: 0}, // within 40 of cluster 1 -> merged
 	}
-	got := dedupeNearbyCentroids(in, 40)
-	want := []r3.Vector{in[0], in[2]}
+	got := mergeNearbyCentroids(in, 40)
+	// Each cluster collapses to the mean of its members, not the first hit.
+	want := []r3.Vector{{X: 15}, {X: 105}}
 	if len(got) != len(want) {
 		t.Fatalf("expected %d, got %d (%v)", len(want), len(got), got)
 	}
@@ -158,31 +159,29 @@ func TestDedupeNearbyCentroids_CollapsesWithinRadius(t *testing.T) {
 	}
 }
 
-func TestDedupeNearbyCentroids_FirstOccurrenceWins(t *testing.T) {
+func TestMergeNearbyCentroids_SeparatesBeyondRadius(t *testing.T) {
+	// 0, 35, 70: 35 is within 40 of cluster {0}, so it merges and the
+	// running mean moves to 17.5; 70 is >40 from 17.5, so it stays separate.
 	in := []r3.Vector{{X: 0}, {X: 35}, {X: 70}}
-	// With radius 40: [0] kept. [1] within 40 of [0] -> dropped.
-	// [2] is 70 from [0] (kept) -> kept. If [1] had been kept,
-	// [2] would be 35 from [1] and dropped — so this asserts
-	// the "first wins" property.
-	got := dedupeNearbyCentroids(in, 40)
-	want := []r3.Vector{in[0], in[2]}
+	got := mergeNearbyCentroids(in, 40)
+	want := []r3.Vector{{X: 17.5}, {X: 70}}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("expected %v, got %v", want, got)
 	}
 }
 
-func TestDedupeNearbyCentroids_ZeroRadiusDisables(t *testing.T) {
+func TestMergeNearbyCentroids_ZeroRadiusDisables(t *testing.T) {
 	in := []r3.Vector{{X: 0}, {X: 0}, {X: 0}}
-	got := dedupeNearbyCentroids(in, 0)
+	got := mergeNearbyCentroids(in, 0)
 	if len(got) != 3 {
 		t.Fatalf("zero radius should keep all, got %v", got)
 	}
 }
 
-func TestDedupeNearbyCentroids_DoesNotMutateInput(t *testing.T) {
+func TestMergeNearbyCentroids_DoesNotMutateInput(t *testing.T) {
 	in := []r3.Vector{{X: 0}, {X: 10}, {X: 100}}
 	orig := append([]r3.Vector(nil), in...)
-	_ = dedupeNearbyCentroids(in, 40)
+	_ = mergeNearbyCentroids(in, 40)
 	for i := range orig {
 		if in[i] != orig[i] {
 			t.Fatalf("input mutated at %d: %v != %v", i, in[i], orig[i])
