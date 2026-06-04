@@ -2,6 +2,7 @@ package beanjamin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -293,14 +294,33 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 	videoFrom := time.Now().UTC()
 	var execErr error
 	startedAt := time.Now()
+	// Reset the per-order failure step; prepareDrink stores the label it
+	// errored at, and a panic below records currentStep directly.
+	s.failedStep.Store("")
 	s.writePendingSave(order, videoFrom)
 	defer func() {
 		if r := recover(); r != nil {
 			execErr = fmt.Errorf("panic: %v", r)
+			step, _ := s.currentStep.Load().(string)
+			s.failedStep.Store(step)
 			s.logger.Errorf("panic while processing order %s for %s: %v — queue will still save video and order reading",
 				order.ID, order.CustomerName, r)
 		}
-		s.notifyOrderReading(order, execErr, startedAt, time.Now())
+		failedStep, _ := s.failedStep.Load().(string)
+		s.notifyOrderReading(orderReading{
+			order:      order,
+			execErr:    execErr,
+			failedStep: failedStep,
+			// An operator cancel propagates as context.Canceled from cancelCtx;
+			// the outer ctx is context.Background(), so this only matches cancels.
+			operatorCancelled: execErr != nil && errors.Is(execErr, context.Canceled),
+			traceID:           traceIDFromContext(ctx),
+			placeCup:          s.cfg.PlaceCup,
+			cleanAfterUse:     s.cfg.CleanAfterUse,
+			decaf:             isDecafDrink(order.Drink),
+			startedAt:         startedAt,
+			endedAt:           time.Now(),
+		})
 		s.saveOrderVideoAsync(order, videoFrom, execErr)
 		s.clearPendingSave(order.ID)
 		span.End()
@@ -343,10 +363,20 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) e
 	return nil
 }
 
-func (s *beanjaminCoffee) notifyOrderReading(order Order, execErr error, startedAt, endedAt time.Time) {
+func (s *beanjaminCoffee) notifyOrderReading(r orderReading) {
 	if s.orderSensorSink != nil {
-		s.orderSensorSink.pushOrderReading(order, execErr, startedAt, endedAt)
+		s.orderSensorSink.pushOrderReading(r)
 	}
+}
+
+// traceIDFromContext returns the OTel trace ID for ctx, or "" if there is no
+// valid span. Recorded on order readings so a failure links to its full trace.
+func traceIDFromContext(ctx context.Context) string {
+	sc := trace.FromContext(ctx).SpanContext()
+	if !sc.HasTraceID() {
+		return ""
+	}
+	return sc.TraceID().String()
 }
 
 // enqueueOrder validates the order and adds it to the queue.

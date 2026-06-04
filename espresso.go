@@ -270,7 +270,12 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 	return map[string]interface{}{"status": "complete", "action": name}, nil
 }
 
-func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName string, batchIndex, batchSize int) error {
+// isDecafDrink reports whether the drink uses the decaf grinding path.
+func isDecafDrink(drink string) bool {
+	return drink == "decaf" || drink == "decaf_lungo"
+}
+
+func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName string, batchIndex, batchSize int) (err error) {
 	ctx, span := trace.StartSpan(ctx, "beanjamin::prepareDrink["+drink+"]")
 	defer span.End()
 
@@ -278,6 +283,15 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		return errors.New("a sequence is already running")
 	}
 	defer s.running.Store(false)
+	// Capture the step the order errored at before `running` flips false above
+	// (LIFO defers: this runs first). Cancel recovery waits for idle and then
+	// mutates currentStep, so reading it any later would race with recovery.
+	defer func() {
+		if err != nil {
+			step, _ := s.currentStep.Load().(string)
+			s.failedStep.Store(step)
+		}
+	}()
 
 	s.mu.Lock()
 	cancelCtx := s.cancelCtx
@@ -288,8 +302,8 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 	s.logger.Infof("starting %s preparation (place_cup=%t, clean_after_use=%t, brew_time=%v)",
 		drink, s.cfg.PlaceCup, s.cfg.CleanAfterUse, brewTime)
 
-	s.setStep("Grinding")
-	isDecaf := drink == "decaf" || drink == "decaf_lungo"
+	s.setStep(stepGrinding)
+	isDecaf := isDecafDrink(drink)
 	if isDecaf {
 		s.logger.Infof("step 1/9: grinding decaf coffee")
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::grinding_decaf")
@@ -308,7 +322,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		}
 	}
 
-	s.setStep("Tamping")
+	s.setStep(stepTamping)
 	s.logger.Infof("step 2/9: tamping ground")
 	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::tamping")
@@ -319,7 +333,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		}
 	}
 
-	s.setStep("Locking portafilter")
+	s.setStep(stepLockingPortafilter)
 	s.logger.Infof("step 3/9: locking portafilter")
 	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::locking_portafilter")
@@ -330,7 +344,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		}
 	}
 
-	s.setStep("Releasing filter")
+	s.setStep(stepReleasingFilter)
 	s.logger.Infof("step 4/9: releasing filter")
 	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::releasing_filter")
@@ -342,7 +356,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 	}
 
 	if s.cfg.PlaceCup {
-		s.setStep("Placing cup")
+		s.setStep(stepPlacingCup)
 		s.logger.Infof("step 5/9: placing cup (place_cup=true)")
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::placing_cup")
 		err := s.setCupForCoffee(ctx, cancelCtx)
@@ -354,7 +368,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		s.logger.Infof("step 5/9: skipping cup placement (place_cup=false)")
 	}
 
-	s.setStep("Brewing")
+	s.setStep(stepBrewing)
 	s.logger.Infof("step 6/9: brewing %s", drink)
 	if err := s.say(ctx, pickAlmostReady()); err != nil {
 		s.logger.Warnf("failed to say almost-ready: %v", err)
@@ -369,7 +383,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 	}
 
 	if s.cfg.PlaceCup {
-		s.setStep("Serving")
+		s.setStep(stepServing)
 		s.logger.Infof("step 6b/9: serving cup (place_cup=true, place_cup_on_shelf=%t)", s.cfg.PlaceCupOnShelf)
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::serving")
 		var err error
@@ -389,7 +403,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		s.logger.Infof("step 6b/9: skipping cup handoff (place_cup=false)")
 	}
 
-	s.setStep("Grabbing filter")
+	s.setStep(stepGrabbingFilter)
 	s.logger.Infof("step 7/9: grabbing filter")
 	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::grabbing_filter")
@@ -400,7 +414,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		}
 	}
 
-	s.setStep("Unlocking portafilter")
+	s.setStep(stepUnlockingPortafilter)
 	s.logger.Infof("step 8/9: unlocking portafilter")
 	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::unlocking_portafilter")
@@ -412,7 +426,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 	}
 
 	if s.cfg.CleanAfterUse {
-		s.setStep("Cleaning")
+		s.setStep(stepCleaning)
 		s.logger.Infof("post: cleaning portafilter (clean_after_use=true)")
 		if !s.cfg.PlaceCup {
 			s.logger.Infof("post: waiting for manual cup removal (place_cup=false)")
@@ -431,7 +445,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		s.logger.Infof("post: skipping cleaning (clean_after_use=false)")
 	}
 
-	s.setStep("Finishing up")
+	s.setStep(stepFinishingUp)
 	s.logger.Infof("step 9/9: moving to home pose")
 	homeStep := Step{PoseName: filterPoseHome, Component: "filter"}
 	if err := s.executeStep(ctx, cancelCtx, homeStep); err != nil {
