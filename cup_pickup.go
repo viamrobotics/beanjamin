@@ -278,7 +278,7 @@ func (s *beanjaminCoffee) observeCupCandidates(ctx, cancelCtx context.Context) (
 				s.logger.Warnf("dynamic cup pickup: announcement failed: %v", sayErr)
 			}
 			s.logger.Infof("dynamic cup pickup: pass %d/%d — moving to %q", i+1, passes, poseName)
-			step := Step{PoseName: poseName, Component: "coffee-claws-middle", Pause: shortPause}
+			step := Step{PoseName: poseName, Component: componentClaws, Pause: shortPause}
 			if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 				s.logger.Warnf("dynamic cup pickup: pass %d/%d — pose %q unreachable, skipping pass: %v", i+1, passes, poseName, err)
 				continue
@@ -374,12 +374,12 @@ func (s *beanjaminCoffee) tryGrabCup(ctx, cancelCtx context.Context, centroid r3
 	approachPD := &poseData{
 		pose:          composeCupPose(centroid, relativePoseToSpatial(s.cfg.CupApproachRelativePose)),
 		refFrame:      referenceframe.World,
-		componentName: "coffee-claws-middle",
+		componentName: componentClaws,
 	}
 	grabPD := &poseData{
 		pose:          composeCupPose(centroid, relativePoseToSpatial(s.cfg.CupGrabRelativePose)),
 		refFrame:      referenceframe.World,
-		componentName: "coffee-claws-middle",
+		componentName: componentClaws,
 	}
 
 	// 1. Approach (free planning). On failure the arm has not moved.
@@ -433,7 +433,7 @@ func (s *beanjaminCoffee) recoverToObserve(ctx, cancelCtx context.Context) {
 	}
 	time.Sleep(gripperPause)
 
-	observeStep := Step{PoseName: "cup_observe", Component: "coffee-claws-middle", Pause: shortPause}
+	observeStep := Step{PoseName: clawPoseCupObserve, Component: componentClaws, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, observeStep); err != nil {
 		s.logger.Warnf("dynamic cup pickup: recover to cup_observe: %v", err)
 	}
@@ -466,7 +466,7 @@ func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 		// Move to observe pose at the start of every attempt. Redundant on
 		// attempts that follow a recoverToObserve, but harmless — the plan
 		// to a pose the arm already occupies is trivial.
-		observeStep := Step{PoseName: "cup_observe", Component: "coffee-claws-middle", Pause: shortPause}
+		observeStep := Step{PoseName: clawPoseCupObserve, Component: componentClaws, Pause: shortPause}
 		if err := s.executeStep(ctx, cancelCtx, observeStep); err != nil {
 			return fmt.Errorf("dynamic_cup_pickup: observe: %w", err)
 		}
@@ -481,7 +481,7 @@ func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 			// other failure (out-of-range, all-on-shelf, etc.)
 			// — re-observing won't change those.
 			if errors.Is(err, errNoCupsDetected) && attempt < maxAttempts {
-				recoverStep := Step{PoseName: "cup_observe", Component: "coffee-claws-middle", Pause: shortPause}
+				recoverStep := Step{PoseName: clawPoseCupObserve, Component: componentClaws, Pause: shortPause}
 				if mvErr := s.executeStep(ctx, cancelCtx, recoverStep); mvErr != nil {
 					s.logger.Warnf("dynamic cup pickup: return to cup_observe before retry wait: %v", mvErr)
 				}

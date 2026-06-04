@@ -166,7 +166,7 @@ func (s *beanjaminCoffee) drawViz(fsInputs referenceframe.FrameSystemInputs) {
 // The cached frame system is mutated in place so all subsequent planning calls
 // see the filter at its locked position.
 func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
-	const filterFrameName = "filter"
+	const filterFrameName = componentFilter
 
 	_, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
@@ -483,9 +483,9 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 
 func (s *beanjaminCoffee) switchForComponent(componentName string) (toggleswitch.Switch, error) {
 	switch componentName {
-	case "filter":
+	case componentFilter:
 		return s.filterSw, nil
-	case "coffee-claws-middle":
+	case componentClaws:
 		return s.clawsSw, nil
 	default:
 		return nil, fmt.Errorf("unknown reference frame %q", componentName)
