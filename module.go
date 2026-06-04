@@ -306,6 +306,7 @@ type beanjaminCoffee struct {
 	camStorage             generic.Service // optional; mux over video stores; nil if cam_storage_mux_name unset
 	slackNotifier          generic.Service // optional; viam:notifications:slack; nil if slack_notifier_name unset
 	machineLogsURL         string          // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
+	dataLocationID         string          // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
 	pendingOrderClipsDir   string          // optional; directory for pending-clip records to survive restarts
 	mu                     sync.Mutex
 	cancelCtx              context.Context
@@ -531,6 +532,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		camStorage:           camStorage,
 		slackNotifier:        slackNotifier,
 		machineLogsURL:       buildMachineLogsURL(os.Getenv("VIAM_MACHINE_ID"), os.Getenv("VIAM_PRIMARY_ORG_ID")),
+		dataLocationID:       os.Getenv("VIAM_LOCATION_ID"),
 		pendingOrderClipsDir: pendingOrderClipsDir,
 		gripper:              gripperComp,
 		vizEnabled:           vizEnabled,

@@ -21,7 +21,13 @@ func (s *beanjaminCoffee) notifyOrderFailureSlack(r orderReading) {
 		return
 	}
 	text := slackFailureText(r)
-	blocks := slackFailureBlocks(r, s.machineLogsURL)
+	// Only link to a clip when one was actually requested (cam storage
+	// configured) and we know the location to filter within.
+	clipURL := ""
+	if s.camStorage != nil {
+		clipURL = buildClipDataURL(s.dataLocationID, r.order.ID)
+	}
+	blocks := slackFailureBlocks(r, s.machineLogsURL, clipURL)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), notifySlackTimeout)
 		defer cancel()
@@ -67,9 +73,10 @@ func slackFailureText(r orderReading) string {
 // context footer with the order ID, trace ID, and start time. Returned as
 // []interface{} of map[string]interface{} so it serializes cleanly through the
 // structpb-backed DoCommand wire format (which rejects []map[string]interface{}
-// as a list value). machineLogsURL, when non-empty, adds a clickable
-// app.viam.com logs deep-link to the footer.
-func slackFailureBlocks(r orderReading, machineLogsURL string) []interface{} {
+// as a list value). machineLogsURL and clipDataURL, when non-empty, add
+// clickable app.viam.com deep-links (machine logs, and the order's video clip
+// filtered by tag) to the footer.
+func slackFailureBlocks(r orderReading, machineLogsURL, clipDataURL string) []interface{} {
 	header := ":x: Order failed"
 	stepLabel := "*Failed at:*"
 	if r.operatorCancelled {
@@ -122,6 +129,9 @@ func slackFailureBlocks(r orderReading, machineLogsURL string) []interface{} {
 	if machineLogsURL != "" {
 		footer += fmt.Sprintf(" · <%s|machine logs>", machineLogsURL)
 	}
+	if clipDataURL != "" {
+		footer += fmt.Sprintf(" · <%s|video clip>", clipDataURL)
+	}
 	blocks = append(blocks, map[string]interface{}{
 		"type":     "context",
 		"elements": []interface{}{map[string]interface{}{"type": "mrkdwn", "text": footer}},
@@ -139,6 +149,21 @@ func buildMachineLogsURL(machineID, orgID string) string {
 		return ""
 	}
 	return fmt.Sprintf("https://app.viam.com/machine/%s/logs?org=%s", machineID, orgID)
+}
+
+// buildClipDataURL constructs an app.viam.com data-page deep-link filtered to
+// the order's video clip. The clip is tagged with the order ID (a UUID, so the
+// tag filter alone uniquely identifies it); locationID — from VIAM_LOCATION_ID
+// — scopes the view. robotName is intentionally omitted: there is no
+// robot-name env var, and the UUID tag makes it redundant. Returns "" when
+// locationID is empty (e.g. a local/test machine), so callers can omit the
+// link. Note: the clip is uploaded asynchronously after the notification is
+// sent, so the link may show no results for the first ~15-60s.
+func buildClipDataURL(locationID, orderID string) string {
+	if locationID == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://app.viam.com/data/all?locationId=%s&tags=%s&view=media", locationID, orderID)
 }
 
 // slackField builds a single mrkdwn field ("*Label:*\nvalue") for a Block Kit
