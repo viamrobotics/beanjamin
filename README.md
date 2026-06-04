@@ -214,7 +214,7 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
 }
 ```
 
-Add a **`viam:beanjamin:order-sensor`** component to the machine, put it in the coffee service **depends_on**, and set `order_sensor_name` to that component’s name. When an order attempt finishes, one reading is queued with `start_time`, `end_time`, `order_ok`, `duration_ms`, and `error_message` (if applicable).
+Add a **`viam:beanjamin:order-sensor`** component to the machine, put it in the coffee service **depends_on**, and set `order_sensor_name` to that component’s name. When an order attempt finishes, one reading is queued with `start_time`, `end_time`, `order_ok`, `duration_ms`, and — for observability — `failed_step`, `operator_cancelled`, `trace_id`, the path flags (`place_cup`/`clean_after_use`/`decaf`), and `error_message` (if applicable).
 
 Configure a [`viam:video:storage`](https://github.com/viam-modules/video-store) camera on the machine. After each order attempt, the coffee service issues an async `save` DoCommand. Each clip includes a fixed **N seconds** of pre-roll (ring-buffer permitting) and **N seconds** of post-roll; the short post-roll wait means the next queued order starts slightly after the prior one fully finishes.
 
@@ -593,7 +593,13 @@ After each order attempt completes (success, failure, or panic), the **next** `R
   "drink": "espresso",
   "customer_name": "Alice",
   "order_ok": true,
+  "operator_cancelled": false,
   "error_message": "",
+  "failed_step": "",
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "place_cup": true,
+  "clean_after_use": true,
+  "decaf": false,
   "start_time": "2026-04-01T12:00:00.000000000Z",
   "end_time": "2026-04-01T12:02:05.000000000Z",
   "duration_ms": 125000
@@ -601,6 +607,15 @@ After each order attempt completes (success, failure, or panic), the **next** `R
 ```
 
 `start_time` and `end_time` are UTC RFC3339Nano timestamps: wall clock from when queue processing begins for that order through when the attempt finishes (greeting, drink prep, completion speech). `duration_ms` matches `end_time − start_time`. On failure, `order_ok` is `false` and `error_message` is set; panics use a `panic: ...` message. When successful, `error_message` is an empty string.
+
+The remaining fields exist to support observability (per-step error rates and failure investigation):
+
+- **`failed_step`** — the step label the order errored at (e.g. `"Brewing"`, `"Grinding"`), matching the `setStep` labels surfaced through `get_queue`. Empty on success. Count readings by `failed_step` to see where orders die.
+- **`operator_cancelled`** — `true` when the failure was an operator `cancel` (a `context.Canceled` interruption), not a genuine fault. **Exclude these from step error-rate metrics** so intentional cancellations don't inflate failure counts. `failed_step` is still populated (it marks where the cancel interrupted).
+- **`trace_id`** — the OpenTelemetry trace ID for the order. Use it to jump from a failed reading to the order's full distributed trace (every motion plan and step span). Empty if no trace context was present.
+- **`place_cup` / `clean_after_use` / `decaf`** — which conditional branches the order took, so you can tell why a given step ran (or didn't) without cross-referencing the coffee service config. `decaf` is derived from the drink; the other two mirror the coffee service config at the time of the attempt.
+
+A per-step error rate is then `count(failed_step == X AND NOT operator_cancelled) / count(all orders)`.
 
 ---
 

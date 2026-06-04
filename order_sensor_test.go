@@ -35,7 +35,7 @@ func TestOrderSensor_Readings_Success(t *testing.T) {
 	order := Order{
 		ID: "o1", Drink: "latte", CustomerName: "Ada",
 	}
-	s.pushOrderReading(order, nil, start, end)
+	s.pushOrderReading(orderReading{order: order, startedAt: start, endedAt: end})
 
 	r, err := s.Readings(context.Background(), nil)
 	if err != nil {
@@ -49,6 +49,9 @@ func TestOrderSensor_Readings_Success(t *testing.T) {
 	}
 	if r["error_message"] != "" {
 		t.Fatalf("expected empty error_message, got %q", r["error_message"])
+	}
+	if r["failed_step"] != "" {
+		t.Fatalf("expected empty failed_step on success, got %q", r["failed_step"])
 	}
 	wantStart := start.UTC().Format(time.RFC3339Nano)
 	wantEnd := end.UTC().Format(time.RFC3339Nano)
@@ -72,8 +75,17 @@ func TestOrderSensor_Readings_Failure(t *testing.T) {
 	s := newTestOrderSensor(t)
 	start := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
 	end := start.Add(time.Millisecond)
-	order := Order{ID: "o2", Drink: "espresso", CustomerName: "Bob"}
-	s.pushOrderReading(order, errors.New("grinder jam"), start, end)
+	order := Order{ID: "o2", Drink: "decaf", CustomerName: "Bob"}
+	s.pushOrderReading(orderReading{
+		order:      order,
+		execErr:    errors.New("grinder jam"),
+		failedStep: "Grinding",
+		traceID:    "abc123",
+		placeCup:   true,
+		decaf:      true,
+		startedAt:  start,
+		endedAt:    end,
+	})
 
 	r, err := s.Readings(context.Background(), nil)
 	if err != nil {
@@ -82,16 +94,59 @@ func TestOrderSensor_Readings_Failure(t *testing.T) {
 	if ok, _ := r["order_ok"].(bool); ok {
 		t.Fatal("expected order_ok false")
 	}
+	if cancelled, _ := r["operator_cancelled"].(bool); cancelled {
+		t.Fatal("expected operator_cancelled false for a genuine fault")
+	}
 	if r["error_message"] != "grinder jam" {
 		t.Fatalf("error_message: %q", r["error_message"])
+	}
+	if r["trace_id"] != "abc123" {
+		t.Fatalf("trace_id: want %q got %q", "abc123", r["trace_id"])
+	}
+	if pc, _ := r["place_cup"].(bool); !pc {
+		t.Fatalf("place_cup: want true got %#v", r["place_cup"])
+	}
+	if d, _ := r["decaf"].(bool); !d {
+		t.Fatalf("decaf: want true got %#v", r["decaf"])
+	}
+	if r["failed_step"] != "Grinding" {
+		t.Fatalf("failed_step: want %q got %q", "Grinding", r["failed_step"])
+	}
+}
+
+func TestOrderSensor_Readings_OperatorCancelled(t *testing.T) {
+	s := newTestOrderSensor(t)
+	t0 := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
+	s.pushOrderReading(orderReading{
+		order:             Order{ID: "o3", Drink: "latte"},
+		execErr:           context.Canceled,
+		failedStep:        "Brewing",
+		operatorCancelled: true,
+		startedAt:         t0,
+		endedAt:           t0,
+	})
+
+	r, err := s.Readings(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := r["order_ok"].(bool); ok {
+		t.Fatal("expected order_ok false")
+	}
+	if cancelled, _ := r["operator_cancelled"].(bool); !cancelled {
+		t.Fatal("expected operator_cancelled true")
+	}
+	// failed_step is still recorded so we know where the cancel interrupted.
+	if r["failed_step"] != "Brewing" {
+		t.Fatalf("failed_step: want %q got %q", "Brewing", r["failed_step"])
 	}
 }
 
 func TestOrderSensor_Readings_FIFO(t *testing.T) {
 	s := newTestOrderSensor(t)
 	t0 := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
-	s.pushOrderReading(Order{ID: "first"}, nil, t0, t0)
-	s.pushOrderReading(Order{ID: "second"}, nil, t0, t0)
+	s.pushOrderReading(orderReading{order: Order{ID: "first"}, startedAt: t0, endedAt: t0})
+	s.pushOrderReading(orderReading{order: Order{ID: "second"}, startedAt: t0, endedAt: t0})
 
 	r1, err := s.Readings(context.Background(), nil)
 	if err != nil {
