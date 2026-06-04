@@ -104,25 +104,15 @@ type Config struct {
 	// Dynamic cup pickup. When true, setCupForCoffee uses vision-driven
 	// detection to find the cup; when false, the existing static pickup
 	// (empty_cup_approach -> empty_cup) is used.
-	DynamicCupPickup           bool          `json:"dynamic_cup_pickup,omitempty"`
-	CupVisionServiceName       string        `json:"cup_vision_service_name,omitempty"`
-	SrcCameraName              string        `json:"src_camera_name,omitempty"`
-	ExpectedCupPositionMm      *Vec3Mm       `json:"expected_cup_position_mm,omitempty"`
-	CupApproachRelativePose    *RelativePose `json:"cup_approach_relative_pose,omitempty"`
-	CupGrabRelativePose        *RelativePose `json:"cup_grab_relative_pose,omitempty"`
-	CupMaxDistanceFromTargetMm float64       `json:"cup_max_distance_from_target_mm,omitempty"`
-	// CupPhotosPerVantage is how many vision frames to capture at each
-	// observation pose. Every detection from every frame feeds the
-	// cross-vantage merge, so more photos average out per-frame centroid
-	// noise. Defaults to 1.
-	CupPhotosPerVantage int `json:"cup_photos_per_vantage,omitempty"`
-	// CameraObservePoseSwitcherName is a dedicated multi-poses-execution-switch
-	// holding the camera observation vantages for cup detection. Every pose on
-	// this switch is visited and vision is run at each; their detections are
-	// merged in world frame. The switch must include a pose named "cup_observe",
-	// used as the home/recovery pose. Required when DynamicCupPickup=true. Its
-	// poses move the camera frame "cam" (the switch's component_name).
-	CameraObservePoseSwitcherName string `json:"camera_observe_pose_switcher_name,omitempty"`
+	DynamicCupPickup              bool          `json:"dynamic_cup_pickup,omitempty"`
+	CupVisionServiceName          string        `json:"cup_vision_service_name,omitempty"`
+	SrcCameraName                 string        `json:"src_camera_name,omitempty"`
+	ExpectedCupPositionMm         *Vec3Mm       `json:"expected_cup_position_mm,omitempty"`
+	CupApproachRelativePose       *RelativePose `json:"cup_approach_relative_pose,omitempty"`
+	CupGrabRelativePose           *RelativePose `json:"cup_grab_relative_pose,omitempty"`
+	CupMaxDistanceFromTargetMm    float64       `json:"cup_max_distance_from_target_mm,omitempty"`
+	CupPhotosPerVantage           int           `json:"cup_photos_per_vantage,omitempty"`
+	CameraObservePoseSwitcherName string        `json:"camera_observe_pose_switcher_name,omitempty"`
 	// CupPickupMaxAttempts caps how many full observe-and-grab attempts
 	// pickCupDynamic will make per order. Each attempt re-detects, then
 	// walks the candidate list (closest first), falling through to the
