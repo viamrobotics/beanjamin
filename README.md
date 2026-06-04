@@ -251,7 +251,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `order_sensor_name`        | string | No       | Name of a `viam:beanjamin:order-sensor` sensor to notify when each order attempt completes (must appear in **depends_on**). |
 | `usage_sensor_name`        | string | No       | Name of a single sensor whose per-key counters are updated through the brew lifecycle: `regular_grinds`, `decaf_grinds`, `usage`, `cleanings`, and `successful_consecutive_orders`. See "Usage sensor" below. |
 | `cam_storage_mux_name` | string | No   | Name of a [`viam:multiplexer:resource-multiplexer`](https://github.com/viam-modules/multiplexer) generic service whose dependencies are `viam:video:storage` stores; when set, saves a clip per order attempt (synchronous `save`) to all configured stores. |
-| `data_dir`                 | string | No       | Directory for persistent module data. When set alongside `cam_storage_mux_name`, pending-clip records are written under `<data_dir>/pending-clips` when each order starts and removed on completion; use with a Viam scheduled job calling `cleanup_pending_clips` to recover clips from interrupted orders. |
+| `data_dir`                 | string | No       | Directory for persistent module data. When set alongside `cam_storage_mux_name`, a pending-clip record is written under `<data_dir>/pending-clips` when each order starts and removed only once that order's clip has been saved successfully — a save that fails (or never runs because the process died first) leaves the record in place. Use with a Viam scheduled job calling `cleanup_pending_clips` to recover clips for any order whose save was interrupted or failed. |
 | `input_range_override`     | object | No       | Narrows joint limits on named frames before motion planning. Outer key is the frame name (typically the arm); inner key is either the joint name or its stringified index (e.g. `"5"` for the last joint of a 6-DoF arm). Each value is `{ "min_degs": number, "max_degs": number }`. |
 | `conversational`           | bool   | No       | When true, the coffee service speaks its own greetings, almost-ready prompts, order-received lines, and rejection quips through `speech_service_name`. When false (default), the service stays silent except for the drink-ready announcement at cup handoff — leaving the rest of the talking to an external orchestrator (e.g. `viam:conversation-bundle:voice-command`). |
 | `dynamic_cup_pickup`                  | bool   | No       | Enables vision-guided cup pickup. When `true`, the arm uses a vision service to detect cups in the workspace rather than picking from the static `empty_cup` pose. Default `false`. |
@@ -337,7 +337,7 @@ Returns `{"status": "resumed"}`.
 
 Returns `{"status": "cleared", "removed": 2}`.
 
-**`cleanup_pending_clips`** - Attempt a video save for any remaining pending-clip records under `data_dir`, then remove them. Catches clips that could not be recovered on startup (e.g. cam storage unavailable at boot). Intended to be invoked via a Viam scheduled job.
+**`cleanup_pending_clips`** - Attempt a video save for any remaining pending-clip records under `data_dir`, then remove them. Catches clips whose live save was interrupted (process died during the post-roll wait) or failed (e.g. cam storage unavailable). Records younger than one full clip window plus a segment-flush margin are skipped, so an in-progress order is not double-saved. Intended to be invoked via a Viam scheduled job.
 
 ```json
 {"cleanup_pending_clips": true}
