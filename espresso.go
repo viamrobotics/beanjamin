@@ -743,80 +743,62 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 }
 
 // placeFullCupOnShelf retrieves the brewed cup from cup_ready_for_coffee and
-// drops it on the serving-area shelf. Replaces giveFullCupToCustomer when
+// drops it in the serving area. Replaces giveFullCupToCustomer when
 // PlaceCupInServingArea=true.
-//
-// The grab phase mirrors giveFullCupToCustomer (approach -> open -> linear
-// descent + grab -> linear retreat). The placement phase walks the serving-area
-// slots in round-robin order starting from servingAreaSlotCounter and drops the
-// cup in the first slot it can reach (tryDropCupInSlot), skipping any whose
-// approach or descent cannot be planned. On success the counter advances to the
-// slot after the one used, so the next placement starts there.
 func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) error {
+	if err := s.grabBrewedCupFromMachine(ctx, cancelCtx); err != nil {
+		return err
+	}
+	return s.placeHeldInServingArea(ctx, cancelCtx)
+}
+
+// placeHeldInServingArea drops the item currently held by the gripper into the
+// serving area: it walks the serving-area slots in round-robin order starting
+// from servingAreaSlotCounter and drops the item in the first slot it can reach
+// (tryDropCupInSlot), skipping any whose approach or descent cannot be planned.
+// On success the counter advances to the slot after the one used, so the next
+// placement starts there. The caller must already be holding the item; shared
+// by placeFullCupOnShelf (cups) and serveIcedCoffee (the empty espresso cup and
+// the iced glass).
+func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context) error {
 	if s.gripper == nil {
-		return fmt.Errorf("place_full_cup_on_shelf: no gripper configured")
+		return fmt.Errorf("place_in_serving_area: no gripper configured")
 	}
 
-	// Resolve the serving-area slot layout up front so a missing/too-small
-	// serving area aborts before any arm motion.
 	slots, shelfTopZ, err := s.servingAreaSlots(ctx)
 	if err != nil {
-		return fmt.Errorf("place_full_cup_on_shelf: %w", err)
+		return fmt.Errorf("place_in_serving_area: %w", err)
 	}
 
-	// 1. Retrieve the brewed cup (mirrors giveFullCupToCustomer).
-	approachStep := Step{PoseName: clawPoseCupUnderMachineApproach, Component: componentClaws, Pause: shortPause}
-	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
-		return fmt.Errorf("place_full_cup_on_shelf: %w", err)
-	}
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("place_full_cup_on_shelf: open gripper: %w", err)
-	}
-	time.Sleep(gripperPause)
-	grabStep := Step{PoseName: clawPoseCupReadyForCoffee, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
-	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
-		return fmt.Errorf("place_full_cup_on_shelf: %w", err)
-	}
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		return fmt.Errorf("place_full_cup_on_shelf: grab gripper: %w", err)
-	}
-	time.Sleep(gripperPause)
-	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
-	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
-		return fmt.Errorf("place_full_cup_on_shelf: %w", err)
-	}
-
-	// 2. Drop the cup, trying slots in round-robin order and skipping any whose
-	// approach or descent cannot be planned.
 	n := len(slots)
 	start := s.servingAreaSlotCounter.Load()
 	var lastErr error
 	for off := 0; off < n; off++ {
 		idx := slotIndex(start+uint64(off), n)
-		s.logger.Infof("place_full_cup_on_shelf: trying slot %d/%d", idx+1, n)
+		s.logger.Infof("place_in_serving_area: trying slot %d/%d", idx+1, n)
 		err := s.tryDropCupInSlot(ctx, slots[idx], shelfTopZ)
 		if err == nil {
 			// Next placement starts at the slot after the one just used.
 			s.servingAreaSlotCounter.Store(start + uint64(off) + 1)
-			s.logger.Infof("place_full_cup_on_shelf: placed cup in slot %d/%d", idx+1, n)
+			s.logger.Infof("place_in_serving_area: placed item in slot %d/%d", idx+1, n)
 			return nil
 		}
 		lastErr = err
 
 		// Operator cancel always wins.
 		if ctx.Err() != nil || cancelCtx.Err() != nil {
-			return fmt.Errorf("place_full_cup_on_shelf: cancelled: %w", err)
+			return fmt.Errorf("place_in_serving_area: cancelled: %w", err)
 		}
 
-		// Only planning failures (cup still held, arm unmoved) are skippable.
-		// Anything else — execution error, or any failure after the cup was
+		// Only planning failures (item still held, arm unmoved) are skippable.
+		// Anything else — execution error, or any failure after the item was
 		// released — bubbles up.
 		if !errors.Is(err, errMotionPlanning) {
-			return fmt.Errorf("place_full_cup_on_shelf: %w", err)
+			return fmt.Errorf("place_in_serving_area: %w", err)
 		}
-		s.logger.Warnf("place_full_cup_on_shelf: slot %d/%d unreachable — trying next slot: %v", idx+1, n, err)
+		s.logger.Warnf("place_in_serving_area: slot %d/%d unreachable — trying next slot: %v", idx+1, n, err)
 	}
-	return fmt.Errorf("place_full_cup_on_shelf: all %d serving-area slot(s) unreachable; last error: %w", n, lastErr)
+	return fmt.Errorf("place_in_serving_area: all %d serving-area slot(s) unreachable; last error: %w", n, lastErr)
 }
 
 // tryDropCupInSlot drops the held cup at one serving-area slot: free-plan to the
@@ -998,9 +980,9 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 // serveIcedCoffee finishes an ice_coffee order after the espresso has brewed
 // into the cup under the machine. It fetches a separate glass, dispenses ice
 // into it via the board pin, sets the glass down in the staging area, retrieves
-// the espresso cup, pours the espresso over the ice, then disposes the
-// now-empty espresso cup at the customer pickup position. The iced glass is left
-// in the staging area for the customer.
+// the espresso cup, and pours the espresso over the ice. Both finished items
+// then go into the serving area at the next round-robin slots: the empty
+// espresso cup first, then the iced glass (re-grabbed from staging).
 func (s *beanjaminCoffee) serveIcedCoffee(ctx, cancelCtx context.Context) error {
 	if s.gripper == nil {
 		return fmt.Errorf("serve_iced_coffee: no gripper configured")
@@ -1009,7 +991,7 @@ func (s *beanjaminCoffee) serveIcedCoffee(ctx, cancelCtx context.Context) error 
 		return fmt.Errorf("serve_iced_coffee: no ice board configured (set ice_board_name)")
 	}
 
-	// 1. Fetch the glass from its station.
+	// 1. Fetch the glass off the top shelf.
 	if err := s.fetchGlass(ctx, cancelCtx); err != nil {
 		return err
 	}
@@ -1017,7 +999,7 @@ func (s *beanjaminCoffee) serveIcedCoffee(ctx, cancelCtx context.Context) error 
 	if err := s.dispenseIce(ctx, cancelCtx); err != nil {
 		return err
 	}
-	// 3. Set the glass down in the staging area.
+	// 3. Set the glass down in the staging area to free the gripper.
 	if err := s.stageGlass(ctx, cancelCtx); err != nil {
 		return err
 	}
@@ -1029,8 +1011,16 @@ func (s *beanjaminCoffee) serveIcedCoffee(ctx, cancelCtx context.Context) error 
 	if err := s.pourEspresso(ctx, cancelCtx); err != nil {
 		return err
 	}
-	// 6. Dispose the now-empty espresso cup at the customer pickup position.
-	return s.placeHeldCupForCustomer(ctx, cancelCtx)
+	// 6. Place the now-empty espresso cup in the serving area (round-robin).
+	if err := s.placeHeldInServingArea(ctx, cancelCtx); err != nil {
+		return err
+	}
+	// 7. Re-grab the iced glass from the staging area.
+	if err := s.grabStagedGlass(ctx, cancelCtx); err != nil {
+		return err
+	}
+	// 8. Place the iced glass in the serving area (next round-robin slot).
+	return s.placeHeldInServingArea(ctx, cancelCtx)
 }
 
 // grabBrewedCupFromMachine retrieves the brewed cup from under the machine:
@@ -1063,33 +1053,33 @@ func (s *beanjaminCoffee) grabBrewedCupFromMachine(ctx, cancelCtx context.Contex
 	return nil
 }
 
-// placeHeldCupForCustomer hands the cup currently held by the gripper to the
-// customer pickup position (empty_cup): approach -> linear place -> open to
-// release -> linear exit -> close. The caller must already be holding a cup.
-func (s *beanjaminCoffee) placeHeldCupForCustomer(ctx, cancelCtx context.Context) error {
+// grabStagedGlass picks the iced glass back up from the staging area: approach
+// -> open -> linear descent + grab -> linear retreat, leaving the glass held by
+// the gripper. The reverse of stageGlass.
+func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error {
 	if s.gripper == nil {
-		return fmt.Errorf("give_full_cup_to_customer: no gripper configured")
+		return fmt.Errorf("grab_staged_glass: no gripper configured")
 	}
-	customerApproachStep := Step{PoseName: clawPoseEmptyCupApproach, Component: componentClaws, Pause: shortPause}
-	if err := s.executeStep(ctx, cancelCtx, customerApproachStep); err != nil {
-		return fmt.Errorf("give_full_cup_to_customer: %w", err)
-	}
-	placeStep := Step{PoseName: clawPoseEmptyCup, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, Pause: shortPause}
-	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
-		return fmt.Errorf("give_full_cup_to_customer: %w", err)
+	approachStep := Step{PoseName: clawPoseStagingApproach, Component: componentClaws, Pause: shortPause}
+	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
+		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
 	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("give_full_cup_to_customer: open gripper: %w", err)
+		return fmt.Errorf("grab_staged_glass: open gripper: %w", err)
 	}
 	time.Sleep(gripperPause)
-	exitStep := Step{PoseName: clawPoseEmptyCupApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, Pause: shortPause}
-	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
-		return fmt.Errorf("give_full_cup_to_customer: %w", err)
+	grabStep := Step{PoseName: clawPoseStaging, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
+		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		return fmt.Errorf("give_full_cup_to_customer: close gripper: %w", err)
+		return fmt.Errorf("grab_staged_glass: grab gripper: %w", err)
 	}
 	time.Sleep(gripperPause)
+	retreatStep := Step{PoseName: clawPoseStagingApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
+		return fmt.Errorf("grab_staged_glass: %w", err)
+	}
 	return nil
 }
 
@@ -1157,7 +1147,8 @@ func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 }
 
 // stageGlass sets the held glass down in the staging area and releases it,
-// leaving it there for the espresso pour and customer pickup.
+// freeing the gripper to retrieve the espresso cup and pour; the glass is
+// re-grabbed afterward (grabStagedGlass) and placed in the serving area.
 func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 	approachStep := Step{PoseName: clawPoseStagingApproach, Component: componentClaws, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
