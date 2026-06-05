@@ -136,7 +136,7 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		// Serving: placeFullCupOnShelf composes world poses at runtime (no
 		// named pose to validate); giveFullCupToCustomer hands the cup back
 		// via the empty-cup poses.
-		if !s.cfg.PlaceCupOnShelf {
+		if !s.cfg.PlaceCupInServingArea {
 			poses = append(poses,
 				requiredPose{componentClaws, clawPoseEmptyCupApproach},
 				requiredPose{componentClaws, clawPoseEmptyCup},
@@ -226,7 +226,7 @@ var cupGrabCollisions = []AllowedCollision{
 
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {
 	giveCupFunc := s.giveFullCupToCustomer
-	if s.cfg.PlaceCupOnShelf {
+	if s.cfg.PlaceCupInServingArea {
 		giveCupFunc = s.placeFullCupOnShelf
 	}
 
@@ -406,10 +406,10 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 
 	if s.cfg.PlaceCup {
 		s.setStep(stepServing)
-		s.logger.Infof("step 6b/9: serving cup (place_cup=true, place_cup_on_shelf=%t)", s.cfg.PlaceCupOnShelf)
+		s.logger.Infof("step 6b/9: serving cup (place_cup=true, place_cup_in_serving_area=%t)", s.cfg.PlaceCupInServingArea)
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::serving")
 		var err error
-		if s.cfg.PlaceCupOnShelf {
+		if s.cfg.PlaceCupInServingArea {
 			err = s.placeFullCupOnShelf(ctx, cancelCtx)
 		} else {
 			err = s.giveFullCupToCustomer(ctx, cancelCtx)
@@ -698,7 +698,7 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 
 // placeFullCupOnShelf retrieves the brewed cup from cup_ready_for_coffee and
 // drops it on the served-drinks shelf at the next round-robin slot chosen by
-// nextShelfTile. Replaces giveFullCupToCustomer when PlaceCupOnShelf=true.
+// nextShelfTile. Replaces giveFullCupToCustomer when PlaceCupInServingArea=true.
 //
 // The grab phase mirrors giveFullCupToCustomer (approach -> open -> linear
 // descent + grab -> linear retreat). The placement phase plans to a
@@ -795,14 +795,14 @@ func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) er
 //
 // It assumes the portafilter has been physically removed from the claws — the
 // flow never touches portafilter state. Requires dynamic_cup_pickup and
-// place_cup_on_shelf: each placement advances the shelf-slot counter inside
+// place_cup_in_serving_area: each placement advances the shelf-slot counter inside
 // placeFullCupOnShelf.
 func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string]interface{}, error) {
 	if !s.cfg.DynamicCupPickup {
 		return nil, errors.New("run_cup_flow requires dynamic_cup_pickup=true")
 	}
-	if !s.cfg.PlaceCupOnShelf {
-		return nil, errors.New("run_cup_flow requires place_cup_on_shelf=true")
+	if !s.cfg.PlaceCupInServingArea {
+		return nil, errors.New("run_cup_flow requires place_cup_in_serving_area=true")
 	}
 
 	if !s.running.CompareAndSwap(false, true) {

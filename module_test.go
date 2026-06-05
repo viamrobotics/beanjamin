@@ -174,18 +174,18 @@ func TestValidate_DynamicCupPickup_RejectsNegativeMaxAttempts(t *testing.T) {
 	}
 }
 
-func TestValidate_PlaceCupOnShelf_RequiresDynamicCupPickup(t *testing.T) {
+func TestValidate_PlaceCupInServingArea_RequiresDynamicCupPickup(t *testing.T) {
 	cfg := validBaseConfig()
-	cfg.PlaceCupOnShelf = true
+	cfg.PlaceCupInServingArea = true
 	_, _, err := cfg.Validate("")
-	if err == nil || !strings.Contains(err.Error(), "place_cup_on_shelf") || !strings.Contains(err.Error(), "dynamic_cup_pickup") {
-		t.Fatalf("expected place_cup_on_shelf requires dynamic_cup_pickup error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "place_cup_in_serving_area") || !strings.Contains(err.Error(), "dynamic_cup_pickup") {
+		t.Fatalf("expected place_cup_in_serving_area requires dynamic_cup_pickup error, got %v", err)
 	}
 }
 
-func TestValidate_PlaceCupOnShelf_AcceptedWithDynamicCupPickup(t *testing.T) {
+func TestValidate_PlaceCupInServingArea_AcceptedWithDynamicCupPickup(t *testing.T) {
 	cfg := validDynamicConfig()
-	cfg.PlaceCupOnShelf = true
+	cfg.PlaceCupInServingArea = true
 	if _, _, err := cfg.Validate(""); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}

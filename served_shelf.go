@@ -2,14 +2,14 @@
 //
 // Helpers for placing finished cups on a dedicated shelf instead of returning
 // them to the empty-cup pickup spot. The shelf is modeled as a Box geometry
-// in the framesystem under shelfTopFrameName (with a fallback to
-// shelfTopOriginFrameName for the RDK tail-geometry frame). Tile centers are
+// in the framesystem under servingAreaFrameName (with a fallback to
+// servingAreaOriginFrameName for the RDK tail-geometry frame). Tile centers are
 // laid out along the shelf's long axis at fixed spacing on the midline — as
-// many slots as the shelf-top length allows; the claws are commanded to land
-// shelfDropZOffsetMm above the shelf top surface.
+// many slots as the serving-area length allows; the claws are commanded to land
+// shelfDropZOffsetMm above the serving area top surface.
 //
 // Slot selection is a simple sequential round-robin (no vision): each
-// placement takes the next slot via an in-memory counter (shelfSlotCounter)
+// placement takes the next slot via an in-memory counter (servingAreaSlotCounter)
 // modulo the number of tiles, on the assumption that by the time the counter
 // wraps around the earliest-placed cup has been picked up. The counter is
 // process-local and resets to slot 0 on module restart/reconfigure.
@@ -26,8 +26,8 @@ import (
 )
 
 const (
-	shelfTopFrameName       = "shelf-top"
-	shelfTopOriginFrameName = "shelf-top_origin"
+	servingAreaFrameName       = "serving-area"
+	servingAreaOriginFrameName = "serving-area_origin"
 
 	shelfTileSpacingMm = 120.0
 	shelfTileMarginMm  = 60.0
@@ -89,8 +89,8 @@ func slotIndex(counter uint64, n int) int {
 }
 
 // shelfTopGeometry returns the world-frame center pose and box dimensions of
-// the served-drinks shelf-top obstacle. Looks for a Box geometry under
-// shelfTopFrameName first, then under shelfTopOriginFrameName (RDK creates
+// the served-drinks serving-area obstacle. Looks for a Box geometry under
+// servingAreaFrameName first, then under servingAreaOriginFrameName (RDK creates
 // both frames for any part with a collision body — only one of them
 // typically carries the geometry, so we try each). Non-Box geometries return
 // an error.
@@ -105,7 +105,7 @@ func (s *beanjaminCoffee) shelfTopGeometry(ctx context.Context) (spatialmath.Pos
 		geos      []spatialmath.Geometry
 		anyFound  bool
 	)
-	for _, name := range []string{shelfTopFrameName, shelfTopOriginFrameName} {
+	for _, name := range []string{servingAreaFrameName, servingAreaOriginFrameName} {
 		frame := fs.Frame(name)
 		if frame == nil {
 			continue
@@ -124,10 +124,10 @@ func (s *beanjaminCoffee) shelfTopGeometry(ctx context.Context) (spatialmath.Pos
 		s.logger.Debugf("shelf placement: frame %q exists but carries no geometry; trying next", name)
 	}
 	if !anyFound {
-		return nil, r3.Vector{}, fmt.Errorf("shelf-top frame %q (or %q) not found in framesystem", shelfTopFrameName, shelfTopOriginFrameName)
+		return nil, r3.Vector{}, fmt.Errorf("serving-area frame %q (or %q) not found in framesystem", servingAreaFrameName, servingAreaOriginFrameName)
 	}
 	if len(geos) == 0 {
-		return nil, r3.Vector{}, fmt.Errorf("neither frame %q nor %q carries a geometry", shelfTopFrameName, shelfTopOriginFrameName)
+		return nil, r3.Vector{}, fmt.Errorf("neither frame %q nor %q carries a geometry", servingAreaFrameName, servingAreaOriginFrameName)
 	}
 
 	// Transform geometry to world coordinates via the framesystem so the
@@ -158,15 +158,15 @@ func (s *beanjaminCoffee) shelfTopGeometry(ctx context.Context) (spatialmath.Pos
 	return worldGeom.Pose(), dims, nil
 }
 
-// nextShelfTile resolves the shelf-top geometry, computes the tile layout
-// (as many slots as the shelf length allows at shelfTileSpacingMm), and
+// nextShelfTile resolves the serving-area geometry, computes the tile layout
+// (as many slots as the serving area length allows at shelfTileSpacingMm), and
 // returns the next slot in round-robin order along with the world-frame Z of
-// the shelf top surface. The slot is chosen by an in-memory counter that
+// the serving area top surface. The slot is chosen by an in-memory counter that
 // increments once per placement and wraps modulo the tile count, on the
 // assumption that the earliest-placed cup has been picked up by the time the
 // counter wraps. The counter is process-local and resets on restart.
 //
-// Returns an error only when the shelf-top geometry is missing or too small
+// Returns an error only when the serving-area geometry is missing or too small
 // to hold a single slot.
 func (s *beanjaminCoffee) nextShelfTile(ctx context.Context) (r3.Vector, float64, error) {
 	shelfWorldPose, dimsMm, err := s.shelfTopGeometry(ctx)
@@ -176,13 +176,13 @@ func (s *beanjaminCoffee) nextShelfTile(ctx context.Context) (r3.Vector, float64
 
 	tiles := computeShelfTileCenters(shelfWorldPose, dimsMm, shelfTileSpacingMm, shelfTileMarginMm)
 	if len(tiles) == 0 {
-		return r3.Vector{}, 0, fmt.Errorf("shelf placement: shelf-top dimensions %v leave no room for tiles (margin=%.0fmm, spacing=%.0fmm)",
+		return r3.Vector{}, 0, fmt.Errorf("shelf placement: serving-area dimensions %v leave no room for tiles (margin=%.0fmm, spacing=%.0fmm)",
 			dimsMm, shelfTileMarginMm, shelfTileSpacingMm)
 	}
 
 	// Add returns the post-increment value; subtract 1 so the first placement
 	// after a (re)start uses slot 0.
-	counter := s.shelfSlotCounter.Add(1) - 1
+	counter := s.servingAreaSlotCounter.Add(1) - 1
 	idx := slotIndex(counter, len(tiles))
 	tileWorld := tiles[idx]
 	shelfTopZ := shelfWorldPose.Point().Z + dimsMm.Z/2

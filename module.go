@@ -135,9 +135,11 @@ type Config struct {
 	// and trips the planner. Zero (default) disables clamping.
 	CupCentroidMinZMm float64 `json:"cup_centroid_min_z_mm,omitempty"`
 
-	// PlaceCupOnShelf, when true, replaces giveFullCupToCustomer with
-	// Requires DynamicCupPickup=true.
-	PlaceCupOnShelf bool `json:"place_cup_on_shelf,omitempty"`
+	// PlaceCupInServingArea, when true, replaces giveFullCupToCustomer with
+	// placeFullCupOnShelf — the finished cup is dropped on the serving-area
+	// shelf at the next round-robin slot instead of handed back. Requires
+	// DynamicCupPickup=true.
+	PlaceCupInServingArea bool `json:"place_cup_in_serving_area,omitempty"`
 
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
 
@@ -280,8 +282,8 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		)
 	}
 
-	if cfg.PlaceCupOnShelf && !cfg.DynamicCupPickup {
-		return nil, nil, fmt.Errorf("%s: place_cup_on_shelf requires dynamic_cup_pickup=true", path)
+	if cfg.PlaceCupInServingArea && !cfg.DynamicCupPickup {
+		return nil, nil, fmt.Errorf("%s: place_cup_in_serving_area requires dynamic_cup_pickup=true", path)
 	}
 
 	return reqDeps, optDeps, nil
@@ -339,10 +341,10 @@ type beanjaminCoffee struct {
 	usageSensor   sensor.Sensor
 	cupVision     vision.Service // optional; nil when DynamicCupPickup=false
 	cupCameraName string         // SrcCameraName, validated to exist in cachedFS
-	// shelfSlotCounter is the round-robin placement counter for PlaceCupOnShelf.
+	// servingAreaSlotCounter is the round-robin placement counter for PlaceCupInServingArea.
 	// It increments once per placeFullCupOnShelf and selects the shelf slot
 	// modulo the number of tiles. Process-local; resets to 0 on rebuild.
-	shelfSlotCounter atomic.Uint64
+	servingAreaSlotCounter atomic.Uint64
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
