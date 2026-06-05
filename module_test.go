@@ -32,10 +32,120 @@ func validDynamicConfig() *Config {
 	return cfg
 }
 
+// validDynamicGlassConfig returns a Config with every field required by Validate
+// when DynamicGlassPickup=true populated to a valid (zero-value) entry.
+func validDynamicGlassConfig() *Config {
+	cfg := validBaseConfig()
+	cfg.DynamicGlassPickup = true
+	cfg.GlassVisionServiceName = "glass-vis"
+	cfg.GlassObservePoseSwitcherName = "glass-observe-switch"
+	cfg.SrcCameraName = "cam"
+	cfg.ExpectedGlassPositionMm = &Vec3Mm{}
+	cfg.GlassApproachRelativePose = &RelativePose{}
+	cfg.GlassGrabRelativePose = &RelativePose{}
+	return cfg
+}
+
+// validCanServeIcedConfig returns a Config with every field required by
+// Validate when CanServeIced=true populated to a valid entry. Iced serving
+// requires place_cup and dynamic glass pickup, so it builds on the glass config.
+func validCanServeIcedConfig() *Config {
+	cfg := validDynamicGlassConfig()
+	cfg.CanServeIced = true
+	cfg.PlaceCup = true
+	cfg.IceDispenseBoardName = "ice-board"
+	cfg.IceDispensePinName = "ice-pin"
+	return cfg
+}
+
+func TestValidate_CanServeIced_Valid(t *testing.T) {
+	cfg := validCanServeIcedConfig()
+	if _, _, err := cfg.Validate(""); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidate_CanServeIced_RequiresIceBoardName(t *testing.T) {
+	cfg := validCanServeIcedConfig()
+	cfg.IceDispenseBoardName = ""
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "ice_board_name") {
+		t.Fatalf("expected ice_board_name required error, got %v", err)
+	}
+}
+
+func TestValidate_CanServeIced_RequiresIcePinName(t *testing.T) {
+	cfg := validCanServeIcedConfig()
+	cfg.IceDispensePinName = ""
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "ice_pin_name") {
+		t.Fatalf("expected ice_pin_name required error, got %v", err)
+	}
+}
+
+func TestValidate_CanServeIced_RequiresPlaceCup(t *testing.T) {
+	cfg := validCanServeIcedConfig()
+	cfg.PlaceCup = false
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "place_cup=true") {
+		t.Fatalf("expected place_cup required error, got %v", err)
+	}
+}
+
+func TestValidate_CanServeIced_RequiresDynamicGlassPickup(t *testing.T) {
+	cfg := validCanServeIcedConfig()
+	cfg.DynamicGlassPickup = false
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "dynamic_glass_pickup=true") {
+		t.Fatalf("expected dynamic_glass_pickup required error, got %v", err)
+	}
+}
+
 func TestValidate_DynamicCupPickup_OffLeavesUnsetFieldsAlone(t *testing.T) {
 	cfg := validBaseConfig()
 	if _, _, err := cfg.Validate(""); err != nil {
 		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidate_DynamicGlassPickup_OffLeavesUnsetFieldsAlone(t *testing.T) {
+	cfg := validBaseConfig()
+	if _, _, err := cfg.Validate(""); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidate_DynamicGlassPickup_Valid(t *testing.T) {
+	cfg := validDynamicGlassConfig()
+	if _, _, err := cfg.Validate(""); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidate_DynamicGlassPickup_RequiresGlassVisionServiceName(t *testing.T) {
+	cfg := validDynamicGlassConfig()
+	cfg.GlassVisionServiceName = ""
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "glass_vision_service_name") {
+		t.Fatalf("expected glass_vision_service_name required error, got %v", err)
+	}
+}
+
+func TestValidate_DynamicGlassPickup_RequiresObserveSwitcher(t *testing.T) {
+	cfg := validDynamicGlassConfig()
+	cfg.GlassObservePoseSwitcherName = ""
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "glass_observe_pose_switcher_name") {
+		t.Fatalf("expected glass_observe_pose_switcher_name required error, got %v", err)
+	}
+}
+
+func TestValidate_DynamicGlassPickup_RequiresExpectedPosition(t *testing.T) {
+	cfg := validDynamicGlassConfig()
+	cfg.ExpectedGlassPositionMm = nil
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "expected_glass_position_mm") {
+		t.Fatalf("expected expected_glass_position_mm required error, got %v", err)
 	}
 }
 

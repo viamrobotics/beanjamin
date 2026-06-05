@@ -443,6 +443,30 @@ func TestEnqueueOrder_RejectsBatchOfUnsupportedDrink(t *testing.T) {
 	}
 }
 
+func TestEnqueueOrder_IcedGatedByCanServeIced(t *testing.T) {
+	// Rejected when can_serve_iced is off.
+	c, _ := newTestCoffee(t, &Config{})
+	if _, err := c.enqueueOrder(context.Background(), map[string]interface{}{
+		"drink": "iced_coffee",
+	}); err == nil {
+		t.Fatal("expected rejection for iced_coffee when can_serve_iced=false")
+	}
+	if c.queue.Len() != 0 {
+		t.Errorf("queue should stay empty after rejection, got len=%d", c.queue.Len())
+	}
+
+	// Accepted when can_serve_iced is on.
+	c2, _ := newTestCoffee(t, &Config{CanServeIced: true})
+	if _, err := c2.enqueueOrder(context.Background(), map[string]interface{}{
+		"drink": "iced_coffee",
+	}); err != nil {
+		t.Fatalf("unexpected error enqueuing iced_coffee with can_serve_iced=true: %v", err)
+	}
+	if c2.queue.Len() != 1 {
+		t.Errorf("queue length = %d, want 1", c2.queue.Len())
+	}
+}
+
 func TestQueue_SetStep_FindsRecentOrder(t *testing.T) {
 	// SetStep called after Complete (e.g. straggling step from a goroutine)
 	// should still be attributed to the order if it's still in recent.

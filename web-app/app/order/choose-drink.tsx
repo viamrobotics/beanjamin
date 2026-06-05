@@ -24,6 +24,7 @@ export function ChooseDrink({
   const decafDrinks = DRINKS.filter(
     (drink) => drink.id === "decaf" || drink.id === "decaf_lungo",
   );
+  const icedDrinks = DRINKS.filter((drink) => drink.id === "iced_coffee");
   const secondRowDrinks = DRINKS.filter(
     (drink) =>
       drink.id === "americano" || drink.id === "cappuccino" || drink.id === "latte",
@@ -97,9 +98,17 @@ export function ChooseDrink({
               renderDrinkCard(drink, i + firstRowDrinks.length),
             )}
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            {icedDrinks.map((drink, i) =>
+              renderDrinkCard(drink, i + firstRowDrinks.length + decafDrinks.length),
+            )}
+          </div>
           <div className="grid grid-cols-3 gap-3">
             {secondRowDrinks.map((drink, i) =>
-              renderDrinkCard(drink, i + firstRowDrinks.length + decafDrinks.length),
+              renderDrinkCard(
+                drink,
+                i + firstRowDrinks.length + decafDrinks.length + icedDrinks.length,
+              ),
             )}
           </div>
         </div>

@@ -12,6 +12,7 @@ import (
 
 	viz "github.com/viam-labs/motion-tools/client/client"
 	"go.viam.com/rdk/components/arm"
+	"go.viam.com/rdk/components/board"
 	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/components/gripper"
 	"go.viam.com/rdk/components/sensor"
@@ -105,6 +106,11 @@ type Config struct {
 	DataDir           string `json:"data_dir,omitempty"`
 	CanServeDecaf     bool   `json:"can_serve_decaf,omitempty"`
 
+	CanServeIced         bool    `json:"can_serve_iced,omitempty"`
+	IceDispenseBoardName string  `json:"ice_board_name,omitempty"`
+	IceDispensePinName   string  `json:"ice_pin_name,omitempty"`
+	IceDispenseSec       float64 `json:"ice_dispense_sec,omitempty"`
+
 	// Optional Slack notifier (viam:notifications:slack generic service). When
 	// set, the coffee service sends a best-effort Slack message via DoCommand
 	// for every non-successful order attempt — genuine faults and operator
@@ -142,6 +148,20 @@ type Config struct {
 	// noise that puts the centroid slightly below the physical cup base
 	// and trips the planner. Zero (default) disables clamping.
 	CupCentroidMinZMm float64 `json:"cup_centroid_min_z_mm,omitempty"`
+
+	// Dynamic glass pickup. Mirrors dynamic cup pickup but with its own vision
+	// service and observe-pose switch, tuned for the taller iced-coffee glass.
+	// When true, fetchGlass vision-detects the glass instead of using the static
+	// glass_approach/glass poses. The physical camera is shared with cup pickup
+	// (src_camera_name); only the vision service and observe poses differ.
+	DynamicGlassPickup           bool          `json:"dynamic_glass_pickup,omitempty"`
+	GlassVisionServiceName       string        `json:"glass_vision_service_name,omitempty"`
+	GlassObservePoseSwitcherName string        `json:"glass_observe_pose_switcher_name,omitempty"`
+	ExpectedGlassPositionMm      *Vec3Mm       `json:"expected_glass_position_mm,omitempty"`
+	GlassApproachRelativePose    *RelativePose `json:"glass_approach_relative_pose,omitempty"`
+	GlassGrabRelativePose        *RelativePose `json:"glass_grab_relative_pose,omitempty"`
+	GlassMaxDistanceFromTargetMm float64       `json:"glass_max_distance_from_target_mm,omitempty"`
+	GlassCentroidMinZMm          float64       `json:"glass_centroid_min_z_mm,omitempty"`
 
 	// PlaceCupInServingArea, when true, replaces giveFullCupToCustomer with
 	// placeFullCupOnShelf — the finished cup is dropped on the serving-area
@@ -194,20 +214,21 @@ func (s *beanjaminCoffee) maxBatchSize() int {
 // unset or zero.
 const defaultCupPickupMaxAttempts = 3
 
-// cupPickupMaxAttempts returns the configured cap on full observe-and-grab
-// attempts per order, falling back to defaultCupPickupMaxAttempts.
-func (s *beanjaminCoffee) cupPickupMaxAttempts() int {
-	if s.cfg != nil && s.cfg.CupPickupMaxAttempts > 0 {
-		return s.cfg.CupPickupMaxAttempts
+// pickupMaxAttempts returns the configured cap on full observe-and-grab
+// attempts (cup or glass), falling back to defaultCupPickupMaxAttempts when
+// unset or non-positive.
+func pickupMaxAttempts(configured int) int {
+	if configured > 0 {
+		return configured
 	}
 	return defaultCupPickupMaxAttempts
 }
 
-// cupPhotosPerVantage returns the number of vision frames to capture at each
+// pickupPhotosPerVantage returns the number of vision frames to capture at each
 // observation pose, defaulting to 1.
-func (s *beanjaminCoffee) cupPhotosPerVantage() int {
-	if s.cfg != nil && s.cfg.CupPhotosPerVantage > 1 {
-		return s.cfg.CupPhotosPerVantage
+func pickupPhotosPerVantage(configured int) int {
+	if configured > 1 {
+		return configured
 	}
 	return 1
 }
@@ -312,6 +333,59 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		return nil, nil, fmt.Errorf("%s: free_move_collision_sensitivity must be between 0 and 5, got %d", path, cfg.FreeMoveCollisionSensitivity)
 	}
 
+	if cfg.DynamicGlassPickup {
+		if cfg.GlassVisionServiceName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "glass_vision_service_name")
+		}
+		if cfg.GlassObservePoseSwitcherName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "glass_observe_pose_switcher_name")
+		}
+		// The glass pipeline reuses the cup camera (src_camera_name).
+		if cfg.SrcCameraName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "src_camera_name")
+		}
+		if cfg.ExpectedGlassPositionMm == nil {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "expected_glass_position_mm")
+		}
+		if cfg.GlassApproachRelativePose == nil {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "glass_approach_relative_pose")
+		}
+		if cfg.GlassGrabRelativePose == nil {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "glass_grab_relative_pose")
+		}
+		if cfg.GlassMaxDistanceFromTargetMm == 0 {
+			cfg.GlassMaxDistanceFromTargetMm = 300
+		}
+		reqDeps = append(reqDeps,
+			vision.Named(cfg.GlassVisionServiceName).String(),
+			cfg.GlassObservePoseSwitcherName,
+		)
+		// camera.Named(SrcCameraName) is already a dep when dynamic_cup_pickup is
+		// on; add it here too in case glass pickup is used without cup pickup.
+		if !cfg.DynamicCupPickup {
+			reqDeps = append(reqDeps, camera.Named(cfg.SrcCameraName).String())
+		}
+	}
+
+	if cfg.CanServeIced {
+		if cfg.IceDispenseBoardName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "ice_board_name")
+		}
+		if cfg.IceDispensePinName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "ice_pin_name")
+		}
+		if !cfg.PlaceCup {
+			return nil, nil, fmt.Errorf("%s: can_serve_iced requires place_cup=true", path)
+		}
+		// The glass is always vision-detected (no static glass pickup).
+		if !cfg.DynamicGlassPickup {
+			return nil, nil, fmt.Errorf("%s: can_serve_iced requires dynamic_glass_pickup=true", path)
+		}
+	}
+	if cfg.IceDispenseBoardName != "" {
+		optDeps = append(optDeps, board.Named(cfg.IceDispenseBoardName).String())
+	}
+
 	return reqDeps, optDeps, nil
 }
 
@@ -332,6 +406,7 @@ type beanjaminCoffee struct {
 	vizConsecutiveFailures int                         // auto-disables viz after repeated failures
 	gripper                gripper.Gripper
 	camStorage             generic.Service // optional; mux over video stores; nil if cam_storage_mux_name unset
+	iceBoard               board.Board     // optional; drives the ice-machine GPIO pin; nil if ice_board_name unset
 	slackNotifier          generic.Service // optional; viam:notifications:slack; nil if slack_notifier_name unset
 	machineLogsURL         string          // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
 	dataLocationID         string          // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
@@ -368,9 +443,11 @@ type beanjaminCoffee struct {
 	// nil when usage_sensor_name is unset, in which case every update is a
 	// no-op. Holds all counters keyed by regular_grinds, decaf_grinds, usage,
 	// cleanings, and successful_consecutive_orders.
-	usageSensor   sensor.Sensor
-	cupVision     vision.Service // optional; nil when DynamicCupPickup=false
-	cupCameraName string         // SrcCameraName, validated to exist in cachedFS
+	usageSensor    sensor.Sensor
+	cupVision      vision.Service // optional; nil when DynamicCupPickup=false
+	cupCameraName  string         // SrcCameraName, validated to exist in cachedFS
+	glassVision    vision.Service
+	glassObserveSw toggleswitch.Switch
 	// servingAreaSlotCounter is the round-robin placement counter for PlaceCupInServingArea.
 	// It increments once per placeFullCupOnShelf and selects the shelf slot
 	// modulo the number of tiles. Process-local; resets to 0 on rebuild.
@@ -469,6 +546,37 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 			conf.CupVisionServiceName, conf.SrcCameraName, conf.CameraObservePoseSwitcherName)
 	}
 
+	var glassVision vision.Service
+	var glassObserveSw toggleswitch.Switch
+	if conf.DynamicGlassPickup {
+		visRes, err := vision.FromProvider(deps, conf.GlassVisionServiceName)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("glass vision service %q: %w", conf.GlassVisionServiceName, err)
+		}
+		glassVision = visRes
+		// The glass pipeline reuses the cup camera; ensure it's resolved even
+		// when dynamic cup pickup is off.
+		if cachedFS.Frame(conf.SrcCameraName) == nil {
+			cancelFunc()
+			return nil, fmt.Errorf("src_camera_name %q not found in frame system — add the camera to the frame system fragment", conf.SrcCameraName)
+		}
+		cupCameraName = conf.SrcCameraName
+
+		obsSwRes, ok := deps[toggleswitch.Named(conf.GlassObservePoseSwitcherName)]
+		if !ok {
+			cancelFunc()
+			return nil, fmt.Errorf("glass observe switch %q not found in dependencies", conf.GlassObservePoseSwitcherName)
+		}
+		glassObserveSw, ok = obsSwRes.(toggleswitch.Switch)
+		if !ok {
+			cancelFunc()
+			return nil, fmt.Errorf("resource %q is not a switch", conf.GlassObservePoseSwitcherName)
+		}
+		logger.Infof("dynamic glass pickup enabled (vision=%q, camera=%q, observe_switch=%q)",
+			conf.GlassVisionServiceName, conf.SrcCameraName, conf.GlassObservePoseSwitcherName)
+	}
+
 	var speech resource.Resource
 	if conf.SpeechServiceName != "" {
 		speechRes, ok := deps[generic.Named(conf.SpeechServiceName)]
@@ -491,6 +599,17 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		}
 		camStorage = mux
 		logger.Infof("cam storage mux %q connected", conf.CamStorageMuxName)
+	}
+
+	var iceBoard board.Board
+	if conf.IceDispenseBoardName != "" {
+		b, err := board.FromProvider(deps, conf.IceDispenseBoardName)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("ice_board_name %q: %w", conf.IceDispenseBoardName, err)
+		}
+		iceBoard = b
+		logger.Infof("ice board %q connected (pin %q)", conf.IceDispenseBoardName, conf.IceDispensePinName)
 	}
 
 	var slackNotifier generic.Service
@@ -565,6 +684,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		cachedFS:             cachedFS,
 		speech:               speech,
 		camStorage:           camStorage,
+		iceBoard:             iceBoard,
 		slackNotifier:        slackNotifier,
 		machineLogsURL:       buildMachineLogsURL(os.Getenv("VIAM_MACHINE_ID"), os.Getenv("VIAM_PRIMARY_ORG_ID")),
 		dataLocationID:       os.Getenv("VIAM_LOCATION_ID"),
@@ -579,6 +699,8 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		usageSensor:          usageSensor,
 		cupVision:            cupVision,
 		cupCameraName:        cupCameraName,
+		glassVision:          glassVision,
+		glassObserveSw:       glassObserveSw,
 	}
 	s.faultReason.Store("")
 

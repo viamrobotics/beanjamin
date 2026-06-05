@@ -170,7 +170,7 @@ function Kiosk() {
     if (!selectedDrink) return;
     setDrinkRejection(null);
 
-    const supportedDrinks = new Set(["espresso", "lungo", "decaf", "decaf_lungo"]);
+    const supportedDrinks = new Set(["espresso", "lungo", "decaf", "decaf_lungo", "iced_coffee"]);
     if (supportedDrinks.has(selectedDrink)) {
       setStep("name");
       return;
