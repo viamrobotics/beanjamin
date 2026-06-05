@@ -130,7 +130,7 @@ func slackFailureBlocks(r orderReading, machineLogsURL, clipDataURL string) []in
 		footer += fmt.Sprintf(" · <%s|machine logs>", machineLogsURL)
 	}
 	if clipDataURL != "" {
-		footer += fmt.Sprintf(" · <%s|video clip>", clipDataURL)
+		footer += fmt.Sprintf(" · <%s|video clip> _(may take ~a minute to appear)_", clipDataURL)
 	}
 	blocks = append(blocks, map[string]interface{}{
 		"type":     "context",
