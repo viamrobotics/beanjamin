@@ -32,10 +32,65 @@ func validDynamicConfig() *Config {
 	return cfg
 }
 
+// validDynamicGlassConfig returns a Config with every field required by Validate
+// when DynamicGlassPickup=true populated to a valid (zero-value) entry.
+func validDynamicGlassConfig() *Config {
+	cfg := validBaseConfig()
+	cfg.DynamicGlassPickup = true
+	cfg.GlassVisionServiceName = "glass-vis"
+	cfg.GlassObservePoseSwitcherName = "glass-observe-switch"
+	cfg.SrcCameraName = "cam"
+	cfg.ExpectedGlassPositionMm = &Vec3Mm{}
+	cfg.GlassApproachRelativePose = &RelativePose{}
+	cfg.GlassGrabRelativePose = &RelativePose{}
+	return cfg
+}
+
 func TestValidate_DynamicCupPickup_OffLeavesUnsetFieldsAlone(t *testing.T) {
 	cfg := validBaseConfig()
 	if _, _, err := cfg.Validate(""); err != nil {
 		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidate_DynamicGlassPickup_OffLeavesUnsetFieldsAlone(t *testing.T) {
+	cfg := validBaseConfig()
+	if _, _, err := cfg.Validate(""); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidate_DynamicGlassPickup_Valid(t *testing.T) {
+	cfg := validDynamicGlassConfig()
+	if _, _, err := cfg.Validate(""); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidate_DynamicGlassPickup_RequiresGlassVisionServiceName(t *testing.T) {
+	cfg := validDynamicGlassConfig()
+	cfg.GlassVisionServiceName = ""
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "glass_vision_service_name") {
+		t.Fatalf("expected glass_vision_service_name required error, got %v", err)
+	}
+}
+
+func TestValidate_DynamicGlassPickup_RequiresObserveSwitcher(t *testing.T) {
+	cfg := validDynamicGlassConfig()
+	cfg.GlassObservePoseSwitcherName = ""
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "glass_observe_pose_switcher_name") {
+		t.Fatalf("expected glass_observe_pose_switcher_name required error, got %v", err)
+	}
+}
+
+func TestValidate_DynamicGlassPickup_RequiresExpectedPosition(t *testing.T) {
+	cfg := validDynamicGlassConfig()
+	cfg.ExpectedGlassPositionMm = nil
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "expected_glass_position_mm") {
+		t.Fatalf("expected expected_glass_position_mm required error, got %v", err)
 	}
 }
 

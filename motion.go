@@ -487,11 +487,16 @@ func (s *beanjaminCoffee) switchForComponent(componentName string) (toggleswitch
 		return s.filterSw, nil
 	case componentClaws:
 		return s.clawsSw, nil
-	case "cam":
+	case componentCam:
 		if s.cameraObserveSw == nil {
 			return nil, fmt.Errorf("camera observe switch not configured")
 		}
 		return s.cameraObserveSw, nil
+	case componentGlassCam:
+		if s.glassObserveSw == nil {
+			return nil, fmt.Errorf("glass observe switch not configured")
+		}
+		return s.glassObserveSw, nil
 	default:
 		return nil, fmt.Errorf("unknown reference frame %q", componentName)
 	}

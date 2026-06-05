@@ -271,6 +271,33 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `cup_centroid_min_z_mm`               | float  | No       | Minimum world-frame Z for each detection. If a detected centroid's Z is below this, it is clamped up to this value before pose composition; values above are left alone. Use to recover from depth noise that would otherwise produce a too-low approach pose and trip the planner. Default `0` disables clamping. |
 | `place_cup_in_serving_area`                  | bool   | No       | When `true`, replaces the per-customer handoff with placement on a dedicated served-drinks shelf. Slots are tiled along the shelf's long axis (120 mm spacing, 60 mm margin from each end) on the midline of the shelf top — as many slots as the shelf length allows; the placement anchor is 40 mm above the shelf top surface (composed with `cup_grab_relative_pose` to derive the actual claws pose, mirroring how the pickup uses the detected cup centroid). Slots are filled **sequentially (round-robin)**: a process-local counter advances one slot per placement and wraps back to the first slot when it reaches the end, on the assumption that by the time it wraps the earliest-placed cup has been picked up. If the arm cannot plan a path to a slot (approach or descent), that slot is **skipped and the next one is tried**, continuing around the ring until one is reachable (the order fails only if every slot is unreachable). There is no vision-based occupancy check — placement is fully decoupled from pickup observation. The counter resets to the first slot on module restart/reconfigure. Requires `dynamic_cup_pickup=true`, a `serving-area` (or `serving-area_origin`) Box geometry in the framesystem, and a shelf physically mounted above the empty-cup pickup spot. Default `false`. |
 | `max_batch_size`           | int    | No       | Cap on `prepare_order.count` — how many identical drinks one DoCommand may enqueue at once. Defaults to 10 when unset. Protects the queue against runaway voice commands or LLM hallucinations. |
+| `can_serve_iced`           | bool   | No       | Enables the `ice_coffee` drink. When `true`, after brewing the espresso the arm vision-detects a glass off the top shelf, dispenses ice into it via `ice_board_name`/`ice_pin_name`, sets the glass in a staging area, then pours the espresso over the ice; the now-empty espresso cup is disposed via the normal serving path. Requires `place_cup=true`, `ice_board_name`, and `dynamic_glass_pickup=true` (the glass is always vision-detected), plus the iced claws poses below. Default `false`. |
+| `ice_board_name`           | string | When `can_serve_iced` is enabled | Name of a `rdk:component:board` whose GPIO pin triggers the ice machine. |
+| `ice_pin_name`             | string | No       | Board pin held HIGH to dispense ice. |
+| `ice_dispense_sec`         | float  | No       | How long the ice pin is held HIGH per drink, in seconds. Defaults to 5. |
+| `dynamic_glass_pickup`                | bool   | Required by `can_serve_iced` | Enables vision-guided glass pickup, mirroring `dynamic_cup_pickup` but with its own vision service and observe poses (tuned for the taller iced-coffee glass). The glass is always vision-detected — there is no static glass pickup. Shares the cup camera (`src_camera_name`). Default `false`. |
+| `glass_vision_service_name`           | string | When `dynamic_glass_pickup` is enabled | Name of a `rdk:service:vision` segmenter that returns glass detections via `GetObjectPointClouds`. |
+| `glass_observe_pose_switcher_name`    | string | When `dynamic_glass_pickup` is enabled | Switcher holding the glass observation vantages (swept one at a time, same as the cup observe switch). Must include a pose named `glass_observe` (home/recovery), and all poses must move the `cam` frame. |
+| `expected_glass_position_mm`          | object | When `dynamic_glass_pickup` is enabled | World-frame heuristic point `{ "x", "y", "z" }`; the detection closest to it wins. |
+| `glass_approach_relative_pose`        | object | When `dynamic_glass_pickup` is enabled | 6-DoF gripper offset composed onto the detected glass centroid for the pre-grab pose (same shape as `cup_approach_relative_pose`), tuned for the taller glass. |
+| `glass_grab_relative_pose`            | object | When `dynamic_glass_pickup` is enabled | 6-DoF gripper offset for the final glass grab pose. |
+| `glass_max_distance_from_target_mm`   | float  | No       | Hard cutoff: glass detections beyond this from `expected_glass_position_mm` are dropped. Default 300 mm. |
+| `glass_centroid_min_z_mm`             | float  | No       | Floor each glass detection's world-frame Z to this value. Default `0` disables. |
+
+Glass pickup reuses `cup_photos_per_vantage` and `cup_pickup_max_attempts` (item-agnostic operational knobs); there are no glass-specific versions.
+
+**Iced coffee — required poses on the claws pose switcher (`claws_pose_switcher_name`):**
+
+When `can_serve_iced` is enabled, the claws switch must additionally hold these poses (all moving the `coffee-claws-middle` frame). Calibrate them physically on the machine via `viam robot part motion get-pose`/`set-pose`. The glass itself is vision-detected (see the glass-observe switch below), so there are no static glass-pickup poses.
+
+| Pose name              | Description |
+| ---------------------- | ----------- |
+| `ice_machine_approach` | Staged in front of the ice chute. |
+| `ice_machine_dispense` | Glass held under the chute while the ice pin pulses. |
+| `staging_approach`     | Above the staging area where the iced glass is left for the customer. |
+| `staging`              | Down in the staging area, ready to release the glass. |
+| `pour_approach`        | Espresso cup held upright above the staged glass. |
+| `pour`                 | Espresso cup tilted to pour over the ice. |
 
 **Dynamic cup pickup — required poses on the camera-observe pose switcher (`camera_observe_pose_switcher_name`):**
 
@@ -281,9 +308,18 @@ When `dynamic_cup_pickup` is enabled, the dedicated camera-observe switch must h
 | `cup_observe`       | Absolute world pose | Required. The primary view of the cup workspace and the home/recovery pose the arm returns to between grab attempts. |
 | additional poses    | Absolute world pose | Optional extra vantages tried in turn **only when earlier poses found no cup**, to recover cups occluded from the primary view. An unreachable pose logs a warning and is skipped. |
 
+**Dynamic glass pickup — required poses on the glass-observe pose switcher (`glass_observe_pose_switcher_name`):**
+
+When `dynamic_glass_pickup` is enabled, the dedicated glass-observe switch must hold one or more observation poses, all moving the `cam` frame. The switch must include a pose named `glass_observe`. Same sweep semantics as the cup observe switch.
+
+| Pose name           | Type                | Description |
+| ------------------- | ------------------- | ----------- |
+| `glass_observe`     | Absolute world pose | Required. The primary view of the glass storage area and the home/recovery pose between grab attempts. |
+| additional poses    | Absolute world pose | Optional extra vantages tried only when earlier poses found no glass. |
+
 ### DoCommand
 
-**`prepare_order`** - Prepare a drink order with optional speech greetings. Supports `"espresso"` and `"lungo"`.
+**`prepare_order`** - Prepare a drink order with optional speech greetings. Supports `"espresso"` and `"lungo"`; `"decaf"`/`"decaf_lungo"` when `can_serve_decaf` is set, and `"ice_coffee"` when `can_serve_iced` is set.
 
 ```json
 {
