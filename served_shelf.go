@@ -158,36 +158,28 @@ func (s *beanjaminCoffee) shelfTopGeometry(ctx context.Context) (spatialmath.Pos
 	return worldGeom.Pose(), dims, nil
 }
 
-// nextShelfTile resolves the serving-area geometry, computes the tile layout
-// (as many slots as the serving area length allows at shelfTileSpacingMm), and
-// returns the next slot in round-robin order along with the world-frame Z of
-// the serving area top surface. The slot is chosen by an in-memory counter that
-// increments once per placement and wraps modulo the tile count, on the
-// assumption that the earliest-placed cup has been picked up by the time the
-// counter wraps. The counter is process-local and resets on restart.
+// servingAreaSlots resolves the serving-area geometry and returns the slot
+// layout (as many slots as the serving area length allows at
+// shelfTileSpacingMm) ordered along the serving area's long axis, plus the
+// world-frame Z of the serving area top surface. The caller picks a slot in
+// round-robin order via servingAreaSlotCounter and skips any it cannot reach.
 //
 // Returns an error only when the serving-area geometry is missing or too small
 // to hold a single slot.
-func (s *beanjaminCoffee) nextShelfTile(ctx context.Context) (r3.Vector, float64, error) {
+func (s *beanjaminCoffee) servingAreaSlots(ctx context.Context) ([]r3.Vector, float64, error) {
 	shelfWorldPose, dimsMm, err := s.shelfTopGeometry(ctx)
 	if err != nil {
-		return r3.Vector{}, 0, fmt.Errorf("shelf placement: %w", err)
+		return nil, 0, fmt.Errorf("shelf placement: %w", err)
 	}
 
 	tiles := computeShelfTileCenters(shelfWorldPose, dimsMm, shelfTileSpacingMm, shelfTileMarginMm)
 	if len(tiles) == 0 {
-		return r3.Vector{}, 0, fmt.Errorf("shelf placement: serving-area dimensions %v leave no room for tiles (margin=%.0fmm, spacing=%.0fmm)",
+		return nil, 0, fmt.Errorf("shelf placement: serving-area dimensions %v leave no room for slots (margin=%.0fmm, spacing=%.0fmm)",
 			dimsMm, shelfTileMarginMm, shelfTileSpacingMm)
 	}
 
-	// Add returns the post-increment value; subtract 1 so the first placement
-	// after a (re)start uses slot 0.
-	counter := s.servingAreaSlotCounter.Add(1) - 1
-	idx := slotIndex(counter, len(tiles))
-	tileWorld := tiles[idx]
 	shelfTopZ := shelfWorldPose.Point().Z + dimsMm.Z/2
-
-	s.logger.Infof("shelf placement: shelf top at %v, dims %v, %d slot(s); placement #%d -> slot %d/%d at world %v (shelf top Z=%.1fmm)",
-		shelfWorldPose.Point(), dimsMm, len(tiles), counter+1, idx+1, len(tiles), tileWorld, shelfTopZ)
-	return tileWorld, shelfTopZ, nil
+	s.logger.Infof("shelf placement: serving area at %v, dims %v, %d slot(s) (shelf top Z=%.1fmm)",
+		shelfWorldPose.Point(), dimsMm, len(tiles), shelfTopZ)
+	return tiles, shelfTopZ, nil
 }
