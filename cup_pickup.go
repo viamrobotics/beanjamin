@@ -33,21 +33,21 @@ import (
 	viz "go.viam.com/rdk/vision"
 )
 
-// errNoCupsDetected is returned by findCupCandidates when the vision frames
-// at every observe pose yielded zero detections. pickCupDynamic recognises
-// this case via errors.Is and recovers with a spoken "please place a cup"
+// errNoItemsDetected is returned by findCandidates when the vision frames at
+// every observe pose yielded zero detections. pickDynamic recognises this case
+// via errors.Is and recovers with a spoken "please place a cup/glass"
 // announcement + a wait before re-observing, instead of failing the order
-// outright.
-var errNoCupsDetected = errors.New("no cups detected")
+// outright. Shared by cup and glass pickup.
+var errNoItemsDetected = errors.New("no items detected")
 
-// noCupsRetryDelay is the wait between outer observation attempts when
-// findCupCandidates reports zero detections.
-const noCupsRetryDelay = 15 * time.Second
+// noItemRetryDelay is the wait between outer observation attempts when
+// findCandidates reports zero detections.
+const noItemRetryDelay = 15 * time.Second
 
-// cupObserveDedupMm is the merge radius used to collapse near-duplicate
-// detections across multi-vantage observations: two centroids closer than
-// this in world frame are treated as the same physical cup.
-const cupObserveDedupMm = 40.0
+// observeDedupMm is the merge radius used to collapse near-duplicate detections
+// across multi-vantage observations: two centroids closer than this in world
+// frame are treated as the same physical item.
+const observeDedupMm = 40.0
 
 // mergeNearbyCentroids clusters centroids that fall within mm of an existing
 // cluster's running mean and returns one centroid per cluster: the mean of its
@@ -285,7 +285,7 @@ func (s *beanjaminCoffee) observationPoseNames(ctx context.Context, sw toggleswi
 // logged and skipped.
 //
 // When no pose yields an in-range candidate, the error distinguishes two cases
-// so pickDynamic can react: errNoCupsDetected (recoverable: announce + wait +
+// so pickDynamic can react: errNoItemsDetected (recoverable: announce + wait +
 // re-observe) when no pose produced any detection at all, versus a plain "none
 // within cutoff" error (non-recoverable) when detections were seen but all fell
 // outside the cutoff.
@@ -320,7 +320,7 @@ func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pick
 			continue
 		}
 
-		merged := mergeNearbyCentroids(centroids, cupObserveDedupMm)
+		merged := mergeNearbyCentroids(centroids, observeDedupMm)
 		s.logger.Infof("dynamic %s pickup: pass %d/%d — target=(x=%.1f, y=%.1f, z=%.1f) cutoff=%.0fmm — %d candidate(s) (%d before merge):",
 			t.label, i+1, passes, target.X, target.Y, target.Z, cutoff, len(merged), len(centroids))
 		for j, c := range merged {
@@ -349,7 +349,7 @@ func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pick
 	}
 
 	if totalDetections == 0 {
-		return nil, fmt.Errorf("dynamic_%s_pickup: %w across all %d observe pose(s)", t.label, errNoCupsDetected, passes)
+		return nil, fmt.Errorf("dynamic_%s_pickup: %w across all %d observe pose(s)", t.label, errNoItemsDetected, passes)
 	}
 	return nil, fmt.Errorf("dynamic_%s_pickup: %d detection(s) across all observe poses but none within %.0fmm of target", t.label, totalDetections, cutoff)
 }
@@ -481,7 +481,7 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 			// re-observe on the next outer iteration. Bail on any other failure
 			// (e.g. detections all beyond the cutoff) — re-observing won't
 			// change those.
-			if errors.Is(err, errNoCupsDetected) && attempt < maxAttempts {
+			if errors.Is(err, errNoItemsDetected) && attempt < maxAttempts {
 				recoverStep := Step{PoseName: t.observeHomePose, Component: t.observeComponent, Pause: shortPause}
 				if mvErr := s.executeStep(ctx, cancelCtx, recoverStep); mvErr != nil {
 					s.logger.Warnf("dynamic %s pickup: return to %q before retry wait: %v", t.label, t.observeHomePose, mvErr)
@@ -490,9 +490,9 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 					s.logger.Warnf("dynamic %s pickup: announcement failed: %v", t.label, sayErr)
 				}
 				s.logger.Infof("dynamic %s pickup: nothing detected on attempt %d/%d — waiting %s before retry",
-					t.label, attempt, maxAttempts, noCupsRetryDelay)
+					t.label, attempt, maxAttempts, noItemRetryDelay)
 				select {
-				case <-time.After(noCupsRetryDelay):
+				case <-time.After(noItemRetryDelay):
 				case <-ctx.Done():
 					return fmt.Errorf("dynamic_%s_pickup: cancelled during no-item wait: %w", t.label, ctx.Err())
 				}

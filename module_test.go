@@ -46,6 +46,61 @@ func validDynamicGlassConfig() *Config {
 	return cfg
 }
 
+// validCanServeIcedConfig returns a Config with every field required by
+// Validate when CanServeIced=true populated to a valid entry. Iced serving
+// requires place_cup and dynamic glass pickup, so it builds on the glass config.
+func validCanServeIcedConfig() *Config {
+	cfg := validDynamicGlassConfig()
+	cfg.CanServeIced = true
+	cfg.PlaceCup = true
+	cfg.IceDispenseBoardName = "ice-board"
+	cfg.IceDispensePinName = "ice-pin"
+	return cfg
+}
+
+func TestValidate_CanServeIced_Valid(t *testing.T) {
+	cfg := validCanServeIcedConfig()
+	if _, _, err := cfg.Validate(""); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidate_CanServeIced_RequiresIceBoardName(t *testing.T) {
+	cfg := validCanServeIcedConfig()
+	cfg.IceDispenseBoardName = ""
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "ice_board_name") {
+		t.Fatalf("expected ice_board_name required error, got %v", err)
+	}
+}
+
+func TestValidate_CanServeIced_RequiresIcePinName(t *testing.T) {
+	cfg := validCanServeIcedConfig()
+	cfg.IceDispensePinName = ""
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "ice_pin_name") {
+		t.Fatalf("expected ice_pin_name required error, got %v", err)
+	}
+}
+
+func TestValidate_CanServeIced_RequiresPlaceCup(t *testing.T) {
+	cfg := validCanServeIcedConfig()
+	cfg.PlaceCup = false
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "place_cup=true") {
+		t.Fatalf("expected place_cup required error, got %v", err)
+	}
+}
+
+func TestValidate_CanServeIced_RequiresDynamicGlassPickup(t *testing.T) {
+	cfg := validCanServeIcedConfig()
+	cfg.DynamicGlassPickup = false
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "dynamic_glass_pickup=true") {
+		t.Fatalf("expected dynamic_glass_pickup required error, got %v", err)
+	}
+}
+
 func TestValidate_DynamicCupPickup_OffLeavesUnsetFieldsAlone(t *testing.T) {
 	cfg := validBaseConfig()
 	if _, _, err := cfg.Validate(""); err != nil {

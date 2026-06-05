@@ -24,7 +24,7 @@ export function ChooseDrink({
   const decafDrinks = DRINKS.filter(
     (drink) => drink.id === "decaf" || drink.id === "decaf_lungo",
   );
-  const icedDrinks = DRINKS.filter((drink) => drink.id === "ice_coffee");
+  const icedDrinks = DRINKS.filter((drink) => drink.id === "iced_coffee");
   const secondRowDrinks = DRINKS.filter(
     (drink) =>
       drink.id === "americano" || drink.id === "cappuccino" || drink.id === "latte",

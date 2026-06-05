@@ -45,7 +45,7 @@ export const DRINKS: Drink[] = [
     available: true,
   },
   {
-    id: "ice_coffee",
+    id: "iced_coffee",
     label: "Iced Coffee",
     description: "Espresso poured over fresh ice",
     image: "./espresso.png",

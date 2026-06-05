@@ -154,8 +154,6 @@ type Config struct {
 	GlassGrabRelativePose        *RelativePose `json:"glass_grab_relative_pose,omitempty"`
 	GlassMaxDistanceFromTargetMm float64       `json:"glass_max_distance_from_target_mm,omitempty"`
 	GlassCentroidMinZMm          float64       `json:"glass_centroid_min_z_mm,omitempty"`
-	// Glass pickup shares cup_photos_per_vantage / cup_pickup_max_attempts —
-	// those are item-agnostic operational knobs, not glass-specific.
 
 	// PlaceCupInServingArea, when true, replaces giveFullCupToCustomer with
 	// placeFullCupOnShelf — the finished cup is dropped on the serving-area
@@ -346,6 +344,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.CanServeIced {
 		if cfg.IceDispenseBoardName == "" {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "ice_board_name")
+		}
+		if cfg.IceDispensePinName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "ice_pin_name")
 		}
 		if !cfg.PlaceCup {
 			return nil, nil, fmt.Errorf("%s: can_serve_iced requires place_cup=true", path)
@@ -575,7 +576,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		b, err := board.FromProvider(deps, conf.IceDispenseBoardName)
 		if err != nil {
 			cancelFunc()
-			return nil, fmt.Errorf("ice_dispense_board_name %q: %w", conf.IceDispenseBoardName, err)
+			return nil, fmt.Errorf("ice_board_name %q: %w", conf.IceDispenseBoardName, err)
 		}
 		iceBoard = b
 		logger.Infof("ice board %q connected (pin %q)", conf.IceDispenseBoardName, conf.IceDispensePinName)

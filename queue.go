@@ -434,7 +434,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}
 			}
 			return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
 		}
-	case "ice_coffee":
+	case "iced_coffee":
 		if !s.cfg.CanServeIced {
 			s.logger.Infof("rejected iced order %q from %s (can_serve_iced=false)", drink, customerName)
 			msg := pickUnsupportedDrink(drink)

@@ -325,7 +325,7 @@ func isLungoDrink(drink string) bool {
 // (fetch glass -> dispense ice -> pour espresso over ice) instead of handing
 // the espresso cup to the customer. It brews espresso like any other drink.
 func isIcedDrink(drink string) bool {
-	return drink == "ice_coffee"
+	return drink == "iced_coffee"
 }
 
 // waterDelta returns the water-usage increment for a brew: 1.5 for lungo sizes
@@ -977,7 +977,7 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 	return nil
 }
 
-// serveIcedCoffee finishes an ice_coffee order after the espresso has brewed
+// serveIcedCoffee finishes an iced_coffee order after the espresso has brewed
 // into the cup under the machine. It fetches a separate glass, dispenses ice
 // into it via the board pin, sets the glass down in the staging area, retrieves
 // the espresso cup, and pours the espresso over the ice. Both finished items
@@ -1267,12 +1267,11 @@ func (s *beanjaminCoffee) iceDispenseSec() float64 {
 	return defaultIceDispenseSec
 }
 
-// icePinName returns the configured or default ice-machine board pin name.
+// icePinName returns the ice-machine board pin name. Validate requires it to be
+// set whenever can_serve_iced is enabled, which is the only path that reaches a
+// dispense, so it is always non-empty here.
 func (s *beanjaminCoffee) icePinName() string {
-	if s.cfg.IceDispensePinName != "" {
-		return s.cfg.IceDispensePinName
-	}
-	return ""
+	return s.cfg.IceDispensePinName
 }
 
 // drinkBrewTime returns the configured or default brew duration for the given drink.
