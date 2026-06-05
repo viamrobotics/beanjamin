@@ -482,7 +482,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 	steps := []Step{
 		{PoseName: filterPoseGrinderApproach, Component: componentFilter, Pause: shortPause},
-		{PoseName: filterPoseGrinderActivate, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
+		{PoseName: filterPoseGrinderActivate, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint, ExpectsContact: true},
 		{PoseName: filterPoseGrinderApproach, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
 		// Circle under the grinder chute to distribute grounds evenly while the grinder dispenses.
 		{PoseName: filterPoseGrinderApproach, Component: componentFilter,
@@ -506,7 +506,7 @@ func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
 func (s *beanjaminCoffee) grindDecaf(ctx, cancelCtx context.Context) error {
 	steps := []Step{
 		{PoseName: filterPoseDecafGrinderApproach, Component: componentFilter, Pause: shortPause},
-		{PoseName: filterPoseDecafGrinderActivate, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
+		{PoseName: filterPoseDecafGrinderActivate, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint, ExpectsContact: true},
 		{PoseName: filterPoseDecafGrinderApproach, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
 		// Circle under the decaf grinder chute to distribute grounds evenly while the grinder dispenses.
 		{PoseName: filterPoseDecafGrinderApproach, Component: componentFilter,
@@ -530,7 +530,7 @@ func (s *beanjaminCoffee) grindDecaf(ctx, cancelCtx context.Context) error {
 func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
 	steps := []Step{
 		{PoseName: filterPoseTamperApproach, Component: componentFilter, Pause: shortPause},
-		{PoseName: filterPoseTamperActivate, Component: componentFilter, Pause: 3000 * time.Millisecond, LinearConstraint: defaultApproachConstraint},
+		{PoseName: filterPoseTamperActivate, Component: componentFilter, Pause: 3000 * time.Millisecond, LinearConstraint: defaultApproachConstraint, ExpectsContact: true},
 		{PoseName: filterPoseTamperApproach, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
 	}
 	for _, step := range steps {
@@ -1063,21 +1063,38 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 	default:
 	}
 
+	// Once a collision e-stop has latched, refuse all further motion (including
+	// the order's own deferred recovery and home moves) so the arm stays put
+	// until an operator clears the obstacle and resumes the queue.
+	if reason, _ := s.faultReason.Load().(string); reason != "" {
+		return fmt.Errorf("arm halted after %s; send 'proceed' once clear", reason)
+	}
+
+	// Set hardware collision protection for this move: protective for free-space,
+	// 0 for intentional contact. No-op when the feature is disabled.
+	if err := s.applyCollisionSensitivity(ctx, step); err != nil {
+		return err
+	}
+
+	var moveErr error
 	if step.PivotFromPose != "" {
 		s.logger.Infof("pivoting from %q to %q", step.PivotFromPose, step.PoseName)
-		if err := s.executePivot(ctx, cancelCtx, step); err != nil {
-			return err
-		}
+		moveErr = s.executePivot(ctx, cancelCtx, step)
 	} else if step.CircularRadiusMm > 0 {
 		s.logger.Infof("circular motion around %q", step.PoseName)
-		if err := s.executeCircularMotion(ctx, cancelCtx, step); err != nil {
-			return err
-		}
+		moveErr = s.executeCircularMotion(ctx, cancelCtx, step)
 	} else {
 		s.logger.Infof("moving to %q", step.PoseName)
-		if err := s.moveToPose(ctx, step); err != nil {
-			return err
+		moveErr = s.moveToPose(ctx, step)
+	}
+	if moveErr != nil {
+		// A collision trip on a protected move means the arm hit something
+		// unexpected: record the fault, auto-clear, and let the error fail the
+		// order (firing the Slack failure notification).
+		if s.collisionProtectionEnabled() && isCollisionError(moveErr) {
+			s.handleCollisionFault(step, moveErr)
 		}
+		return moveErr
 	}
 
 	if step.Pause > 0 {

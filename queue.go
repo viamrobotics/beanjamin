@@ -252,6 +252,25 @@ func (s *beanjaminCoffee) processQueue() {
 			// debugging.
 			s.currentStep.Store("")
 
+			// If the order tripped a collision e-stop, halt the queue so no new
+			// order drives the arm into the same obstacle. The operator clears
+			// the obstacle, then sends 'proceed' to clear the fault and resume.
+			// currentSensitivity stays 0 (set during the fault) so the next
+			// free-space move re-applies the protective level.
+			if reason, _ := s.faultReason.Load().(string); reason != "" {
+				s.logger.Errorf("queue halted: %s — clear the obstacle, then send 'proceed' to resume", reason)
+				s.paused.Store(true)
+				select {
+				case <-s.queue.proceed:
+					s.faultReason.Store("")
+					s.paused.Store(false)
+					s.logger.Infof("received 'proceed', cleared collision fault, resuming queue processing")
+				case <-s.queueStop:
+					s.paused.Store(false)
+					return
+				}
+			}
+
 			// If the operator cancelled the running order, pause so no new
 			// orders start until they explicitly send 'proceed'.
 			if s.paused.Swap(false) {
@@ -332,6 +351,9 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 			decaf:             isDecafDrink(order.Drink),
 			startedAt:         startedAt,
 			endedAt:           time.Now(),
+			// Arm collision-detection level in effect at the end of the attempt;
+			// clamp the -1 "unknown" sentinel (feature off / never applied) to 0.
+			collisionSensitivity: max(0, int(s.currentSensitivity.Load())),
 		})
 		// Consecutive-successful-orders streak: bump on success, reset on any
 		// non-successful outcome (fault, panic, or operator cancel). ctx here

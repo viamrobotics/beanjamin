@@ -215,7 +215,7 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
 }
 ```
 
-Add a **`viam:beanjamin:order-sensor`** component to the machine, put it in the coffee service **depends_on**, and set `order_sensor_name` to that component’s name. When an order attempt finishes, one reading is queued with `start_time`, `end_time`, `order_ok`, `duration_ms`, and — for observability — `failed_step`, `operator_cancelled`, `trace_id`, the path flags (`place_cup`/`clean_after_use`/`decaf`), and `error_message` (if applicable).
+Add a **`viam:beanjamin:order-sensor`** component to the machine, put it in the coffee service **depends_on**, and set `order_sensor_name` to that component’s name. When an order attempt finishes, one reading is queued with `start_time`, `end_time`, `order_ok`, `duration_ms`, and — for observability — `failed_step`, `operator_cancelled`, `trace_id`, the path flags (`place_cup`/`clean_after_use`/`decaf`), `collision_sensitivity`, and `error_message` (if applicable).
 
 **Usage sensor.** The optional `usage_sensor_name` field points at a single sensor resource that holds several counters, one per key, updated through the brew lifecycle. Setting the field automatically registers the sensor as a dependency of the coffee service, so no manual `depends_on` entry is required. The sensor must support both the `Readings` API and a `DoCommand({"set": {<key>: <value>}})` that overwrites the named counter (and preserves the others). The coffee service updates each counter with a best-effort read-modify-write: it reads the current value via `Readings`, computes the new value, and writes it back via `DoCommand`. The keys are:
 
@@ -271,6 +271,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `cup_centroid_min_z_mm`               | float  | No       | Minimum world-frame Z for each detection. If a detected centroid's Z is below this, it is clamped up to this value before pose composition; values above are left alone. Use to recover from depth noise that would otherwise produce a too-low approach pose and trip the planner. Default `0` disables clamping. |
 | `place_cup_in_serving_area`                  | bool   | No       | When `true`, replaces the per-customer handoff with placement on a dedicated served-drinks shelf. Slots are tiled along the shelf's long axis (120 mm spacing, 60 mm margin from each end) on the midline of the shelf top — as many slots as the shelf length allows; the placement anchor is 40 mm above the shelf top surface (composed with `cup_grab_relative_pose` to derive the actual claws pose, mirroring how the pickup uses the detected cup centroid). Slots are filled **sequentially (round-robin)**: a process-local counter advances one slot per placement and wraps back to the first slot when it reaches the end, on the assumption that by the time it wraps the earliest-placed cup has been picked up. If the arm cannot plan a path to a slot (approach or descent), that slot is **skipped and the next one is tried**, continuing around the ring until one is reachable (the order fails only if every slot is unreachable). There is no vision-based occupancy check — placement is fully decoupled from pickup observation. The counter resets to the first slot on module restart/reconfigure. Requires `dynamic_cup_pickup=true`, a `serving-area` (or `serving-area_origin`) Box geometry in the framesystem, and a shelf physically mounted above the empty-cup pickup spot. Default `false`. |
 | `max_batch_size`           | int    | No       | Cap on `prepare_order.count` — how many identical drinks one DoCommand may enqueue at once. Defaults to 10 when unset. Protects the queue against runaway voice commands or LLM hallucinations. |
+| `free_move_collision_sensitivity` | int (0–5) | No | Enables per-move hardware collision protection during the brew cycle. See "Per-move collision protection" below. Defaults to `0` (disabled). |
 
 **Dynamic cup pickup — required poses on the camera-observe pose switcher (`camera_observe_pose_switcher_name`):**
 
@@ -280,6 +281,28 @@ When `dynamic_cup_pickup` is enabled, the dedicated camera-observe switch must h
 | ------------------- | ------------------- | ----------- |
 | `cup_observe`       | Absolute world pose | Required. The primary view of the cup workspace and the home/recovery pose the arm returns to between grab attempts. |
 | additional poses    | Absolute world pose | Optional extra vantages tried in turn **only when earlier poses found no cup**, to recover cups occluded from the primary view. An unreachable pose logs a warning and is skipped. |
+
+### Per-move collision protection
+
+Setting `free_move_collision_sensitivity` (1–5) enables the arm's hardware collision detection **per move** during the brew cycle:
+
+- **Free-space moves** (approaches, retreats, homing) run at the configured protective level, so the firmware e-stops the arm the moment it hits something unexpected.
+- **Intentional-contact moves** — tamping, the grinder press, locking/unlocking the portafilter, the brew-button presses, cup and filter grabs, and cleaning — temporarily drop to sensitivity `0` so the deliberate force isn't mistaken for a crash. Steps are classified as contact when they declare `AllowedCollisions` or set `expects_contact`.
+
+The service toggles sensitivity between moves via the arm's `set_collision_sensitivity` DoCommand (the arm is idle at that point; the command rejects changes mid-motion).
+
+When an **unexpected collision** trips on a protected move:
+
+1. The arm firmware e-stops and the in-flight move returns `collision caused overcurrent: …`.
+2. The order **fails** (firing the Slack failure notification, if configured) and the failed step is recorded.
+3. The service logs that it is **automatically clearing** the arm's latched error (`clear_error`) so the arm isn't bricked, then sets sensitivity back to `0`.
+4. The **queue halts** (`is_paused: true`, `faulted: true` in `get_queue`) so no new order drives the arm into the same obstacle. No further motion runs until you resume.
+
+**Recovery:** clear the obstacle, then send **`proceed`** to clear the fault and resume the queue. The next free-space move re-applies the protective level.
+
+Leaving `free_move_collision_sensitivity` unset (or `0`) disables all of the above — the service never touches the arm's collision sensitivity, and the arm keeps whatever `collision_sensitivity` it was configured with.
+
+> Requires the xArm module's `set_collision_sensitivity` / `clear_error` DoCommands ([viam-modules/viam-ufactory-xarm#79](https://github.com/viam-modules/viam-ufactory-xarm/pull/79)). Tune to the lowest level that still catches a real crash: too high and normal acceleration/payload current spikes can false-trip the same fault. See the xArm module's "Recovering from an Error" docs for manual recovery via UFACTORY Studio.
 
 ### DoCommand
 
@@ -322,10 +345,12 @@ Only `drink` is required. If `initial_greeting` is omitted, a random greeting is
 Returns:
 
 ```json
-{"count": 2, "orders": ["Alice", "Bob"], "is_paused": false, "is_busy": true}
+{"count": 2, "orders": ["Alice", "Bob"], "is_paused": false, "is_busy": true, "faulted": false, "fault_reason": "", "collision_sensitivity": 3}
 ```
 
-**`proceed`** - Resume queue processing after a pause between orders.
+`faulted`/`fault_reason` report a halted-after-collision state and `collision_sensitivity` the level last set on the arm (`-1` when the feature is off); see "Per-move collision protection" above.
+
+**`proceed`** - Resume queue processing after a pause between orders, or after a collision fault once the obstacle is cleared.
 
 ```json
 {"proceed": true}
@@ -627,7 +652,8 @@ After each order attempt completes (success, failure, or panic), the **next** `R
   "decaf": false,
   "start_time": "2026-04-01T12:00:00.000000000Z",
   "end_time": "2026-04-01T12:02:05.000000000Z",
-  "duration_ms": 125000
+  "duration_ms": 125000,
+  "collision_sensitivity": 3
 }
 ```
 
@@ -639,6 +665,7 @@ The remaining fields exist to support observability (per-step error rates and fa
 - **`operator_cancelled`** — `true` when the failure was an operator `cancel` (a `context.Canceled` interruption), not a genuine fault. **Exclude these from step error-rate metrics** so intentional cancellations don't inflate failure counts. `failed_step` is still populated (it marks where the cancel interrupted).
 - **`trace_id`** — the OpenTelemetry trace ID for the order. Use it to jump from a failed reading to the order's full distributed trace (every motion plan and step span). Empty if no trace context was present.
 - **`place_cup` / `clean_after_use` / `decaf`** — which conditional branches the order took, so you can tell why a given step ran (or didn't) without cross-referencing the coffee service config. `decaf` is derived from the drink; the other two mirror the coffee service config at the time of the attempt.
+- **`collision_sensitivity`** — the arm collision-detection level in effect at the end of the attempt (`0` when `free_move_collision_sensitivity` is off or never applied). An order ending at `0` ended on a contact step or right after a collision fault auto-clear; see "Per-move collision protection" above.
 
 A per-step error rate is then `count(failed_step == X AND NOT operator_cancelled) / count(all orders)`.
 

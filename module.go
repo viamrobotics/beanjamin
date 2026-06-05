@@ -69,6 +69,14 @@ type Step struct {
 	CircularRadiusMm     float64 `json:"circular_radius_mm,omitempty"`
 	CircularDurationSec  float64 `json:"circular_duration_sec,omitempty"`
 	CircularPointsPerRev int     `json:"circular_points_per_rev,omitempty"`
+
+	// ExpectsContact marks a step as an intentional-contact move (e.g. pressing
+	// the tamper or grinder). When the free_move_collision_sensitivity feature
+	// is enabled, such steps drop the arm's hardware collision detection to 0 so
+	// the deliberate force isn't mistaken for a crash. Steps that declare
+	// AllowedCollisions are treated as contact moves automatically — see
+	// Step.expectsContact in collision.go.
+	ExpectsContact bool `json:"expects_contact,omitempty"`
 }
 
 type Config struct {
@@ -154,6 +162,19 @@ type Config struct {
 	// runaway voice command ("a hundred lattes") and from an LLM
 	// hallucinating a huge count. Defaults to 10 when unset or non-positive.
 	MaxBatchSize int `json:"max_batch_size,omitempty"`
+
+	// FreeMoveCollisionSensitivity enables per-move hardware collision
+	// protection during the brew cycle. When set (1–5), free-space moves run at
+	// this protective level while intentional-contact moves (tamping, grinder
+	// press, locking, button presses, cup/filter grabs, cleaning) temporarily
+	// drop to 0 so deliberate force isn't mistaken for a crash. On an
+	// unexpected collision the arm firmware e-stops, the order fails, the arm is
+	// auto-cleared, and the queue halts until an operator sends "proceed".
+	// Unset/0 disables the feature: the service never toggles sensitivity and
+	// the arm keeps whatever collision_sensitivity it was configured with.
+	// Requires the xArm module's set_collision_sensitivity / clear_error
+	// DoCommands (viam-modules/viam-ufactory-xarm#79).
+	FreeMoveCollisionSensitivity int `json:"free_move_collision_sensitivity,omitempty"`
 }
 
 // defaultMaxBatchSize is used when Config.MaxBatchSize is unset or zero.
@@ -286,6 +307,10 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		return nil, nil, fmt.Errorf("%s: place_cup_in_serving_area requires dynamic_cup_pickup=true", path)
 	}
 
+	if cfg.FreeMoveCollisionSensitivity < 0 || cfg.FreeMoveCollisionSensitivity > 5 {
+		return nil, nil, fmt.Errorf("%s: free_move_collision_sensitivity must be between 0 and 5, got %d", path, cfg.FreeMoveCollisionSensitivity)
+	}
+
 	return reqDeps, optDeps, nil
 }
 
@@ -324,6 +349,15 @@ type beanjaminCoffee struct {
 	queue          *OrderQueue
 	queueStop      chan struct{}
 	paused         atomic.Bool
+	// currentSensitivity is the arm collision-detection level we last set via
+	// set_collision_sensitivity, or -1 when unknown (feature off, or not yet
+	// applied). Lets applyCollisionSensitivity skip redundant DoCommands.
+	// Only mutated from the single queue-consumer routine (guarded by running).
+	currentSensitivity atomic.Int64
+	// faultReason is non-empty after a free-space move trips the firmware
+	// collision e-stop. It short-circuits further motion (executeStep) and
+	// makes processQueue halt the queue until an operator sends "proceed".
+	faultReason atomic.Value // string; "" when healthy
 	// portafilterInMachine is true between releaseFilter and grabFilter:
 	// the bayonet holds the filter and the arm is free. Cancel uses this
 	// to decide whether recovery (re-grip + clean + home) is required.
@@ -550,6 +584,10 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		cupVision:            cupVision,
 		cupCameraName:        cupCameraName,
 	}
+	// -1 means "unknown / not yet applied" so the first move always issues a
+	// set_collision_sensitivity. faultReason starts healthy.
+	s.currentSensitivity.Store(-1)
+	s.faultReason.Store("")
 
 	// Fail fast if the enabled configuration references poses that are missing
 	// from (or unset on) the switches, rather than discovering it mid-order.
@@ -626,6 +664,7 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 		}
 	}
 	step, _ := s.currentStep.Load().(string)
+	faultReason, _ := s.faultReason.Load().(string)
 	resp := map[string]interface{}{
 		// count reports pending depth only — orders waiting to be made.
 		// Recently-completed orders are visible in `orders` but don't add
@@ -638,6 +677,13 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 		"is_busy":         s.running.Load(),
 		"current_step":    step,
 		"can_serve_decaf": s.cfg.CanServeDecaf,
+		// Collision-protection state (free_move_collision_sensitivity). faulted
+		// is true while the arm is halted after a collision e-stop; send
+		// 'proceed' once clear to resume. collision_sensitivity is the level we
+		// last set on the arm (-1 when unknown / feature off).
+		"faulted":               faultReason != "",
+		"fault_reason":          faultReason,
+		"collision_sensitivity": float64(s.currentSensitivity.Load()),
 	}
 	s.logger.Debugw("Status", "response", resp)
 	return resp, nil
