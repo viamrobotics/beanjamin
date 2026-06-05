@@ -331,8 +331,9 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 		} else {
 			s.setSensorReading(ctx, s.usageSensor, "consecutive orders", "successful_consecutive_orders", 0)
 		}
+		// saveOrderVideoAsync owns clearing the pending record—only after the save
+		// succeeds—so a crash/restart during the post-roll wait stays recoverable.
 		s.saveOrderVideoAsync(order, videoFrom, execErr)
-		s.clearPendingSave(order.ID)
 		span.End()
 	}()
 	execErr = s.executeQueuedOrder(ctx, order)
