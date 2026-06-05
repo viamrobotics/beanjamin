@@ -240,6 +240,30 @@ export interface QueueStatus {
   current_step: string;
 }
 
+/**
+ * Per-machine dashboard state. Absent from the map (`undefined`) means the
+ * first poll hasn't completed yet.
+ *   - ok:         connected and the coffee-lifecycle service answered.
+ *   - no-service: connected, but this machine isn't running coffee-lifecycle.
+ *   - error:      the connection or the queue RPC failed.
+ */
+export type MachineQueueState =
+  | { kind: "ok"; status: QueueStatus }
+  | { kind: "no-service" }
+  | { kind: "error" };
+
+/**
+ * Whether the coffee-lifecycle service is present on the machine. A machine can
+ * be online and reachable without running it, in which case getQueue would
+ * fail spuriously — the dashboard checks this first so a missing service shows
+ * as a distinct state rather than a connection error.
+ */
+export async function hasCoffeeService(conn: ViamConnection): Promise<boolean> {
+  if (isDevMode()) return true;
+  const names = await conn.robotClient.resourceNames();
+  return names.some((n) => n.name === COFFEE_SERVICE_NAME);
+}
+
 export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
   if (isDevMode()) {
     pruneDevRecent();

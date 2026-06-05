@@ -6,7 +6,8 @@ import * as VIAM from "@viamrobotics/sdk";
 import Cookies from "js-cookie";
 import {
   getQueue,
-  type QueueStatus,
+  hasCoffeeService,
+  type MachineQueueState,
   type ViamConnection,
 } from "./lib/viamClient";
 import { createConnectionManager } from "./lib/connectionManager";
@@ -53,7 +54,7 @@ export default function Home() {
   >(null);
   const [viamClient, setViamClient] = useState<VIAM.ViamClient | null>(null);
   const [machineQueues, setMachineQueues] = useState<
-    Map<string, QueueStatus | null>
+    Map<string, MachineQueueState>
   >(new Map());
   const [panel, setPanel] = useState<Panel | null>(null);
   const [panelOrders, setPanelOrders] = useState<OrderRecord[] | null>(null);
@@ -80,11 +81,11 @@ export default function Home() {
     // after MAX_QUEUE_FAILURES rather than on every transient RPC error.
     const queueFailures = new Map<string, number>();
 
-    const setQueue = (machineId: string, q: QueueStatus | null) => {
+    const setQueue = (machineId: string, state: MachineQueueState) => {
       if (cancelled) return;
       setMachineQueues((prev) => {
         const next = new Map(prev);
-        next.set(machineId, q);
+        next.set(machineId, state);
         return next;
       });
     };
@@ -102,14 +103,22 @@ export default function Home() {
       } catch (e) {
         console.error(`failed to connect to ${machineId}:`, e);
         queueFailures.delete(partId);
-        setQueue(machineId, null);
+        setQueue(machineId, { kind: "error" });
         return;
       }
 
       try {
+        // A machine can be online and reachable without running the coffee
+        // service. That's not an error — keep the connection and mark it so
+        // the dashboard can show a distinct (yellow) state.
+        if (!(await hasCoffeeService(conn))) {
+          queueFailures.delete(partId);
+          setQueue(machineId, { kind: "no-service" });
+          return;
+        }
         const q = await getQueue(conn);
         queueFailures.delete(partId);
-        setQueue(machineId, q);
+        setQueue(machineId, { kind: "ok", status: q });
       } catch (e) {
         const failures = (queueFailures.get(partId) ?? 0) + 1;
         queueFailures.set(partId, failures);
@@ -122,7 +131,7 @@ export default function Home() {
           connections.invalidate(partId);
           queueFailures.delete(partId);
         }
-        setQueue(machineId, null);
+        setQueue(machineId, { kind: "error" });
       }
     };
 
@@ -292,7 +301,11 @@ export default function Home() {
           .sort((a, b) => {
             const score = (m: Machine) => {
               const q = machineQueues.get(m.id);
-              if (q && q.is_busy && q.orders.some((o) => o.completed_at === ""))
+              if (
+                q?.kind === "ok" &&
+                q.status.is_busy &&
+                q.status.orders.some((o) => o.completed_at === "")
+              )
                 return 2;
               if (m.online) return 1;
               return 0;
