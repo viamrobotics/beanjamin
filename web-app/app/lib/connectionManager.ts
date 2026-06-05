@@ -4,24 +4,39 @@ import { connectToViam, type ViamConnection } from "./viamClient";
 // wedge in the pool as a promise that never settles, blocking recovery.
 export const DIAL_TIMEOUT_MS = 10_000;
 
+/**
+ * Reject if `p` doesn't settle within `ms`. The timer is always cleared once
+ * `p` settles, so a winning promise doesn't leave a dangling timeout alive
+ * until `ms` elapses (this runs on every heartbeat/dial).
+ */
 export function withTimeout<T>(
   p: Promise<T>,
   ms: number,
   label: string
 ): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
-    ),
-  ]);
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms
+    );
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
 /**
- * Pools Viam connections keyed by `partId`. A single manager can back one
- * connection (the kiosk, via `useViamConnection`) or many (the dashboard, one
- * per online machine). Centralizing it keeps the dial-timeout, in-flight
- * dedup, and teardown behavior identical for every caller.
+ * Fire-and-forget teardown of a (possibly zombie) channel. Awaiting a stuck
+ * disconnect would only block recovery, and callers always re-dial. No-op in
+ * dev mode, whose mock client has no real `disconnect`.
+ */
+export function disconnectQuietly(conn: ViamConnection): void {
+  if (!conn.isDev) void conn.robotClient.disconnect().catch(() => {});
+}
+
+/**
+ * Pools Viam connections keyed by `partId` — one per online machine. Used by
+ * the dashboard, which juggles many machines at once; the kiosk talks to a
+ * single machine and dials directly via `useViamConnection`.
  */
 export interface ConnectionManager {
   /**
@@ -41,18 +56,22 @@ export interface ConnectionManager {
   closeAll(): void;
 }
 
-export function createConnectionManager(): ConnectionManager {
+/**
+ * `dial` and `timeoutMs` are injectable so the pooling/eviction/dedup logic can
+ * be unit-tested without a real Viam dial; they default to the production
+ * dialer and timeout.
+ */
+export function createConnectionManager(
+  dial: (partId: string) => Promise<ViamConnection> = connectToViam,
+  timeoutMs: number = DIAL_TIMEOUT_MS
+): ConnectionManager {
   const entries = new Map<string, Promise<ViamConnection>>();
 
   function get(partId: string): Promise<ViamConnection> {
     const existing = entries.get(partId);
     if (existing) return existing;
 
-    const dialed = withTimeout(
-      connectToViam(partId),
-      DIAL_TIMEOUT_MS,
-      "dial"
-    ).catch((err) => {
+    const dialed = withTimeout(dial(partId), timeoutMs, "dial").catch((err) => {
       // Evict the rejected promise so the next get() re-dials instead of
       // replaying the same failure forever. Guard against clobbering a newer
       // entry that may have replaced this one in the meantime.
@@ -67,13 +86,7 @@ export function createConnectionManager(): ConnectionManager {
     const entry = entries.get(partId);
     if (!entry) return;
     entries.delete(partId);
-    // Fire-and-forget teardown of the (possibly zombie) channel. Awaiting a
-    // stuck disconnect would block recovery, and a fresh get() re-dials.
-    void entry
-      .then((conn) => {
-        if (!conn.isDev) void conn.robotClient.disconnect().catch(() => {});
-      })
-      .catch(() => {});
+    void entry.then(disconnectQuietly).catch(() => {});
   }
 
   function closeAll(): void {

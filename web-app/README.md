@@ -4,7 +4,10 @@ Customer-facing kiosk UI for the Beanjamin espresso robot. Built with Next.js an
 
 ## Routes
 
-- `/` — machine picker. Lists machines accessible to the logged-in user. Each row offers two links: the row itself opens the kiosk in **standard mode**, and a `[kiosk mode →]` link opens it in **kiosk mode**.
+- `/` — fleet dashboard. Lists machines accessible to the logged-in user with a live per-machine queue summary, plus order charts and leaderboards. Each row offers two links: the row itself opens the kiosk in **standard mode**, and a `[kiosk mode →]` link opens it in **kiosk mode**. A status dot precedes each machine name:
+  - 🟢 **green** — online and the coffee-lifecycle service is answering.
+  - 🟡 **yellow** — online and reachable, but the machine isn't running the coffee-lifecycle service.
+  - ⚪ **gray** — offline.
 - `/machine?partId=<partId>` — kiosk for a specific robot part. The `partId` is resolved to an FQDN via `appClient.getRobotPart` and the kiosk connects directly to the machine.
 
 ### Query parameters

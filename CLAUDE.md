@@ -66,7 +66,7 @@ All models follow the standard Viam `Validate`/`newX` pattern — see `DEVELOPER
 
 ### Web app
 
-`web-app/app/page.tsx` is a single-page kiosk flow (`enter-name` → `face-register` → `choose-drink` → `order-confirmation` → `order-tracker`). `web-app/app/lib/viamClient.ts` is the only entry point that talks to the robot — it wraps the Viam TS SDK and issues `DoCommand`s against the coffee service. The tracker polls `get_queue` to render step state and ready-to-pick-up cards.
+`web-app/app/page.tsx` is the **fleet dashboard** (machine list with a per-machine status dot and queue summary, order charts, and leaderboards). `web-app/app/machine/page.tsx` is the **kiosk flow** for a single machine (`welcome` → `drink` → `name` → `face-register` → `confirmation`, with a right-rail `order-tracker`). `web-app/app/lib/viamClient.ts` wraps the Viam TS SDK and is where `DoCommand`s are issued against the coffee and customer-detector services. Connection lifecycle helpers live in `web-app/app/lib/connectionManager.ts`: `withTimeout`/`disconnectQuietly` (the dial-timeout and teardown primitives) plus `createConnectionManager`, a per-machine connection pool with in-flight dedup that the dashboard uses (one pooled connection per machine). `useViamConnection.ts` is the kiosk's single connection — it dials directly with those shared helpers and runs a heartbeat, without the pool. The tracker polls `get_queue` to render step state and ready-to-pick-up cards; the dashboard polls each machine and colors its status dot green (coffee service answering), yellow (reachable but coffee service absent), or gray (offline).
 
 ## Lint and style
 

@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { type ViamConnection } from "./viamClient";
-import { createConnectionManager, withTimeout } from "./connectionManager";
+import { connectToViam, type ViamConnection } from "./viamClient";
+import {
+  DIAL_TIMEOUT_MS,
+  withTimeout,
+  disconnectQuietly,
+} from "./connectionManager";
 
 const HEARTBEAT_INTERVAL_MS = 3000;
 // Shorter than the interval so a stuck ping on a zombie channel can't block
@@ -17,30 +21,33 @@ export function useViamConnection(partId: string) {
     let cancelled = false;
     let dialInFlight = false;
     let pingInFlight = false;
-    // One manager per hook instance, backing this hook's single partId. The
-    // dial-timeout and teardown behavior lives in the manager so the kiosk and
-    // the dashboard stay in sync.
-    const manager = createConnectionManager();
 
-    // setError fires only on the first-ever attempt (no previous client) so
-    // transient reconnect failures don't stomp the UI.
+    // Only path to a fresh client. Idempotent via dialInFlight: concurrent
+    // callers don't stack dials. setError fires only on the first-ever attempt
+    // (no previous client) so transient reconnect failures don't stomp the UI.
     async function dial(reason: string) {
       if (cancelled || dialInFlight) return;
       dialInFlight = true;
-      const hadPrevious = connRef.current !== null;
+      const previous = connRef.current;
       try {
         console.log(`[app] dialing Viam (${reason})…`);
-        const next = await manager.get(partId);
+        const next = await withTimeout(
+          connectToViam(partId),
+          DIAL_TIMEOUT_MS,
+          "dial"
+        );
         if (cancelled) return;
         connRef.current = next;
         setConn(next);
         setConnected(true);
         setError(null);
         console.log("[app] connected to Viam");
+        // Tear down the old zombie client now that the fresh one is live.
+        if (previous) disconnectQuietly(previous);
       } catch (err) {
         if (cancelled) return;
         console.log(`[app] dial failed (${reason}):`, err);
-        if (!hadPrevious) {
+        if (!previous) {
           setError(
             `Viam connection failed: ${err instanceof Error ? err.message : String(err)}`
           );
@@ -69,12 +76,9 @@ export function useViamConnection(partId: string) {
         if (cancelled) return;
         console.log("[app] heartbeat failed:", err);
         setConnected(false);
-        if (navigator.onLine) {
-          // Drop the zombie channel so the re-dial gets a fresh client rather
-          // than the cached, heartbeat-failing one.
-          manager.invalidate(partId);
-          void dial("heartbeat failed");
-        }
+        // Re-dial gets a fresh client; the old zombie is torn down once the
+        // new one is live (see dial()).
+        if (navigator.onLine) void dial("heartbeat failed");
       } finally {
         pingInFlight = false;
       }
@@ -94,7 +98,7 @@ export function useViamConnection(partId: string) {
       cancelled = true;
       clearInterval(interval);
       window.removeEventListener("online", handleOnline);
-      manager.closeAll();
+      if (connRef.current) disconnectQuietly(connRef.current);
     };
   }, [partId]);
 

@@ -261,7 +261,15 @@ export type MachineQueueState =
 export async function hasCoffeeService(conn: ViamConnection): Promise<boolean> {
   if (isDevMode()) return true;
   const names = await conn.robotClient.resourceNames();
-  return names.some((n) => n.name === COFFEE_SERVICE_NAME);
+  // The coffee service is a generic service (type "service", subtype
+  // "generic"). Match all three so a component or sensor that happens to share
+  // the name can't be mistaken for the service.
+  return names.some(
+    (n) =>
+      n.name === COFFEE_SERVICE_NAME &&
+      n.type === "service" &&
+      n.subtype === "generic"
+  );
 }
 
 export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
