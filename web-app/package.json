@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "build:viam": "next build && tar -czvf module.tar.gz -C out . -C .. meta.json",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --import tsx --test \"app/**/*.test.ts\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
@@ -28,6 +29,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
+    "tsx": "^4.22.4",
     "typescript": "^5"
   }
 }
