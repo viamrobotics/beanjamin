@@ -73,6 +73,7 @@ export default function Home() {
     // and teardown behavior — same manager the kiosk uses.
     const connections = createConnectionManager();
     let queueInterval: ReturnType<typeof setInterval> | undefined;
+    let machinesInterval: ReturnType<typeof setInterval> | undefined;
     let aggregatesInterval: ReturnType<typeof setInterval> | undefined;
     let currentClient: VIAM.ViamClient | null = null;
     let currentMachines: Machine[] = [];
@@ -150,6 +151,25 @@ export default function Home() {
       }
     };
 
+    // Re-list machines so online/offline status (and the status dot) stays
+    // live, and tear down the pooled connection of any machine that's no
+    // longer online — otherwise a dead channel lingers in the pool and the
+    // next cycle burns MAX_QUEUE_FAILURES before re-dialing when it returns.
+    const refreshMachines = async () => {
+      if (!currentClient) return;
+      try {
+        const found = await listMachines(currentClient);
+        if (cancelled) return;
+        for (const m of found) {
+          if (m.mainPartId && !m.online) connections.invalidate(m.mainPartId);
+        }
+        currentMachines = found;
+        setMachines(found);
+      } catch (e) {
+        console.error("failed to refresh machines:", e);
+      }
+    };
+
     const refreshAggregates = () => {
       if (!currentClient) return;
       loadDailyOrderCounts(currentClient, currentMachines)
@@ -177,6 +197,7 @@ export default function Home() {
     };
 
     refreshAllRef.current = () => {
+      refreshMachines();
       refreshQueues();
       refreshAggregates();
     };
@@ -209,6 +230,7 @@ export default function Home() {
         refreshQueues();
 
         queueInterval = setInterval(refreshQueues, 5000);
+        machinesInterval = setInterval(refreshMachines, 15000);
         aggregatesInterval = setInterval(refreshAggregates, 30000);
       } catch (e) {
         if (!cancelled) {
@@ -221,6 +243,7 @@ export default function Home() {
     return () => {
       cancelled = true;
       if (queueInterval) clearInterval(queueInterval);
+      if (machinesInterval) clearInterval(machinesInterval);
       if (aggregatesInterval) clearInterval(aggregatesInterval);
       connections.closeAll();
     };
