@@ -2,7 +2,6 @@ package beanjamin
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -298,6 +297,18 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 	// errored at, and a panic below records currentStep directly.
 	s.failedStep.Store("")
 	s.writePendingSave(order, videoFrom)
+
+	// Snapshot the cancel context this order will run under so we can tell an
+	// operator cancel from a genuine fault. signalCancel cancels this exact
+	// context and then rotates s.cancelCtx to a fresh one, so we must capture
+	// it now: prepareDrink reads the same s.cancelCtx (it can't rotate while
+	// running is false), and reading s.cancelCtx later would see the fresh,
+	// un-cancelled replacement and miss the cancellation. Relying on the error
+	// unwrapping to context.Canceled is unreliable — executeStep's cancelCtx
+	// branch returns a plain (non-wrapped) error.
+	s.mu.Lock()
+	orderCancelCtx := s.cancelCtx
+	s.mu.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
 			execErr = fmt.Errorf("panic: %v", r)
@@ -311,9 +322,10 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 			order:      order,
 			execErr:    execErr,
 			failedStep: failedStep,
-			// An operator cancel propagates as context.Canceled from cancelCtx;
-			// the outer ctx is context.Background(), so this only matches cancels.
-			operatorCancelled: execErr != nil && errors.Is(execErr, context.Canceled),
+			// An operator cancel (or reset_world) interrupts the order by
+			// cancelling orderCancelCtx; a genuine fault leaves it un-cancelled.
+			// Only meaningful alongside a failure, hence the execErr guard.
+			operatorCancelled: execErr != nil && orderCancelCtx.Err() != nil,
 			traceID:           traceIDFromContext(ctx),
 			placeCup:          s.cfg.PlaceCup,
 			cleanAfterUse:     s.cfg.CleanAfterUse,
