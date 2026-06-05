@@ -95,6 +95,7 @@ func slotIndex(counter uint64, n int) int {
 // typically carries the geometry, so we try each). Non-Box geometries return
 // an error.
 func (s *beanjaminCoffee) shelfTopGeometry(ctx context.Context) (spatialmath.Pose, r3.Vector, error) {
+	logger := s.activeOrderLogger()
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return nil, r3.Vector{}, err
@@ -113,7 +114,7 @@ func (s *beanjaminCoffee) shelfTopGeometry(ctx context.Context) (spatialmath.Pos
 		anyFound = true
 		gif, gErr := frame.Geometries([]referenceframe.Input{})
 		if gErr != nil {
-			s.logger.Debugf("shelf placement: frame %q has no geometries (%v); trying next", name, gErr)
+			logger.Debugf("shelf placement: frame %q has no geometries (%v); trying next", name, gErr)
 			continue
 		}
 		if g := gif.Geometries(); len(g) > 0 {
@@ -121,7 +122,7 @@ func (s *beanjaminCoffee) shelfTopGeometry(ctx context.Context) (spatialmath.Pos
 			geos = g
 			break
 		}
-		s.logger.Debugf("shelf placement: frame %q exists but carries no geometry; trying next", name)
+		logger.Debugf("shelf placement: frame %q exists but carries no geometry; trying next", name)
 	}
 	if !anyFound {
 		return nil, r3.Vector{}, fmt.Errorf("serving-area frame %q (or %q) not found in framesystem", servingAreaFrameName, servingAreaOriginFrameName)
@@ -167,6 +168,7 @@ func (s *beanjaminCoffee) shelfTopGeometry(ctx context.Context) (spatialmath.Pos
 // Returns an error only when the serving-area geometry is missing or too small
 // to hold a single slot.
 func (s *beanjaminCoffee) servingAreaSlots(ctx context.Context) ([]r3.Vector, float64, error) {
+	logger := s.activeOrderLogger()
 	shelfWorldPose, dimsMm, err := s.shelfTopGeometry(ctx)
 	if err != nil {
 		return nil, 0, fmt.Errorf("shelf placement: %w", err)
@@ -179,7 +181,7 @@ func (s *beanjaminCoffee) servingAreaSlots(ctx context.Context) ([]r3.Vector, fl
 	}
 
 	shelfTopZ := shelfWorldPose.Point().Z + dimsMm.Z/2
-	s.logger.Infof("shelf placement: serving area at %v, dims %v, %d slot(s) (shelf top Z=%.1fmm)",
+	logger.Infof("shelf placement: serving area at %v, dims %v, %d slot(s) (shelf top Z=%.1fmm)",
 		shelfWorldPose.Point(), dimsMm, len(tiles), shelfTopZ)
 	return tiles, shelfTopZ, nil
 }

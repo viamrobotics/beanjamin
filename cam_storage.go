@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"go.viam.com/rdk/logging"
 )
 
 // Fixed clip padding around each order (not configurable). Pre-roll is limited by the camera ring buffer;
@@ -46,23 +48,24 @@ func (s *beanjaminCoffee) writePendingSave(order Order, videoFrom time.Time) {
 	if s.pendingOrderClipsDir == "" {
 		return
 	}
+	logger := s.activeOrderLogger()
 	data, err := json.Marshal(pendingSave{Order: order, VideoFrom: videoFrom})
 	if err != nil {
-		s.logger.Warnf("cam storage: failed to marshal pending save for order %s: %v", order.ID, err)
+		logger.Warnf("cam storage: failed to marshal pending save: %v", err)
 		return
 	}
 	if err := os.WriteFile(filepath.Join(s.pendingOrderClipsDir, order.ID+".json"), data, 0o644); err != nil {
-		s.logger.Warnf("cam storage: failed to write pending save for order %s: %v", order.ID, err)
+		logger.Warnf("cam storage: failed to write pending save: %v", err)
 	}
 }
 
-func (s *beanjaminCoffee) clearPendingSave(orderID string) {
+func (s *beanjaminCoffee) clearPendingSave(orderID string, logger logging.Logger) {
 	if s.pendingOrderClipsDir == "" {
 		return
 	}
 	path := filepath.Join(s.pendingOrderClipsDir, orderID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		s.logger.Warnf("cam storage: failed to clear pending save for order %s: %v", orderID, err)
+		logger.Warnf("cam storage: failed to clear pending save: %v", err)
 	}
 }
 
@@ -112,12 +115,16 @@ func (s *beanjaminCoffee) cleanupPendingClips() (map[string]any, error) {
 			skipped++
 			continue
 		}
-		s.logger.Infof("cam storage: cleanup: attempting save for interrupted order %s (%s)", ps.Order.ID, ps.Order.CustomerName)
+		// Recovery for an interrupted order — tag with its ID. The cleanup job
+		// runs off any order goroutine, so build the tagged logger from the
+		// record rather than activeOrderLogger().
+		orderLogger := s.logger.WithFields("order_id", ps.Order.ID)
+		orderLogger.Infof("cam storage: cleanup: attempting save for interrupted order (%s)", ps.Order.CustomerName)
 		clipFrom := ps.VideoFrom.Add(-clipLead)
 		// The skip gate above guarantees this is already ≥ segmentDuration in the past,
 		// so it lands in closed segments and never exceeds now.
 		clipTo := ps.VideoFrom.Add(maxBrewDuration + clipLead)
-		s.issueVideoSave(ps.Order, clipFrom, clipTo, fmt.Errorf("interrupted: recovered by scheduled cleanup"))
+		s.issueVideoSave(ps.Order, clipFrom, clipTo, fmt.Errorf("interrupted: recovered by scheduled cleanup"), orderLogger)
 		saved++
 	}
 	return map[string]any{"saved": saved, "skipped": skipped}, nil
@@ -131,16 +138,20 @@ func (s *beanjaminCoffee) cleanupPendingClips() (map[string]any, error) {
 // silently dropped as they were with async saves.
 // execErr is nil when the order finished the brew sequence; non-nil records failure (including panic) in metadata.
 func (s *beanjaminCoffee) saveOrderVideoAsync(order Order, from time.Time, execErr error) {
+	// Capture the order-scoped logger synchronously: the save runs in a
+	// detached goroutine that outlives the order, by which point activeLogger
+	// has been cleared, so we can't source it from activeOrderLogger() there.
+	logger := s.activeOrderLogger()
 	if s.camStorage == nil {
-		s.logger.Infof("cam storage: skip save for order %s — no cam_storage_mux_name configured", order.ID)
+		logger.Infof("cam storage: skip save — no cam_storage_mux_name configured")
 		// No saver will ever run, so the pending record is unrecoverable noise—drop it.
-		s.clearPendingSave(order.ID)
+		s.clearPendingSave(order.ID, logger)
 		return
 	}
 	clipFrom := from.Add(-clipLead)
 	clipTo := time.Now().UTC().Add(clipTrail) // fixed end ≈ order end + post-roll
-	s.logger.Infof("cam storage: scheduling save for order %s — [%s, %s], waiting for trailing segment to close",
-		order.ID, formatClipTimestampUTC(clipFrom), formatClipTimestampUTC(clipTo))
+	logger.Infof("cam storage: scheduling save — [%s, %s], waiting for trailing segment to close",
+		formatClipTimestampUTC(clipFrom), formatClipTimestampUTC(clipTo))
 	go func() {
 		// Not tied to service/caller cancellation—we still want the clip. The segment
 		// containing clipTo closes at most segmentDuration after clipTo; wait that out
@@ -148,23 +159,23 @@ func (s *beanjaminCoffee) saveOrderVideoAsync(order Order, from time.Time, execE
 		if wait := time.Until(clipTo.Add(segmentDuration + clipFlushMargin)); wait > 0 {
 			time.Sleep(wait)
 		}
-		s.saveOrderVideoAndClear(order, clipFrom, clipTo, execErr)
+		s.saveOrderVideoAndClear(order, clipFrom, clipTo, execErr, logger)
 	}()
 }
 
 // saveOrderVideoAndClear issues the save and clears the pending-clip record only once
 // the save actually succeeds. If the save fails—or the process dies before this runs—the
 // record survives so cleanupPendingClips can recover the clip on the next scheduled sweep.
-func (s *beanjaminCoffee) saveOrderVideoAndClear(order Order, clipFrom, clipTo time.Time, execErr error) {
-	if s.issueVideoSave(order, clipFrom, clipTo, execErr) {
-		s.clearPendingSave(order.ID)
+func (s *beanjaminCoffee) saveOrderVideoAndClear(order Order, clipFrom, clipTo time.Time, execErr error, logger logging.Logger) {
+	if s.issueVideoSave(order, clipFrom, clipTo, execErr, logger) {
+		s.clearPendingSave(order.ID, logger)
 	}
 }
 
 // issueVideoSave performs the synchronous save and reports whether it succeeded.
 // Callers use the result to decide whether to clear the pending-clip record: a
 // failed save keeps the record so cleanupPendingClips can retry it later.
-func (s *beanjaminCoffee) issueVideoSave(order Order, clipFrom, clipTo time.Time, execErr error) bool {
+func (s *beanjaminCoffee) issueVideoSave(order Order, clipFrom, clipTo time.Time, execErr error, logger logging.Logger) bool {
 	// The video-store bakes this metadata into the clip filename and nothing more (it's
 	// not queryable cloud metadata — clips are linked to orders via the `tags` field, and
 	// failure detail lives queryably on the order sensor). So keep it minimal: just enough
@@ -179,7 +190,7 @@ func (s *beanjaminCoffee) issueVideoSave(order Order, clipFrom, clipTo time.Time
 		"order_status": status,
 	})
 	if err != nil {
-		s.logger.Warnf("cam storage: skip save for order %s: metadata: %v", order.ID, err)
+		logger.Warnf("cam storage: skip save: metadata: %v", err)
 		return false
 	}
 	cmd := map[string]any{
@@ -193,19 +204,19 @@ func (s *beanjaminCoffee) issueVideoSave(order Order, clipFrom, clipTo time.Time
 		// instead of being silently lost in a background worker.
 		"async": false,
 	}
-	s.logger.Infof("cam storage: issuing save for order %s — from=%s to=%s",
-		order.ID, formatClipTimestampUTC(clipFrom), formatClipTimestampUTC(clipTo))
+	logger.Infof("cam storage: issuing save — from=%s to=%s",
+		formatClipTimestampUTC(clipFrom), formatClipTimestampUTC(clipTo))
 	resp, err := s.camStorage.DoCommand(context.Background(), cmd)
 	if err != nil {
-		s.logger.Errorf("cam storage: save failed for order %s: %v", order.ID, err)
+		logger.Errorf("cam storage: save failed: %v", err)
 		return false
 	}
 	if errs, ok := resp["errors"].(map[string]any); ok && len(errs) > 0 {
 		for store, msg := range errs {
-			s.logger.Errorf("cam storage: save failed for order %s on %q: %v", order.ID, store, msg)
+			logger.Errorf("cam storage: save failed on %q: %v", store, msg)
 		}
 		return false
 	}
-	s.logger.Infof("cam storage: saved clip for order %s (response: %+v)", order.ID, resp)
+	logger.Infof("cam storage: saved clip (response: %+v)", resp)
 	return true
 }

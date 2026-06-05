@@ -236,12 +236,21 @@ func (s *beanjaminCoffee) processQueue() {
 				break
 			}
 
+			// Tag every log emitted while this order runs with its ID, then
+			// thread the tagged logger down through the whole brew lifecycle.
+			orderLogger := s.logger.WithFields("order_id", order.ID)
+
 			remaining := s.queue.Len() - 1 // excluding the one about to run
-			s.logger.Infof("processing order %s for %s (%s) — %d order(s) waiting behind it",
-				order.ID, order.CustomerName, order.Drink, remaining)
+			orderLogger.Infof("processing order for %s (%s) — %d order(s) waiting behind it",
+				order.CustomerName, order.Drink, remaining)
 
 			s.currentOrderID.Store(order.ID)
+			// Publish the tagged logger so the whole brew lifecycle — and
+			// out-of-goroutine entry points like cancel — pick it up via
+			// activeOrderLogger().
+			s.activeLogger.Store(&orderLogger)
 			s.safeExecuteOrder(order)
+			s.activeLogger.Store(nil)
 			s.currentOrderID.Store("")
 			// Move the order from pending to recent with CompletedAt set.
 			// The frontend renders recent orders as the green "Ready!" card
@@ -255,11 +264,11 @@ func (s *beanjaminCoffee) processQueue() {
 			// If the operator cancelled the running order, pause so no new
 			// orders start until they explicitly send 'proceed'.
 			if s.paused.Swap(false) {
-				s.logger.Infof("order cancelled — queue paused, send 'proceed' to resume")
+				orderLogger.Infof("order cancelled — queue paused, send 'proceed' to resume")
 				s.paused.Store(true)
 				select {
 				case <-s.queue.proceed:
-					s.logger.Infof("received 'proceed', resuming queue processing")
+					orderLogger.Infof("received 'proceed', resuming queue processing")
 					s.paused.Store(false)
 				case <-s.queueStop:
 					s.paused.Store(false)
@@ -270,11 +279,11 @@ func (s *beanjaminCoffee) processQueue() {
 			// If cleanup is not automatic, pause
 			// so the operator can clean up before the next order starts.
 			if !s.cfg.CleanAfterUse {
-				s.logger.Infof("queue drained — pausing for manual cleanup, send 'proceed' to continue")
+				orderLogger.Infof("queue drained — pausing for manual cleanup, send 'proceed' to continue")
 				s.paused.Store(true)
 				select {
 				case <-s.queue.proceed:
-					s.logger.Infof("received 'proceed', resuming queue processing")
+					orderLogger.Infof("received 'proceed', resuming queue processing")
 					s.paused.Store(false)
 				case <-s.queueStop:
 					s.paused.Store(false)
@@ -289,6 +298,10 @@ func (s *beanjaminCoffee) processQueue() {
 // single failing order cannot kill the queue-processing goroutine and strand
 // every order behind it. Notifies the optional order sensor and queues a clip from each camera via cam storage when configured.
 func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
+	// Runs entirely within the window where processQueue has published the
+	// order-scoped logger, so activeOrderLogger() returns the tagged logger
+	// here and in everything it calls.
+	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(context.Background(), "beanjamin::order["+order.ID+"/"+order.Drink+"]")
 	videoFrom := time.Now().UTC()
 	var execErr error
@@ -314,8 +327,8 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 			execErr = fmt.Errorf("panic: %v", r)
 			step, _ := s.currentStep.Load().(string)
 			s.failedStep.Store(step)
-			s.logger.Errorf("panic while processing order %s for %s: %v — queue will still save video and order reading",
-				order.ID, order.CustomerName, r)
+			logger.Errorf("panic while processing order for %s: %v — queue will still save video and order reading",
+				order.CustomerName, r)
 		}
 		failedStep, _ := s.failedStep.Load().(string)
 		s.notifyOrderReading(orderReading{
@@ -354,26 +367,27 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 // executeQueuedOrder runs a single order: says greeting, brews, says completion.
 // A non-nil return means the brew sequence failed; the caller still notifies the sensor and saves video via safeExecuteOrder.
 func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) error {
+	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::executeQueuedOrder")
 	defer span.End()
 	waitTime := time.Since(order.EnqueuedAt).Round(time.Second)
-	s.logger.Infof("starting order %s for %s (%s) — waited %s in queue",
-		order.ID, order.CustomerName, order.Drink, waitTime)
+	logger.Infof("starting order for %s (%s) — waited %s in queue",
+		order.CustomerName, order.Drink, waitTime)
 
 	if order.Greeting != "" {
 		if err := s.say(ctx, order.Greeting); err != nil {
-			s.logger.Warnf("failed to say greeting for order %s: %v", order.ID, err)
+			logger.Warnf("failed to say greeting: %v", err)
 		}
 	}
 
 	if err := s.prepareDrink(ctx, order.Drink, order.CustomerName, order.BatchIndex, order.BatchSize); err != nil {
-		s.logger.Errorf("order %s for %s failed: %v", order.ID, order.CustomerName, err)
+		logger.Errorf("order for %s failed: %v", order.CustomerName, err)
 		return err
 	}
 
 	if order.Completion != "" {
 		if err := s.say(ctx, order.Completion); err != nil {
-			s.logger.Warnf("failed to say completion for order %s: %v", order.ID, err)
+			logger.Warnf("failed to say completion: %v", err)
 		}
 	}
 
@@ -382,7 +396,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) e
 	// processQueue is about to move into the recent buffer; the frontend
 	// renders any order with completed_at set as the green "Ready!" card
 	// regardless of raw_step value.
-	s.logger.Infof("order %s complete for %s", order.ID, order.CustomerName)
+	logger.Infof("order complete for %s", order.CustomerName)
 	return nil
 }
 

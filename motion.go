@@ -106,6 +106,7 @@ func (s *beanjaminCoffee) fetchPose(ctx context.Context, component, poseName str
 // which iterates all resources and can fail on modular arms whose kinematics
 // proto round-trip produces KINEMATICS_FILE_FORMAT_UNSPECIFIED.
 func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.FrameSystem, referenceframe.FrameSystemInputs, error) {
+	logger := s.activeOrderLogger()
 	fsInputs := referenceframe.NewZeroInputs(s.cachedFS)
 
 	// Get current joint positions directly from the arm.
@@ -116,7 +117,7 @@ func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.Fr
 
 	// Use the config arm name as the key — this matches the frame name in the cached
 	// frame system built from FrameSystemConfig.
-	s.logger.Debugf("currentInputs: arm=%q, armInputsLen=%d", s.cfg.ArmName, len(armInputs))
+	logger.Debugf("currentInputs: arm=%q, armInputsLen=%d", s.cfg.ArmName, len(armInputs))
 	fsInputs[s.cfg.ArmName] = armInputs
 
 	if s.vizEnabled {
@@ -135,6 +136,7 @@ const (
 // After vizMaxFailures consecutive failures the visualizer is automatically
 // disabled so that an unreachable server does not slow down every motion call.
 func (s *beanjaminCoffee) drawViz(fsInputs referenceframe.FrameSystemInputs) {
+	logger := s.activeOrderLogger()
 	done := make(chan error, 1)
 	go func() {
 		done <- viz.DrawFrameSystem(s.cachedFS, fsInputs)
@@ -144,19 +146,19 @@ func (s *beanjaminCoffee) drawViz(fsInputs referenceframe.FrameSystemInputs) {
 	case err := <-done:
 		if err != nil {
 			s.vizConsecutiveFailures++
-			s.logger.Warnf("viz: failed to draw frame system (%d/%d): %v",
+			logger.Warnf("viz: failed to draw frame system (%d/%d): %v",
 				s.vizConsecutiveFailures, vizMaxFailures, err)
 		} else {
 			s.vizConsecutiveFailures = 0
 		}
 	case <-time.After(vizTimeout):
 		s.vizConsecutiveFailures++
-		s.logger.Warnf("viz: draw timed out after %v (%d/%d)",
+		logger.Warnf("viz: draw timed out after %v (%d/%d)",
 			vizTimeout, s.vizConsecutiveFailures, vizMaxFailures)
 	}
 
 	if s.vizConsecutiveFailures >= vizMaxFailures {
-		s.logger.Warnf("viz: disabling visualizer after %d consecutive failures", vizMaxFailures)
+		logger.Warnf("viz: disabling visualizer after %d consecutive failures", vizMaxFailures)
 		s.vizEnabled = false
 	}
 }
@@ -166,6 +168,7 @@ func (s *beanjaminCoffee) drawViz(fsInputs referenceframe.FrameSystemInputs) {
 // The cached frame system is mutated in place so all subsequent planning calls
 // see the filter at its locked position.
 func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
+	logger := s.activeOrderLogger()
 	const filterFrameName = componentFilter
 
 	_, fsInputs, err := s.currentInputs(ctx)
@@ -256,7 +259,7 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 		}
 	}
 
-	s.logger.Infof("locked filter frame at world pose %v (%d descendants preserved)", worldPose.Point(), len(descendants))
+	logger.Infof("locked filter frame at world pose %v (%d descendants preserved)", worldPose.Point(), len(descendants))
 	return nil
 }
 
@@ -265,11 +268,12 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 // lockFilterFrame). Shared by unlockFilterFrame during the normal brew cycle and
 // by the reset_world operator command to recover from a mid-cycle cancel.
 func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
+	logger := s.activeOrderLogger()
 	fs, err := framesystem.NewFromService(ctx, s.fsSvc, nil)
 	if err != nil {
 		return fmt.Errorf("rebuild frame system: %w", err)
 	}
-	if err := applyJointLimits(s.logger, fs, s.cfg.InputRangeOverride); err != nil {
+	if err := applyJointLimits(logger, fs, s.cfg.InputRangeOverride); err != nil {
 		return fmt.Errorf("re-apply joint limits: %w", err)
 	}
 	s.cachedFS = fs
@@ -279,10 +283,11 @@ func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 // unlockFilterFrame rebuilds the cached frame system from the service,
 // restoring the filter frame to its original position in the arm subtree.
 func (s *beanjaminCoffee) unlockFilterFrame(ctx context.Context) error {
+	logger := s.activeOrderLogger()
 	if err := s.resetFrameSystem(ctx); err != nil {
 		return err
 	}
-	s.logger.Infof("unlocked filter frame, frame system restored from service")
+	logger.Infof("unlocked filter frame, frame system restored from service")
 	return nil
 }
 
@@ -322,13 +327,14 @@ var fakeMissingFrames = []string{"gripper:claws", "gripper:case-gripper"}
 // filterFakeModeCollisions drops AllowedCollision entries that reference a
 // frame in fakeMissingFrames. Returns the input unchanged when FakeMode is off.
 func (s *beanjaminCoffee) filterFakeModeCollisions(acs []AllowedCollision) []AllowedCollision {
+	logger := s.activeOrderLogger()
 	if !s.cfg.FakeMode {
 		return acs
 	}
 	out := make([]AllowedCollision, 0, len(acs))
 	for _, ac := range acs {
 		if slices.Contains(fakeMissingFrames, ac.Frame1) || slices.Contains(fakeMissingFrames, ac.Frame2) {
-			s.logger.Debugf("fake mode: dropping allowed collision %s <-> %s", ac.Frame1, ac.Frame2)
+			logger.Debugf("fake mode: dropping allowed collision %s <-> %s", ac.Frame1, ac.Frame2)
 			continue
 		}
 		out = append(out, ac)
@@ -380,31 +386,33 @@ func buildMoveOptions(opts *StepMoveOptions) *arm.MoveOptions {
 // savePlanRequest persists a PlanRequest to the configured directory. It is a
 // no-op when SaveMotionRequestsDir is empty.
 func (s *beanjaminCoffee) savePlanRequest(req *armplanning.PlanRequest, label string) {
+	logger := s.activeOrderLogger()
 	dir := s.cfg.SaveMotionRequestsDir
 	if dir == "" {
 		return
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		s.logger.Warnf("save motion request: create dir: %v", err)
+		logger.Warnf("save motion request: create dir: %v", err)
 		return
 	}
 	filename := filepath.Join(dir, fmt.Sprintf("%s_%s.json", time.Now().Format("20060102_150405.000"), label))
 	if err := req.WriteToFile(filename); err != nil {
-		s.logger.Warnf("save motion request: %v", err)
+		logger.Warnf("save motion request: %v", err)
 		return
 	}
-	s.logger.Infof("saved motion request to %s", filename)
+	logger.Infof("saved motion request to %s", filename)
 }
 
 // savePlanResponse persists a Plan's path and trajectory to the configured
 // directory. It is a no-op when SaveMotionRequestsDir is empty.
 func (s *beanjaminCoffee) savePlanResponse(plan motionplan.Plan, label string) {
+	logger := s.activeOrderLogger()
 	dir := s.cfg.SaveMotionRequestsDir
 	if dir == "" {
 		return
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		s.logger.Warnf("save motion response: create dir: %v", err)
+		logger.Warnf("save motion response: create dir: %v", err)
 		return
 	}
 	resp := struct {
@@ -416,19 +424,20 @@ func (s *beanjaminCoffee) savePlanResponse(plan motionplan.Plan, label string) {
 	}
 	data, err := json.MarshalIndent(resp, "", "  ")
 	if err != nil {
-		s.logger.Warnf("save motion response: marshal: %v", err)
+		logger.Warnf("save motion response: marshal: %v", err)
 		return
 	}
 	filename := filepath.Join(dir, fmt.Sprintf("%s_%s_response.json", time.Now().Format("20060102_150405.000"), label))
 	if err := os.WriteFile(filename, data, 0o600); err != nil {
-		s.logger.Warnf("save motion response: %v", err)
+		logger.Warnf("save motion response: %v", err)
 		return
 	}
-	s.logger.Infof("saved motion response to %s", filename)
+	logger.Infof("saved motion response to %s", filename)
 }
 
 // moveToRawPose plans a motion using armplanning and executes it on the arm.
 func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
+	logger := s.activeOrderLogger()
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return err
@@ -445,11 +454,11 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	allowedCollisions = s.filterFakeModeCollisions(allowedCollisions)
 	constraints := buildConstraints(lc, allowedCollisions)
 	if lc != nil {
-		s.logger.Infof("applying linear constraint (line=%.1fmm, orient=%.1f°)",
+		logger.Infof("applying linear constraint (line=%.1fmm, orient=%.1f°)",
 			lc.LineToleranceMm, lc.OrientationToleranceDegs)
 	}
 	if len(allowedCollisions) > 0 {
-		s.logger.Infof("allowing %d collision pair(s)", len(allowedCollisions))
+		logger.Infof("allowing %d collision pair(s)", len(allowedCollisions))
 	}
 
 	// Plan.
@@ -462,7 +471,7 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 		Constraints: constraints,
 	}
 	s.savePlanRequest(req, "move")
-	plan, _, err := armplanning.PlanMotion(ctx, s.logger, req)
+	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errMotionPlanning, err)
 	}
@@ -506,6 +515,7 @@ func (s *beanjaminCoffee) switchForComponent(componentName string) (toggleswitch
 // plans a single multi-goal trajectory through all of them, and executes it
 // in one MoveThroughJointPositions call.
 func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step) error {
+	logger := s.activeOrderLogger()
 	// Merge both contexts so cancellation from either stops planning and execution.
 	ctx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(cancelCtx, func() { cancel() })
@@ -532,7 +542,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	}
 
 	poses := computePivotPoses(startPD.pose, endPD.pose, step.PivotDegreesPerStep)
-	s.logger.Infof("pivot %q → %q: %d waypoints (%.1f°/step)",
+	logger.Infof("pivot %q → %q: %d waypoints (%.1f°/step)",
 		step.PivotFromPose, step.PoseName, len(poses)-1, step.PivotDegreesPerStep)
 
 	fs, fsInputs, err := s.currentInputs(ctx)
@@ -566,7 +576,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 		Constraints: constraints,
 	}
 	s.savePlanRequest(req, "pivot")
-	plan, _, err := armplanning.PlanMotion(ctx, s.logger, req)
+	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
 	if err != nil {
 		return fmt.Errorf("plan pivot motion: %w", err)
 	}
@@ -604,6 +614,7 @@ func computeCircularPoses(centerPose spatialmath.Pose, radiusMm float64, pointsP
 // circular waypoints, plans the trajectory once, then executes it in a loop
 // until the configured duration is exceeded.
 func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, step Step) error {
+	logger := s.activeOrderLogger()
 	// Merge both contexts so cancellation from either stops planning and execution.
 	ctx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(cancelCtx, func() { cancel() })
@@ -621,7 +632,7 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 	}
 
 	poses := computeCircularPoses(centerPD.pose, step.CircularRadiusMm, pointsPerRev)
-	s.logger.Infof("circular motion around %q: radius=%.1fmm, %d pts/rev",
+	logger.Infof("circular motion around %q: radius=%.1fmm, %d pts/rev",
 		step.PoseName, step.CircularRadiusMm, pointsPerRev)
 
 	fs, fsInputs, err := s.currentInputs(ctx)
@@ -653,7 +664,7 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 		Constraints: constraints,
 	}
 	s.savePlanRequest(req, "circular")
-	plan, _, err := armplanning.PlanMotion(ctx, s.logger, req)
+	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
 	if err != nil {
 		return fmt.Errorf("plan circular motion: %w", err)
 	}
@@ -672,7 +683,7 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 			return fmt.Errorf("cancelled during circular motion: %w", ctx.Err())
 		default:
 		}
-		s.logger.Debugf("circular revolution %d", rev+1)
+		logger.Debugf("circular revolution %d", rev+1)
 		circOpts := buildMoveOptions(step.MoveOptions)
 		if circOpts == nil {
 			circOpts = s.slowMovementMoveOptions()

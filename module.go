@@ -373,9 +373,15 @@ type beanjaminCoffee struct {
 	// the order sensor; reset at the start of each order.
 	failedStep     atomic.Value
 	currentOrderID atomic.Value // string: ID of the order currently being processed; "" when idle
-	queue          *OrderQueue
-	queueStop      chan struct{}
-	paused         atomic.Bool
+	// activeLogger holds the order-scoped logger (tagged with order_id) for the
+	// order currently being processed; set by processQueue and cleared when it
+	// finishes. Entry points that run outside the queue goroutine — notably
+	// cancel — read it via activeOrderLogger() so their logs carry the in-flight
+	// order's order_id. nil when idle.
+	activeLogger atomic.Pointer[logging.Logger]
+	queue        *OrderQueue
+	queueStop    chan struct{}
+	paused       atomic.Bool
 	// portafilterInMachine is true between releaseFilter and grabFilter:
 	// the bayonet holds the filter and the arm is free. Cancel uses this
 	// to decide whether recovery (re-grip + clean + home) is required.
@@ -956,6 +962,17 @@ func (s *beanjaminCoffee) waitForIdle(ctx context.Context, timeout time.Duration
 
 const cancelAnnouncement = "Cancelling the current order. I'll clean up if needed and return to home. Click proceed when you're ready for the next order."
 
+// activeOrderLogger returns the order-scoped logger for the in-flight order
+// when one is being processed, otherwise the base service logger. Used by
+// entry points (cancel) that run outside the queue goroutine and so don't
+// receive the tagged logger as a parameter. Never returns nil.
+func (s *beanjaminCoffee) activeOrderLogger() logging.Logger {
+	if l := s.activeLogger.Load(); l != nil {
+		return *l
+	}
+	return s.logger
+}
+
 // cancel interrupts any running sequence and drives whichever recovery the
 // current state requires so the operator does not need a follow-up reset_world:
 //   - portafilter locked in the machine (post-releaseFilter, pre-grabFilter):
@@ -993,19 +1010,24 @@ func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]interface{}, e
 	cancelCtx := s.cancelCtx
 	s.mu.Unlock()
 
+	// Tag recovery logs with the in-flight order's ID when an order is still
+	// active (cancel runs outside the queue goroutine, so there's no tagged
+	// logger passed in); falls back to the base logger on an idle cancel.
+	logger := s.activeOrderLogger()
+
 	// Announce the cancellation up front so the operator hears what's
 	// happening before any recovery motion begins. Only speak when there
 	// is something to actually cancel/recover — silence on a no-op cancel.
 	if cancelled || s.portafilterInMachine.Load() || s.portafilterHasGrounds.Load() {
 		if err := s.sayAlways(ctx, cancelAnnouncement); err != nil {
-			s.logger.Warnf("cancel: failed to announce cancellation: %v", err)
+			logger.Warnf("cancel: failed to announce cancellation: %v", err)
 		}
 	}
 
 	recovered := false
 	switch {
 	case s.portafilterInMachine.Load():
-		s.logger.Infof("cancel: portafilter is in the machine — running recovery (grab → unlock → clean → home)")
+		logger.Infof("cancel: portafilter is in the machine — running recovery (grab → unlock → clean → home)")
 		s.setStep(stepRecoveringFilter)
 		if err := s.grabFilter(ctx, cancelCtx); err != nil {
 			return nil, fmt.Errorf("cancel: recovery grab_filter: %w", err)
@@ -1026,7 +1048,7 @@ func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]interface{}, e
 		s.portafilterInMachine.Store(false)
 		recovered = true
 	case s.portafilterHasGrounds.Load():
-		s.logger.Infof("cancel: portafilter has grounds — running recovery (clean → home)")
+		logger.Infof("cancel: portafilter has grounds — running recovery (clean → home)")
 		s.setStep(stepCleaning)
 		if err := s.cleanPortafilter(ctx, cancelCtx); err != nil {
 			return nil, fmt.Errorf("cancel: recovery clean_portafilter: %w", err)
@@ -1045,7 +1067,7 @@ func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]interface{}, e
 	}
 
 	s.currentStep.Store("")
-	s.logger.Infof("cancel: cancelled=%v recovered=%v — queue paused, send 'proceed' to resume",
+	logger.Infof("cancel: cancelled=%v recovered=%v — queue paused, send 'proceed' to resume",
 		cancelled, recovered)
 	return map[string]interface{}{
 		"status":    "cancelled",

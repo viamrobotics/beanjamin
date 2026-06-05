@@ -21,6 +21,7 @@ import (
 // readings can't be read, or `field` holds a non-numeric value, the write is
 // skipped so a transient failure doesn't clobber the real counters.
 func (s *beanjaminCoffee) incrementSensorReading(ctx context.Context, sen sensor.Sensor, label, field string, delta float64) {
+	logger := s.activeOrderLogger()
 	if sen == nil {
 		return
 	}
@@ -30,7 +31,7 @@ func (s *beanjaminCoffee) incrementSensorReading(ctx context.Context, sen sensor
 	}
 	current, ok := numericReading(readings[field])
 	if !ok {
-		s.logger.Warnf("usage sensor %s: %s = %#v is not numeric, skipping update", label, field, readings[field])
+		logger.Warnf("usage sensor %s: %s = %#v is not numeric, skipping update", label, field, readings[field])
 		return
 	}
 	readings[field] = current + delta
@@ -58,9 +59,10 @@ func (s *beanjaminCoffee) setSensorReading(ctx context.Context, sen sensor.Senso
 // Readings error, in which case the caller must skip the write rather than
 // clobber the real counters with a partial map.
 func (s *beanjaminCoffee) readSensorFields(ctx context.Context, sen sensor.Sensor, label string) (map[string]interface{}, bool) {
+	logger := s.activeOrderLogger()
 	readings, err := sen.Readings(ctx, nil)
 	if err != nil {
-		s.logger.Warnf("usage sensor %s: read failed, skipping update: %v", label, err)
+		logger.Warnf("usage sensor %s: read failed, skipping update: %v", label, err)
 		return nil, false
 	}
 	out := make(map[string]interface{}, len(readings)+1)
@@ -74,9 +76,10 @@ func (s *beanjaminCoffee) readSensorFields(ctx context.Context, sen sensor.Senso
 // DoCommand({"set": readings}). Failures log a warning and are otherwise
 // ignored (best effort).
 func (s *beanjaminCoffee) setSensorReadings(ctx context.Context, sen sensor.Sensor, label string, readings map[string]interface{}) {
+	logger := s.activeOrderLogger()
 	_, err := sen.DoCommand(ctx, map[string]interface{}{"set": readings})
 	if err != nil {
-		s.logger.Warnf("usage sensor %s: set failed: %v", label, err)
+		logger.Warnf("usage sensor %s: set failed: %v", label, err)
 	}
 }
 
