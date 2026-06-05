@@ -697,12 +697,12 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 }
 
 // placeFullCupOnShelf retrieves the brewed cup from cup_ready_for_coffee and
-// drops it on the served-drinks shelf at the tile chosen earlier by
-// selectShelfTile. Replaces giveFullCupToCustomer when PlaceCupOnShelf=true.
+// drops it on the served-drinks shelf at the next round-robin slot chosen by
+// nextShelfTile. Replaces giveFullCupToCustomer when PlaceCupOnShelf=true.
 //
 // The grab phase mirrors giveFullCupToCustomer (approach -> open -> linear
 // descent + grab -> linear retreat). The placement phase plans to a
-// world-frame approach pose above the chosen tile, descends linearly to the
+// world-frame approach pose above the chosen slot, descends linearly to the
 // drop pose (claws-middle = shelfTopZ + shelfDropZOffsetMm), opens the
 // gripper to release, then retreats linearly and closes the gripper.
 func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) error {
@@ -710,10 +710,11 @@ func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) er
 		return fmt.Errorf("place_full_cup_on_shelf: no gripper configured")
 	}
 
-	pickRaw := s.servedShelfTile.Load()
-	pick, ok := pickRaw.(servedShelfTilePick)
-	if !ok || !pick.ok {
-		return fmt.Errorf("place_full_cup_on_shelf: no shelf tile selected — selectShelfTile must run during pickup observation")
+	// Pick the next shelf slot (round-robin, no vision). Done up front so a
+	// missing/too-small shelf aborts before any arm motion.
+	tileWorld, shelfTopZ, err := s.nextShelfTile(ctx)
+	if err != nil {
+		return fmt.Errorf("place_full_cup_on_shelf: %w", err)
 	}
 
 	// 1. Retrieve the brewed cup (mirrors giveFullCupToCustomer).
@@ -744,9 +745,9 @@ func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) er
 	// claws-to-cup geometry identical between grab and release, so the cup
 	// lands centered on the chosen tile.
 	dropAnchor := r3.Vector{
-		X: pick.tileWorld.X,
-		Y: pick.tileWorld.Y,
-		Z: pick.shelfTopZ + shelfDropZOffsetMm,
+		X: tileWorld.X,
+		Y: tileWorld.Y,
+		Z: shelfTopZ + shelfDropZOffsetMm,
 	}
 	dropPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.CupGrabRelativePose))
 	approachPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.CupApproachRelativePose))
@@ -787,17 +788,15 @@ func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) er
 }
 
 // runCupFlow exercises the full cup-handling path without brewing: for each of
-// count iterations it dynamically picks a cup, sets it under the machine,
-// retrieves it, and places it on the served shelf. It re-observes (all
-// vantages, all photos, merged) at the start of every iteration, so each
-// placement sees the cups left by previous iterations and picks the next free
-// tile. Intended for tuning multi-vantage detection + shelf placement on
-// hardware.
+// count iterations it dynamically picks a cup (sweeping observe poses until one
+// sees a cup), sets it under the machine, retrieves it, and places it on the
+// served shelf at the next round-robin slot. Intended for tuning the observe
+// sweep + shelf placement on hardware.
 //
 // It assumes the portafilter has been physically removed from the claws — the
 // flow never touches portafilter state. Requires dynamic_cup_pickup and
-// place_cup_on_shelf: the shelf tile is selected during each pickup
-// observation and consumed by placeFullCupOnShelf.
+// place_cup_on_shelf: each placement advances the shelf-slot counter inside
+// placeFullCupOnShelf.
 func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string]interface{}, error) {
 	if !s.cfg.DynamicCupPickup {
 		return nil, errors.New("run_cup_flow requires dynamic_cup_pickup=true")

@@ -189,28 +189,6 @@ func TestMergeNearbyCentroids_DoesNotMutateInput(t *testing.T) {
 	}
 }
 
-func TestDedupeNearbyGeometries_CollapsesByPoseDistance(t *testing.T) {
-	a, err := spatialmath.NewSphere(spatialmath.NewPoseFromPoint(r3.Vector{X: 0}), 25, "a")
-	if err != nil {
-		t.Fatalf("sphere a: %v", err)
-	}
-	b, err := spatialmath.NewSphere(spatialmath.NewPoseFromPoint(r3.Vector{X: 30}), 25, "b")
-	if err != nil {
-		t.Fatalf("sphere b: %v", err)
-	}
-	c, err := spatialmath.NewSphere(spatialmath.NewPoseFromPoint(r3.Vector{X: 200}), 25, "c")
-	if err != nil {
-		t.Fatalf("sphere c: %v", err)
-	}
-	got := dedupeNearbyGeometries([]spatialmath.Geometry{a, b, c}, 40)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 after dedup, got %d", len(got))
-	}
-	if got[0].Label() != "a" || got[1].Label() != "c" {
-		t.Fatalf("expected first-wins {a,c}, got %v + %v", got[0].Label(), got[1].Label())
-	}
-}
-
 func TestComposeCupPose_IdentityRelative(t *testing.T) {
 	centroid := r3.Vector{X: 100, Y: 200, Z: 300}
 	relative := spatialmath.NewZeroPose()

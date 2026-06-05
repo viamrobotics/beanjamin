@@ -336,10 +336,13 @@ type beanjaminCoffee struct {
 	// nil when usage_sensor_name is unset, in which case every update is a
 	// no-op. Holds all counters keyed by regular_grinds, decaf_grinds, usage,
 	// cleanings, and successful_consecutive_orders.
-	usageSensor     sensor.Sensor
-	cupVision       vision.Service // optional; nil when DynamicCupPickup=false
-	cupCameraName   string         // SrcCameraName, validated to exist in cachedFS
-	servedShelfTile atomic.Value   // servedShelfTile holds the latest servedShelfTilePick chosen by
+	usageSensor   sensor.Sensor
+	cupVision     vision.Service // optional; nil when DynamicCupPickup=false
+	cupCameraName string         // SrcCameraName, validated to exist in cachedFS
+	// shelfSlotCounter is the round-robin placement counter for PlaceCupOnShelf.
+	// It increments once per placeFullCupOnShelf and selects the shelf slot
+	// modulo the number of tiles. Process-local; resets to 0 on rebuild.
+	shelfSlotCounter atomic.Uint64
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {

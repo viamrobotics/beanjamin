@@ -1,7 +1,6 @@
 package beanjamin
 
 import (
-	"fmt"
 	"math"
 	"testing"
 
@@ -106,99 +105,28 @@ func TestComputeShelfTileCenters(t *testing.T) {
 	}
 }
 
-// makeCupSpheres builds zero-orientation cup sphere geometries at the given
-// centers for collision testing. Radius mirrors a typical 40mm cup.
-func makeCupSpheres(t *testing.T, centers []r3.Vector) []spatialmath.Geometry {
-	t.Helper()
-	const cupRadius = 40.0
-	geos := make([]spatialmath.Geometry, len(centers))
-	for i, c := range centers {
-		g, err := spatialmath.NewSphere(spatialmath.NewPoseFromPoint(c), cupRadius, fmt.Sprintf("cup_%d", i))
-		if err != nil {
-			t.Fatalf("build cup sphere %d: %v", i, err)
-		}
-		geos[i] = g
-	}
-	return geos
-}
-
-func TestFirstFreeTile(t *testing.T) {
+func TestSlotIndex(t *testing.T) {
 	t.Parallel()
 
-	tiles := []r3.Vector{
-		{X: 0, Y: 0, Z: 0},
-		{X: 120, Y: 0, Z: 0},
-		{X: 240, Y: 0, Z: 0},
-	}
-
-	// With cupRadius=40 and bufferMm=80, the effective exclusion distance
-	// from tile center to cup center is 40+80 = 120mm. So a cup at tile N
-	// also collides with tile N±1 at 120mm spacing.
 	tests := []struct {
-		name      string
-		cups      []r3.Vector
-		buffer    float64
-		wantIdx   int
-		wantPoint r3.Vector
-		wantOK    bool
+		name    string
+		counter uint64
+		n       int
+		want    int
 	}{
-		{
-			name:      "all free returns idx 0",
-			cups:      nil,
-			buffer:    80,
-			wantIdx:   0,
-			wantPoint: tiles[0],
-			wantOK:    true,
-		},
-		{
-			name:      "cup at tile 0 occupies tiles 0 and 1; idx 2 is first free",
-			cups:      []r3.Vector{tiles[0]},
-			buffer:    80,
-			wantIdx:   2,
-			wantPoint: tiles[2],
-			wantOK:    true,
-		},
-		{
-			name:      "cups at every tile leave no free tile",
-			cups:      tiles,
-			buffer:    80,
-			wantIdx:   -1,
-			wantPoint: r3.Vector{},
-			wantOK:    false,
-		},
-		{
-			name:      "cup well off-shelf does not occupy any tile",
-			cups:      []r3.Vector{{X: 10000, Y: 10000, Z: 10000}},
-			buffer:    80,
-			wantIdx:   0,
-			wantPoint: tiles[0],
-			wantOK:    true,
-		},
-		{
-			// With a 0 buffer the tile-point only collides if the cup
-			// geometry actually overlaps the point. A cup at the exact tile
-			// position overlaps tile 0; tile 1 (120mm away) is free.
-			name:      "zero buffer only excludes overlapping cup",
-			cups:      []r3.Vector{tiles[0]},
-			buffer:    0,
-			wantIdx:   1,
-			wantPoint: tiles[1],
-			wantOK:    true,
-		},
+		{name: "first placement uses slot 0", counter: 0, n: 4, want: 0},
+		{name: "second placement uses slot 1", counter: 1, n: 4, want: 1},
+		{name: "last slot before wrap", counter: 3, n: 4, want: 3},
+		{name: "wraps back to slot 0", counter: 4, n: 4, want: 0},
+		{name: "wraps to slot 1", counter: 5, n: 4, want: 1},
+		{name: "single slot always 0", counter: 7, n: 1, want: 0},
+		{name: "n<=0 returns 0", counter: 9, n: 0, want: 0},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cupGeoms := makeCupSpheres(t, tc.cups)
-			idx, pt, ok, err := firstFreeTile(tiles, cupGeoms, tc.buffer)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if idx != tc.wantIdx || ok != tc.wantOK {
-				t.Fatalf("idx/ok mismatch: got (%d, %v), want (%d, %v)", idx, ok, tc.wantIdx, tc.wantOK)
-			}
-			if ok && !vecAlmostEqual(pt, tc.wantPoint, 1e-6) {
-				t.Errorf("point: got %v, want %v", pt, tc.wantPoint)
+			if got := slotIndex(tc.counter, tc.n); got != tc.want {
+				t.Fatalf("slotIndex(%d, %d) = %d, want %d", tc.counter, tc.n, got, tc.want)
 			}
 		})
 	}
