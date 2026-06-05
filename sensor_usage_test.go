@@ -71,6 +71,22 @@ func (f *fakeUsageSensor) lastSet(t *testing.T, field string) float64 {
 	return v
 }
 
+// lastSetMap returns the full map written by the most recent DoCommand({"set": {...}}).
+func (f *fakeUsageSensor) lastSetMap(t *testing.T) map[string]interface{} {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.doCommands) == 0 {
+		t.Fatalf("no DoCommand recorded")
+	}
+	cmd := f.doCommands[len(f.doCommands)-1]
+	set, ok := cmd["set"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("DoCommand missing set object: %#v", cmd)
+	}
+	return set
+}
+
 func (f *fakeUsageSensor) doCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -144,6 +160,62 @@ func TestIncrementSensorReading_DistinctKeysOnOneSensor(t *testing.T) {
 	s.incrementSensorReading(context.Background(), sen, "decaf grinder", "decaf_grinds", 1)
 	if got := sen.lastSet(t, "decaf_grinds"); got != 6 {
 		t.Fatalf("decaf_grinds = %v, want 6", got)
+	}
+}
+
+func TestIncrementSensorReading_PreservesOtherKeys(t *testing.T) {
+	s, _ := newTestCoffee(t, nil)
+	// Bumping one counter must write back every other key untouched, because
+	// the sensor replaces its whole readings map on `set`.
+	sen := newFakeUsageSensor(map[string]interface{}{
+		"regular_grinds":                float64(2),
+		"decaf_grinds":                  float64(5),
+		"usage":                         float64(10),
+		"cleanings":                     float64(1),
+		"successful_consecutive_orders": float64(3),
+	})
+	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
+	set := sen.lastSetMap(t)
+	want := map[string]float64{
+		"regular_grinds":                3, // the only key that changed
+		"decaf_grinds":                  5,
+		"usage":                         10,
+		"cleanings":                     1,
+		"successful_consecutive_orders": 3,
+	}
+	if len(set) != len(want) {
+		t.Fatalf("set has %d keys, want %d: %#v", len(set), len(want), set)
+	}
+	for k, v := range want {
+		if got, _ := set[k].(float64); got != v {
+			t.Errorf("set[%q] = %v, want %v", k, set[k], v)
+		}
+	}
+}
+
+func TestSetSensorReading_PreservesOtherKeys(t *testing.T) {
+	s, _ := newTestCoffee(t, nil)
+	// The failure path resets only successful_consecutive_orders; consumable
+	// counters must survive the write.
+	sen := newFakeUsageSensor(map[string]interface{}{
+		"regular_grinds":                float64(2),
+		"cleanings":                     float64(4),
+		"successful_consecutive_orders": float64(7),
+	})
+	s.setSensorReading(context.Background(), sen, "consecutive orders", "successful_consecutive_orders", 0)
+	set := sen.lastSetMap(t)
+	want := map[string]float64{
+		"regular_grinds":                2,
+		"cleanings":                     4,
+		"successful_consecutive_orders": 0, // the only key that changed
+	}
+	if len(set) != len(want) {
+		t.Fatalf("set has %d keys, want %d: %#v", len(set), len(want), set)
+	}
+	for k, v := range want {
+		if got, _ := set[k].(float64); got != v {
+			t.Errorf("set[%q] = %v, want %v", k, set[k], v)
+		}
 	}
 }
 

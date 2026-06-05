@@ -89,8 +89,8 @@ type Config struct {
 	OrderSensorName           string  `json:"order_sensor_name,omitempty"`
 
 	// Optional usage sensor updated during the brew lifecycle via a best-effort
-	// read-modify-write: each counter is read with Readings and written back
-	// with DoCommand({"set": {<key>: <value>}}).
+	// read-modify-write: all counters are read with Readings, the changed one is
+	// updated, and the full map is written back with DoCommand({"set": {...}}).
 	UsageSensorName string `json:"usage_sensor_name,omitempty"`
 
 	CamStorageMuxName string `json:"cam_storage_mux_name,omitempty"`
