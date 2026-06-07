@@ -4,12 +4,11 @@
 // when dynamic_cup_pickup is enabled. It sweeps the poses on the dedicated
 // camera-observe switch (camera_observe_pose_switcher_name) one at a time,
 // calling a vision service for cup detections at each. As soon as a pose
-// yields at least one in-range candidate the sweep stops — the next observe
-// pose is only tried when the current one failed to find a cup. Detections
-// are lifted into world frame, ranked by distance from the configured
-// expected position (within the configured cutoff), and the configured
-// approach/grab relative poses (from Config — they are offsets, not
-// switch-resident world-frame poses) are composed onto the chosen centroid
+// yields at least one detection the sweep stops — the next observe pose is
+// only tried when the current one failed to find a cup. Detections are lifted
+// into world frame and ranked by proximity to the gripper (closest first), and
+// the configured approach/grab relative poses (from Config — they are offsets,
+// not switch-resident world-frame poses) are composed onto the chosen centroid
 // and fed to moveToRawPose.
 //
 // On a planning failure, pickCupDynamic falls through to the next
@@ -84,22 +83,17 @@ func mergeNearbyCentroids(centroids []r3.Vector, mm float64) []r3.Vector {
 	return out
 }
 
-// rankCupCentroids returns centroids sorted by distance to target ascending,
-// dropping any beyond maxDistMm. maxDistMm == 0 disables the cutoff. The
-// returned slice is a new allocation; the input is not mutated. Ties keep
-// their original relative order (stable sort).
-func rankCupCentroids(centroids []r3.Vector, target r3.Vector, maxDistMm float64) []r3.Vector {
-	inRange := make([]r3.Vector, 0, len(centroids))
-	for _, c := range centroids {
-		if maxDistMm > 0 && c.Sub(target).Norm() > maxDistMm {
-			continue
-		}
-		inRange = append(inRange, c)
-	}
-	sort.SliceStable(inRange, func(i, j int) bool {
-		return inRange[i].Sub(target).Norm() < inRange[j].Sub(target).Norm()
+// rankCentroidsByProximity returns centroids sorted by distance to reference
+// ascending (closest first). reference is the gripper's world-frame position, so
+// the item nearest the gripper is grabbed first. The returned slice is a new
+// allocation; the input is not mutated. Ties keep their original relative order
+// (stable sort).
+func rankCentroidsByProximity(centroids []r3.Vector, reference r3.Vector) []r3.Vector {
+	ranked := append([]r3.Vector(nil), centroids...)
+	sort.SliceStable(ranked, func(i, j int) bool {
+		return ranked[i].Sub(reference).Norm() < ranked[j].Sub(reference).Norm()
 	})
-	return inRange
+	return ranked
 }
 
 // composeCupPose builds a world-frame target pose by composing a relative
@@ -140,6 +134,23 @@ func cameraToWorld(
 	return worldPose.Pose().Point(), nil
 }
 
+// gripperWorldPoint returns the world-frame position of the gripper — the
+// componentClaws frame the grab actually moves onto a cup/glass. Dynamic pickup
+// ranks detected items by proximity to this point (findCandidates), so the item
+// nearest the gripper at the observe pose is attempted first.
+func (s *beanjaminCoffee) gripperWorldPoint(ctx context.Context) (r3.Vector, error) {
+	fs, fsInputs, err := s.currentInputs(ctx)
+	if err != nil {
+		return r3.Vector{}, err
+	}
+	pif := referenceframe.NewPoseInFrame(componentClaws, spatialmath.NewZeroPose())
+	tf, err := fs.Transform(fsInputs.ToLinearInputs(), pif, referenceframe.World)
+	if err != nil {
+		return r3.Vector{}, fmt.Errorf("transform gripper frame %q to world: %w", componentClaws, err)
+	}
+	return tf.(*referenceframe.PoseInFrame).Pose().Point(), nil
+}
+
 // pickupTarget bundles everything the dynamic pickup pipeline needs to find and
 // grab one kind of item. Cups and glasses each build one (cupPickupTarget /
 // glassPickupTarget); the pipeline methods (observeVantage, findCandidates,
@@ -153,10 +164,8 @@ type pickupTarget struct {
 	observeSw        toggleswitch.Switch // switch holding the observe vantages
 	observeComponent string              // routing key for executeStep/switchForComponent
 	observeHomePose  string              // recovery pose name on observeSw
-	expectedPos      *Vec3Mm             // detections ranked by distance to this
 	approachRel      *RelativePose       // gripper offset for the pre-grab pose
 	grabRel          *RelativePose       // gripper offset for the grab pose
-	maxDistMm        float64             // cutoff: drop detections beyond this from expectedPos
 	photosPerVantage int                 // vision frames per observe pose
 	maxAttempts      int                 // full observe-and-grab attempts
 	centroidMinZMm   float64             // floor detection Z to this (0 = disabled)
@@ -173,10 +182,8 @@ func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 		observeSw:        s.cameraObserveSw,
 		observeComponent: componentCam,
 		observeHomePose:  camPoseCupObserve,
-		expectedPos:      s.cfg.ExpectedCupPositionMm,
 		approachRel:      s.cfg.CupApproachRelativePose,
 		grabRel:          s.cfg.CupGrabRelativePose,
-		maxDistMm:        s.cfg.CupMaxDistanceFromTargetMm,
 		photosPerVantage: pickupPhotosPerVantage(s.cfg.CupPhotosPerVantage),
 		maxAttempts:      pickupMaxAttempts(s.cfg.CupPickupMaxAttempts),
 		centroidMinZMm:   s.cfg.CupCentroidMinZMm,
@@ -197,10 +204,8 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 		observeSw:        s.glassObserveSw,
 		observeComponent: componentGlassCam,
 		observeHomePose:  glassPoseObserve,
-		expectedPos:      s.cfg.ExpectedGlassPositionMm,
 		approachRel:      s.cfg.GlassApproachRelativePose,
 		grabRel:          s.cfg.GlassGrabRelativePose,
-		maxDistMm:        s.cfg.GlassMaxDistanceFromTargetMm,
 		photosPerVantage: pickupPhotosPerVantage(s.cfg.CupPhotosPerVantage),
 		maxAttempts:      pickupMaxAttempts(s.cfg.CupPickupMaxAttempts),
 		centroidMinZMm:   s.cfg.GlassCentroidMinZMm,
@@ -275,31 +280,23 @@ func (s *beanjaminCoffee) observationPoseNames(ctx context.Context, sw toggleswi
 }
 
 // findCandidates sweeps the target's observe poses one at a time and returns
-// the ranked pickup candidates from the first pose that sees a reachable item.
+// the ranked pickup candidates from the first pose that sees an item.
 //
 // At each pose it moves the camera there, observes (observeVantage), merges
-// near-duplicate detections, and ranks them by distance to t.expectedPos within
-// t.maxDistMm. The first pose that yields at least one in-range candidate wins
-// and the remaining poses are not visited — the next observe pose is only tried
-// when the current one failed to find a usable item. An unreachable pose is
-// logged and skipped.
+// near-duplicate detections, and ranks them by proximity to the gripper
+// (closest first). The first pose that yields at least one detection wins and
+// the remaining poses are not visited — the next observe pose is only tried when
+// the current one found nothing. An unreachable pose is logged and skipped.
 //
-// When no pose yields an in-range candidate, the error distinguishes two cases
-// so pickDynamic can react: errNoItemsDetected (recoverable: announce + wait +
-// re-observe) when no pose produced any detection at all, versus a plain "none
-// within cutoff" error (non-recoverable) when detections were seen but all fell
-// outside the cutoff.
+// When no pose produces any detection, findCandidates returns errNoItemsDetected
+// so pickDynamic can recover (announce + wait + re-observe).
 func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pickupTarget) ([]r3.Vector, error) {
 	poseNames, err := s.observationPoseNames(ctx, t.observeSw)
 	if err != nil {
 		return nil, fmt.Errorf("dynamic_%s_pickup: %w", t.label, err)
 	}
 
-	target := r3.Vector{X: t.expectedPos.X, Y: t.expectedPos.Y, Z: t.expectedPos.Z}
-	cutoff := t.maxDistMm
-
 	passes := len(poseNames)
-	totalDetections := 0
 	for i, poseName := range poseNames {
 		s.logger.Infof("dynamic %s pickup: pass %d/%d — moving to observe pose %q", t.label, i+1, passes, poseName)
 		// Pause briefly after arriving so the camera frame is stable before
@@ -314,44 +311,30 @@ func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pick
 		if err != nil {
 			return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, i+1, err)
 		}
-		totalDetections += len(centroids)
 		if len(centroids) == 0 {
 			s.logger.Infof("dynamic %s pickup: pass %d/%d found nothing — trying next observe pose", t.label, i+1, passes)
 			continue
 		}
 
+		// Rank by proximity to the gripperPosition so the item nearest the gripperPosition at
+		// this observe pose is attempted first.
+		gripperPosition, err := s.gripperWorldPoint(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, i+1, err)
+		}
+
 		merged := mergeNearbyCentroids(centroids, observeDedupMm)
-		s.logger.Infof("dynamic %s pickup: pass %d/%d — target=(x=%.1f, y=%.1f, z=%.1f) cutoff=%.0fmm — %d candidate(s) (%d before merge):",
-			t.label, i+1, passes, target.X, target.Y, target.Z, cutoff, len(merged), len(centroids))
-		for j, c := range merged {
-			d := c.Sub(target).Norm()
-			annotation := ""
-			if cutoff > 0 && d > cutoff {
-				annotation = " [REJECTED — beyond cutoff]"
-			}
-			s.logger.Infof("  candidate[%d] world=(x=%.1f, y=%.1f, z=%.1f) distance=%.1fmm%s",
-				j, c.X, c.Y, c.Z, d, annotation)
-		}
-
-		ranked := rankCupCentroids(merged, target, cutoff)
-		if len(ranked) == 0 {
-			s.logger.Infof("dynamic %s pickup: pass %d/%d saw %d item(s) but none within %.0fmm of target — trying next observe pose",
-				t.label, i+1, passes, len(merged), cutoff)
-			continue
-		}
-
-		s.logger.Infof("dynamic %s pickup: pass %d/%d — %d in-range candidate(s) (closest first):", t.label, i+1, passes, len(ranked))
+		ranked := rankCentroidsByProximity(merged, gripperPosition)
+		s.logger.Infof("dynamic %s pickup: pass %d/%d — gripper=(x=%.1f, y=%.1f, z=%.1f) — %d candidate(s) (%d before merge), closest first:",
+			t.label, i+1, passes, gripperPosition.X, gripperPosition.Y, gripperPosition.Z, len(ranked), len(centroids))
 		for j, c := range ranked {
 			s.logger.Infof("  rank[%d] world=(x=%.1f, y=%.1f, z=%.1f) distance=%.1fmm",
-				j, c.X, c.Y, c.Z, c.Sub(target).Norm())
+				j, c.X, c.Y, c.Z, c.Sub(gripperPosition).Norm())
 		}
 		return ranked, nil
 	}
 
-	if totalDetections == 0 {
-		return nil, fmt.Errorf("dynamic_%s_pickup: %w across all %d observe pose(s)", t.label, errNoItemsDetected, passes)
-	}
-	return nil, fmt.Errorf("dynamic_%s_pickup: %d detection(s) across all observe poses but none within %.0fmm of target", t.label, totalDetections, cutoff)
+	return nil, fmt.Errorf("dynamic_%s_pickup: %w across all %d observe pose(s)", t.label, errNoItemsDetected, passes)
 }
 
 // tryGrab attempts a full approach-grab-retreat cycle on one candidate
@@ -479,8 +462,8 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 			// "Nothing detected" is recoverable: there may be no item, or the
 			// vision service is having a bad day. Announce + wait, then
 			// re-observe on the next outer iteration. Bail on any other failure
-			// (e.g. detections all beyond the cutoff) — re-observing won't
-			// change those.
+			// (e.g. an unreachable observe pose or a transform error) —
+			// re-observing won't change those.
 			if errors.Is(err, errNoItemsDetected) && attempt < maxAttempts {
 				recoverStep := Step{PoseName: t.observeHomePose, Component: t.observeComponent, Pause: shortPause}
 				if mvErr := s.executeStep(ctx, cancelCtx, recoverStep); mvErr != nil {

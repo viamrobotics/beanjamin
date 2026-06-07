@@ -124,10 +124,8 @@ type Config struct {
 	DynamicCupPickup              bool          `json:"dynamic_cup_pickup,omitempty"`
 	CupVisionServiceName          string        `json:"cup_vision_service_name,omitempty"`
 	SrcCameraName                 string        `json:"src_camera_name,omitempty"`
-	ExpectedCupPositionMm         *Vec3Mm       `json:"expected_cup_position_mm,omitempty"`
 	CupApproachRelativePose       *RelativePose `json:"cup_approach_relative_pose,omitempty"`
 	CupGrabRelativePose           *RelativePose `json:"cup_grab_relative_pose,omitempty"`
-	CupMaxDistanceFromTargetMm    float64       `json:"cup_max_distance_from_target_mm,omitempty"`
 	CupPhotosPerVantage           int           `json:"cup_photos_per_vantage,omitempty"`
 	CameraObservePoseSwitcherName string        `json:"camera_observe_pose_switcher_name,omitempty"`
 	// CupPickupMaxAttempts caps how many full observe-and-grab attempts
@@ -149,10 +147,8 @@ type Config struct {
 	DynamicGlassPickup           bool          `json:"dynamic_glass_pickup,omitempty"`
 	GlassVisionServiceName       string        `json:"glass_vision_service_name,omitempty"`
 	GlassObservePoseSwitcherName string        `json:"glass_observe_pose_switcher_name,omitempty"`
-	ExpectedGlassPositionMm      *Vec3Mm       `json:"expected_glass_position_mm,omitempty"`
 	GlassApproachRelativePose    *RelativePose `json:"glass_approach_relative_pose,omitempty"`
 	GlassGrabRelativePose        *RelativePose `json:"glass_grab_relative_pose,omitempty"`
-	GlassMaxDistanceFromTargetMm float64       `json:"glass_max_distance_from_target_mm,omitempty"`
 	GlassCentroidMinZMm          float64       `json:"glass_centroid_min_z_mm,omitempty"`
 
 	// PlaceCupInServingArea, when true, replaces giveFullCupToCustomer with
@@ -209,13 +205,6 @@ func pickupPhotosPerVantage(configured int) int {
 		return configured
 	}
 	return 1
-}
-
-// Vec3Mm is a 3D point in millimeters used for world-frame configuration.
-type Vec3Mm struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
-	Z float64 `json:"z"`
 }
 
 // RelativePose is a 6-DoF offset (translation in millimeters + orientation as
@@ -278,9 +267,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		if cfg.CameraObservePoseSwitcherName == "" {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "camera_observe_pose_switcher_name")
 		}
-		if cfg.ExpectedCupPositionMm == nil {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "expected_cup_position_mm")
-		}
 		if cfg.CupApproachRelativePose == nil {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_approach_relative_pose")
 		}
@@ -292,9 +278,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 		if cfg.CupPickupMaxAttempts < 0 {
 			return nil, nil, fmt.Errorf("%s: cup_pickup_max_attempts must be >= 0", path)
-		}
-		if cfg.CupMaxDistanceFromTargetMm == 0 {
-			cfg.CupMaxDistanceFromTargetMm = 300
 		}
 		reqDeps = append(reqDeps,
 			vision.Named(cfg.CupVisionServiceName).String(),
@@ -318,17 +301,11 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		if cfg.SrcCameraName == "" {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "src_camera_name")
 		}
-		if cfg.ExpectedGlassPositionMm == nil {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "expected_glass_position_mm")
-		}
 		if cfg.GlassApproachRelativePose == nil {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "glass_approach_relative_pose")
 		}
 		if cfg.GlassGrabRelativePose == nil {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "glass_grab_relative_pose")
-		}
-		if cfg.GlassMaxDistanceFromTargetMm == 0 {
-			cfg.GlassMaxDistanceFromTargetMm = 300
 		}
 		reqDeps = append(reqDeps,
 			vision.Named(cfg.GlassVisionServiceName).String(),

@@ -8,37 +8,29 @@ import (
 	"go.viam.com/rdk/spatialmath"
 )
 
-func TestRankCupCentroids_Empty(t *testing.T) {
-	got := rankCupCentroids(nil, r3.Vector{}, 100)
+func TestRankCentroidsByProximity_Empty(t *testing.T) {
+	got := rankCentroidsByProximity(nil, r3.Vector{})
 	if len(got) != 0 {
 		t.Fatalf("expected empty slice, got %v", got)
 	}
 }
 
-func TestRankCupCentroids_SingleInRange(t *testing.T) {
+func TestRankCentroidsByProximity_Single(t *testing.T) {
 	c := []r3.Vector{{X: 110, Y: 0, Z: 0}}
-	got := rankCupCentroids(c, r3.Vector{X: 100, Y: 0, Z: 0}, 50)
+	got := rankCentroidsByProximity(c, r3.Vector{X: 100, Y: 0, Z: 0})
 	if len(got) != 1 || got[0] != c[0] {
 		t.Fatalf("expected [%v], got %v", c[0], got)
 	}
 }
 
-func TestRankCupCentroids_SingleOutOfRange(t *testing.T) {
-	c := []r3.Vector{{X: 1000, Y: 0, Z: 0}}
-	got := rankCupCentroids(c, r3.Vector{}, 100)
-	if len(got) != 0 {
-		t.Fatalf("expected empty slice (out of range), got %v", got)
-	}
-}
-
-func TestRankCupCentroids_SortsClosestFirst(t *testing.T) {
+func TestRankCentroidsByProximity_SortsClosestFirst(t *testing.T) {
 	c := []r3.Vector{
-		{X: 200, Y: 0, Z: 0}, // 100mm from target
+		{X: 200, Y: 0, Z: 0}, // 100mm from gripper
 		{X: 110, Y: 0, Z: 0}, // 10mm
 		{X: 150, Y: 0, Z: 0}, // 50mm
 	}
-	target := r3.Vector{X: 100, Y: 0, Z: 0}
-	got := rankCupCentroids(c, target, 300)
+	gripper := r3.Vector{X: 100, Y: 0, Z: 0}
+	got := rankCentroidsByProximity(c, gripper)
 	want := []r3.Vector{c[1], c[2], c[0]}
 	if len(got) != len(want) {
 		t.Fatalf("expected %d candidates, got %d (%v)", len(want), len(got), got)
@@ -50,57 +42,27 @@ func TestRankCupCentroids_SortsClosestFirst(t *testing.T) {
 	}
 }
 
-func TestRankCupCentroids_AllOutOfRange(t *testing.T) {
-	c := []r3.Vector{
-		{X: 1000, Y: 0, Z: 0},
-		{X: 2000, Y: 0, Z: 0},
-	}
-	got := rankCupCentroids(c, r3.Vector{}, 100)
-	if len(got) != 0 {
-		t.Fatalf("expected empty slice, got %v", got)
-	}
-}
-
-func TestRankCupCentroids_DropsOutOfRangeKeepsRest(t *testing.T) {
-	c := []r3.Vector{
-		{X: 1000, Y: 0, Z: 0}, // out
-		{X: 110, Y: 0, Z: 0},  // in (10mm)
-		{X: 200, Y: 0, Z: 0},  // in (100mm)
-	}
-	target := r3.Vector{X: 100, Y: 0, Z: 0}
-	got := rankCupCentroids(c, target, 150)
-	want := []r3.Vector{c[1], c[2]}
-	if len(got) != len(want) {
-		t.Fatalf("expected %d candidates, got %d (%v)", len(want), len(got), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("rank[%d] = %v, want %v", i, got[i], want[i])
-		}
-	}
-}
-
-func TestRankCupCentroids_ZeroMaxMeansNoCutoff(t *testing.T) {
+func TestRankCentroidsByProximity_KeepsAllNoCutoff(t *testing.T) {
 	c := []r3.Vector{
 		{X: 1e6, Y: 0, Z: 0},
 		{X: 100, Y: 0, Z: 0},
 	}
-	got := rankCupCentroids(c, r3.Vector{}, 0)
+	got := rankCentroidsByProximity(c, r3.Vector{})
 	if len(got) != 2 {
-		t.Fatalf("expected 2 candidates with maxDistMm=0, got %d", len(got))
+		t.Fatalf("expected all candidates kept (no cutoff), got %d", len(got))
 	}
 	if got[0] != c[1] || got[1] != c[0] {
 		t.Fatalf("expected closer-first ordering, got %v", got)
 	}
 }
 
-func TestRankCupCentroids_TiesStable(t *testing.T) {
+func TestRankCentroidsByProximity_TiesStable(t *testing.T) {
 	c := []r3.Vector{
 		{X: 110, Y: 0, Z: 0}, // 10mm
 		{X: 90, Y: 0, Z: 0},  // 10mm — tie
 	}
-	target := r3.Vector{X: 100, Y: 0, Z: 0}
-	got := rankCupCentroids(c, target, 50)
+	gripper := r3.Vector{X: 100, Y: 0, Z: 0}
+	got := rankCentroidsByProximity(c, gripper)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 candidates, got %d", len(got))
 	}
@@ -109,14 +71,14 @@ func TestRankCupCentroids_TiesStable(t *testing.T) {
 	}
 }
 
-func TestRankCupCentroids_DoesNotMutateInput(t *testing.T) {
+func TestRankCentroidsByProximity_DoesNotMutateInput(t *testing.T) {
 	c := []r3.Vector{
 		{X: 200, Y: 0, Z: 0},
 		{X: 110, Y: 0, Z: 0},
 		{X: 150, Y: 0, Z: 0},
 	}
 	orig := append([]r3.Vector(nil), c...)
-	_ = rankCupCentroids(c, r3.Vector{X: 100, Y: 0, Z: 0}, 300)
+	_ = rankCentroidsByProximity(c, r3.Vector{X: 100, Y: 0, Z: 0})
 	for i := range orig {
 		if c[i] != orig[i] {
 			t.Fatalf("input mutated at index %d: got %v, want %v", i, c[i], orig[i])

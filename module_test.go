@@ -26,7 +26,6 @@ func validDynamicConfig() *Config {
 	cfg.CupVisionServiceName = "vis"
 	cfg.SrcCameraName = "cam"
 	cfg.CameraObservePoseSwitcherName = "observe-switch"
-	cfg.ExpectedCupPositionMm = &Vec3Mm{}
 	cfg.CupApproachRelativePose = &RelativePose{}
 	cfg.CupGrabRelativePose = &RelativePose{}
 	return cfg
@@ -40,7 +39,6 @@ func validDynamicGlassConfig() *Config {
 	cfg.GlassVisionServiceName = "glass-vis"
 	cfg.GlassObservePoseSwitcherName = "glass-observe-switch"
 	cfg.SrcCameraName = "cam"
-	cfg.ExpectedGlassPositionMm = &Vec3Mm{}
 	cfg.GlassApproachRelativePose = &RelativePose{}
 	cfg.GlassGrabRelativePose = &RelativePose{}
 	return cfg
@@ -140,12 +138,12 @@ func TestValidate_DynamicGlassPickup_RequiresObserveSwitcher(t *testing.T) {
 	}
 }
 
-func TestValidate_DynamicGlassPickup_RequiresExpectedPosition(t *testing.T) {
+func TestValidate_DynamicGlassPickup_RequiresApproachRelativePose(t *testing.T) {
 	cfg := validDynamicGlassConfig()
-	cfg.ExpectedGlassPositionMm = nil
+	cfg.GlassApproachRelativePose = nil
 	_, _, err := cfg.Validate("")
-	if err == nil || !strings.Contains(err.Error(), "expected_glass_position_mm") {
-		t.Fatalf("expected expected_glass_position_mm required error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "glass_approach_relative_pose") {
+		t.Fatalf("expected glass_approach_relative_pose required error, got %v", err)
 	}
 }
 
@@ -153,7 +151,6 @@ func TestValidate_DynamicCupPickup_RequiresVisionServiceName(t *testing.T) {
 	cfg := validBaseConfig()
 	cfg.DynamicCupPickup = true
 	cfg.SrcCameraName = "cam"
-	cfg.ExpectedCupPositionMm = &Vec3Mm{}
 	_, _, err := cfg.Validate("")
 	if err == nil || !strings.Contains(err.Error(), "cup_vision_service_name") {
 		t.Fatalf("expected cup_vision_service_name required error, got %v", err)
@@ -164,7 +161,6 @@ func TestValidate_DynamicCupPickup_RequiresSrcCameraName(t *testing.T) {
 	cfg := validBaseConfig()
 	cfg.DynamicCupPickup = true
 	cfg.CupVisionServiceName = "vis"
-	cfg.ExpectedCupPositionMm = &Vec3Mm{}
 	_, _, err := cfg.Validate("")
 	if err == nil || !strings.Contains(err.Error(), "src_camera_name") {
 		t.Fatalf("expected src_camera_name required error, got %v", err)
@@ -179,18 +175,6 @@ func TestValidate_DynamicCupPickup_RequiresCameraObservePoseSwitcher(t *testing.
 	_, _, err := cfg.Validate("")
 	if err == nil || !strings.Contains(err.Error(), "camera_observe_pose_switcher_name") {
 		t.Fatalf("expected camera_observe_pose_switcher_name required error, got %v", err)
-	}
-}
-
-func TestValidate_DynamicCupPickup_RequiresExpectedCupPosition(t *testing.T) {
-	cfg := validBaseConfig()
-	cfg.DynamicCupPickup = true
-	cfg.CupVisionServiceName = "vis"
-	cfg.SrcCameraName = "cam"
-	cfg.CameraObservePoseSwitcherName = "observe-switch"
-	_, _, err := cfg.Validate("")
-	if err == nil || !strings.Contains(err.Error(), "expected_cup_position_mm") {
-		t.Fatalf("expected expected_cup_position_mm required error, got %v", err)
 	}
 }
 
@@ -209,27 +193,6 @@ func TestValidate_DynamicCupPickup_RequiresGrabRelativePose(t *testing.T) {
 	_, _, err := cfg.Validate("")
 	if err == nil || !strings.Contains(err.Error(), "cup_grab_relative_pose") {
 		t.Fatalf("expected cup_grab_relative_pose required error, got %v", err)
-	}
-}
-
-func TestValidate_DynamicCupPickup_DefaultsMaxDistance(t *testing.T) {
-	cfg := validDynamicConfig()
-	if _, _, err := cfg.Validate(""); err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if cfg.CupMaxDistanceFromTargetMm != 300 {
-		t.Fatalf("expected default 300mm, got %f", cfg.CupMaxDistanceFromTargetMm)
-	}
-}
-
-func TestValidate_DynamicCupPickup_PreservesExplicitMaxDistance(t *testing.T) {
-	cfg := validDynamicConfig()
-	cfg.CupMaxDistanceFromTargetMm = 500
-	if _, _, err := cfg.Validate(""); err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if cfg.CupMaxDistanceFromTargetMm != 500 {
-		t.Fatalf("expected 500mm preserved, got %f", cfg.CupMaxDistanceFromTargetMm)
 	}
 }
 
