@@ -359,7 +359,7 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	}
 
 	// 1. Approach (free planning). On failure the arm has not moved.
-	if err := s.moveToRawPose(ctx, approachPD, nil, nil, nil); err != nil {
+	if err := s.moveToRawPose(ctx, approachPD, nil, nil, nil, nil); err != nil {
 		return fmt.Errorf("approach centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
 
@@ -371,7 +371,7 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	time.Sleep(gripperPause)
 
 	// 3. Linear descent to grab pose.
-	if err := s.moveToRawPose(ctx, grabPD, defaultApproachConstraint, nil, nil); err != nil {
+	if err := s.moveToRawPose(ctx, grabPD, defaultApproachConstraint, nil, nil, nil); err != nil {
 		s.recoverToObserve(ctx, cancelCtx, t)
 		return fmt.Errorf("grab centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
@@ -392,7 +392,7 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	// can't drop the item safely by recovering to observe. Strip the
 	// errMotionPlanning chain (%v, not %w) so the caller does not treat this
 	// as a try-another-candidate planning failure.
-	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, nil, nil); err != nil {
+	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, nil, nil, nil); err != nil {
 		return fmt.Errorf("retreat with %s grabbed (centroid x=%.1f, y=%.1f, z=%.1f): %v", t.label, centroid.X, centroid.Y, centroid.Z, err)
 	}
 	return nil

@@ -55,7 +55,7 @@ func (s *beanjaminCoffee) moveToPose(ctx context.Context, step Step) error {
 	if err != nil {
 		return err
 	}
-	if err := s.moveToRawPose(ctx, pd, step.LinearConstraint, step.AllowedCollisions, step.MoveOptions); err != nil {
+	if err := s.moveToRawPose(ctx, pd, step.LinearConstraint, step.AllowedCollisions, step.MoveOptions, s.collisionExtra(step)); err != nil {
 		return fmt.Errorf("move to %q failed: %w", step.PoseName, err)
 	}
 	return nil
@@ -428,7 +428,7 @@ func (s *beanjaminCoffee) savePlanResponse(plan motionplan.Plan, label string) {
 }
 
 // moveToRawPose plans a motion using armplanning and executes it on the arm.
-func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
+func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions, extra map[string]interface{}) error {
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return err
@@ -478,7 +478,7 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	if opts == nil && lc != nil {
 		opts = s.slowMovementMoveOptions()
 	}
-	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
+	return s.arm.MoveThroughJointPositions(ctx, positions, opts, extra)
 }
 
 func (s *beanjaminCoffee) switchForComponent(componentName string) (toggleswitch.Switch, error) {
@@ -582,7 +582,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	if opts == nil {
 		opts = s.slowMovementMoveOptions()
 	}
-	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
+	return s.arm.MoveThroughJointPositions(ctx, positions, opts, s.collisionExtra(step))
 }
 
 // computeCircularPoses generates waypoints evenly spaced around a circle in
@@ -677,7 +677,7 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 		if circOpts == nil {
 			circOpts = s.slowMovementMoveOptions()
 		}
-		if err := s.arm.MoveThroughJointPositions(ctx, positions, circOpts, nil); err != nil {
+		if err := s.arm.MoveThroughJointPositions(ctx, positions, circOpts, s.collisionExtra(step)); err != nil {
 			return fmt.Errorf("execute circular revolution %d: %w", rev+1, err)
 		}
 	}

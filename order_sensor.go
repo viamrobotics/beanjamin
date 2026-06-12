@@ -49,6 +49,10 @@ type orderReading struct {
 	decaf         bool
 	startedAt     time.Time
 	endedAt       time.Time
+	// collisionSensitivity is the configured free-space collision-protection
+	// level in effect for the attempt (0 when the feature is off). Free-space
+	// moves ran at this level; contact moves dropped to 0 per-move.
+	collisionSensitivity int
 }
 
 // Implemented by orderSensor; coffee calls this after each order attempt.
@@ -123,19 +127,20 @@ func (s *orderSensor) pushOrderReading(r orderReading) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pending = append(s.pending, map[string]interface{}{
-		"order_id":           r.order.ID,
-		"drink":              r.order.Drink,
-		"customer_name":      r.order.CustomerName,
-		"order_ok":           ok,
-		"operator_cancelled": r.operatorCancelled,
-		"error_message":      errMsg,
-		"failed_step":        failedStep,
-		"trace_id":           r.traceID,
-		"place_cup":          r.placeCup,
-		"clean_after_use":    r.cleanAfterUse,
-		"decaf":              r.decaf,
-		"start_time":         r.startedAt.UTC().Format(time.RFC3339Nano),
-		"end_time":           r.endedAt.UTC().Format(time.RFC3339Nano),
-		"duration_ms":        float64(r.endedAt.Sub(r.startedAt).Milliseconds()),
+		"order_id":              r.order.ID,
+		"drink":                 r.order.Drink,
+		"customer_name":         r.order.CustomerName,
+		"order_ok":              ok,
+		"operator_cancelled":    r.operatorCancelled,
+		"error_message":         errMsg,
+		"failed_step":           failedStep,
+		"trace_id":              r.traceID,
+		"place_cup":             r.placeCup,
+		"clean_after_use":       r.cleanAfterUse,
+		"decaf":                 r.decaf,
+		"start_time":            r.startedAt.UTC().Format(time.RFC3339Nano),
+		"end_time":              r.endedAt.UTC().Format(time.RFC3339Nano),
+		"duration_ms":           float64(r.endedAt.Sub(r.startedAt).Milliseconds()),
+		"collision_sensitivity": float64(r.collisionSensitivity),
 	})
 }
