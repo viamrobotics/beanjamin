@@ -338,6 +338,7 @@ func waterDelta(drink string) float64 {
 }
 
 func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName string, batchIndex, batchSize int) (err error) {
+	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::prepareDrink["+drink+"]")
 	defer span.End()
 
@@ -361,13 +362,13 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 
 	brewTime := s.drinkBrewTime(drink)
 
-	s.logger.Infof("starting %s preparation (place_cup=%t, clean_after_use=%t, brew_time=%v)",
+	logger.Infof("starting %s preparation (place_cup=%t, clean_after_use=%t, brew_time=%v)",
 		drink, s.cfg.PlaceCup, s.cfg.CleanAfterUse, brewTime)
 
 	s.setStep(stepGrinding)
 	isDecaf := isDecafDrink(drink)
 	if isDecaf {
-		s.logger.Infof("step 1/9: grinding decaf coffee")
+		logger.Infof("step 1/9: grinding decaf coffee")
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::grinding_decaf")
 		err := s.grindDecaf(ctx, cancelCtx)
 		stepSpan.End()
@@ -376,7 +377,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		}
 		s.incrementSensorReading(ctx, s.usageSensor, "decaf grinder", "decaf_grinds", 1)
 	} else {
-		s.logger.Infof("step 1/9: grinding coffee")
+		logger.Infof("step 1/9: grinding coffee")
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::grinding")
 		err := s.grindCoffee(ctx, cancelCtx)
 		stepSpan.End()
@@ -387,7 +388,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 	}
 
 	s.setStep(stepTamping)
-	s.logger.Infof("step 2/9: tamping ground")
+	logger.Infof("step 2/9: tamping ground")
 	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::tamping")
 		err := s.tampGround(ctx, cancelCtx)
@@ -398,7 +399,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 	}
 
 	s.setStep(stepLockingPortafilter)
-	s.logger.Infof("step 3/9: locking portafilter")
+	logger.Infof("step 3/9: locking portafilter")
 	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::locking_portafilter")
 		err := s.lockPortaFilter(ctx, cancelCtx)
@@ -409,7 +410,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 	}
 
 	s.setStep(stepReleasingFilter)
-	s.logger.Infof("step 4/9: releasing filter")
+	logger.Infof("step 4/9: releasing filter")
 	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::releasing_filter")
 		err := s.releaseFilter(ctx, cancelCtx)
@@ -421,7 +422,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 
 	if s.cfg.PlaceCup {
 		s.setStep(stepPlacingCup)
-		s.logger.Infof("step 5/9: placing cup (place_cup=true)")
+		logger.Infof("step 5/9: placing cup (place_cup=true)")
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::placing_cup")
 		err := s.setCupForCoffee(ctx, cancelCtx)
 		stepSpan.End()
@@ -429,13 +430,13 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 			return err
 		}
 	} else {
-		s.logger.Infof("step 5/9: skipping cup placement (place_cup=false)")
+		logger.Infof("step 5/9: skipping cup placement (place_cup=false)")
 	}
 
 	s.setStep(stepBrewing)
-	s.logger.Infof("step 6/9: brewing %s", drink)
+	logger.Infof("step 6/9: brewing %s", drink)
 	if err := s.say(ctx, pickAlmostReady()); err != nil {
-		s.logger.Warnf("failed to say almost-ready: %v", err)
+		logger.Warnf("failed to say almost-ready: %v", err)
 	}
 	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::brewing")
@@ -449,7 +450,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 
 	if s.cfg.PlaceCup {
 		s.setStep(stepServing)
-		s.logger.Infof("step 6b/9: serving cup (place_cup=true, place_cup_in_serving_area=%t)", s.cfg.PlaceCupInServingArea)
+		logger.Infof("step 6b/9: serving cup (place_cup=true, place_cup_in_serving_area=%t)", s.cfg.PlaceCupInServingArea)
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::serving")
 		var err error
 		switch {
@@ -465,14 +466,14 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 			return err
 		}
 		if err := s.sayAlways(ctx, pickDrinkReady(drink, customerName, batchIndex, batchSize)); err != nil {
-			s.logger.Warnf("failed to say drink-ready: %v", err)
+			logger.Warnf("failed to say drink-ready: %v", err)
 		}
 	} else {
-		s.logger.Infof("step 6b/9: skipping cup handoff (place_cup=false)")
+		logger.Infof("step 6b/9: skipping cup handoff (place_cup=false)")
 	}
 
 	s.setStep(stepGrabbingFilter)
-	s.logger.Infof("step 7/9: grabbing filter")
+	logger.Infof("step 7/9: grabbing filter")
 	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::grabbing_filter")
 		err := s.grabFilter(ctx, cancelCtx)
@@ -483,7 +484,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 	}
 
 	s.setStep(stepUnlockingPortafilter)
-	s.logger.Infof("step 8/9: unlocking portafilter")
+	logger.Infof("step 8/9: unlocking portafilter")
 	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::unlocking_portafilter")
 		err := s.unlockPortaFilter(ctx, cancelCtx)
@@ -495,11 +496,11 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 
 	if s.cfg.CleanAfterUse {
 		s.setStep(stepCleaning)
-		s.logger.Infof("post: cleaning portafilter (clean_after_use=true)")
+		logger.Infof("post: cleaning portafilter (clean_after_use=true)")
 		if !s.cfg.PlaceCup {
-			s.logger.Infof("post: waiting for manual cup removal (place_cup=false)")
+			logger.Infof("post: waiting for manual cup removal (place_cup=false)")
 			if err := s.say(ctx, "Please remove the cup before we start the cleaning process!"); err != nil {
-				s.logger.Warnf("failed to say cup-removal prompt: %v", err)
+				logger.Warnf("failed to say cup-removal prompt: %v", err)
 			}
 			time.Sleep(10 * time.Second)
 		}
@@ -511,17 +512,17 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		}
 		s.incrementSensorReading(ctx, s.usageSensor, "cleaner", "cleanings", 1)
 	} else {
-		s.logger.Infof("post: skipping cleaning (clean_after_use=false)")
+		logger.Infof("post: skipping cleaning (clean_after_use=false)")
 	}
 
 	s.setStep(stepFinishingUp)
-	s.logger.Infof("step 9/9: moving to home pose")
+	logger.Infof("step 9/9: moving to home pose")
 	homeStep := Step{PoseName: filterPoseHome, Component: componentFilter}
 	if err := s.executeStep(ctx, cancelCtx, homeStep); err != nil {
 		return err
 	}
 
-	s.logger.Infof("%s preparation complete", drink)
+	logger.Infof("%s preparation complete", drink)
 	return nil
 }
 
@@ -761,6 +762,7 @@ func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) er
 // by placeFullCupOnShelf (cups) and serveIcedCoffee (the empty espresso cup and
 // the iced glass).
 func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context) error {
+	logger := s.activeOrderLogger()
 	if s.gripper == nil {
 		return fmt.Errorf("place_in_serving_area: no gripper configured")
 	}
@@ -775,12 +777,12 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context)
 	var lastErr error
 	for off := 0; off < n; off++ {
 		idx := slotIndex(start+uint64(off), n)
-		s.logger.Infof("place_in_serving_area: trying slot %d/%d", idx+1, n)
+		logger.Infof("place_in_serving_area: trying slot %d/%d", idx+1, n)
 		err := s.tryDropCupInSlot(ctx, slots[idx], shelfTopZ)
 		if err == nil {
 			// Next placement starts at the slot after the one just used.
 			s.servingAreaSlotCounter.Store(start + uint64(off) + 1)
-			s.logger.Infof("place_in_serving_area: placed item in slot %d/%d", idx+1, n)
+			logger.Infof("place_in_serving_area: placed item in slot %d/%d", idx+1, n)
 			return nil
 		}
 		lastErr = err
@@ -796,7 +798,7 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context)
 		if !errors.Is(err, errMotionPlanning) {
 			return fmt.Errorf("place_in_serving_area: %w", err)
 		}
-		s.logger.Warnf("place_in_serving_area: slot %d/%d unreachable — trying next slot: %v", idx+1, n, err)
+		logger.Warnf("place_in_serving_area: slot %d/%d unreachable — trying next slot: %v", idx+1, n, err)
 	}
 	return fmt.Errorf("place_in_serving_area: all %d serving-area slot(s) unreachable; last error: %w", n, lastErr)
 }
@@ -819,6 +821,7 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context)
 //   - anything else → an execution error, or any failure after the cup was
 //     released; bubble up (do not try another slot with an empty gripper).
 func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vector, shelfTopZ float64) error {
+	logger := s.activeOrderLogger()
 	dropAnchor := r3.Vector{
 		X: tileWorld.X,
 		Y: tileWorld.Y,
@@ -829,7 +832,7 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 
 	approachPD := &poseData{pose: approachPose, refFrame: referenceframe.World, componentName: componentClaws}
 	dropPD := &poseData{pose: dropPose, refFrame: referenceframe.World, componentName: componentClaws}
-	s.logger.Infof("shelf placement: slot (x=%.1f, y=%.1f) drop_pose=%v approach_pose=%v",
+	logger.Infof("shelf placement: slot (x=%.1f, y=%.1f) drop_pose=%v approach_pose=%v",
 		tileWorld.X, tileWorld.Y, dropPose, approachPose)
 
 	// 1. Free planning to the approach pose. On a planning failure the arm has
@@ -892,14 +895,18 @@ func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string
 	cancelCtx := s.cancelCtx
 	s.mu.Unlock()
 
-	s.logger.Infof("run_cup_flow: starting %d iteration(s) (assumes portafilter physically removed)", count)
+	// Not tied to a queued order, so there is no order ID to tag — use the
+	// base service logger.
+	logger := s.logger
+
+	logger.Infof("run_cup_flow: starting %d iteration(s) (assumes portafilter physically removed)", count)
 	for i := 1; i <= count; i++ {
 		s.setStep(fmt.Sprintf("Cup flow %d/%d", i, count))
-		s.logger.Infof("run_cup_flow: iteration %d/%d — pick cup + set under machine", i, count)
+		logger.Infof("run_cup_flow: iteration %d/%d — pick cup + set under machine", i, count)
 		if err := s.setCupForCoffee(ctx, cancelCtx); err != nil {
 			return nil, fmt.Errorf("run_cup_flow: iteration %d/%d: pickup: %w", i, count, err)
 		}
-		s.logger.Infof("run_cup_flow: iteration %d/%d — retrieve from machine + place on shelf", i, count)
+		logger.Infof("run_cup_flow: iteration %d/%d — retrieve from machine + place on shelf", i, count)
 		if err := s.placeFullCupOnShelf(ctx, cancelCtx); err != nil {
 			return nil, fmt.Errorf("run_cup_flow: iteration %d/%d: place-on-shelf: %w", i, count, err)
 		}
@@ -910,7 +917,7 @@ func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string
 		return nil, fmt.Errorf("run_cup_flow: home: %w", err)
 	}
 
-	s.logger.Infof("run_cup_flow: complete (%d iteration(s))", count)
+	logger.Infof("run_cup_flow: complete (%d iteration(s))", count)
 	return map[string]interface{}{"status": "complete", "iterations": count}, nil
 }
 
@@ -1099,6 +1106,7 @@ func (s *beanjaminCoffee) fetchGlass(ctx, cancelCtx context.Context) error {
 // always driven back LOW — including on cancel — so the ice machine can't be
 // left running.
 func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
+	logger := s.activeOrderLogger()
 	approachStep := Step{PoseName: clawPoseIceMachineApproach, Component: componentClaws, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("dispense_ice: %w", err)
@@ -1114,7 +1122,7 @@ func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("dispense_ice: get pin %q: %w", pinName, err)
 	}
 	dwell := time.Duration(s.iceDispenseSec() * float64(time.Second))
-	s.logger.Infof("dispensing ice: pin %q HIGH for %s", pinName, dwell)
+	logger.Infof("dispensing ice: pin %q HIGH for %s", pinName, dwell)
 	if err := pin.Set(ctx, true, nil); err != nil {
 		return fmt.Errorf("dispense_ice: set pin %q high: %w", pinName, err)
 	}
@@ -1225,10 +1233,11 @@ func (s *beanjaminCoffee) brewCoffee(ctx, cancelCtx context.Context) error {
 
 // brew presses the coffee button, waits for the given duration, then releases.
 func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, brewTime time.Duration) error {
+	logger := s.activeOrderLogger()
 	if err := s.turnCoffeeButtonOn(ctx, cancelCtx); err != nil {
 		return fmt.Errorf("brew_coffee: %w", err)
 	}
-	s.logger.Infof("waiting %s for coffee to brew", brewTime)
+	logger.Infof("waiting %s for coffee to brew", brewTime)
 	select {
 	case <-time.After(brewTime):
 	case <-ctx.Done():
@@ -1313,6 +1322,7 @@ func (s *beanjaminCoffee) cleanPortafilter(ctx, cancelCtx context.Context) error
 }
 
 func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step) error {
+	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::executeStep::"+step.PoseName)
 	defer span.End()
 
@@ -1325,24 +1335,24 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 	}
 
 	if step.PivotFromPose != "" {
-		s.logger.Infof("pivoting from %q to %q", step.PivotFromPose, step.PoseName)
+		logger.Infof("pivoting from %q to %q", step.PivotFromPose, step.PoseName)
 		if err := s.executePivot(ctx, cancelCtx, step); err != nil {
 			return err
 		}
 	} else if step.CircularRadiusMm > 0 {
-		s.logger.Infof("circular motion around %q", step.PoseName)
+		logger.Infof("circular motion around %q", step.PoseName)
 		if err := s.executeCircularMotion(ctx, cancelCtx, step); err != nil {
 			return err
 		}
 	} else {
-		s.logger.Infof("moving to %q", step.PoseName)
+		logger.Infof("moving to %q", step.PoseName)
 		if err := s.moveToPose(ctx, step); err != nil {
 			return err
 		}
 	}
 
 	if step.Pause > 0 {
-		s.logger.Infof("pausing %s after %q", step.Pause, step.PoseName)
+		logger.Infof("pausing %s after %q", step.Pause, step.PoseName)
 		select {
 		case <-time.After(step.Pause):
 		case <-ctx.Done():

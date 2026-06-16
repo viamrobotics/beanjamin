@@ -97,7 +97,7 @@ func TestSaveOrderVideoAndClear_ClearsOnlyOnSuccess(t *testing.T) {
 				t.Fatalf("pending record was not written: %v", err)
 			}
 
-			c.saveOrderVideoAndClear(order, now.Add(-clipLead), now.Add(clipTrail), nil)
+			c.saveOrderVideoAndClear(order, now.Add(-clipLead), now.Add(clipTrail), nil, c.logger)
 
 			_, err := os.Stat(path)
 			cleared := os.IsNotExist(err)
@@ -147,7 +147,7 @@ func TestIssueVideoSave_RequestShape(t *testing.T) {
 	from := time.Now().UTC().Add(-clipLead)
 	to := time.Now().UTC().Add(clipTrail)
 
-	if ok := c.issueVideoSave(order, from, to, context.DeadlineExceeded); !ok {
+	if ok := c.issueVideoSave(order, from, to, context.DeadlineExceeded, c.logger); !ok {
 		t.Fatalf("issueVideoSave returned false on a clean response")
 	}
 

@@ -28,6 +28,11 @@ func (s *beanjaminCoffee) notifyOrderFailureSlack(r orderReading) {
 		clipURL = buildClipDataURL(s.dataLocationID, r.order.ID)
 	}
 	blocks := slackFailureBlocks(r, s.machineLogsURL, clipURL)
+	// Tag with the order ID so the send logs join the rest of the order's
+	// trail. The send is queued and runs detached, possibly after the order
+	// has left the queue, so we build the tagged logger from the reading in
+	// hand rather than activeOrderLogger().
+	logger := s.logger.WithFields("order_id", r.order.ID)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), notifySlackTimeout)
 		defer cancel()
@@ -41,10 +46,10 @@ func (s *beanjaminCoffee) notifyOrderFailureSlack(r orderReading) {
 			"blocks":  blocks,
 		})
 		if err != nil {
-			s.logger.Warnf("slack notifier: failed to send for order %s: %v", r.order.ID, err)
+			logger.Warnf("slack notifier: failed to send: %v", err)
 			return
 		}
-		s.logger.Infof("slack notifier: sent failure notification for order %s (response: %+v)", r.order.ID, resp)
+		logger.Infof("slack notifier: sent failure notification (response: %+v)", resp)
 	}()
 }
 

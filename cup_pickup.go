@@ -219,6 +219,7 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 // nil slice with no error when no frame produced a detection, so the sweep in
 // findCandidates can move on to the next observe pose.
 func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) ([]r3.Vector, error) {
+	logger := s.activeOrderLogger()
 	photosToTake := t.photosPerVantage
 
 	var objects []*viz.Object
@@ -230,7 +231,7 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 		if err != nil {
 			return nil, fmt.Errorf("detect: %w", err)
 		}
-		s.logger.Infof("dynamic %s pickup: vision photo %d/%d, found %d detections", t.label, photo, photosToTake, len(objs))
+		logger.Infof("dynamic %s pickup: vision photo %d/%d, found %d detections", t.label, photo, photosToTake, len(objs))
 		objects = append(objects, objs...)
 	}
 	if len(objects) == 0 {
@@ -253,11 +254,11 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 			return nil, err
 		}
 		if floor := t.centroidMinZMm; floor != 0 && world.Z < floor {
-			s.logger.Infof("dynamic %s pickup: flooring centroid Z from %.1f to %.1f (centroid_min_z_mm)",
+			logger.Infof("dynamic %s pickup: flooring centroid Z from %.1f to %.1f (centroid_min_z_mm)",
 				t.label, world.Z, floor)
 			world.Z = floor
 		}
-		s.logger.Debugf("dynamic %s pickup: detection at camera-local %v -> world %v", t.label, local, world)
+		logger.Debugf("dynamic %s pickup: detection at camera-local %v -> world %v", t.label, local, world)
 		centroids = append(centroids, world)
 	}
 	return centroids, nil
@@ -291,6 +292,7 @@ func (s *beanjaminCoffee) observationPoseNames(ctx context.Context, sw toggleswi
 // When no pose produces any detection, findCandidates returns errNoItemsDetected
 // so pickDynamic can recover (announce + wait + re-observe).
 func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pickupTarget) ([]r3.Vector, error) {
+	logger := s.activeOrderLogger()
 	poseNames, err := s.observationPoseNames(ctx, t.observeSw)
 	if err != nil {
 		return nil, fmt.Errorf("dynamic_%s_pickup: %w", t.label, err)
@@ -298,12 +300,12 @@ func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pick
 
 	passes := len(poseNames)
 	for i, poseName := range poseNames {
-		s.logger.Infof("dynamic %s pickup: pass %d/%d — moving to observe pose %q", t.label, i+1, passes, poseName)
+		logger.Infof("dynamic %s pickup: pass %d/%d — moving to observe pose %q", t.label, i+1, passes, poseName)
 		// Pause briefly after arriving so the camera frame is stable before
 		// detection. t.observeComponent routes the fetch to the right switch.
 		step := Step{PoseName: poseName, Component: t.observeComponent, Pause: shortPause}
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-			s.logger.Warnf("dynamic %s pickup: pass %d/%d — observe pose %q unreachable, skipping pass: %v", t.label, i+1, passes, poseName, err)
+			logger.Warnf("dynamic %s pickup: pass %d/%d — observe pose %q unreachable, skipping pass: %v", t.label, i+1, passes, poseName, err)
 			continue
 		}
 
@@ -312,7 +314,7 @@ func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pick
 			return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, i+1, err)
 		}
 		if len(centroids) == 0 {
-			s.logger.Infof("dynamic %s pickup: pass %d/%d found nothing — trying next observe pose", t.label, i+1, passes)
+			logger.Infof("dynamic %s pickup: pass %d/%d found nothing — trying next observe pose", t.label, i+1, passes)
 			continue
 		}
 
@@ -325,10 +327,10 @@ func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pick
 
 		merged := mergeNearbyCentroids(centroids, observeDedupMm)
 		ranked := rankCentroidsByProximity(merged, gripperPosition)
-		s.logger.Infof("dynamic %s pickup: pass %d/%d — gripper=(x=%.1f, y=%.1f, z=%.1f) — %d candidate(s) (%d before merge), closest first:",
+		logger.Infof("dynamic %s pickup: pass %d/%d — gripper=(x=%.1f, y=%.1f, z=%.1f) — %d candidate(s) (%d before merge), closest first:",
 			t.label, i+1, passes, gripperPosition.X, gripperPosition.Y, gripperPosition.Z, len(ranked), len(centroids))
 		for j, c := range ranked {
-			s.logger.Infof("  rank[%d] world=(x=%.1f, y=%.1f, z=%.1f) distance=%.1fmm",
+			logger.Infof("  rank[%d] world=(x=%.1f, y=%.1f, z=%.1f) distance=%.1fmm",
 				j, c.X, c.Y, c.Z, c.Sub(gripperPosition).Norm())
 		}
 		return ranked, nil
@@ -403,16 +405,17 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 // state. Errors are logged, not returned — the caller is already returning an
 // error.
 func (s *beanjaminCoffee) recoverToObserve(ctx, cancelCtx context.Context, t *pickupTarget) {
+	logger := s.activeOrderLogger()
 	// Close the gripper to a safe configuration before traversing back. A
 	// stray open gripper has a larger collision silhouette than a closed one.
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		s.logger.Warnf("dynamic %s pickup: recover: close gripper: %v", t.label, err)
+		logger.Warnf("dynamic %s pickup: recover: close gripper: %v", t.label, err)
 	}
 	time.Sleep(gripperPause)
 
 	observeStep := Step{PoseName: t.observeHomePose, Component: t.observeComponent, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, observeStep); err != nil {
-		s.logger.Warnf("dynamic %s pickup: recover to %q: %v", t.label, t.observeHomePose, err)
+		logger.Warnf("dynamic %s pickup: recover to %q: %v", t.label, t.observeHomePose, err)
 	}
 }
 
@@ -436,6 +439,7 @@ func (s *beanjaminCoffee) pickGlassDynamic(ctx, cancelCtx context.Context) error
 // observe pose sees an item or all candidates in a batch fail planning. Shared
 // by cup and glass pickup.
 func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupTarget) error {
+	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::dynamic_pickup::"+t.label)
 	defer span.End()
 
@@ -467,12 +471,12 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 			if errors.Is(err, errNoItemsDetected) && attempt < maxAttempts {
 				recoverStep := Step{PoseName: t.observeHomePose, Component: t.observeComponent, Pause: shortPause}
 				if mvErr := s.executeStep(ctx, cancelCtx, recoverStep); mvErr != nil {
-					s.logger.Warnf("dynamic %s pickup: return to %q before retry wait: %v", t.label, t.observeHomePose, mvErr)
+					logger.Warnf("dynamic %s pickup: return to %q before retry wait: %v", t.label, t.observeHomePose, mvErr)
 				}
 				if sayErr := s.sayAlways(ctx, t.noItemSpeak); sayErr != nil {
-					s.logger.Warnf("dynamic %s pickup: announcement failed: %v", t.label, sayErr)
+					logger.Warnf("dynamic %s pickup: announcement failed: %v", t.label, sayErr)
 				}
-				s.logger.Infof("dynamic %s pickup: nothing detected on attempt %d/%d — waiting %s before retry",
+				logger.Infof("dynamic %s pickup: nothing detected on attempt %d/%d — waiting %s before retry",
 					t.label, attempt, maxAttempts, noItemRetryDelay)
 				select {
 				case <-time.After(noItemRetryDelay):
@@ -485,7 +489,7 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 			return err
 		}
 
-		s.logger.Infof("dynamic %s pickup: attempt %d/%d — %d candidate(s) to try", t.label, attempt, maxAttempts, len(candidates))
+		logger.Infof("dynamic %s pickup: attempt %d/%d — %d candidate(s) to try", t.label, attempt, maxAttempts, len(candidates))
 		for i, centroid := range candidates {
 			err := s.tryGrab(ctx, cancelCtx, t, centroid)
 			if err == nil {
@@ -501,7 +505,7 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 			if !errors.Is(err, errMotionPlanning) {
 				return err
 			}
-			s.logger.Warnf("dynamic %s pickup: attempt %d, candidate %d/%d planning failed — trying next: %v",
+			logger.Warnf("dynamic %s pickup: attempt %d, candidate %d/%d planning failed — trying next: %v",
 				t.label, attempt, i+1, len(candidates), err)
 		}
 	}
