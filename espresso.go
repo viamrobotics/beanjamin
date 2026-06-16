@@ -1106,6 +1106,7 @@ func (s *beanjaminCoffee) fetchGlass(ctx, cancelCtx context.Context) error {
 // always driven back LOW — including on cancel — so the ice machine can't be
 // left running.
 func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
+	logger := s.activeOrderLogger()
 	approachStep := Step{PoseName: clawPoseIceMachineApproach, Component: componentClaws, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("dispense_ice: %w", err)
@@ -1121,7 +1122,7 @@ func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("dispense_ice: get pin %q: %w", pinName, err)
 	}
 	dwell := time.Duration(s.iceDispenseSec() * float64(time.Second))
-	s.logger.Infof("dispensing ice: pin %q HIGH for %s", pinName, dwell)
+	logger.Infof("dispensing ice: pin %q HIGH for %s", pinName, dwell)
 	if err := pin.Set(ctx, true, nil); err != nil {
 		return fmt.Errorf("dispense_ice: set pin %q high: %w", pinName, err)
 	}
