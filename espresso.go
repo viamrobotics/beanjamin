@@ -260,6 +260,25 @@ var cupGrabCollisions = []AllowedCollision{
 	{Frame1: "gripper:claws", Frame2: "empty-cup"},
 }
 
+// Held-item surface collisions (track_held_geometry). When a cup/glass geometry
+// is attached to the gripper, the held item must be allowed to approach the
+// modeled surfaces it legitimately gets close to during a contact phase — the
+// same allowances the bare claws already carry. The gripper-overlap pairs
+// (heldItemSelfCollisions) are auto-injected for every held move; these cover
+// the per-surface phases and are applied via heldItemSurfaceCollisions so they
+// only take effect while an item is actually attached.
+var heldItemMachineCollisions = []AllowedCollision{
+	{Frame1: heldItemFrameName, Frame2: "coffee-machine-base"},
+}
+
+var heldItemServingAreaCollisions = []AllowedCollision{
+	{Frame1: heldItemFrameName, Frame2: servingAreaFrameName},
+}
+
+var heldItemEmptyCupCollisions = []AllowedCollision{
+	{Frame1: heldItemFrameName, Frame2: "empty-cup"},
+}
+
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {
 	giveCupFunc := s.giveFullCupToCustomer
 	if s.cfg.PlaceCupInServingArea {
@@ -717,7 +736,7 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	if err := s.executeStep(ctx, cancelCtx, cupPlacementApproach); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
-	readyStep := Step{PoseName: clawPoseCupReadyForCoffee, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	readyStep := Step{PoseName: clawPoseCupReadyForCoffee, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions)}
 	if err := s.executeStep(ctx, cancelCtx, readyStep); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
@@ -728,6 +747,8 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	}
 	// Give time for the gripper to open
 	time.Sleep(gripperPause)
+	// Cup is released under the machine; it no longer travels with the gripper.
+	s.detachHeldGeometry()
 
 	// Move away from the cup.
 	exitStep := Step{PoseName: clawPoseCupUnderMachineApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
@@ -841,9 +862,13 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 		return fmt.Errorf("approach slot (x=%.1f, y=%.1f): %w", tileWorld.X, tileWorld.Y, err)
 	}
 
+	// The cup is held during the approach and descent, so allow its geometry to
+	// approach the shelf surface (no-op when tracking is off / nothing attached).
+	shelfCollisions := s.heldItemSurfaceCollisions(heldItemServingAreaCollisions)
+
 	// 2. Linear descent to the drop pose. A planning failure leaves the arm at
 	// the approach pose still holding the cup — caller can try the next slot.
-	if err := s.moveToRawPose(ctx, dropPD, defaultApproachConstraint, nil, nil); err != nil {
+	if err := s.moveToRawPose(ctx, dropPD, defaultApproachConstraint, shelfCollisions, nil); err != nil {
 		return fmt.Errorf("descend into slot (x=%.1f, y=%.1f): %w", tileWorld.X, tileWorld.Y, err)
 	}
 
@@ -854,6 +879,8 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 		return fmt.Errorf("open gripper to release cup: %w", err)
 	}
 	time.Sleep(gripperPause)
+	// Cup is released onto the shelf; it no longer travels with the gripper.
+	s.detachHeldGeometry()
 
 	// 4. Linear retreat back to the approach pose.
 	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, nil, nil); err != nil {
@@ -947,9 +974,14 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 		return fmt.Errorf("give_full_cup_to_customer: grab gripper: %w", err)
 	}
 	time.Sleep(gripperPause)
+	// The cup was tracked at pickup and released under the machine; restore its
+	// geometry now that it's back in the gripper.
+	if err := s.reattachGeometry(pickupLabelCup); err != nil {
+		s.activeOrderLogger().Warnf("give_full_cup_to_customer: reattach cup geometry failed, continuing untracked: %v", err)
+	}
 
 	// Retreat from the machine.
-	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions)}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: %w", err)
 	}
@@ -959,7 +991,7 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 	if err := s.executeStep(ctx, cancelCtx, customerApproachStep); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: %w", err)
 	}
-	placeStep := Step{PoseName: clawPoseEmptyCup, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, Pause: shortPause}
+	placeStep := Step{PoseName: clawPoseEmptyCup, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: append(cupGrabCollisions, s.heldItemSurfaceCollisions(heldItemEmptyCupCollisions)...), Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: %w", err)
 	}
@@ -969,6 +1001,8 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 		return fmt.Errorf("give_full_cup_to_customer: open gripper: %w", err)
 	}
 	time.Sleep(gripperPause)
+	// Cup handed off; it no longer travels with the gripper.
+	s.detachHeldGeometry()
 
 	// Move away from the cup.
 	exitStep := Step{PoseName: clawPoseEmptyCupApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, Pause: shortPause}
@@ -1053,7 +1087,12 @@ func (s *beanjaminCoffee) grabBrewedCupFromMachine(ctx, cancelCtx context.Contex
 		return fmt.Errorf("grab_brewed_cup_from_machine: grab gripper: %w", err)
 	}
 	time.Sleep(gripperPause)
-	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	// The cup was tracked at pickup and released under the machine; restore its
+	// geometry now that it's back in the gripper so the retreat routes around it.
+	if err := s.reattachGeometry(pickupLabelCup); err != nil {
+		s.activeOrderLogger().Warnf("grab_brewed_cup_from_machine: reattach cup geometry failed, continuing untracked: %v", err)
+	}
+	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions)}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("grab_brewed_cup_from_machine: %w", err)
 	}
@@ -1083,6 +1122,11 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 		return fmt.Errorf("grab_staged_glass: grab gripper: %w", err)
 	}
 	time.Sleep(gripperPause)
+	// The glass was tracked at pickup and set down in staging; restore its
+	// geometry now that it's back in the gripper.
+	if err := s.reattachGeometry(pickupLabelGlass); err != nil {
+		s.activeOrderLogger().Warnf("grab_staged_glass: reattach glass geometry failed, continuing untracked: %v", err)
+	}
 	retreatStep := Step{PoseName: clawPoseStagingApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("grab_staged_glass: %w", err)
@@ -1170,6 +1214,8 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("stage_glass: open gripper: %w", err)
 	}
 	time.Sleep(gripperPause)
+	// Glass is set down in the staging area; it no longer travels with the gripper.
+	s.detachHeldGeometry()
 	exitStep := Step{PoseName: clawPoseStagingApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)

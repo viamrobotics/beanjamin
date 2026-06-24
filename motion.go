@@ -277,6 +277,10 @@ func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 		return fmt.Errorf("re-apply joint limits: %w", err)
 	}
 	s.cachedFS = fs
+	// The rebuilt frame system has no held-item frame, and any cached grasp no
+	// longer corresponds to reality — forget it so a stale geometry can't be
+	// re-attached after a cancel/reset.
+	s.clearHeldGeometry()
 	return nil
 }
 
@@ -451,7 +455,7 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	}
 	goalPose := tf.(*referenceframe.PoseInFrame)
 
-	allowedCollisions = s.filterFakeModeCollisions(allowedCollisions)
+	allowedCollisions = s.filterFakeModeCollisions(s.appendHeldItemCollisions(allowedCollisions))
 	constraints := buildConstraints(lc, allowedCollisions)
 	if lc != nil {
 		logger.Infof("applying linear constraint (line=%.1fmm, orient=%.1f°)",
@@ -566,7 +570,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	}
 
 	// Build constraints.
-	constraints := buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(step.AllowedCollisions))
+	constraints := buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.appendHeldItemCollisions(step.AllowedCollisions)))
 
 	// Plan all waypoints in a single call.
 	req := &armplanning.PlanRequest{
@@ -655,7 +659,7 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 		))
 	}
 
-	constraints := buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(step.AllowedCollisions))
+	constraints := buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.appendHeldItemCollisions(step.AllowedCollisions)))
 
 	req := &armplanning.PlanRequest{
 		FrameSystem: fs,

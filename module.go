@@ -24,6 +24,7 @@ import (
 	"go.viam.com/rdk/robot/framesystem"
 	generic "go.viam.com/rdk/services/generic"
 	"go.viam.com/rdk/services/vision"
+	"go.viam.com/rdk/spatialmath"
 
 	// Register the multi-poses-execution-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
@@ -156,6 +157,14 @@ type Config struct {
 	// shelf at the next round-robin slot instead of handed back. Requires
 	// DynamicCupPickup=true.
 	PlaceCupInServingArea bool `json:"place_cup_in_serving_area,omitempty"`
+
+	// TrackHeldGeometry, when true, attaches the vision-detected geometry of a
+	// picked-up cup/glass to the gripper frame in the cached frame system, so
+	// motion planning routes around the held item until it is set down (see
+	// held_geometry.go). The geometry comes from the dynamic-pickup vision
+	// detection, so it requires a dynamic pickup path (DynamicCupPickup and/or
+	// DynamicGlassPickup). Off by default.
+	TrackHeldGeometry bool `json:"track_held_geometry,omitempty"`
 
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
 
@@ -290,6 +299,10 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		return nil, nil, fmt.Errorf("%s: place_cup_in_serving_area requires dynamic_cup_pickup=true", path)
 	}
 
+	if cfg.TrackHeldGeometry && !cfg.DynamicCupPickup && !cfg.DynamicGlassPickup {
+		return nil, nil, fmt.Errorf("%s: track_held_geometry requires a dynamic pickup path (dynamic_cup_pickup and/or dynamic_glass_pickup) to supply the detected geometry", path)
+	}
+
 	if cfg.DynamicGlassPickup {
 		if cfg.GlassVisionServiceName == "" {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "glass_vision_service_name")
@@ -405,6 +418,16 @@ type beanjaminCoffee struct {
 	// It increments once per placeFullCupOnShelf and selects the shelf slot
 	// modulo the number of tiles. Process-local; resets to 0 on rebuild.
 	servingAreaSlotCounter atomic.Uint64
+
+	// Held-item geometry tracking (track_held_geometry, held_geometry.go).
+	// heldCupGeom / heldGlassGeom cache the gripper-local geometry of the cup /
+	// glass detected at pickup so a re-grab can restore it; heldItemAttached
+	// tracks whether the held-item frame is currently present in cachedFS. These
+	// are mutated only on the motion sequence goroutine (like cachedFS, gated by
+	// the running flag), so they need no extra locking.
+	heldCupGeom      spatialmath.Geometry
+	heldGlassGeom    spatialmath.Geometry
+	heldItemAttached bool
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {

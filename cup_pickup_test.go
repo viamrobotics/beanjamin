@@ -186,6 +186,63 @@ func TestComposeCupPose_PureRotation(t *testing.T) {
 	}
 }
 
+func TestCentroidsOf(t *testing.T) {
+	box, err := spatialmath.NewBox(spatialmath.NewZeroPose(), r3.Vector{X: 10, Y: 10, Z: 10}, "c")
+	if err != nil {
+		t.Fatalf("new box: %v", err)
+	}
+	cands := []pickupCandidate{
+		{centroid: r3.Vector{X: 1}, geom: box},
+		{centroid: r3.Vector{X: 2}},
+	}
+	got := centroidsOf(cands)
+	want := []r3.Vector{{X: 1}, {X: 2}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("centroidsOf = %v, want %v", got, want)
+	}
+}
+
+func TestNearestGeometry(t *testing.T) {
+	near, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 100}), r3.Vector{X: 10, Y: 10, Z: 10}, "near")
+	far, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 200}), r3.Vector{X: 10, Y: 10, Z: 10}, "far")
+	originals := []pickupCandidate{
+		{centroid: r3.Vector{X: 200}, geom: far},
+		{centroid: r3.Vector{X: 100}, geom: near},
+		{centroid: r3.Vector{X: 150}, geom: nil}, // skipped — no geometry
+	}
+	// Closest original to (110) is the one at (100) -> "near".
+	got := nearestGeometry(r3.Vector{X: 110}, originals)
+	if got == nil || got.Label() != "near" {
+		t.Fatalf("expected nearest geometry 'near', got %v", got)
+	}
+
+	// No originals carry geometry -> nil.
+	if g := nearestGeometry(r3.Vector{}, []pickupCandidate{{centroid: r3.Vector{X: 1}}}); g != nil {
+		t.Fatalf("expected nil when no geometry available, got %v", g)
+	}
+}
+
+func TestCandidatesForCentroids(t *testing.T) {
+	a, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 0}), r3.Vector{X: 10, Y: 10, Z: 10}, "a")
+	b, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 100}), r3.Vector{X: 10, Y: 10, Z: 10}, "b")
+	originals := []pickupCandidate{
+		{centroid: r3.Vector{X: 0}, geom: a},
+		{centroid: r3.Vector{X: 100}, geom: b},
+	}
+	// Ranked order swaps the two; each ranked centroid should keep its own geom.
+	ranked := []r3.Vector{{X: 100}, {X: 0}}
+	got := candidatesForCentroids(ranked, originals)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(got))
+	}
+	if got[0].centroid != (r3.Vector{X: 100}) || got[0].geom.Label() != "b" {
+		t.Fatalf("candidate[0] = %v/%v, want centroid (100) geom 'b'", got[0].centroid, got[0].geom)
+	}
+	if got[1].centroid != (r3.Vector{X: 0}) || got[1].geom.Label() != "a" {
+		t.Fatalf("candidate[1] = %v/%v, want centroid (0) geom 'a'", got[1].centroid, got[1].geom)
+	}
+}
+
 func cameraToWorldTestFS(t *testing.T, camPose spatialmath.Pose) *referenceframe.FrameSystem {
 	t.Helper()
 	fs := referenceframe.NewEmptyFrameSystem("test")

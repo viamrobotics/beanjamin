@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -31,6 +32,22 @@ import (
 	"go.viam.com/rdk/spatialmath"
 	viz "go.viam.com/rdk/vision"
 )
+
+// Pickup item labels — used for logs/spans/errors and as the cache key for
+// held-item geometry tracking (held_geometry.go).
+const (
+	pickupLabelCup   = "cup"
+	pickupLabelGlass = "glass"
+)
+
+// pickupCandidate is one detected item: its world-frame grasp centroid plus the
+// world-frame detected geometry (nil when geometry is unavailable). The geometry
+// rides alongside the centroid so the held-item tracker can attach the detected
+// shape to the gripper after a successful grab.
+type pickupCandidate struct {
+	centroid r3.Vector
+	geom     spatialmath.Geometry
+}
 
 // errNoItemsDetected is returned by findCandidates when the vision frames at
 // every observe pose yielded zero detections. pickDynamic recognises this case
@@ -176,7 +193,7 @@ type pickupTarget struct {
 // pipeline used before the generic refactor.
 func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 	return &pickupTarget{
-		label:            "cup",
+		label:            pickupLabelCup,
 		vision:           s.cupVision,
 		cameraName:       s.cupCameraName,
 		observeSw:        s.cameraObserveSw,
@@ -198,7 +215,7 @@ func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 // item-agnostic operational settings.
 func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 	return &pickupTarget{
-		label:            "glass",
+		label:            pickupLabelGlass,
 		vision:           s.glassVision,
 		cameraName:       s.cupCameraName,
 		observeSw:        s.glassObserveSw,
@@ -214,11 +231,11 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 }
 
 // observeVantage captures t.photosPerVantage vision frames at the arm's current
-// pose, accumulates every detection from all of them, and lifts each centroid
-// into world coordinates. Returns the pickup centroids (world frame). Returns a
-// nil slice with no error when no frame produced a detection, so the sweep in
-// findCandidates can move on to the next observe pose.
-func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) ([]r3.Vector, error) {
+// pose, accumulates every detection from all of them, and lifts each into world
+// coordinates. Returns the pickup candidates (world-frame centroid + geometry).
+// Returns a nil slice with no error when no frame produced a detection, so the
+// sweep in findCandidates can move on to the next observe pose.
+func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) ([]pickupCandidate, error) {
 	logger := s.activeOrderLogger()
 	photosToTake := t.photosPerVantage
 
@@ -243,7 +260,7 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 		return nil, err
 	}
 
-	centroids := make([]r3.Vector, 0, len(objects))
+	candidates := make([]pickupCandidate, 0, len(objects))
 	for _, obj := range objects {
 		if obj.Geometry == nil {
 			continue
@@ -253,15 +270,25 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 		if err != nil {
 			return nil, err
 		}
+		// Lift the full detection geometry (not just its centroid) into world so
+		// the held-item tracker can attach the detected shape after the grab.
+		geomWorld, err := geometryToWorld(fs, fsInputs, t.cameraName, obj.Geometry)
+		if err != nil {
+			return nil, err
+		}
 		if floor := t.centroidMinZMm; floor != 0 && world.Z < floor {
+			delta := floor - world.Z
 			logger.Infof("dynamic %s pickup: flooring centroid Z from %.1f to %.1f (centroid_min_z_mm)",
 				t.label, world.Z, floor)
 			world.Z = floor
+			// Shift the geometry up by the same delta so it stays centered on the
+			// (floored) grasp centroid.
+			geomWorld = geomWorld.Transform(spatialmath.NewPoseFromPoint(r3.Vector{Z: delta}))
 		}
 		logger.Debugf("dynamic %s pickup: detection at camera-local %v -> world %v", t.label, local, world)
-		centroids = append(centroids, world)
+		candidates = append(candidates, pickupCandidate{centroid: world, geom: geomWorld})
 	}
-	return centroids, nil
+	return candidates, nil
 }
 
 // observationPoseNames returns the names of every pose on the given observe
@@ -291,7 +318,7 @@ func (s *beanjaminCoffee) observationPoseNames(ctx context.Context, sw toggleswi
 //
 // When no pose produces any detection, findCandidates returns errNoItemsDetected
 // so pickDynamic can recover (announce + wait + re-observe).
-func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pickupTarget) ([]r3.Vector, error) {
+func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pickupTarget) ([]pickupCandidate, error) {
 	logger := s.activeOrderLogger()
 	poseNames, err := s.observationPoseNames(ctx, t.observeSw)
 	if err != nil {
@@ -309,11 +336,11 @@ func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pick
 			continue
 		}
 
-		centroids, err := s.observeVantage(ctx, t)
+		detected, err := s.observeVantage(ctx, t)
 		if err != nil {
 			return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, i+1, err)
 		}
-		if len(centroids) == 0 {
+		if len(detected) == 0 {
 			logger.Infof("dynamic %s pickup: pass %d/%d found nothing — trying next observe pose", t.label, i+1, passes)
 			continue
 		}
@@ -325,18 +352,63 @@ func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pick
 			return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, i+1, err)
 		}
 
+		// Merge/rank operate on centroids; the geometry is matched back to each
+		// ranked centroid afterward (mergeNearbyCentroids averages centroids, so
+		// geometry can't be threaded through the merge directly).
+		centroids := centroidsOf(detected)
 		merged := mergeNearbyCentroids(centroids, observeDedupMm)
 		ranked := rankCentroidsByProximity(merged, gripperPosition)
+		candidates := candidatesForCentroids(ranked, detected)
 		logger.Infof("dynamic %s pickup: pass %d/%d — gripper=(x=%.1f, y=%.1f, z=%.1f) — %d candidate(s) (%d before merge), closest first:",
-			t.label, i+1, passes, gripperPosition.X, gripperPosition.Y, gripperPosition.Z, len(ranked), len(centroids))
-		for j, c := range ranked {
+			t.label, i+1, passes, gripperPosition.X, gripperPosition.Y, gripperPosition.Z, len(candidates), len(detected))
+		for j, c := range candidates {
 			logger.Infof("  rank[%d] world=(x=%.1f, y=%.1f, z=%.1f) distance=%.1fmm",
-				j, c.X, c.Y, c.Z, c.Sub(gripperPosition).Norm())
+				j, c.centroid.X, c.centroid.Y, c.centroid.Z, c.centroid.Sub(gripperPosition).Norm())
 		}
-		return ranked, nil
+		return candidates, nil
 	}
 
 	return nil, fmt.Errorf("dynamic_%s_pickup: %w across all %d observe pose(s)", t.label, errNoItemsDetected, passes)
+}
+
+// centroidsOf extracts the world-frame centroids from a slice of candidates,
+// preserving order. Used to feed the centroid-only merge/rank helpers.
+func centroidsOf(candidates []pickupCandidate) []r3.Vector {
+	out := make([]r3.Vector, len(candidates))
+	for i, c := range candidates {
+		out[i] = c.centroid
+	}
+	return out
+}
+
+// candidatesForCentroids pairs each ranked centroid with the geometry of the
+// nearest original detection, so the held-item tracker can attach the detected
+// shape after the grab. Geometry is matched back by nearest original rather than
+// threaded through the merge (which averages centroids).
+func candidatesForCentroids(ranked []r3.Vector, originals []pickupCandidate) []pickupCandidate {
+	out := make([]pickupCandidate, len(ranked))
+	for i, c := range ranked {
+		out[i] = pickupCandidate{centroid: c, geom: nearestGeometry(c, originals)}
+	}
+	return out
+}
+
+// nearestGeometry returns the geometry of the original detection whose centroid
+// is closest to c, skipping detections with no geometry. Returns nil when no
+// original carries a geometry.
+func nearestGeometry(c r3.Vector, originals []pickupCandidate) spatialmath.Geometry {
+	var best spatialmath.Geometry
+	bestDist := math.MaxFloat64
+	for _, o := range originals {
+		if o.geom == nil {
+			continue
+		}
+		if d := o.centroid.Sub(c).Norm(); d < bestDist {
+			bestDist = d
+			best = o.geom
+		}
+	}
+	return best
 }
 
 // tryGrab attempts a full approach-grab-retreat cycle on one candidate
@@ -348,7 +420,8 @@ func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pick
 // errors.Is:
 //   - wraps errMotionPlanning → planning failure; try a different candidate.
 //   - anything else → execution error or operator cancel; bubble up.
-func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarget, centroid r3.Vector) error {
+func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarget, cand pickupCandidate) error {
+	centroid := cand.centroid
 	approachPD := &poseData{
 		pose:          composeCupPose(centroid, relativePoseToSpatial(t.approachRel)),
 		refFrame:      referenceframe.World,
@@ -389,6 +462,14 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 		return fmt.Errorf("close gripper on %s: %w", t.label, err)
 	}
 	time.Sleep(gripperPause)
+
+	// Attach the detected geometry to the gripper while the arm is at the grab
+	// pose, so the retreat (and everything until release) plans around the held
+	// item. Best-effort: a tracking-attach hiccup degrades to untracked motion
+	// (the prior behavior) rather than aborting a physical order mid-grab.
+	if err := s.attachDetectedGeometry(ctx, t.label, cand.geom); err != nil {
+		s.activeOrderLogger().Warnf("dynamic %s pickup: attach geometry failed, continuing untracked: %v", t.label, err)
+	}
 
 	// 5. Linear retreat with the item in hand. A failure here is fatal — we
 	// can't drop the item safely by recovering to observe. Strip the
@@ -490,8 +571,8 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 		}
 
 		logger.Infof("dynamic %s pickup: attempt %d/%d — %d candidate(s) to try", t.label, attempt, maxAttempts, len(candidates))
-		for i, centroid := range candidates {
-			err := s.tryGrab(ctx, cancelCtx, t, centroid)
+		for i, cand := range candidates {
+			err := s.tryGrab(ctx, cancelCtx, t, cand)
 			if err == nil {
 				return nil
 			}
