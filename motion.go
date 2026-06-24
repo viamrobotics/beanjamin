@@ -699,6 +699,137 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 	return nil
 }
 
+// defaultCarryWaypointSpacingMm is the straight-line spacing between the
+// waypoints inserted along a no-spill carry move (see carryHeldLevel). 200 mm
+// keeps consecutive goals close enough that the planner has little room to tilt
+// the held drink between them.
+const defaultCarryWaypointSpacingMm = 200.0
+
+// noSpillGoalCloud loosens the goal at each carry waypoint so IK has room to
+// solve while still keeping the held container close to level. A PoseCloud only
+// ever relaxes a goal — a candidate inside the cloud scores as a perfect match,
+// otherwise the standard weighted metric applies. X/Y/Z are small translational
+// leeways (mm) that give a little positional slack; the orientation leeways are
+// deviations from the goal orientation — OX/OY allow a small tilt of the
+// container's axis, Theta a wider twist about it.
+//
+// These are conservative defaults. Which axis is genuinely "safe" to open up
+// depends on how the cup sits in the gripper (its vertical axis relative to the
+// goal orientation vector); opening the wrong one can tip the drink (see the
+// referenceframe.PoseCloud docs). Tune on hardware before widening them.
+var noSpillGoalCloud = &referenceframe.PoseCloud{
+	X: 2, Y: 2, Z: 2,
+	OX: 0.2, OY: 0.2, OZ: 0.1, Theta: 45,
+}
+
+// computeLevelCarryWaypoints returns the ordered goal poses for a straight-line
+// carry from startPose to endPose. Each waypoint is spaced at most spacingMm
+// apart along the line.
+func computeLevelCarryWaypoints(startPose, endPose spatialmath.Pose, spacingMm float64) []spatialmath.Pose {
+	startPt := startPose.Point()
+	endPt := endPose.Point()
+	delta := endPt.Sub(startPt)
+	dist := delta.Norm()
+
+	// Number of straight-line segments: at least 1, otherwise ceil(dist/spacing)
+	// so no segment exceeds spacingMm.
+	segments := 1
+	if spacingMm > 0 && dist > spacingMm {
+		segments = int(math.Ceil(dist / spacingMm))
+	}
+
+	poses := make([]spatialmath.Pose, 0, segments)
+	for i := 1; i <= segments; i++ {
+		t := float64(i) / float64(segments)
+		poses = append(poses, spatialmath.Interpolate(startPose, endPose, t))
+	}
+	return poses
+}
+
+// carryHeldLevel carries the held container from its current pose to dest along
+// the straight line between them, stepping through waypoints (one per
+// defaultCarryWaypointSpacingMm). Each waypoint's pose is interpolated from the
+// container's current (upright) pose to dest, so the orientation eases from
+// upright to the approach pose while a goal pose cloud keeps it close to level —
+// so the drink doesn't slosh.
+//
+// The goals command the held-item frame (the container) rather than the gripper:
+// the held-item frame is coincident with the gripper (attached with an identity
+// offset, geometry aside), so converting the gripper start/dest poses to it is
+// the same world pose, but expressing the goals against the container frame keeps
+// the upright goal and the relaxing pose cloud about the container itself. When
+// no item is attached (tracking off, or a static pickup left nothing cached) it
+// falls back to the gripper frame, which is equivalent. Each goal carries
+// noSpillGoalCloud to loosen the orientation; held-item self-collisions are
+// injected so the tracked geometry still routes around obstacles. Planning
+// failures are wrapped in errMotionPlanning so placeHeldInServingArea can fall
+// through to the next slot.
+func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData) error {
+	logger := s.activeOrderLogger()
+	fs, fsInputs, err := s.currentInputs(ctx)
+	if err != nil {
+		return err
+	}
+	linearInputs := fsInputs.ToLinearInputs()
+
+	// Move the held-container frame when an item is attached; otherwise the
+	// coincident gripper frame (same world pose).
+	moveFrame := componentClaws
+	if s.heldItemAttached {
+		moveFrame = heldItemFrameName
+	}
+
+	// Start: current world pose of the moving frame (the container is upright).
+	startPIF := referenceframe.NewPoseInFrame(moveFrame, spatialmath.NewZeroPose())
+	startTF, err := fs.Transform(linearInputs, startPIF, referenceframe.World)
+	if err != nil {
+		return fmt.Errorf("transform held-container start pose to world: %w", err)
+	}
+	startPose := startTF.(*referenceframe.PoseInFrame).Pose()
+
+	// End: the gripper destination, converted to the moving frame (coincident, so
+	// the same world position).
+	destPIF := referenceframe.NewPoseInFrame(dest.refFrame, dest.pose)
+	destTF, err := fs.Transform(linearInputs, destPIF, referenceframe.World)
+	if err != nil {
+		return fmt.Errorf("transform carry destination to world: %w", err)
+	}
+	destPose := destTF.(*referenceframe.PoseInFrame).Pose()
+
+	waypoints := computeLevelCarryWaypoints(startPose, destPose, defaultCarryWaypointSpacingMm)
+	logger.Infof("no-spill carry: moving %q through %d waypoint(s) over %.0fmm (cloud: tilt±%.2f, twist±%.0f°)",
+		moveFrame, len(waypoints), destPose.Point().Sub(startPose.Point()).Norm(), noSpillGoalCloud.OX, noSpillGoalCloud.Theta)
+
+	goals := make([]*armplanning.PlanState, 0, len(waypoints))
+	for _, pose := range waypoints {
+		pif := referenceframe.NewPoseInFrameWithGoalCloud(referenceframe.World, pose, noSpillGoalCloud)
+		goals = append(goals, armplanning.NewPlanState(
+			referenceframe.FrameSystemPoses{moveFrame: pif}, nil,
+		))
+	}
+
+	constraints := buildConstraints(nil, s.filterFakeModeCollisions(s.appendHeldItemCollisions(nil)))
+
+	req := &armplanning.PlanRequest{
+		FrameSystem: fs,
+		Goals:       goals,
+		StartState:  armplanning.NewPlanState(nil, fsInputs),
+		Constraints: constraints,
+	}
+	s.savePlanRequest(req, "carry")
+	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errMotionPlanning, err)
+	}
+	s.savePlanResponse(plan, "carry")
+
+	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
+	if err != nil {
+		return fmt.Errorf("get frame inputs from carry plan: %w", err)
+	}
+	return s.arm.MoveThroughJointPositions(ctx, positions, nil, nil)
+}
+
 // computePivotPoses returns interpolated poses between startPose and endPose.
 // The step count is derived from the total rotation angle divided by degreesPerStep.
 func computePivotPoses(startPose, endPose spatialmath.Pose, degreesPerStep float64) []spatialmath.Pose {

@@ -155,6 +155,17 @@ type Config struct {
 	// Off by default.
 	TrackHeldGeometry bool `json:"track_held_geometry,omitempty"`
 
+	// NoSpillCarry, when true, carries the brewed cup from under the machine to
+	// the serving-area shelf along a straight line broken into waypoints (one
+	// every defaultCarryWaypointSpacingMm). Each waypoint commands the held-item
+	// (container) frame, interpolating from the container's upright start pose to
+	// the approach pose, with a goal pose cloud keeping it close to level so the
+	// held drink doesn't slosh (see carryHeldLevel in motion.go). Only affects the
+	// carry move in placeFullCupOnShelf; it commands the held-item frame, so it
+	// requires TrackHeldGeometry=true. Off by default (the carry free-plans
+	// straight to the approach pose).
+	NoSpillCarry bool `json:"no_spill_carry,omitempty"`
+
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
 
 	// FakeMode skips AllowedCollision entries that reference gripper
@@ -281,6 +292,10 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		camera.Named(cfg.SrcCameraName).String(),
 		cfg.CameraObservePoseSwitcherName,
 	)
+
+	if cfg.NoSpillCarry && !cfg.TrackHeldGeometry {
+		return nil, nil, fmt.Errorf("%s: no_spill_carry commands the held-item (container) frame, so it requires track_held_geometry=true", path)
+	}
 
 	if cfg.CanServeIced {
 		if cfg.IceDispenseBoardName == "" {

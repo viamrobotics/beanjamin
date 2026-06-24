@@ -775,9 +775,17 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 	logger.Infof("shelf placement: slot (x=%.1f, y=%.1f) drop_pose=%v approach_pose=%v",
 		tileWorld.X, tileWorld.Y, dropPose, approachPose)
 
-	// 1. Free planning to the approach pose. On a planning failure the arm has
-	// not moved and the cup is still held — caller can try the next slot.
-	if err := s.moveToRawPose(ctx, approachPD, nil, nil, nil); err != nil {
+	// 1. Carry the held cup to the approach pose above the slot. With
+	// no_spill_carry set, step through level-pinned waypoints (carryHeldLevel)
+	// so the drink doesn't slosh on the long traverse; otherwise free-plan
+	// straight there. Both wrap planning failures in errMotionPlanning, so on
+	// failure the arm has not moved and the cup is still held — the caller can
+	// try the next slot.
+	carry := func() error { return s.moveToRawPose(ctx, approachPD, nil, nil, nil) }
+	if s.cfg.NoSpillCarry {
+		carry = func() error { return s.carryHeldLevel(ctx, approachPD) }
+	}
+	if err := carry(); err != nil {
 		return fmt.Errorf("approach slot (x=%.1f, y=%.1f): %w", tileWorld.X, tileWorld.Y, err)
 	}
 
