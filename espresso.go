@@ -384,6 +384,10 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 	logger.Infof("starting %s preparation (place_cup=%t, clean_after_use=%t, brew_time=%v)",
 		drink, s.cfg.PlaceCup, s.cfg.CleanAfterUse, brewTime)
 
+	if err := s.normalizeGripperAtStart(ctx); err != nil {
+		return fmt.Errorf("normalize gripper before brew: %w", err)
+	}
+
 	s.setStep(stepGrinding)
 	isDecaf := isDecafDrink(drink)
 	if isDecaf {
@@ -721,10 +725,9 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 		if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
 			return fmt.Errorf("set_cup_for_coffee: %w", err)
 		}
-		if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		if err := s.grabAndVerifyHolding(ctx); err != nil {
 			return fmt.Errorf("set_cup_for_coffee: grab gripper: %w", err)
 		}
-		time.Sleep(gripperPause)
 
 		retreatStep := Step{PoseName: clawPoseEmptyCupApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, Pause: shortPause}
 		if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
@@ -970,12 +973,12 @@ func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) 
 	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: %w", err)
 	}
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+	if err := s.grabAndVerifyHolding(ctx); err != nil {
 		return fmt.Errorf("give_full_cup_to_customer: grab gripper: %w", err)
 	}
-	time.Sleep(gripperPause)
 	// The cup was tracked at pickup and released under the machine; restore its
-	// geometry now that it's back in the gripper.
+	// geometry now that it's back in the gripper. grabAndVerifyHolding only
+	// returns nil on a confirmed grab, so this never reattaches onto empty jaws.
 	if err := s.reattachGeometry(pickupLabelCup); err != nil {
 		s.activeOrderLogger().Warnf("give_full_cup_to_customer: reattach cup geometry failed, continuing untracked: %v", err)
 	}
@@ -1083,12 +1086,13 @@ func (s *beanjaminCoffee) grabBrewedCupFromMachine(ctx, cancelCtx context.Contex
 	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
 		return fmt.Errorf("grab_brewed_cup_from_machine: %w", err)
 	}
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+	if err := s.grabAndVerifyHolding(ctx); err != nil {
 		return fmt.Errorf("grab_brewed_cup_from_machine: grab gripper: %w", err)
 	}
-	time.Sleep(gripperPause)
 	// The cup was tracked at pickup and released under the machine; restore its
 	// geometry now that it's back in the gripper so the retreat routes around it.
+	// grabAndVerifyHolding only returns nil on a confirmed grab, so this never
+	// reattaches onto empty jaws.
 	if err := s.reattachGeometry(pickupLabelCup); err != nil {
 		s.activeOrderLogger().Warnf("grab_brewed_cup_from_machine: reattach cup geometry failed, continuing untracked: %v", err)
 	}
@@ -1118,12 +1122,12 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
 		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+	if err := s.grabAndVerifyHolding(ctx); err != nil {
 		return fmt.Errorf("grab_staged_glass: grab gripper: %w", err)
 	}
-	time.Sleep(gripperPause)
 	// The glass was tracked at pickup and set down in staging; restore its
-	// geometry now that it's back in the gripper.
+	// geometry now that it's back in the gripper. grabAndVerifyHolding only
+	// returns nil on a confirmed grab, so this never reattaches onto empty jaws.
 	if err := s.reattachGeometry(pickupLabelGlass); err != nil {
 		s.activeOrderLogger().Warnf("grab_staged_glass: reattach glass geometry failed, continuing untracked: %v", err)
 	}

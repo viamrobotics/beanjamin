@@ -451,17 +451,10 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 		return fmt.Errorf("grab centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
 
-	// 4. Close the gripper on the item.
-	//
-	// TODO: verify the gripper actually picked up an item before continuing.
-	// gripper.IsHoldingSomething is not usable here because the real robot
-	// permanently grips the claws extension, so the call returns true
-	// regardless of whether an item is between the claws.
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+	if err := s.grabAndVerifyHolding(ctx); err != nil {
 		s.recoverToObserve(ctx, cancelCtx, t)
-		return fmt.Errorf("close gripper on %s: %w", t.label, err)
+		return fmt.Errorf("grab %s: %w", t.label, err)
 	}
-	time.Sleep(gripperPause)
 
 	// Attach the detected geometry to the gripper while the arm is at the grab
 	// pose, so the retreat (and everything until release) plans around the held
@@ -583,10 +576,10 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 				return fmt.Errorf("dynamic_%s_pickup: cancelled: %w", t.label, err)
 			}
 
-			if !errors.Is(err, errMotionPlanning) {
+			if !errors.Is(err, errMotionPlanning) && !errors.Is(err, errGripMissed) {
 				return err
 			}
-			logger.Warnf("dynamic %s pickup: attempt %d, candidate %d/%d planning failed — trying next: %v",
+			logger.Warnf("dynamic %s pickup: attempt %d, candidate %d/%d failed (planning or grab miss) — trying next: %v",
 				t.label, attempt, i+1, len(candidates), err)
 		}
 	}
