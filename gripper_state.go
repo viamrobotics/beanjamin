@@ -105,6 +105,45 @@ func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context) error {
 	return nil
 }
 
+// dropHeldContainer releases a cup or glass the gripper is holding so cancel
+// recovery starts from an empty gripper and the cached frame system stops
+// tracking a container that has been let go. It opens the jaws to drop whatever
+// is held, detaches the held-item geometry, then closes the jaws again —
+// mirroring the open→close handoff the brew cycle uses at every place/release.
+//
+// It acts only when the jaws are in the holding band (a cup or glass); a gripper
+// closed on the thin filter handle reads as gripperClosed, so the portafilter is
+// never dropped. A failed position read is logged and skipped rather than
+// aborting the cancel: without a confirmed read we must not blindly open and
+// risk dropping the filter. No-op when no gripper is configured.
+func (s *beanjaminCoffee) dropHeldContainer(ctx context.Context) error {
+	if s.gripper == nil {
+		return nil
+	}
+	logger := s.activeOrderLogger()
+	pos, err := s.gripperPos(ctx)
+	if err != nil {
+		logger.Warnf("cancel: skipping held-container drop, gripper position unreadable: %v", err)
+		return nil
+	}
+	if s.classifyGripper(pos) != gripperHolding {
+		return nil
+	}
+	logger.Infof("cancel: gripper holding a container (pos=%.0f); opening to drop it", pos)
+	if err := s.gripper.Open(ctx, nil); err != nil {
+		return fmt.Errorf("drop held container: open: %w", err)
+	}
+	// Detach the geometry the moment the jaws release so any recovery motion
+	// that follows isn't planned around a container that's no longer there.
+	s.detachHeldGeometry()
+	// Let the jaws fully open so the container clears before re-closing.
+	time.Sleep(gripperPause)
+	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		return fmt.Errorf("drop held container: close: %w", err)
+	}
+	return nil
+}
+
 // normalizeGripperAtStart ensures the gripper is closed before a brew cycle
 // begins. Nothing closes the gripper on the prior cycle's exit, so the first
 // motion can inherit an open gripper — which has a larger collision silhouette,
