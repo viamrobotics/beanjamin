@@ -1049,6 +1049,15 @@ func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]interface{}, e
 		}
 	}
 
+	// Drop any cup/glass still in the gripper before recovery so the arm starts
+	// empty and the frame system stops tracking a container we've let go. The
+	// resetFrameSystem below also forgets the geometry, but dropping here both
+	// releases the physical object and clears the held-item frame mid-flow, so
+	// the recovery motion that follows plans against reality.
+	if err := s.dropHeldContainer(ctx); err != nil {
+		return nil, fmt.Errorf("cancel: %w", err)
+	}
+
 	recovered := false
 	switch {
 	case s.portafilterInMachine.Load():

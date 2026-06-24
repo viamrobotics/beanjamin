@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/spatialmath"
 	"go.viam.com/rdk/testutils/inject"
 )
 
@@ -53,6 +54,62 @@ func TestGrabAndVerifyHolding(t *testing.T) {
 			}
 			if got := errors.Is(err, errGripMissed); got != tc.wantMiss {
 				t.Errorf("errors.Is(err, errGripMissed) = %v, want %v (err=%v)", got, tc.wantMiss, err)
+			}
+		})
+	}
+}
+
+// TestDropHeldContainer covers cancel's pre-recovery release: a cup/glass in the
+// holding band is dropped (open→close) and its geometry detached, while a gripper
+// closed on the filter handle, an already-open gripper, or an unreadable position
+// leaves the jaws (and the portafilter) untouched.
+func TestDropHeldContainer(t *testing.T) {
+	cases := []struct {
+		name      string
+		pos       float64
+		doErr     error
+		noGripper bool
+		wantOpen  bool
+		wantGrab  bool
+		wantErr   bool
+	}{
+		{name: "holding drops and detaches", pos: 520, wantOpen: true, wantGrab: true},
+		{name: "closed on filter handle, no drop", pos: 357},
+		{name: "already open, no drop", pos: 850},
+		{name: "read error skips drop", doErr: errors.New("boom")},
+		{name: "no gripper noop", noGripper: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := clawsStaticFS(t, spatialmath.NewZeroPose())
+			s := &beanjaminCoffee{cfg: &Config{}, logger: logging.NewTestLogger(t), cachedFS: fs}
+			if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
+				t.Fatalf("addHeldItemFrame: %v", err)
+			}
+			var opened, grabbed bool
+			if !tc.noGripper {
+				g := inject.NewGripper("g")
+				g.OpenFunc = func(context.Context, map[string]interface{}) error { opened = true; return nil }
+				g.GrabFunc = func(context.Context, map[string]interface{}) (bool, error) { grabbed = true; return true, nil }
+				g.DoFunc = func(context.Context, map[string]interface{}) (map[string]interface{}, error) {
+					return map[string]interface{}{"pos": tc.pos}, tc.doErr
+				}
+				s.gripper = g
+			}
+			err := s.dropHeldContainer(context.Background())
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("dropHeldContainer err = %v, wantErr = %v", err, tc.wantErr)
+			}
+			if opened != tc.wantOpen {
+				t.Errorf("Open called = %v, want %v", opened, tc.wantOpen)
+			}
+			if grabbed != tc.wantGrab {
+				t.Errorf("Grab called = %v, want %v", grabbed, tc.wantGrab)
+			}
+			// The held-item geometry is detached iff we actually dropped.
+			wantAttached := !tc.wantOpen
+			if s.heldItemAttached != wantAttached {
+				t.Errorf("heldItemAttached = %v, want %v", s.heldItemAttached, wantAttached)
 			}
 		})
 	}
