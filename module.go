@@ -83,6 +83,8 @@ type Config struct {
 	BrewTimeSec               float64 `json:"brew_time_sec,omitempty"`
 	LungoBrewTimeSec          float64 `json:"lungo_brew_time_sec,omitempty"`
 	GrindTimeSec              float64 `json:"grind_time_sec,omitempty"`
+	GripperHoldMinPos         float64 `json:"gripper_hold_min_pos,omitempty"`
+	GripperHoldMaxPos         float64 `json:"gripper_hold_max_pos,omitempty"`
 	SlowMovementVelDegsPerSec float64 `json:"slow_movement_vel_degs_per_sec,omitempty"`
 	PlaceCup                  bool    `json:"place_cup,omitempty"`
 	CleanAfterUse             bool    `json:"clean_after_use,omitempty"`
