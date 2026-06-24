@@ -67,13 +67,13 @@ export function MachineRow({
   return (
     <li>
       <Link
-        href={`/machine?partId=${m.mainPartId}`}
+        href={`/?view=machine&partId=${m.mainPartId}`}
         className="text-neutral-900 no-underline hover:underline"
       >
         {row}
       </Link>{" "}
       <Link
-        href={`/machine?partId=${m.mainPartId}&kiosk=1`}
+        href={`/?view=machine&partId=${m.mainPartId}&kiosk=1`}
         className="text-blue-600 ml-2 hover:underline"
       >
         [kiosk mode →]
