@@ -104,3 +104,34 @@ func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context) error {
 	}
 	return nil
 }
+
+// normalizeGripperAtStart ensures the gripper is closed before a brew cycle
+// begins. Nothing closes the gripper on the prior cycle's exit, so the first
+// motion can inherit an open gripper — which has a larger collision silhouette,
+// and the allowed-collision tuning assumes a closed gripper. Self-heals the
+// common open case; aborts only if the jaws cannot reach closed (an object
+// physically jammed between the claws), since traversing jammed risks collision.
+func (s *beanjaminCoffee) normalizeGripperAtStart(ctx context.Context) error {
+	if s.gripper == nil {
+		return nil
+	}
+	pos, err := s.gripperPos(ctx)
+	if err != nil {
+		return err
+	}
+	if s.classifyGripper(pos) == gripperClosed {
+		return nil
+	}
+	s.activeOrderLogger().Infof("gripper not closed at cycle start (pos=%.0f); closing", pos)
+	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		return fmt.Errorf("normalize gripper: close: %w", err)
+	}
+	time.Sleep(gripperPause)
+	if pos, err = s.gripperPos(ctx); err != nil {
+		return err
+	}
+	if s.classifyGripper(pos) != gripperClosed {
+		return fmt.Errorf("gripper won't close at cycle start (pos=%.0f); item jammed between claws?", pos)
+	}
+	return nil
+}

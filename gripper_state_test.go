@@ -57,3 +57,42 @@ func TestGrabAndVerifyHolding(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeGripperAtStart(t *testing.T) {
+	cases := []struct {
+		name      string
+		positions []float64 // successive gripperPos reads
+		wantErr   bool
+		wantGrab  bool
+	}{
+		{name: "already closed", positions: []float64{357}, wantGrab: false},
+		{name: "open self-heals", positions: []float64{850, 357}, wantGrab: true},
+		{name: "jammed", positions: []float64{850, 520}, wantErr: true, wantGrab: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := inject.NewGripper("g")
+			var grabbed bool
+			g.GrabFunc = func(context.Context, map[string]interface{}) (bool, error) {
+				grabbed = true
+				return true, nil
+			}
+			i := 0
+			g.DoFunc = func(context.Context, map[string]interface{}) (map[string]interface{}, error) {
+				pos := tc.positions[i]
+				if i < len(tc.positions)-1 {
+					i++
+				}
+				return map[string]interface{}{"pos": pos}, nil
+			}
+			s := &beanjaminCoffee{cfg: &Config{}, gripper: g, logger: logging.NewTestLogger(t)}
+			err := s.normalizeGripperAtStart(context.Background())
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("normalizeGripperAtStart err = %v, wantErr = %v", err, tc.wantErr)
+			}
+			if grabbed != tc.wantGrab {
+				t.Errorf("Grab called = %v, want %v", grabbed, tc.wantGrab)
+			}
+		})
+	}
+}

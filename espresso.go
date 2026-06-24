@@ -384,6 +384,10 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 	logger.Infof("starting %s preparation (place_cup=%t, clean_after_use=%t, brew_time=%v)",
 		drink, s.cfg.PlaceCup, s.cfg.CleanAfterUse, brewTime)
 
+	if err := s.normalizeGripperAtStart(ctx); err != nil {
+		return fmt.Errorf("normalize gripper before brew: %w", err)
+	}
+
 	s.setStep(stepGrinding)
 	isDecaf := isDecafDrink(drink)
 	if isDecaf {
