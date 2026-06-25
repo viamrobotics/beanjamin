@@ -86,7 +86,6 @@ type Config struct {
 	GripperHoldMinPos         float64 `json:"gripper_hold_min_pos,omitempty"`
 	GripperHoldMaxPos         float64 `json:"gripper_hold_max_pos,omitempty"`
 	SlowMovementVelDegsPerSec float64 `json:"slow_movement_vel_degs_per_sec,omitempty"`
-	CleanAfterUse             bool    `json:"clean_after_use,omitempty"`
 	PortafilterShakeSec       float64 `json:"portafilter_shake_sec,omitempty"`
 	SaveMotionRequestsDir     string  `json:"save_motion_requests_dir,omitempty"`
 	OrderSensorName           string  `json:"order_sensor_name,omitempty"`

@@ -200,7 +200,6 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
   "lungo_brew_time_sec": 40,
   "grind_time_sec": 7.5,
   "slow_movement_vel_degs_per_sec": 25,
-  "clean_after_use": true,
   "portafilter_shake_sec": 2.5,
   "save_motion_requests_dir": "/tmp/motion-requests",
   "order_sensor_name": "order-events",
@@ -219,7 +218,7 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
 }
 ```
 
-Add a **`viam:beanjamin:order-sensor`** component to the machine, put it in the coffee service **depends_on**, and set `order_sensor_name` to that component’s name. When an order attempt finishes, one reading is queued with `start_time`, `end_time`, `order_ok`, `duration_ms`, and — for observability — `failed_step`, `operator_cancelled`, `trace_id`, the path flags (`clean_after_use`/`decaf`), and `error_message` (if applicable).
+Add a **`viam:beanjamin:order-sensor`** component to the machine, put it in the coffee service **depends_on**, and set `order_sensor_name` to that component’s name. When an order attempt finishes, one reading is queued with `start_time`, `end_time`, `order_ok`, `duration_ms`, and — for observability — `failed_step`, `operator_cancelled`, `trace_id`, the `decaf` path flag, and `error_message` (if applicable).
 
 **Usage sensor.** The optional `usage_sensor_name` field points at a single sensor resource that holds several counters, one per key, updated through the brew lifecycle. Setting the field automatically registers the sensor as a dependency of the coffee service, so no manual `depends_on` entry is required. The sensor must support both the `Readings` API and a `DoCommand({"set": {<key>: <value>}})` that overwrites the named counter (and preserves the others). The coffee service updates each counter with a best-effort read-modify-write: it reads the current value via `Readings`, computes the new value, and writes it back via `DoCommand`. The keys are:
 
@@ -235,7 +234,7 @@ Configure a [`viam:video:storage`](https://github.com/viam-modules/video-store) 
 
 The save request includes a `tags` entry with the order UUID — this is what links clips to orders for cloud data filtering — and a minimal JSON `metadata` blob containing only `order_id` and `order_status` (`ok` or `failed`), which the video-store appends to the clip filename. Clips are saved after every attempt, including failed brews or panics. Failure detail (the error and the step it failed at) is not stored in the clip metadata; it is recorded separately on the order sensor.
 
-**Slack notifications.** The optional `slack_notifier_name` field points at a [`viam:notifications:slack`](https://github.com/viam-modules/notifications) generic service. Setting the field automatically registers it as a dependency of the coffee service, so no manual `depends_on` entry is required. When set, the coffee service sends a best-effort Slack message on every **non-successful** order attempt — both genuine faults and operator cancels — via `DoCommand({"command": "send", "blocks": [...], "text": ...})`. The message is laid out with [Slack Block Kit](https://api.slack.com/block-kit) and mirrors the per-attempt fields the order sensor records, so it's a self-contained record: a header that distinguishes a fault (`:x: Order failed`) from an operator cancel (`:warning: Order cancelled by operator`), a fields section with the drink, customer, the step it failed (or was cancelled) at, the duration, and the `decaf`/`clean_after_use` flags, the error in a code block (faults only), and a context footer with the order ID, trace ID, start time, and — when the module is cloud-connected — clickable `app.viam.com` deep-links to this machine's logs (built from the `VIAM_MACHINE_ID` / `VIAM_PRIMARY_ORG_ID` environment variables Viam injects) and, when `cam_storage_mux_name` is configured, to the order's video clip (a data page filtered by the order-ID tag, scoped to `VIAM_LOCATION_ID`). All links are omitted on a local or test machine where those environment variables are unset. Because the clip uploads asynchronously *after* the notification is sent, the clip link may show no results for the first ~15–60s. The flat `text` value is sent alongside as the notification/accessibility fallback Slack uses when blocks can't render. Sends run off the queue goroutine (so a slow Slack call never stalls the next order) and are bounded by a 10-second timeout; a send failure logs a warning and never affects brewing. The Slack channel/credentials (bot token or webhook URL) are configured on the notifier service itself. When `slack_notifier_name` is unset, no notifications are sent.
+**Slack notifications.** The optional `slack_notifier_name` field points at a [`viam:notifications:slack`](https://github.com/viam-modules/notifications) generic service. Setting the field automatically registers it as a dependency of the coffee service, so no manual `depends_on` entry is required. When set, the coffee service sends a best-effort Slack message on every **non-successful** order attempt — both genuine faults and operator cancels — via `DoCommand({"command": "send", "blocks": [...], "text": ...})`. The message is laid out with [Slack Block Kit](https://api.slack.com/block-kit) and mirrors the per-attempt fields the order sensor records, so it's a self-contained record: a header that distinguishes a fault (`:x: Order failed`) from an operator cancel (`:warning: Order cancelled by operator`), a fields section with the drink, customer, the step it failed (or was cancelled) at, the duration, and the `decaf` flag, the error in a code block (faults only), and a context footer with the order ID, trace ID, start time, and — when the module is cloud-connected — clickable `app.viam.com` deep-links to this machine's logs (built from the `VIAM_MACHINE_ID` / `VIAM_PRIMARY_ORG_ID` environment variables Viam injects) and, when `cam_storage_mux_name` is configured, to the order's video clip (a data page filtered by the order-ID tag, scoped to `VIAM_LOCATION_ID`). All links are omitted on a local or test machine where those environment variables are unset. Because the clip uploads asynchronously *after* the notification is sent, the clip link may show no results for the first ~15–60s. The flat `text` value is sent alongside as the notification/accessibility fallback Slack uses when blocks can't render. Sends run off the queue goroutine (so a slow Slack call never stalls the next order) and are bounded by a 10-second timeout; a send failure logs a warning and never affects brewing. The Slack channel/credentials (bot token or webhook URL) are configured on the notifier service itself. When `slack_notifier_name` is unset, no notifications are sent.
 
 **Top-level fields:**
 
@@ -253,7 +252,6 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `gripper_hold_min_pos`     | float  | No       | Gripper jaw position (0–850) below which the gripper is considered closed/empty. Positions in `[min, max]` mean an object (cup or glass) is held; used to verify grabs and self-heal an open gripper at brew-cycle start (default: 430).                 |
 | `gripper_hold_max_pos`     | float  | No       | Gripper jaw position (0–850) above which the gripper is considered open (default: 685).                       |
 | `slow_movement_vel_degs_per_sec` | float | No    | Max joint velocity (degrees/sec) used when a step has a `LinearConstraint` without explicit `MoveOptions`, as well as for pivot and circular motions. Raise carefully — precision and contact steps rely on this (default: 25). |
-| `clean_after_use`          | bool   | No       | Enable cleaning step after each brew.                                                                         |
 | `portafilter_shake_sec`    | float  | No       | Duration in seconds of a small circular shake at the `coffee_shake` pose during `unlock_portafilter`, to dislodge a stuck puck. Requires a `coffee_shake` pose in the filter pose switcher. Defaults to 0 (disabled). |
 | `save_motion_requests_dir` | string | No       | Directory to save motion request payloads for debugging.                                                      |
 | `order_sensor_name`        | string | No       | Name of a `viam:beanjamin:order-sensor` sensor to notify when each order attempt completes (must appear in **depends_on**). |
@@ -660,7 +658,6 @@ After each order attempt completes (success, failure, or panic), the **next** `R
   "error_message": "",
   "failed_step": "",
   "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
-  "clean_after_use": true,
   "decaf": false,
   "start_time": "2026-04-01T12:00:00.000000000Z",
   "end_time": "2026-04-01T12:02:05.000000000Z",
@@ -675,7 +672,7 @@ The remaining fields exist to support observability (per-step error rates and fa
 - **`failed_step`** — the step label the order errored at (e.g. `"Brewing"`, `"Grinding"`), matching the `setStep` labels surfaced through `get_queue`. Empty on success. Count readings by `failed_step` to see where orders die.
 - **`operator_cancelled`** — `true` when the failure was an operator `cancel` (a `context.Canceled` interruption), not a genuine fault. **Exclude these from step error-rate metrics** so intentional cancellations don't inflate failure counts. `failed_step` is still populated (it marks where the cancel interrupted).
 - **`trace_id`** — the OpenTelemetry trace ID for the order. Use it to jump from a failed reading to the order's full distributed trace (every motion plan and step span). Empty if no trace context was present.
-- **`clean_after_use` / `decaf`** — which conditional branches the order took, so you can tell why a given step ran (or didn't) without cross-referencing the coffee service config. `decaf` is derived from the drink; `clean_after_use` mirrors the coffee service config at the time of the attempt.
+- **`decaf`** — whether the order took the decaf grinder branch, so you can tell why a given step ran (or didn't) without cross-referencing the coffee service config. Derived from the drink.
 
 A per-step error rate is then `count(failed_step == X AND NOT operator_cancelled) / count(all orders)`.
 

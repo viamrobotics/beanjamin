@@ -116,7 +116,7 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		{componentFilter, filterPoseCoffeeShake},
 		// step 9: home
 		{componentFilter, filterPoseHome},
-		// cleaning (clean_after_use + cancel recovery)
+		// cleaning (post-brew and cancel recovery)
 		{componentFilter, filterPoseCloseToCleaning},
 		{componentFilter, filterPoseApproachToCleaningScrapper},
 		{componentFilter, filterPoseCleaningScrapperActive},
@@ -338,8 +338,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 
 	brewTime := s.drinkBrewTime(drink)
 
-	logger.Infof("starting %s preparation (clean_after_use=%t, brew_time=%v)",
-		drink, s.cfg.CleanAfterUse, brewTime)
+	logger.Infof("starting %s preparation (brew_time=%v)", drink, brewTime)
 
 	if err := s.normalizeGripperAtStart(ctx); err != nil {
 		return fmt.Errorf("normalize gripper before brew: %w", err)
@@ -467,9 +466,9 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		}
 	}
 
-	if s.cfg.CleanAfterUse {
-		s.setStep(stepCleaning)
-		logger.Infof("post: cleaning portafilter (clean_after_use=true)")
+	s.setStep(stepCleaning)
+	logger.Infof("post: cleaning portafilter")
+	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::cleaning")
 		err := s.cleanPortafilter(ctx, cancelCtx)
 		stepSpan.End()
@@ -477,8 +476,6 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 			return err
 		}
 		s.incrementSensorReading(ctx, s.usageSensor, "cleaner", "cleanings", 1)
-	} else {
-		logger.Infof("post: skipping cleaning (clean_after_use=false)")
 	}
 
 	s.setStep(stepFinishingUp)
