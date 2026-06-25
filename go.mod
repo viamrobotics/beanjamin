@@ -6,7 +6,7 @@ require (
 	cloud.google.com/go/texttospeech v1.16.0
 	github.com/golang/geo v0.0.0-20230421003525-6adc56603217
 	github.com/google/uuid v1.6.0
-	github.com/viam-labs/motion-tools v1.15.1
+	github.com/viam-labs/motion-tools v1.34.6
 	go.viam.com/api v0.1.561
 	go.viam.com/rdk v0.131.0
 	go.viam.com/utils v0.6.3

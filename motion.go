@@ -407,6 +407,69 @@ func (s *beanjaminCoffee) savePlanRequest(req *armplanning.PlanRequest, label st
 	logger.Infof("saved motion request to %s", filename)
 }
 
+// frameSystemWithGeometries returns a deep copy of the cached frame system with
+// each world-frame geometry added as a static frame parented to world, named
+// "<label>_<i>". The geometries are expected to already be in world coordinates;
+// each is attached at a zero-pose static frame so the frame system resolves it
+// back at its world pose (the parent→world transform is identity, sidestepping
+// the "GeometriesInFrame skips the frame's own transform" convention). The input
+// geometries are not mutated — a copy is relabeled.
+func (s *beanjaminCoffee) frameSystemWithGeometries(label string, geoms []spatialmath.Geometry) (*referenceframe.FrameSystem, error) {
+	fs, err := s.cachedFS.Clone()
+	if err != nil {
+		return nil, fmt.Errorf("clone frame system: %w", err)
+	}
+	for i, g := range geoms {
+		if g == nil {
+			continue
+		}
+		name := fmt.Sprintf("%s_%d", label, i)
+		geom := g.Transform(spatialmath.NewZeroPose())
+		geom.SetLabel(name)
+		frame, err := referenceframe.NewStaticFrameWithGeometry(name, spatialmath.NewZeroPose(), geom)
+		if err != nil {
+			return nil, fmt.Errorf("create static frame %q: %w", name, err)
+		}
+		if err := fs.AddFrame(frame, fs.World()); err != nil {
+			return nil, fmt.Errorf("add frame %q: %w", name, err)
+		}
+	}
+	return fs, nil
+}
+
+// saveObservedItemsFrameSystem persists a snapshot of the frame system augmented
+// with the detected item geometries (cups/glasses) to SaveMotionRequestsDir, so
+// it can be read back into a referenceframe.FrameSystem and drawn in a local
+// motion-tools visualizer. It is a no-op when SaveMotionRequestsDir is empty or
+// no geometries are given.
+func (s *beanjaminCoffee) saveObservedItemsFrameSystem(label string, geoms []spatialmath.Geometry) {
+	logger := s.activeOrderLogger()
+	dir := s.cfg.SaveMotionRequestsDir
+	if dir == "" || len(geoms) == 0 {
+		return
+	}
+	fs, err := s.frameSystemWithGeometries(label, geoms)
+	if err != nil {
+		logger.Warnf("save observed %s frame system: %v", label, err)
+		return
+	}
+	data, err := json.MarshalIndent(fs, "", "  ")
+	if err != nil {
+		logger.Warnf("save observed %s frame system: marshal: %v", label, err)
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		logger.Warnf("save observed %s frame system: create dir: %v", label, err)
+		return
+	}
+	filename := filepath.Join(dir, fmt.Sprintf("%s_%s_framesystem.json", time.Now().Format("20060102_150405.000"), label))
+	if err := os.WriteFile(filename, data, 0o600); err != nil {
+		logger.Warnf("save observed %s frame system: %v", label, err)
+		return
+	}
+	logger.Infof("saved observed-%s frame system (%d geometries) to %s", label, len(geoms), filename)
+}
+
 // savePlanResponse persists a Plan's path and trajectory to the configured
 // directory. It is a no-op when SaveMotionRequestsDir is empty.
 func (s *beanjaminCoffee) savePlanResponse(plan motionplan.Plan, label string) {
