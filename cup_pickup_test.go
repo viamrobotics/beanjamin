@@ -339,6 +339,35 @@ func TestWorldBoundingBox(t *testing.T) {
 	}
 }
 
+// TestOverriddenBox verifies that overriddenBox builds an axis-aligned box of the
+// operator-supplied size (width = depth = diameter, height = height) centered on
+// the grasp centroid — not on any point-cloud-derived midpoint.
+func TestOverriddenBox(t *testing.T) {
+	centroid := r3.Vector{X: 110, Y: 20, Z: 40}
+	dims := &ContainerDimensions{DiameterMm: 70, HeightMm: 140}
+
+	box, err := overriddenBox(centroid, dims, "glass")
+	if err != nil {
+		t.Fatalf("overriddenBox: %v", err)
+	}
+	if box == nil {
+		t.Fatal("expected a box, got nil")
+	}
+
+	// Box is centered on the grasp centroid with override dims.
+	want, err := spatialmath.NewBox(
+		spatialmath.NewPose(centroid, &spatialmath.OrientationVectorDegrees{OZ: 1}),
+		r3.Vector{X: 70, Y: 70, Z: 140},
+		"glass",
+	)
+	if err != nil {
+		t.Fatalf("new want box: %v", err)
+	}
+	if !spatialmath.GeometriesAlmostEqual(box, want) {
+		t.Errorf("box mismatch:\n got %v\nwant %v", box, want)
+	}
+}
+
 // TestWorldBoundingBox_EmptyCloud verifies an empty cloud yields a nil geometry
 // (the caller skips it) rather than an error.
 func TestWorldBoundingBox_EmptyCloud(t *testing.T) {

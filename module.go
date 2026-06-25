@@ -137,6 +137,10 @@ type Config struct {
 	// noise that puts the centroid slightly below the physical cup base
 	// and trips the planner. Zero (default) disables clamping.
 	CupCentroidMinZMm float64 `json:"cup_centroid_min_z_mm,omitempty"`
+	// CupDimensions optionally overrides the cup size derived from the
+	// detection point cloud with a known diameter/height (see
+	// ContainerDimensions). Unset keeps the point-cloud-derived size.
+	CupDimensions *ContainerDimensions `json:"cup_dimensions,omitempty"`
 
 	// Glass pickup (iced coffee) mirrors cup pickup but with its own vision
 	// service and observe-pose switch, tuned for the taller iced-coffee glass.
@@ -146,6 +150,10 @@ type Config struct {
 	GlassApproachRelativePose    *RelativePose `json:"glass_approach_relative_pose,omitempty"`
 	GlassGrabRelativePose        *RelativePose `json:"glass_grab_relative_pose,omitempty"`
 	GlassCentroidMinZMm          float64       `json:"glass_centroid_min_z_mm,omitempty"`
+	// GlassDimensions optionally overrides the glass size derived from the
+	// detection point cloud with a known diameter/height (see
+	// ContainerDimensions). Unset keeps the point-cloud-derived size.
+	GlassDimensions *ContainerDimensions `json:"glass_dimensions,omitempty"`
 
 	// TrackHeldGeometry, when true, attaches the vision-detected geometry of a
 	// picked-up cup/glass to the gripper frame in the cached frame system, so
@@ -233,6 +241,39 @@ type RelativePose struct {
 	Theta float64 `json:"theta"`
 }
 
+// ContainerDimensions is an optional, operator-supplied size for a picked-up
+// container (cup or glass). When set on the coffee service config
+// (cup_dimensions / glass_dimensions), it replaces the size derived from the
+// detection point cloud: the held-item bounding box is built with
+// width = depth = DiameterMm and height = HeightMm, centered on the grasp
+// centroid (the point the gripper is sent to) rather than on the point-cloud
+// midpoint. The grasp centroid itself is unaffected — only the
+// collision/visualization geometry changes. Round containers (cups/glasses)
+// are well approximated by a square-footprint box of the rim diameter, and a
+// known size centered on the grasp point avoids the point cloud under-reading or
+// skewing the box for a partially-observed container. Unset (the default) keeps
+// the point-cloud-derived dimensions.
+type ContainerDimensions struct {
+	DiameterMm float64 `json:"diameter_mm"`
+	HeightMm   float64 `json:"height_mm"`
+}
+
+// validate checks an optional ContainerDimensions override: a nil override is
+// allowed (point-cloud dimensions are used), but when present both diameter and
+// height must be positive. field is the JSON config key for error messages.
+func (d *ContainerDimensions) validate(path, field string) error {
+	if d == nil {
+		return nil
+	}
+	if d.DiameterMm <= 0 {
+		return fmt.Errorf("%s: %s.diameter_mm must be > 0", path, field)
+	}
+	if d.HeightMm <= 0 {
+		return fmt.Errorf("%s: %s.height_mm must be > 0", path, field)
+	}
+	return nil
+}
+
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.PoseSwitcherName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "pose_switcher_name")
@@ -285,6 +326,12 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 	if cfg.CupPickupMaxAttempts < 0 {
 		return nil, nil, fmt.Errorf("%s: cup_pickup_max_attempts must be >= 0", path)
+	}
+	if err := cfg.CupDimensions.validate(path, "cup_dimensions"); err != nil {
+		return nil, nil, err
+	}
+	if err := cfg.GlassDimensions.validate(path, "glass_dimensions"); err != nil {
+		return nil, nil, err
 	}
 	reqDeps = append(reqDeps,
 		vision.Named(cfg.CupVisionServiceName).String(),
