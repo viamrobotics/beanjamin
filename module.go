@@ -24,6 +24,7 @@ import (
 	"go.viam.com/rdk/robot/framesystem"
 	generic "go.viam.com/rdk/services/generic"
 	"go.viam.com/rdk/services/vision"
+	"go.viam.com/rdk/spatialmath"
 
 	// Register the multi-poses-execution-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
@@ -82,9 +83,9 @@ type Config struct {
 	BrewTimeSec               float64 `json:"brew_time_sec,omitempty"`
 	LungoBrewTimeSec          float64 `json:"lungo_brew_time_sec,omitempty"`
 	GrindTimeSec              float64 `json:"grind_time_sec,omitempty"`
+	GripperHoldMinPos         float64 `json:"gripper_hold_min_pos,omitempty"`
+	GripperHoldMaxPos         float64 `json:"gripper_hold_max_pos,omitempty"`
 	SlowMovementVelDegsPerSec float64 `json:"slow_movement_vel_degs_per_sec,omitempty"`
-	PlaceCup                  bool    `json:"place_cup,omitempty"`
-	CleanAfterUse             bool    `json:"clean_after_use,omitempty"`
 	PortafilterShakeSec       float64 `json:"portafilter_shake_sec,omitempty"`
 	SaveMotionRequestsDir     string  `json:"save_motion_requests_dir,omitempty"`
 	OrderSensorName           string  `json:"order_sensor_name,omitempty"`
@@ -118,10 +119,8 @@ type Config struct {
 	// to handle.
 	Conversational bool `json:"conversational,omitempty"`
 
-	// Dynamic cup pickup. When true, setCupForCoffee uses vision-driven
-	// detection to find the cup; when false, the existing static pickup
-	// (empty_cup_approach -> empty_cup) is used.
-	DynamicCupPickup              bool          `json:"dynamic_cup_pickup,omitempty"`
+	// Vision-driven cup pickup
+	// The fields below configure that pipeline and are required.
 	CupVisionServiceName          string        `json:"cup_vision_service_name,omitempty"`
 	SrcCameraName                 string        `json:"src_camera_name,omitempty"`
 	CupApproachRelativePose       *RelativePose `json:"cup_approach_relative_pose,omitempty"`
@@ -139,23 +138,32 @@ type Config struct {
 	// and trips the planner. Zero (default) disables clamping.
 	CupCentroidMinZMm float64 `json:"cup_centroid_min_z_mm,omitempty"`
 
-	// Dynamic glass pickup. Mirrors dynamic cup pickup but with its own vision
+	// Glass pickup (iced coffee) mirrors cup pickup but with its own vision
 	// service and observe-pose switch, tuned for the taller iced-coffee glass.
-	// When true, fetchGlass vision-detects the glass instead of using the static
-	// glass_approach/glass poses. The physical camera is shared with cup pickup
-	// (src_camera_name); only the vision service and observe poses differ.
-	DynamicGlassPickup           bool          `json:"dynamic_glass_pickup,omitempty"`
+	// These fields are required when can_serve_iced is set.
 	GlassVisionServiceName       string        `json:"glass_vision_service_name,omitempty"`
 	GlassObservePoseSwitcherName string        `json:"glass_observe_pose_switcher_name,omitempty"`
 	GlassApproachRelativePose    *RelativePose `json:"glass_approach_relative_pose,omitempty"`
 	GlassGrabRelativePose        *RelativePose `json:"glass_grab_relative_pose,omitempty"`
 	GlassCentroidMinZMm          float64       `json:"glass_centroid_min_z_mm,omitempty"`
 
-	// PlaceCupInServingArea, when true, replaces giveFullCupToCustomer with
-	// placeFullCupOnShelf — the finished cup is dropped on the serving-area
-	// shelf at the next round-robin slot instead of handed back. Requires
-	// DynamicCupPickup=true.
-	PlaceCupInServingArea bool `json:"place_cup_in_serving_area,omitempty"`
+	// TrackHeldGeometry, when true, attaches the vision-detected geometry of a
+	// picked-up cup/glass to the gripper frame in the cached frame system, so
+	// motion planning routes around the held item until it is set down (see
+	// held_geometry.go). The geometry comes from the pickup vision detection.
+	// Off by default.
+	TrackHeldGeometry bool `json:"track_held_geometry,omitempty"`
+
+	// NoSpillCarry, when true, carries the brewed cup from under the machine to
+	// the serving-area shelf along a straight line broken into waypoints (one
+	// every defaultCarryWaypointSpacingMm). Each waypoint commands the held-item
+	// (container) frame, interpolating from the container's upright start pose to
+	// the approach pose, with a goal pose cloud keeping it close to level so the
+	// held drink doesn't slosh (see carryHeldLevel in motion.go). Only affects the
+	// carry move in placeFullCupOnShelf; it commands the held-item frame, so it
+	// requires TrackHeldGeometry=true. Off by default (the carry free-plans
+	// straight to the approach pose).
+	NoSpillCarry bool `json:"no_spill_carry,omitempty"`
 
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
 
@@ -257,49 +265,51 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		optDeps = append(optDeps, generic.Named(cfg.SlackNotifierName).String())
 	}
 
-	if cfg.DynamicCupPickup {
-		if cfg.CupVisionServiceName == "" {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_vision_service_name")
-		}
-		if cfg.SrcCameraName == "" {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "src_camera_name")
-		}
-		if cfg.CameraObservePoseSwitcherName == "" {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "camera_observe_pose_switcher_name")
-		}
-		if cfg.CupApproachRelativePose == nil {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_approach_relative_pose")
-		}
-		if cfg.CupGrabRelativePose == nil {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_grab_relative_pose")
-		}
-		if cfg.CupPhotosPerVantage < 0 {
-			return nil, nil, fmt.Errorf("%s: cup_photos_per_vantage must be >= 0", path)
-		}
-		if cfg.CupPickupMaxAttempts < 0 {
-			return nil, nil, fmt.Errorf("%s: cup_pickup_max_attempts must be >= 0", path)
-		}
-		reqDeps = append(reqDeps,
-			vision.Named(cfg.CupVisionServiceName).String(),
-			camera.Named(cfg.SrcCameraName).String(),
-			cfg.CameraObservePoseSwitcherName,
-		)
+	if cfg.CupVisionServiceName == "" {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_vision_service_name")
+	}
+	if cfg.SrcCameraName == "" {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "src_camera_name")
+	}
+	if cfg.CameraObservePoseSwitcherName == "" {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "camera_observe_pose_switcher_name")
+	}
+	if cfg.CupApproachRelativePose == nil {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_approach_relative_pose")
+	}
+	if cfg.CupGrabRelativePose == nil {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_grab_relative_pose")
+	}
+	if cfg.CupPhotosPerVantage < 0 {
+		return nil, nil, fmt.Errorf("%s: cup_photos_per_vantage must be >= 0", path)
+	}
+	if cfg.CupPickupMaxAttempts < 0 {
+		return nil, nil, fmt.Errorf("%s: cup_pickup_max_attempts must be >= 0", path)
+	}
+	reqDeps = append(reqDeps,
+		vision.Named(cfg.CupVisionServiceName).String(),
+		camera.Named(cfg.SrcCameraName).String(),
+		cfg.CameraObservePoseSwitcherName,
+	)
+
+	if cfg.NoSpillCarry && !cfg.TrackHeldGeometry {
+		return nil, nil, fmt.Errorf("%s: no_spill_carry commands the held-item (container) frame, so it requires track_held_geometry=true", path)
 	}
 
-	if cfg.PlaceCupInServingArea && !cfg.DynamicCupPickup {
-		return nil, nil, fmt.Errorf("%s: place_cup_in_serving_area requires dynamic_cup_pickup=true", path)
-	}
-
-	if cfg.DynamicGlassPickup {
+	if cfg.CanServeIced {
+		if cfg.IceDispenseBoardName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "ice_board_name")
+		}
+		if cfg.IceDispensePinName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "ice_pin_name")
+		}
+		// Iced coffee fetches a glass via its own vision pipeline (the glass is
+		// always vision-detected, reusing the cup camera src_camera_name).
 		if cfg.GlassVisionServiceName == "" {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "glass_vision_service_name")
 		}
 		if cfg.GlassObservePoseSwitcherName == "" {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "glass_observe_pose_switcher_name")
-		}
-		// The glass pipeline reuses the cup camera (src_camera_name).
-		if cfg.SrcCameraName == "" {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "src_camera_name")
 		}
 		if cfg.GlassApproachRelativePose == nil {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "glass_approach_relative_pose")
@@ -311,27 +321,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 			vision.Named(cfg.GlassVisionServiceName).String(),
 			cfg.GlassObservePoseSwitcherName,
 		)
-		// camera.Named(SrcCameraName) is already a dep when dynamic_cup_pickup is
-		// on; add it here too in case glass pickup is used without cup pickup.
-		if !cfg.DynamicCupPickup {
-			reqDeps = append(reqDeps, camera.Named(cfg.SrcCameraName).String())
-		}
-	}
-
-	if cfg.CanServeIced {
-		if cfg.IceDispenseBoardName == "" {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "ice_board_name")
-		}
-		if cfg.IceDispensePinName == "" {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "ice_pin_name")
-		}
-		if !cfg.PlaceCup {
-			return nil, nil, fmt.Errorf("%s: can_serve_iced requires place_cup=true", path)
-		}
-		// The glass is always vision-detected (no static glass pickup).
-		if !cfg.DynamicGlassPickup {
-			return nil, nil, fmt.Errorf("%s: can_serve_iced requires dynamic_glass_pickup=true", path)
-		}
 	}
 	if cfg.IceDispenseBoardName != "" {
 		optDeps = append(optDeps, board.Named(cfg.IceDispenseBoardName).String())
@@ -348,7 +337,7 @@ type beanjaminCoffee struct {
 	cfg                    *Config
 	filterSw               toggleswitch.Switch
 	clawsSw                toggleswitch.Switch
-	cameraObserveSw        toggleswitch.Switch // optional; nil unless DynamicCupPickup. Holds the camera observation vantages.
+	cameraObserveSw        toggleswitch.Switch // holds the camera observation vantages for cup pickup.
 	arm                    arm.Arm
 	fsSvc                  framesystem.Service
 	cachedFS               *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
@@ -397,14 +386,29 @@ type beanjaminCoffee struct {
 	// no-op. Holds all counters keyed by regular_grinds, decaf_grinds, usage,
 	// cleanings, and successful_consecutive_orders.
 	usageSensor    sensor.Sensor
-	cupVision      vision.Service // optional; nil when DynamicCupPickup=false
+	cupVision      vision.Service // vision service for cup pickup (always configured)
 	cupCameraName  string         // SrcCameraName, validated to exist in cachedFS
-	glassVision    vision.Service
+	glassVision    vision.Service // optional; nil unless CanServeIced
 	glassObserveSw toggleswitch.Switch
-	// servingAreaSlotCounter is the round-robin placement counter for PlaceCupInServingArea.
+	// servingAreaSlotCounter is the round-robin counter for serving-area placement.
 	// It increments once per placeFullCupOnShelf and selects the shelf slot
 	// modulo the number of tiles. Process-local; resets to 0 on rebuild.
 	servingAreaSlotCounter atomic.Uint64
+
+	// Held-item geometry tracking (track_held_geometry, held_geometry.go).
+	// heldCupGeom / heldGlassGeom cache the gripper-local geometry of the cup /
+	// glass detected at pickup so a re-grab can restore it; heldItemAttached
+	// tracks whether the held-item frame is currently present in cachedFS. These
+	// are mutated only on the motion sequence goroutine (like cachedFS, gated by
+	// the running flag), so they need no extra locking.
+	heldCupGeom      spatialmath.Geometry
+	heldGlassGeom    spatialmath.Geometry
+	heldItemAttached bool
+
+	// filterFrameLocked tracks whether lockFilterFrame has re-parented the filter
+	// frame to world in cachedFS (i.e. an in-flight lock that must be preserved).
+	// Mutated only on the motion sequence goroutine, like cachedFS.
+	filterFrameLocked bool
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -469,52 +473,41 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, fmt.Errorf("apply joint limits: %w", err)
 	}
 
-	var cupVision vision.Service
-	var cupCameraName string
-	var cameraObserveSw toggleswitch.Switch
-	if conf.DynamicCupPickup {
-		visRes, err := vision.FromProvider(deps, conf.CupVisionServiceName)
-		if err != nil {
-			cancelFunc()
-			return nil, fmt.Errorf("cup vision service %q: %w", conf.CupVisionServiceName, err)
-		}
-		cupVision = visRes
-		if cachedFS.Frame(conf.SrcCameraName) == nil {
-			cancelFunc()
-			return nil, fmt.Errorf("src_camera_name %q not found in frame system — add the camera to the frame system fragment", conf.SrcCameraName)
-		}
-		cupCameraName = conf.SrcCameraName
-
-		obsSwRes, ok := deps[toggleswitch.Named(conf.CameraObservePoseSwitcherName)]
-		if !ok {
-			cancelFunc()
-			return nil, fmt.Errorf("camera observe switch %q not found in dependencies", conf.CameraObservePoseSwitcherName)
-		}
-		cameraObserveSw, ok = obsSwRes.(toggleswitch.Switch)
-		if !ok {
-			cancelFunc()
-			return nil, fmt.Errorf("resource %q is not a switch", conf.CameraObservePoseSwitcherName)
-		}
-		logger.Infof("dynamic cup pickup enabled (vision=%q, camera=%q, observe_switch=%q)",
-			conf.CupVisionServiceName, conf.SrcCameraName, conf.CameraObservePoseSwitcherName)
+	// Cup pickup is always vision-driven.
+	cupVision, err := vision.FromProvider(deps, conf.CupVisionServiceName)
+	if err != nil {
+		cancelFunc()
+		return nil, fmt.Errorf("cup vision service %q: %w", conf.CupVisionServiceName, err)
 	}
+	if cachedFS.Frame(conf.SrcCameraName) == nil {
+		cancelFunc()
+		return nil, fmt.Errorf("src_camera_name %q not found in frame system — add the camera to the frame system fragment", conf.SrcCameraName)
+	}
+	cupCameraName := conf.SrcCameraName
 
+	observeSwRes, ok := deps[toggleswitch.Named(conf.CameraObservePoseSwitcherName)]
+	if !ok {
+		cancelFunc()
+		return nil, fmt.Errorf("camera observe switch %q not found in dependencies", conf.CameraObservePoseSwitcherName)
+	}
+	cameraObserveSw, ok := observeSwRes.(toggleswitch.Switch)
+	if !ok {
+		cancelFunc()
+		return nil, fmt.Errorf("resource %q is not a switch", conf.CameraObservePoseSwitcherName)
+	}
+	logger.Infof("cup vision pickup (vision=%q, camera=%q, observe_switch=%q)",
+		conf.CupVisionServiceName, conf.SrcCameraName, conf.CameraObservePoseSwitcherName)
+
+	// Iced coffee fetches a glass via its own vision pipeline (shares the cup
+	// camera resolved above).
 	var glassVision vision.Service
 	var glassObserveSw toggleswitch.Switch
-	if conf.DynamicGlassPickup {
-		visRes, err := vision.FromProvider(deps, conf.GlassVisionServiceName)
+	if conf.CanServeIced {
+		glassVision, err = vision.FromProvider(deps, conf.GlassVisionServiceName)
 		if err != nil {
 			cancelFunc()
 			return nil, fmt.Errorf("glass vision service %q: %w", conf.GlassVisionServiceName, err)
 		}
-		glassVision = visRes
-		// The glass pipeline reuses the cup camera; ensure it's resolved even
-		// when dynamic cup pickup is off.
-		if cachedFS.Frame(conf.SrcCameraName) == nil {
-			cancelFunc()
-			return nil, fmt.Errorf("src_camera_name %q not found in frame system — add the camera to the frame system fragment", conf.SrcCameraName)
-		}
-		cupCameraName = conf.SrcCameraName
 
 		obsSwRes, ok := deps[toggleswitch.Named(conf.GlassObservePoseSwitcherName)]
 		if !ok {
@@ -526,7 +519,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 			cancelFunc()
 			return nil, fmt.Errorf("resource %q is not a switch", conf.GlassObservePoseSwitcherName)
 		}
-		logger.Infof("dynamic glass pickup enabled (vision=%q, camera=%q, observe_switch=%q)",
+		logger.Infof("iced coffee glass vision pickup (vision=%q, camera=%q, observe_switch=%q)",
 			conf.GlassVisionServiceName, conf.SrcCameraName, conf.GlassObservePoseSwitcherName)
 	}
 
@@ -1022,6 +1015,15 @@ func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]interface{}, e
 		if err := s.sayAlways(ctx, cancelAnnouncement); err != nil {
 			logger.Warnf("cancel: failed to announce cancellation: %v", err)
 		}
+	}
+
+	// Drop any cup/glass still in the gripper before recovery so the arm starts
+	// empty and the frame system stops tracking a container we've let go. The
+	// resetFrameSystem below also forgets the geometry, but dropping here both
+	// releases the physical object and clears the held-item frame mid-flow, so
+	// the recovery motion that follows plans against reality.
+	if err := s.dropHeldContainer(ctx); err != nil {
+		return nil, fmt.Errorf("cancel: %w", err)
 	}
 
 	recovered := false

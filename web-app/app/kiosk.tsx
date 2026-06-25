@@ -1,26 +1,26 @@
 "use client";
 
-import { Suspense, useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
-import { drinkLabel } from "../order/drinks";
-import { ChooseDrink } from "../order/choose-drink";
-import { EnterName } from "../order/enter-name";
+import { drinkLabel } from "./order/drinks";
+import { ChooseDrink } from "./order/choose-drink";
+import { EnterName } from "./order/enter-name";
 import dynamic from "next/dynamic";
-const FaceRegister = dynamic(() => import("../order/face-register").then(m => ({ default: m.FaceRegister })), { ssr: false });
-import { OrderConfirmation } from "../order/order-confirmation";
-import { OrderTracker } from "../order/order-tracker";
-import { CamFeed } from "../order/cam-feed";
+const FaceRegister = dynamic(() => import("./order/face-register").then(m => ({ default: m.FaceRegister })), { ssr: false });
+import { OrderConfirmation } from "./order/order-confirmation";
+import { OrderTracker } from "./order/order-tracker";
+import { CamFeed } from "./order/cam-feed";
 import {
   getMachineMetadataKey,
   getMachineName,
   prepareOrder,
   identifyCustomer,
   getQueue,
-} from "../lib/viamClient";
-import { useViamConnection } from "../lib/useViamConnection";
-import { misspellName } from "../lib/misspell";
+} from "./lib/viamClient";
+import { useViamConnection } from "./lib/useViamConnection";
+import { misspellName } from "./lib/misspell";
 
 type Step = "welcome" | "drink" | "name" | "face-register" | "confirmation";
 
@@ -37,15 +37,7 @@ const TRACKER_PANEL_WIDTH = "w-[560px]";
 const LOST_CONNECTION_MSG =
   "Lost connection to the machine. Please wait for it to reconnect and try again.";
 
-export default function KioskPage() {
-  return (
-    <Suspense fallback={null}>
-      <Kiosk />
-    </Suspense>
-  );
-}
-
-function Kiosk() {
+export function Kiosk() {
   const searchParams = useSearchParams();
   const partId = searchParams.get("partId") ?? "";
   const kioskMode = searchParams.get("kiosk") === "1";

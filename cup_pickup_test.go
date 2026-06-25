@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/golang/geo/r3"
+	"go.viam.com/rdk/pointcloud"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
 )
@@ -186,6 +187,63 @@ func TestComposeCupPose_PureRotation(t *testing.T) {
 	}
 }
 
+func TestCentroidsOf(t *testing.T) {
+	box, err := spatialmath.NewBox(spatialmath.NewZeroPose(), r3.Vector{X: 10, Y: 10, Z: 10}, "c")
+	if err != nil {
+		t.Fatalf("new box: %v", err)
+	}
+	cands := []pickupCandidate{
+		{centroid: r3.Vector{X: 1}, geom: box},
+		{centroid: r3.Vector{X: 2}},
+	}
+	got := centroidsOf(cands)
+	want := []r3.Vector{{X: 1}, {X: 2}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("centroidsOf = %v, want %v", got, want)
+	}
+}
+
+func TestNearestGeometry(t *testing.T) {
+	near, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 100}), r3.Vector{X: 10, Y: 10, Z: 10}, "near")
+	far, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 200}), r3.Vector{X: 10, Y: 10, Z: 10}, "far")
+	originals := []pickupCandidate{
+		{centroid: r3.Vector{X: 200}, geom: far},
+		{centroid: r3.Vector{X: 100}, geom: near},
+		{centroid: r3.Vector{X: 150}, geom: nil}, // skipped — no geometry
+	}
+	// Closest original to (110) is the one at (100) -> "near".
+	got := nearestGeometry(r3.Vector{X: 110}, originals)
+	if got == nil || got.Label() != "near" {
+		t.Fatalf("expected nearest geometry 'near', got %v", got)
+	}
+
+	// No originals carry geometry -> nil.
+	if g := nearestGeometry(r3.Vector{}, []pickupCandidate{{centroid: r3.Vector{X: 1}}}); g != nil {
+		t.Fatalf("expected nil when no geometry available, got %v", g)
+	}
+}
+
+func TestCandidatesForCentroids(t *testing.T) {
+	a, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 0}), r3.Vector{X: 10, Y: 10, Z: 10}, "a")
+	b, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 100}), r3.Vector{X: 10, Y: 10, Z: 10}, "b")
+	originals := []pickupCandidate{
+		{centroid: r3.Vector{X: 0}, geom: a},
+		{centroid: r3.Vector{X: 100}, geom: b},
+	}
+	// Ranked order swaps the two; each ranked centroid should keep its own geom.
+	ranked := []r3.Vector{{X: 100}, {X: 0}}
+	got := candidatesForCentroids(ranked, originals)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(got))
+	}
+	if got[0].centroid != (r3.Vector{X: 100}) || got[0].geom.Label() != "b" {
+		t.Fatalf("candidate[0] = %v/%v, want centroid (100) geom 'b'", got[0].centroid, got[0].geom)
+	}
+	if got[1].centroid != (r3.Vector{X: 0}) || got[1].geom.Label() != "a" {
+		t.Fatalf("candidate[1] = %v/%v, want centroid (0) geom 'a'", got[1].centroid, got[1].geom)
+	}
+}
+
 func cameraToWorldTestFS(t *testing.T, camPose spatialmath.Pose) *referenceframe.FrameSystem {
 	t.Helper()
 	fs := referenceframe.NewEmptyFrameSystem("test")
@@ -232,5 +290,64 @@ func TestCameraToWorld_MissingFrame(t *testing.T) {
 	_, err := cameraToWorld(fs, fsInputs, "no-such-camera", r3.Vector{})
 	if err == nil {
 		t.Fatalf("expected error for missing camera frame")
+	}
+}
+
+// TestWorldBoundingBox verifies that worldBoundingBox builds an axis-aligned
+// (orientation OZ=1) box in the world frame spanning the point cloud's world
+// min/max extents, centered at their midpoint, with the camera→world transform
+// applied to the camera-frame points.
+func TestWorldBoundingBox(t *testing.T) {
+	// Camera translated +100 in X from world (identity orientation), so world
+	// coords are the camera coords shifted by +100 in X.
+	fs := referenceframe.NewEmptyFrameSystem("test")
+	cam, err := referenceframe.NewStaticFrame("camera", spatialmath.NewPoseFromPoint(r3.Vector{X: 100}))
+	if err != nil {
+		t.Fatalf("new camera frame: %v", err)
+	}
+	if err := fs.AddFrame(cam, fs.World()); err != nil {
+		t.Fatalf("add camera frame: %v", err)
+	}
+
+	// Camera-frame points spanning min (0,0,0) .. max (20,40,80).
+	cloud := pointcloud.NewBasicEmpty()
+	for _, p := range []r3.Vector{{X: 0, Y: 0, Z: 0}, {X: 20, Y: 40, Z: 80}, {X: 10, Y: 5, Z: 30}} {
+		if err := cloud.Set(p, pointcloud.NewBasicData()); err != nil {
+			t.Fatalf("set point: %v", err)
+		}
+	}
+
+	box, err := worldBoundingBox(fs, referenceframe.NewZeroInputs(fs), "camera", cloud, "cup")
+	if err != nil {
+		t.Fatalf("worldBoundingBox: %v", err)
+	}
+	if box == nil {
+		t.Fatal("expected a box, got nil")
+	}
+
+	// World center: camera midpoint (10,20,40) shifted +100 in X => (110,20,40).
+	want, err := spatialmath.NewBox(
+		spatialmath.NewPose(r3.Vector{X: 110, Y: 20, Z: 40}, &spatialmath.OrientationVectorDegrees{OZ: 1}),
+		r3.Vector{X: 20, Y: 40, Z: 80},
+		"cup",
+	)
+	if err != nil {
+		t.Fatalf("new want box: %v", err)
+	}
+	if !spatialmath.GeometriesAlmostEqual(box, want) {
+		t.Errorf("bounding box mismatch:\n got %v\nwant %v", box, want)
+	}
+}
+
+// TestWorldBoundingBox_EmptyCloud verifies an empty cloud yields a nil geometry
+// (the caller skips it) rather than an error.
+func TestWorldBoundingBox_EmptyCloud(t *testing.T) {
+	fs := referenceframe.NewEmptyFrameSystem("test")
+	box, err := worldBoundingBox(fs, referenceframe.NewZeroInputs(fs), "world", pointcloud.NewBasicEmpty(), "cup")
+	if err != nil {
+		t.Fatalf("worldBoundingBox: %v", err)
+	}
+	if box != nil {
+		t.Errorf("expected nil box for empty cloud, got %v", box)
 	}
 }

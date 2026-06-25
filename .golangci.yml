@@ -15,3 +15,14 @@ linters:
         - "-ST1020" # comment on exported function should be of the form "Foo does X."
         - "-ST1021" # comment on exported type should be of the form "Foo is X."
         - "-ST1022" # comment on exported variable should be of the form "Foo is X."
+  exclusions:
+    rules:
+      # motion-tools v2 (client/api) has no way to target an arbitrary viz_url:
+      # its client only connects to localhost:3030 over Connect-RPC, with no
+      # address/URL override. We deliberately stay on the deprecated v1
+      # client/client (which honors viz_url via SetURL) until v2 exposes a
+      # configurable client address. Suppress ONLY that one deprecation so every
+      # other SA1019 still fails lint.
+      - linters:
+          - staticcheck
+        text: 'SA1019: "github.com/viam-labs/motion-tools/client/client" is deprecated'

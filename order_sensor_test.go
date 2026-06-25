@@ -81,7 +81,6 @@ func TestOrderSensor_Readings_Failure(t *testing.T) {
 		execErr:    errors.New("grinder jam"),
 		failedStep: "Grinding",
 		traceID:    "abc123",
-		placeCup:   true,
 		decaf:      true,
 		startedAt:  start,
 		endedAt:    end,
@@ -102,9 +101,6 @@ func TestOrderSensor_Readings_Failure(t *testing.T) {
 	}
 	if r["trace_id"] != "abc123" {
 		t.Fatalf("trace_id: want %q got %q", "abc123", r["trace_id"])
-	}
-	if pc, _ := r["place_cup"].(bool); !pc {
-		t.Fatalf("place_cup: want true got %#v", r["place_cup"])
 	}
 	if d, _ := r["decaf"].(bool); !d {
 		t.Fatalf("decaf: want true got %#v", r["decaf"])

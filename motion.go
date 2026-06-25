@@ -259,6 +259,7 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 		}
 	}
 
+	s.filterFrameLocked = true
 	logger.Infof("locked filter frame at world pose %v (%d descendants preserved)", worldPose.Point(), len(descendants))
 	return nil
 }
@@ -277,6 +278,31 @@ func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 		return fmt.Errorf("re-apply joint limits: %w", err)
 	}
 	s.cachedFS = fs
+	// The rebuilt frame system has no held-item frame, and any cached grasp no
+	// longer corresponds to reality — forget it so a stale geometry can't be
+	// re-attached after a cancel/reset. The rebuilt frame system also restores the
+	// filter frame to the arm subtree, undoing any lockFilterFrame mutation.
+	s.clearHeldGeometry()
+	s.filterFrameLocked = false
+	return nil
+}
+
+// refreshFrameSystemIfClean rebuilds cachedFS from the service when no in-flight
+// state would be lost — i.e. nothing is held and the filter frame is not locked —
+// so a manually-invoked action picks up out-of-band config edits (e.g. the
+// portafilter handle geometry being changed during calibration) instead of
+// planning against a stale snapshot. When an item is held or the filter is locked,
+// cachedFS carries state that must persist across separate DoCommand calls, so it
+// is left untouched. Must be called on the motion sequence goroutine (gated by the
+// running flag), like resetFrameSystem.
+func (s *beanjaminCoffee) refreshFrameSystemIfClean(ctx context.Context) error {
+	if s.heldItemAttached || s.filterFrameLocked {
+		return nil
+	}
+	if err := s.resetFrameSystem(ctx); err != nil {
+		return err
+	}
+	s.activeOrderLogger().Infof("refreshed frame system from service")
 	return nil
 }
 
@@ -403,6 +429,69 @@ func (s *beanjaminCoffee) savePlanRequest(req *armplanning.PlanRequest, label st
 	logger.Infof("saved motion request to %s", filename)
 }
 
+// frameSystemWithGeometries returns a deep copy of the cached frame system with
+// each world-frame geometry added as a static frame parented to world, named
+// "<label>_<i>". The geometries are expected to already be in world coordinates;
+// each is attached at a zero-pose static frame so the frame system resolves it
+// back at its world pose (the parent→world transform is identity, sidestepping
+// the "GeometriesInFrame skips the frame's own transform" convention). The input
+// geometries are not mutated — a copy is relabeled.
+func (s *beanjaminCoffee) frameSystemWithGeometries(label string, geoms []spatialmath.Geometry) (*referenceframe.FrameSystem, error) {
+	fs, err := s.cachedFS.Clone()
+	if err != nil {
+		return nil, fmt.Errorf("clone frame system: %w", err)
+	}
+	for i, g := range geoms {
+		if g == nil {
+			continue
+		}
+		name := fmt.Sprintf("%s_%d", label, i)
+		geom := g.Transform(spatialmath.NewZeroPose())
+		geom.SetLabel(name)
+		frame, err := referenceframe.NewStaticFrameWithGeometry(name, spatialmath.NewZeroPose(), geom)
+		if err != nil {
+			return nil, fmt.Errorf("create static frame %q: %w", name, err)
+		}
+		if err := fs.AddFrame(frame, fs.World()); err != nil {
+			return nil, fmt.Errorf("add frame %q: %w", name, err)
+		}
+	}
+	return fs, nil
+}
+
+// saveObservedItemsFrameSystem persists a snapshot of the frame system augmented
+// with the detected item geometries (cups/glasses) to SaveMotionRequestsDir, so
+// it can be read back into a referenceframe.FrameSystem and drawn in a local
+// motion-tools visualizer. It is a no-op when SaveMotionRequestsDir is empty or
+// no geometries are given.
+func (s *beanjaminCoffee) saveObservedItemsFrameSystem(label string, geoms []spatialmath.Geometry) {
+	logger := s.activeOrderLogger()
+	dir := s.cfg.SaveMotionRequestsDir
+	if dir == "" || len(geoms) == 0 {
+		return
+	}
+	fs, err := s.frameSystemWithGeometries(label, geoms)
+	if err != nil {
+		logger.Warnf("save observed %s frame system: %v", label, err)
+		return
+	}
+	data, err := json.MarshalIndent(fs, "", "  ")
+	if err != nil {
+		logger.Warnf("save observed %s frame system: marshal: %v", label, err)
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		logger.Warnf("save observed %s frame system: create dir: %v", label, err)
+		return
+	}
+	filename := filepath.Join(dir, fmt.Sprintf("%s_%s_framesystem.json", time.Now().Format("20060102_150405.000"), label))
+	if err := os.WriteFile(filename, data, 0o600); err != nil {
+		logger.Warnf("save observed %s frame system: %v", label, err)
+		return
+	}
+	logger.Infof("saved observed-%s frame system (%d geometries) to %s", label, len(geoms), filename)
+}
+
 // savePlanResponse persists a Plan's path and trajectory to the configured
 // directory. It is a no-op when SaveMotionRequestsDir is empty.
 func (s *beanjaminCoffee) savePlanResponse(plan motionplan.Plan, label string) {
@@ -451,7 +540,7 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	}
 	goalPose := tf.(*referenceframe.PoseInFrame)
 
-	allowedCollisions = s.filterFakeModeCollisions(allowedCollisions)
+	allowedCollisions = s.filterFakeModeCollisions(s.appendHeldItemCollisions(allowedCollisions))
 	constraints := buildConstraints(lc, allowedCollisions)
 	if lc != nil {
 		logger.Infof("applying linear constraint (line=%.1fmm, orient=%.1f°)",
@@ -566,7 +655,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	}
 
 	// Build constraints.
-	constraints := buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(step.AllowedCollisions))
+	constraints := buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.appendHeldItemCollisions(step.AllowedCollisions)))
 
 	// Plan all waypoints in a single call.
 	req := &armplanning.PlanRequest{
@@ -655,7 +744,7 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 		))
 	}
 
-	constraints := buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(step.AllowedCollisions))
+	constraints := buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.appendHeldItemCollisions(step.AllowedCollisions)))
 
 	req := &armplanning.PlanRequest{
 		FrameSystem: fs,
@@ -693,6 +782,137 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 		}
 	}
 	return nil
+}
+
+// defaultCarryWaypointSpacingMm is the straight-line spacing between the
+// waypoints inserted along a no-spill carry move (see carryHeldLevel). 200 mm
+// keeps consecutive goals close enough that the planner has little room to tilt
+// the held drink between them.
+const defaultCarryWaypointSpacingMm = 200.0
+
+// noSpillGoalCloud loosens the goal at each carry waypoint so IK has room to
+// solve while still keeping the held container close to level. A PoseCloud only
+// ever relaxes a goal — a candidate inside the cloud scores as a perfect match,
+// otherwise the standard weighted metric applies. X/Y/Z are small translational
+// leeways (mm) that give a little positional slack; the orientation leeways are
+// deviations from the goal orientation — OX/OY allow a small tilt of the
+// container's axis, Theta a wider twist about it.
+//
+// These are conservative defaults. Which axis is genuinely "safe" to open up
+// depends on how the cup sits in the gripper (its vertical axis relative to the
+// goal orientation vector); opening the wrong one can tip the drink (see the
+// referenceframe.PoseCloud docs). Tune on hardware before widening them.
+var noSpillGoalCloud = &referenceframe.PoseCloud{
+	X: 2, Y: 2, Z: 2,
+	OX: 0.2, OY: 0.2, OZ: 0.1, Theta: 45,
+}
+
+// computeLevelCarryWaypoints returns the ordered goal poses for a straight-line
+// carry from startPose to endPose. Each waypoint is spaced at most spacingMm
+// apart along the line.
+func computeLevelCarryWaypoints(startPose, endPose spatialmath.Pose, spacingMm float64) []spatialmath.Pose {
+	startPt := startPose.Point()
+	endPt := endPose.Point()
+	delta := endPt.Sub(startPt)
+	dist := delta.Norm()
+
+	// Number of straight-line segments: at least 1, otherwise ceil(dist/spacing)
+	// so no segment exceeds spacingMm.
+	segments := 1
+	if spacingMm > 0 && dist > spacingMm {
+		segments = int(math.Ceil(dist / spacingMm))
+	}
+
+	poses := make([]spatialmath.Pose, 0, segments)
+	for i := 1; i <= segments; i++ {
+		t := float64(i) / float64(segments)
+		poses = append(poses, spatialmath.Interpolate(startPose, endPose, t))
+	}
+	return poses
+}
+
+// carryHeldLevel carries the held container from its current pose to dest along
+// the straight line between them, stepping through waypoints (one per
+// defaultCarryWaypointSpacingMm). Each waypoint's pose is interpolated from the
+// container's current (upright) pose to dest, so the orientation eases from
+// upright to the approach pose while a goal pose cloud keeps it close to level —
+// so the drink doesn't slosh.
+//
+// The goals command the held-item frame (the container) rather than the gripper:
+// the held-item frame is coincident with the gripper (attached with an identity
+// offset, geometry aside), so converting the gripper start/dest poses to it is
+// the same world pose, but expressing the goals against the container frame keeps
+// the upright goal and the relaxing pose cloud about the container itself. When
+// no item is attached (tracking off, or a static pickup left nothing cached) it
+// falls back to the gripper frame, which is equivalent. Each goal carries
+// noSpillGoalCloud to loosen the orientation; held-item self-collisions are
+// injected so the tracked geometry still routes around obstacles. Planning
+// failures are wrapped in errMotionPlanning so placeHeldInServingArea can fall
+// through to the next slot.
+func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData) error {
+	logger := s.activeOrderLogger()
+	fs, fsInputs, err := s.currentInputs(ctx)
+	if err != nil {
+		return err
+	}
+	linearInputs := fsInputs.ToLinearInputs()
+
+	// Move the held-container frame when an item is attached; otherwise the
+	// coincident gripper frame (same world pose).
+	moveFrame := componentClaws
+	if s.heldItemAttached {
+		moveFrame = heldItemFrameName
+	}
+
+	// Start: current world pose of the moving frame (the container is upright).
+	startPIF := referenceframe.NewPoseInFrame(moveFrame, spatialmath.NewZeroPose())
+	startTF, err := fs.Transform(linearInputs, startPIF, referenceframe.World)
+	if err != nil {
+		return fmt.Errorf("transform held-container start pose to world: %w", err)
+	}
+	startPose := startTF.(*referenceframe.PoseInFrame).Pose()
+
+	// End: the gripper destination, converted to the moving frame (coincident, so
+	// the same world position).
+	destPIF := referenceframe.NewPoseInFrame(dest.refFrame, dest.pose)
+	destTF, err := fs.Transform(linearInputs, destPIF, referenceframe.World)
+	if err != nil {
+		return fmt.Errorf("transform carry destination to world: %w", err)
+	}
+	destPose := destTF.(*referenceframe.PoseInFrame).Pose()
+
+	waypoints := computeLevelCarryWaypoints(startPose, destPose, defaultCarryWaypointSpacingMm)
+	logger.Infof("no-spill carry: moving %q through %d waypoint(s) over %.0fmm (cloud: tilt±%.2f, twist±%.0f°)",
+		moveFrame, len(waypoints), destPose.Point().Sub(startPose.Point()).Norm(), noSpillGoalCloud.OX, noSpillGoalCloud.Theta)
+
+	goals := make([]*armplanning.PlanState, 0, len(waypoints))
+	for _, pose := range waypoints {
+		pif := referenceframe.NewPoseInFrameWithGoalCloud(referenceframe.World, pose, noSpillGoalCloud)
+		goals = append(goals, armplanning.NewPlanState(
+			referenceframe.FrameSystemPoses{moveFrame: pif}, nil,
+		))
+	}
+
+	constraints := buildConstraints(nil, s.filterFakeModeCollisions(s.appendHeldItemCollisions(nil)))
+
+	req := &armplanning.PlanRequest{
+		FrameSystem: fs,
+		Goals:       goals,
+		StartState:  armplanning.NewPlanState(nil, fsInputs),
+		Constraints: constraints,
+	}
+	s.savePlanRequest(req, "carry")
+	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errMotionPlanning, err)
+	}
+	s.savePlanResponse(plan, "carry")
+
+	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
+	if err != nil {
+		return fmt.Errorf("get frame inputs from carry plan: %w", err)
+	}
+	return s.arm.MoveThroughJointPositions(ctx, positions, nil, nil)
 }
 
 // computePivotPoses returns interpolated poses between startPose and endPose.

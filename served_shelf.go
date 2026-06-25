@@ -1,7 +1,7 @@
 // Package beanjamin: served-drinks shelf placement.
 //
-// Helpers for placing finished cups on a dedicated shelf instead of returning
-// them to the empty-cup pickup spot. The shelf is modeled as a Box geometry
+// Helpers for placing finished cups on a dedicated served-drinks shelf. The
+// shelf is modeled as a Box geometry
 // in the framesystem under servingAreaFrameName (with a fallback to
 // servingAreaOriginFrameName for the RDK tail-geometry frame). Tile centers are
 // laid out along the shelf's long axis at fixed spacing on the midline — as

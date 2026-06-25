@@ -217,8 +217,7 @@ func NewOrder(drink, customerName, greeting, completion string) Order {
 }
 
 // processQueue is the background consumer goroutine. It runs orders from the
-// queue one at a time in FIFO order. When clean_after_use is disabled and the
-// queue is non-empty, it pauses between orders until the operator sends "proceed".
+// queue one at a time in FIFO order.
 func (s *beanjaminCoffee) processQueue() {
 	for {
 		// Wait for work or shutdown.
@@ -265,21 +264,6 @@ func (s *beanjaminCoffee) processQueue() {
 			// orders start until they explicitly send 'proceed'.
 			if s.paused.Swap(false) {
 				orderLogger.Infof("order cancelled — queue paused, send 'proceed' to resume")
-				s.paused.Store(true)
-				select {
-				case <-s.queue.proceed:
-					orderLogger.Infof("received 'proceed', resuming queue processing")
-					s.paused.Store(false)
-				case <-s.queueStop:
-					s.paused.Store(false)
-					return
-				}
-			}
-
-			// If cleanup is not automatic, pause
-			// so the operator can clean up before the next order starts.
-			if !s.cfg.CleanAfterUse {
-				orderLogger.Infof("queue drained — pausing for manual cleanup, send 'proceed' to continue")
 				s.paused.Store(true)
 				select {
 				case <-s.queue.proceed:
@@ -340,8 +324,6 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 			// Only meaningful alongside a failure, hence the execErr guard.
 			operatorCancelled: execErr != nil && orderCancelCtx.Err() != nil,
 			traceID:           traceIDFromContext(ctx),
-			placeCup:          s.cfg.PlaceCup,
-			cleanAfterUse:     s.cfg.CleanAfterUse,
 			decaf:             isDecafDrink(order.Drink),
 			startedAt:         startedAt,
 			endedAt:           time.Now(),

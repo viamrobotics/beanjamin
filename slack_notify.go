@@ -70,7 +70,7 @@ func slackFailureText(r orderReading) string {
 
 // slackFailureBlocks builds a Slack Block Kit layout for a failed or cancelled
 // order. It mirrors the per-attempt fields the order sensor records (drink,
-// customer, failed step, decaf, the place_cup/clean_after_use path flags,
+// customer, failed step, decaf,
 // duration, start time, and trace ID) so the message is a self-contained
 // record without a round-trip to the order-events sensor: a header that
 // distinguishes a fault from an operator cancel, a fields section with the
@@ -103,8 +103,6 @@ func slackFailureBlocks(r orderReading, machineLogsURL, clipDataURL string) []in
 				slackField(stepLabel, slackStep(r)),
 				slackField("*Duration:*", duration.String()),
 				slackField("*Decaf:*", slackBool(r.decaf)),
-				slackField("*Place cup:*", slackBool(r.placeCup)),
-				slackField("*Clean after use:*", slackBool(r.cleanAfterUse)),
 			},
 		},
 	}

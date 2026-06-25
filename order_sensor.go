@@ -42,13 +42,11 @@ type orderReading struct {
 	// Filter these out of step error-rate metrics.
 	operatorCancelled bool
 	traceID           string // OTel trace ID; links the reading to the order's full trace
-	// Path flags: which conditional branches the order took. Explain why a
-	// given step ran (or didn't) without cross-referencing config.
-	placeCup      bool
-	cleanAfterUse bool
-	decaf         bool
-	startedAt     time.Time
-	endedAt       time.Time
+	// decaf records whether the order took the decaf grinder branch, to explain
+	// why a given step ran (or didn't) without cross-referencing config.
+	decaf     bool
+	startedAt time.Time
+	endedAt   time.Time
 }
 
 // Implemented by orderSensor; coffee calls this after each order attempt.
@@ -131,8 +129,6 @@ func (s *orderSensor) pushOrderReading(r orderReading) {
 		"error_message":      errMsg,
 		"failed_step":        failedStep,
 		"trace_id":           r.traceID,
-		"place_cup":          r.placeCup,
-		"clean_after_use":    r.cleanAfterUse,
 		"decaf":              r.decaf,
 		"start_time":         r.startedAt.UTC().Format(time.RFC3339Nano),
 		"end_time":           r.endedAt.UTC().Format(time.RFC3339Nano),

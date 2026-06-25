@@ -1,8 +1,8 @@
-// Package beanjamin: dynamic cup pickup.
+// Package beanjamin: vision-based cup pickup.
 //
-// pickCupDynamic replaces the static empty_cup grab in setCupForCoffee
-// when dynamic_cup_pickup is enabled. It sweeps the poses on the dedicated
-// camera-observe switch (camera_observe_pose_switcher_name) one at a time,
+// pickCupDynamic is how setCupForCoffee acquires the empty cup. It sweeps the
+// poses on the dedicated camera-observe switch
+// (camera_observe_pose_switcher_name) one at a time,
 // calling a vision service for cup detections at each. As soon as a pose
 // yields at least one detection the sweep stops — the next observe pose is
 // only tried when the current one failed to find a cup. Detections are lifted
@@ -20,17 +20,35 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
 	"github.com/golang/geo/r3"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/module/trace"
+	"go.viam.com/rdk/pointcloud"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/services/vision"
 	"go.viam.com/rdk/spatialmath"
 	viz "go.viam.com/rdk/vision"
 )
+
+// Pickup item labels — used for logs/spans/errors and as the cache key for
+// held-item geometry tracking (held_geometry.go).
+const (
+	pickupLabelCup   = "cup"
+	pickupLabelGlass = "glass"
+)
+
+// pickupCandidate is one detected item: its world-frame grasp centroid plus the
+// world-frame detected geometry (nil when geometry is unavailable). The geometry
+// rides alongside the centroid so the held-item tracker can attach the detected
+// shape to the gripper after a successful grab.
+type pickupCandidate struct {
+	centroid r3.Vector
+	geom     spatialmath.Geometry
+}
 
 // errNoItemsDetected is returned by findCandidates when the vision frames at
 // every observe pose yielded zero detections. pickDynamic recognises this case
@@ -134,6 +152,48 @@ func cameraToWorld(
 	return worldPose.Pose().Point(), nil
 }
 
+// worldBoundingBox builds an axis-aligned bounding box (orientation OZ=1) in the
+// world frame around the given camera-frame point cloud. The cloud is
+// transformed into world coordinates and the box spans its world min/max
+// extents, centered at their midpoint. Returns a nil geometry for an empty
+// cloud. label is set on the returned box.
+func worldBoundingBox(
+	fs *referenceframe.FrameSystem,
+	fsInputs referenceframe.FrameSystemInputs,
+	cameraFrame string,
+	cloud pointcloud.PointCloud,
+	label string,
+) (spatialmath.Geometry, error) {
+	if cloud == nil || cloud.Size() == 0 {
+		return nil, nil
+	}
+
+	// Resolve the camera→world pose once and transform the whole cloud into world.
+	camPIF := referenceframe.NewPoseInFrame(cameraFrame, spatialmath.NewZeroPose())
+	tf, err := fs.Transform(fsInputs.ToLinearInputs(), camPIF, referenceframe.World)
+	if err != nil {
+		return nil, fmt.Errorf("transform %q to world: %w", cameraFrame, err)
+	}
+	camToWorld := tf.(*referenceframe.PoseInFrame).Pose()
+
+	worldCloud := pointcloud.NewBasicEmpty()
+	if err := pointcloud.ApplyOffset(cloud, camToWorld, worldCloud); err != nil {
+		return nil, fmt.Errorf("transform point cloud to world: %w", err)
+	}
+
+	meta := worldCloud.MetaData()
+	min := r3.Vector{X: meta.MinX, Y: meta.MinY, Z: meta.MinZ}
+	max := r3.Vector{X: meta.MaxX, Y: meta.MaxY, Z: meta.MaxZ}
+	center := min.Add(max).Mul(0.5)
+	dims := max.Sub(min)
+	pose := spatialmath.NewPoseFromPoint(center)
+	box, err := spatialmath.NewBox(pose, dims, label)
+	if err != nil {
+		return nil, fmt.Errorf("new bounding box: %w", err)
+	}
+	return box, nil
+}
+
 // gripperWorldPoint returns the world-frame position of the gripper — the
 // componentClaws frame the grab actually moves onto a cup/glass. Dynamic pickup
 // ranks detected items by proximity to this point (findCandidates), so the item
@@ -176,7 +236,7 @@ type pickupTarget struct {
 // pipeline used before the generic refactor.
 func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 	return &pickupTarget{
-		label:            "cup",
+		label:            pickupLabelCup,
 		vision:           s.cupVision,
 		cameraName:       s.cupCameraName,
 		observeSw:        s.cameraObserveSw,
@@ -198,7 +258,7 @@ func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 // item-agnostic operational settings.
 func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 	return &pickupTarget{
-		label:            "glass",
+		label:            pickupLabelGlass,
 		vision:           s.glassVision,
 		cameraName:       s.cupCameraName,
 		observeSw:        s.glassObserveSw,
@@ -214,11 +274,11 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 }
 
 // observeVantage captures t.photosPerVantage vision frames at the arm's current
-// pose, accumulates every detection from all of them, and lifts each centroid
-// into world coordinates. Returns the pickup centroids (world frame). Returns a
-// nil slice with no error when no frame produced a detection, so the sweep in
-// findCandidates can move on to the next observe pose.
-func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) ([]r3.Vector, error) {
+// pose, accumulates every detection from all of them, and lifts each into world
+// coordinates. Returns the pickup candidates (world-frame centroid + geometry).
+// Returns a nil slice with no error when no frame produced a detection, so the
+// sweep in findCandidates can move on to the next observe pose.
+func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) ([]pickupCandidate, error) {
 	logger := s.activeOrderLogger()
 	photosToTake := t.photosPerVantage
 
@@ -243,7 +303,7 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 		return nil, err
 	}
 
-	centroids := make([]r3.Vector, 0, len(objects))
+	candidates := make([]pickupCandidate, 0, len(objects))
 	for _, obj := range objects {
 		if obj.Geometry == nil {
 			continue
@@ -253,15 +313,47 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 		if err != nil {
 			return nil, err
 		}
+		// Build the detection geometry as a world-frame, axis-aligned (orientation
+		// OZ=1) bounding box around the detection's point cloud, rather than using
+		// the vision service's geometry. The held-item tracker attaches this shape
+		// to the gripper after the grab, and it is drawn in the saved snapshot.
+		geomWorld, err := worldBoundingBox(fs, fsInputs, t.cameraName, obj.PointCloud, t.label)
+		if err != nil {
+			return nil, err
+		}
+		if geomWorld == nil {
+			continue
+		}
 		if floor := t.centroidMinZMm; floor != 0 && world.Z < floor {
+			delta := floor - world.Z
 			logger.Infof("dynamic %s pickup: flooring centroid Z from %.1f to %.1f (centroid_min_z_mm)",
 				t.label, world.Z, floor)
 			world.Z = floor
+			// Shift the geometry up by the same delta so it stays centered on the
+			// (floored) grasp centroid.
+			geomWorld = geomWorld.Transform(spatialmath.NewPoseFromPoint(r3.Vector{Z: delta}))
 		}
 		logger.Debugf("dynamic %s pickup: detection at camera-local %v -> world %v", t.label, local, world)
-		centroids = append(centroids, world)
+		candidates = append(candidates, pickupCandidate{centroid: world, geom: geomWorld})
 	}
-	return centroids, nil
+
+	// Persist a frame-system snapshot augmented with the world-frame detection
+	// geometries to the motion-requests dir, so the observed cups/glasses can be
+	// loaded back into a FrameSystem and drawn in a local motion-tools visualizer.
+	s.saveObservedItemsFrameSystem(t.label, geometriesOf(candidates))
+	return candidates, nil
+}
+
+// geometriesOf extracts the world-frame geometries from a slice of candidates,
+// skipping any without a geometry. Used to feed the visualizer.
+func geometriesOf(candidates []pickupCandidate) []spatialmath.Geometry {
+	out := make([]spatialmath.Geometry, 0, len(candidates))
+	for _, c := range candidates {
+		if c.geom != nil {
+			out = append(out, c.geom)
+		}
+	}
+	return out
 }
 
 // observationPoseNames returns the names of every pose on the given observe
@@ -291,7 +383,7 @@ func (s *beanjaminCoffee) observationPoseNames(ctx context.Context, sw toggleswi
 //
 // When no pose produces any detection, findCandidates returns errNoItemsDetected
 // so pickDynamic can recover (announce + wait + re-observe).
-func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pickupTarget) ([]r3.Vector, error) {
+func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pickupTarget) ([]pickupCandidate, error) {
 	logger := s.activeOrderLogger()
 	poseNames, err := s.observationPoseNames(ctx, t.observeSw)
 	if err != nil {
@@ -309,11 +401,11 @@ func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pick
 			continue
 		}
 
-		centroids, err := s.observeVantage(ctx, t)
+		detected, err := s.observeVantage(ctx, t)
 		if err != nil {
 			return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, i+1, err)
 		}
-		if len(centroids) == 0 {
+		if len(detected) == 0 {
 			logger.Infof("dynamic %s pickup: pass %d/%d found nothing — trying next observe pose", t.label, i+1, passes)
 			continue
 		}
@@ -325,18 +417,63 @@ func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pick
 			return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, i+1, err)
 		}
 
+		// Merge/rank operate on centroids; the geometry is matched back to each
+		// ranked centroid afterward (mergeNearbyCentroids averages centroids, so
+		// geometry can't be threaded through the merge directly).
+		centroids := centroidsOf(detected)
 		merged := mergeNearbyCentroids(centroids, observeDedupMm)
 		ranked := rankCentroidsByProximity(merged, gripperPosition)
+		candidates := candidatesForCentroids(ranked, detected)
 		logger.Infof("dynamic %s pickup: pass %d/%d — gripper=(x=%.1f, y=%.1f, z=%.1f) — %d candidate(s) (%d before merge), closest first:",
-			t.label, i+1, passes, gripperPosition.X, gripperPosition.Y, gripperPosition.Z, len(ranked), len(centroids))
-		for j, c := range ranked {
+			t.label, i+1, passes, gripperPosition.X, gripperPosition.Y, gripperPosition.Z, len(candidates), len(detected))
+		for j, c := range candidates {
 			logger.Infof("  rank[%d] world=(x=%.1f, y=%.1f, z=%.1f) distance=%.1fmm",
-				j, c.X, c.Y, c.Z, c.Sub(gripperPosition).Norm())
+				j, c.centroid.X, c.centroid.Y, c.centroid.Z, c.centroid.Sub(gripperPosition).Norm())
 		}
-		return ranked, nil
+		return candidates, nil
 	}
 
 	return nil, fmt.Errorf("dynamic_%s_pickup: %w across all %d observe pose(s)", t.label, errNoItemsDetected, passes)
+}
+
+// centroidsOf extracts the world-frame centroids from a slice of candidates,
+// preserving order. Used to feed the centroid-only merge/rank helpers.
+func centroidsOf(candidates []pickupCandidate) []r3.Vector {
+	out := make([]r3.Vector, len(candidates))
+	for i, c := range candidates {
+		out[i] = c.centroid
+	}
+	return out
+}
+
+// candidatesForCentroids pairs each ranked centroid with the geometry of the
+// nearest original detection, so the held-item tracker can attach the detected
+// shape after the grab. Geometry is matched back by nearest original rather than
+// threaded through the merge (which averages centroids).
+func candidatesForCentroids(ranked []r3.Vector, originals []pickupCandidate) []pickupCandidate {
+	out := make([]pickupCandidate, len(ranked))
+	for i, c := range ranked {
+		out[i] = pickupCandidate{centroid: c, geom: nearestGeometry(c, originals)}
+	}
+	return out
+}
+
+// nearestGeometry returns the geometry of the original detection whose centroid
+// is closest to c, skipping detections with no geometry. Returns nil when no
+// original carries a geometry.
+func nearestGeometry(c r3.Vector, originals []pickupCandidate) spatialmath.Geometry {
+	var best spatialmath.Geometry
+	bestDist := math.MaxFloat64
+	for _, o := range originals {
+		if o.geom == nil {
+			continue
+		}
+		if d := o.centroid.Sub(c).Norm(); d < bestDist {
+			bestDist = d
+			best = o.geom
+		}
+	}
+	return best
 }
 
 // tryGrab attempts a full approach-grab-retreat cycle on one candidate
@@ -348,7 +485,8 @@ func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pick
 // errors.Is:
 //   - wraps errMotionPlanning → planning failure; try a different candidate.
 //   - anything else → execution error or operator cancel; bubble up.
-func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarget, centroid r3.Vector) error {
+func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarget, cand pickupCandidate) error {
+	centroid := cand.centroid
 	approachPD := &poseData{
 		pose:          composeCupPose(centroid, relativePoseToSpatial(t.approachRel)),
 		refFrame:      referenceframe.World,
@@ -378,17 +516,18 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 		return fmt.Errorf("grab centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
 
-	// 4. Close the gripper on the item.
-	//
-	// TODO: verify the gripper actually picked up an item before continuing.
-	// gripper.IsHoldingSomething is not usable here because the real robot
-	// permanently grips the claws extension, so the call returns true
-	// regardless of whether an item is between the claws.
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+	if err := s.grabAndVerifyHolding(ctx); err != nil {
 		s.recoverToObserve(ctx, cancelCtx, t)
-		return fmt.Errorf("close gripper on %s: %w", t.label, err)
+		return fmt.Errorf("grab %s: %w", t.label, err)
 	}
-	time.Sleep(gripperPause)
+
+	// Attach the detected geometry to the gripper while the arm is at the grab
+	// pose, so the retreat (and everything until release) plans around the held
+	// item. Best-effort: a tracking-attach hiccup degrades to untracked motion
+	// (the prior behavior) rather than aborting a physical order mid-grab.
+	if err := s.attachDetectedGeometry(ctx, t.label, cand.geom); err != nil {
+		s.activeOrderLogger().Warnf("dynamic %s pickup: attach geometry failed, continuing untracked: %v", t.label, err)
+	}
 
 	// 5. Linear retreat with the item in hand. A failure here is fatal — we
 	// can't drop the item safely by recovering to observe. Strip the
@@ -419,15 +558,14 @@ func (s *beanjaminCoffee) recoverToObserve(ctx, cancelCtx context.Context, t *pi
 	}
 }
 
-// pickCupDynamic picks an empty cup via the dynamic pipeline. Called by
-// setCupForCoffee when DynamicCupPickup=true.
+// pickCupDynamic picks an empty cup via the vision pipeline. Called by
+// setCupForCoffee.
 func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 	return s.pickDynamic(ctx, cancelCtx, s.cupPickupTarget())
 }
 
-// pickGlassDynamic picks an iced-coffee glass via the dynamic pipeline (its own
-// vision service + observe switch). Called by fetchGlass when
-// DynamicGlassPickup=true.
+// pickGlassDynamic picks an iced-coffee glass via the vision pipeline (its own
+// vision service + observe switch). Called by fetchGlass (can_serve_iced).
 func (s *beanjaminCoffee) pickGlassDynamic(ctx, cancelCtx context.Context) error {
 	return s.pickDynamic(ctx, cancelCtx, s.glassPickupTarget())
 }
@@ -490,8 +628,8 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 		}
 
 		logger.Infof("dynamic %s pickup: attempt %d/%d — %d candidate(s) to try", t.label, attempt, maxAttempts, len(candidates))
-		for i, centroid := range candidates {
-			err := s.tryGrab(ctx, cancelCtx, t, centroid)
+		for i, cand := range candidates {
+			err := s.tryGrab(ctx, cancelCtx, t, cand)
 			if err == nil {
 				return nil
 			}
@@ -502,10 +640,10 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 				return fmt.Errorf("dynamic_%s_pickup: cancelled: %w", t.label, err)
 			}
 
-			if !errors.Is(err, errMotionPlanning) {
+			if !errors.Is(err, errMotionPlanning) && !errors.Is(err, errGripMissed) {
 				return err
 			}
-			logger.Warnf("dynamic %s pickup: attempt %d, candidate %d/%d planning failed — trying next: %v",
+			logger.Warnf("dynamic %s pickup: attempt %d, candidate %d/%d failed (planning or grab miss) — trying next: %v",
 				t.label, attempt, i+1, len(candidates), err)
 		}
 	}
