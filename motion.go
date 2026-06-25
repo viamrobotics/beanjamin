@@ -132,105 +132,35 @@ const (
 	vizMaxFailures = 3
 )
 
-// runVizDraw executes a single visualizer draw with a timeout. After
-// vizMaxFailures consecutive failures the visualizer is automatically disabled
-// so that an unreachable server does not slow down every motion call. desc
-// labels the operation in failure logs.
-func (s *beanjaminCoffee) runVizDraw(desc string, draw func() error) {
+// drawViz sends the current frame system to the visualizer with a timeout.
+// After vizMaxFailures consecutive failures the visualizer is automatically
+// disabled so that an unreachable server does not slow down every motion call.
+func (s *beanjaminCoffee) drawViz(fsInputs referenceframe.FrameSystemInputs) {
 	logger := s.activeOrderLogger()
 	done := make(chan error, 1)
 	go func() {
-		done <- draw()
+		done <- viz.DrawFrameSystem(s.cachedFS, fsInputs)
 	}()
 
 	select {
 	case err := <-done:
 		if err != nil {
 			s.vizConsecutiveFailures++
-			logger.Warnf("viz: failed to %s (%d/%d): %v",
-				desc, s.vizConsecutiveFailures, vizMaxFailures, err)
+			logger.Warnf("viz: failed to draw frame system (%d/%d): %v",
+				s.vizConsecutiveFailures, vizMaxFailures, err)
 		} else {
 			s.vizConsecutiveFailures = 0
 		}
 	case <-time.After(vizTimeout):
 		s.vizConsecutiveFailures++
-		logger.Warnf("viz: %s timed out after %v (%d/%d)",
-			desc, vizTimeout, s.vizConsecutiveFailures, vizMaxFailures)
+		logger.Warnf("viz: draw timed out after %v (%d/%d)",
+			vizTimeout, s.vizConsecutiveFailures, vizMaxFailures)
 	}
 
 	if s.vizConsecutiveFailures >= vizMaxFailures {
 		logger.Warnf("viz: disabling visualizer after %d consecutive failures", vizMaxFailures)
 		s.vizEnabled = false
 	}
-}
-
-// drawViz sends the current frame system to the visualizer.
-func (s *beanjaminCoffee) drawViz(fsInputs referenceframe.FrameSystemInputs) {
-	s.runVizDraw("draw frame system", func() error {
-		return viz.DrawFrameSystem(s.cachedFS, fsInputs)
-	})
-}
-
-// drawVizGeometries draws detected item geometries (already in world frame) to
-// the visualizer, namespaced by prefix ("cup"/"glass"). Each geometry is
-// relabeled "<prefix>_<i>" so successive observations update the shapes in place
-// instead of accumulating; labels drawn for this prefix on the previous
-// observation but absent now are removed so stale shapes don't linger. The input
-// geometries are not mutated — a copy is relabeled, since the held-item tracker
-// later attaches the original to the gripper.
-func (s *beanjaminCoffee) drawVizGeometries(prefix, color string, geoms []spatialmath.Geometry) {
-	if s.vizDrawnGeomLabels == nil {
-		s.vizDrawnGeomLabels = make(map[string][]string)
-	}
-
-	labeled := make([]spatialmath.Geometry, 0, len(geoms))
-	labels := make([]string, 0, len(geoms))
-	colors := make([]string, 0, len(geoms))
-	for i, g := range geoms {
-		if g == nil {
-			continue
-		}
-		label := fmt.Sprintf("%s_%d", prefix, i)
-		clone := g.Transform(spatialmath.NewZeroPose())
-		clone.SetLabel(label)
-		labeled = append(labeled, clone)
-		labels = append(labels, label)
-		colors = append(colors, color)
-	}
-
-	// Clear geometries drawn for this prefix last observation that aren't redrawn now.
-	if stale := labelsNotIn(s.vizDrawnGeomLabels[prefix], labels); len(stale) > 0 {
-		s.runVizDraw("remove stale "+prefix+" geometries", func() error {
-			return viz.RemoveSpatialObjects(stale)
-		})
-	}
-	s.vizDrawnGeomLabels[prefix] = labels
-
-	if len(labeled) == 0 {
-		return
-	}
-	gif := referenceframe.NewGeometriesInFrame(referenceframe.World, labeled)
-	s.runVizDraw("draw "+prefix+" geometries", func() error {
-		return viz.DrawGeometries(gif, colors)
-	})
-}
-
-// labelsNotIn returns the elements of prev that do not appear in current.
-func labelsNotIn(prev, current []string) []string {
-	if len(prev) == 0 {
-		return nil
-	}
-	keep := make(map[string]struct{}, len(current))
-	for _, c := range current {
-		keep[c] = struct{}{}
-	}
-	var stale []string
-	for _, p := range prev {
-		if _, ok := keep[p]; !ok {
-			stale = append(stale, p)
-		}
-	}
-	return stale
 }
 
 // lockFilterFrame re-parents the "filter" frame from the arm subtree to the
@@ -475,6 +405,69 @@ func (s *beanjaminCoffee) savePlanRequest(req *armplanning.PlanRequest, label st
 		return
 	}
 	logger.Infof("saved motion request to %s", filename)
+}
+
+// frameSystemWithGeometries returns a deep copy of the cached frame system with
+// each world-frame geometry added as a static frame parented to world, named
+// "<label>_<i>". The geometries are expected to already be in world coordinates;
+// each is attached at a zero-pose static frame so the frame system resolves it
+// back at its world pose (the parent→world transform is identity, sidestepping
+// the "GeometriesInFrame skips the frame's own transform" convention). The input
+// geometries are not mutated — a copy is relabeled.
+func (s *beanjaminCoffee) frameSystemWithGeometries(label string, geoms []spatialmath.Geometry) (*referenceframe.FrameSystem, error) {
+	fs, err := s.cachedFS.Clone()
+	if err != nil {
+		return nil, fmt.Errorf("clone frame system: %w", err)
+	}
+	for i, g := range geoms {
+		if g == nil {
+			continue
+		}
+		name := fmt.Sprintf("%s_%d", label, i)
+		geom := g.Transform(spatialmath.NewZeroPose())
+		geom.SetLabel(name)
+		frame, err := referenceframe.NewStaticFrameWithGeometry(name, spatialmath.NewZeroPose(), geom)
+		if err != nil {
+			return nil, fmt.Errorf("create static frame %q: %w", name, err)
+		}
+		if err := fs.AddFrame(frame, fs.World()); err != nil {
+			return nil, fmt.Errorf("add frame %q: %w", name, err)
+		}
+	}
+	return fs, nil
+}
+
+// saveObservedItemsFrameSystem persists a snapshot of the frame system augmented
+// with the detected item geometries (cups/glasses) to SaveMotionRequestsDir, so
+// it can be read back into a referenceframe.FrameSystem and drawn in a local
+// motion-tools visualizer. It is a no-op when SaveMotionRequestsDir is empty or
+// no geometries are given.
+func (s *beanjaminCoffee) saveObservedItemsFrameSystem(label string, geoms []spatialmath.Geometry) {
+	logger := s.activeOrderLogger()
+	dir := s.cfg.SaveMotionRequestsDir
+	if dir == "" || len(geoms) == 0 {
+		return
+	}
+	fs, err := s.frameSystemWithGeometries(label, geoms)
+	if err != nil {
+		logger.Warnf("save observed %s frame system: %v", label, err)
+		return
+	}
+	data, err := json.MarshalIndent(fs, "", "  ")
+	if err != nil {
+		logger.Warnf("save observed %s frame system: marshal: %v", label, err)
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		logger.Warnf("save observed %s frame system: create dir: %v", label, err)
+		return
+	}
+	filename := filepath.Join(dir, fmt.Sprintf("%s_%s_framesystem.json", time.Now().Format("20060102_150405.000"), label))
+	if err := os.WriteFile(filename, data, 0o600); err != nil {
+		logger.Warnf("save observed %s frame system: %v", label, err)
+		return
+	}
+	logger.Infof("saved observed-%s frame system (%d geometries) to %s", label, len(geoms), filename)
 }
 
 // savePlanResponse persists a Plan's path and trajectory to the configured

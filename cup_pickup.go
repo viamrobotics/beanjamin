@@ -40,14 +40,6 @@ const (
 	pickupLabelGlass = "glass"
 )
 
-// Colors used to draw detected item geometries in the visualizer, one per
-// item kind so cup and glass detections are distinguishable. Passed through to
-// the viz client's DrawGeometries (hex strings).
-const (
-	vizColorCup   = "#00E5FF" // cyan
-	vizColorGlass = "#FF4081" // pink
-)
-
 // pickupCandidate is one detected item: its world-frame grasp centroid plus the
 // world-frame detected geometry (nil when geometry is unavailable). The geometry
 // rides alongside the centroid so the held-item tracker can attach the detected
@@ -195,7 +187,6 @@ type pickupTarget struct {
 	maxAttempts      int                 // full observe-and-grab attempts
 	centroidMinZMm   float64             // floor detection Z to this (0 = disabled)
 	noItemSpeak      string              // spoken on "nothing detected" before a retry wait
-	vizColor         string              // color for this item's detection geometries in the visualizer
 }
 
 // cupPickupTarget describes dynamic cup pickup. Reproduces the values the cup
@@ -214,7 +205,6 @@ func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 		maxAttempts:      pickupMaxAttempts(s.cfg.CupPickupMaxAttempts),
 		centroidMinZMm:   s.cfg.CupCentroidMinZMm,
 		noItemSpeak:      "I don't see a cup yet — please place one on the shelf. Trying again in 15 seconds.",
-		vizColor:         vizColorCup,
 	}
 }
 
@@ -237,7 +227,6 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 		maxAttempts:      pickupMaxAttempts(s.cfg.CupPickupMaxAttempts),
 		centroidMinZMm:   s.cfg.GlassCentroidMinZMm,
 		noItemSpeak:      "I don't see a glass yet — please place one on the top shelf. Trying again in 15 seconds.",
-		vizColor:         vizColorGlass,
 	}
 }
 
@@ -300,12 +289,10 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 		candidates = append(candidates, pickupCandidate{centroid: world, geom: geomWorld})
 	}
 
-	// Visualize the world-frame detection geometries alongside the frame system
-	// (drawn above by currentInputs) so the observed cups are visible in the viz
-	// client on every observation.
-	if s.vizEnabled {
-		s.drawVizGeometries(t.label, t.vizColor, geometriesOf(candidates))
-	}
+	// Persist a frame-system snapshot augmented with the world-frame detection
+	// geometries to the motion-requests dir, so the observed cups/glasses can be
+	// loaded back into a FrameSystem and drawn in a local motion-tools visualizer.
+	s.saveObservedItemsFrameSystem(t.label, geometriesOf(candidates))
 	return candidates, nil
 }
 
