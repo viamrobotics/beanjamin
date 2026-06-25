@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/data"
@@ -64,12 +65,33 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}, nil
 }
 
+// orderHistoryEntry records one completed drink for a customer. The list of
+// these on a customerRecord is what "the usual" is derived from.
+type orderHistoryEntry struct {
+	Drink string    `json:"drink"`
+	At    time.Time `json:"at"`
+}
+
 // customerRecord stores metadata about a registered customer.
 type customerRecord struct {
 	Name     string `json:"name"`
 	Email    string `json:"email"`
 	ImageDir string `json:"image_dir"`
+	// Orders is the customer's completed-drink history, oldest first, capped
+	// at maxOrderHistory. Appended by record_order; consumed by get_usual.
+	// omitempty keeps pre-existing customers.json files loading cleanly.
+	Orders []orderHistoryEntry `json:"orders,omitempty"`
 }
+
+// maxOrderHistory caps how many past orders we retain per customer so
+// customers.json can't grow without bound. Oldest entries are dropped first.
+const maxOrderHistory = 50
+
+// statusCacheTTL throttles the live identification Status() performs: within
+// this window repeated polls reuse the last result instead of re-capturing
+// from the camera and re-running the vision model. voice-command's
+// command_status polls Status() every LLM turn, so this matters.
+const statusCacheTTL = 2 * time.Second
 
 type customerDetector struct {
 	resource.AlwaysRebuild
@@ -85,6 +107,12 @@ type customerDetector struct {
 	mu        sync.RWMutex
 	customers map[string]*customerRecord // keyed by email
 	vision    vision.Service             // lazily resolved; may be nil at startup
+
+	// lastStatus caches the most recent currentCustomerStatus() result so
+	// frequent Status() polls don't re-run identification every call. Guarded
+	// by mu; see statusCacheTTL.
+	lastStatus   map[string]interface{}
+	lastStatusAt time.Time
 }
 
 func newCustomerDetector(
@@ -177,12 +205,20 @@ func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]interf
 	if email, ok := cmd["remove_customer"].(string); ok {
 		return cd.removeCustomer(ctx, email)
 	}
+	if rec, ok := cmd["record_order"].(map[string]interface{}); ok {
+		email, _ := rec["email"].(string)
+		drink, _ := rec["drink"].(string)
+		return cd.recordOrder(email, drink)
+	}
+	if email, ok := cmd["get_usual"].(string); ok {
+		return cd.getUsual(email)
+	}
 	if _, ok := cmd["get_info"]; ok {
 		return map[string]interface{}{
 			"camera_name": cd.camera.Name().ShortName(),
 		}, nil
 	}
-	return nil, fmt.Errorf("unknown command, supported: register_customer, finish_registration, identify_customer, list_customers, remove_customer, get_info")
+	return nil, fmt.Errorf("unknown command, supported: register_customer, finish_registration, identify_customer, list_customers, remove_customer, record_order, get_usual, get_info")
 }
 
 // registerCustomer captures an image from the camera and stores it as a known
@@ -419,6 +455,94 @@ func (cd *customerDetector) removeCustomer(ctx context.Context, email string) (m
 	}, nil
 }
 
+// recordOrder appends a completed drink to a customer's history and persists
+// it. An unknown email (e.g. an anonymous walk-up the camera never registered)
+// is a no-op rather than an error, so the coffee service can call this for
+// every completed order without logging a failure for un-recognized customers.
+func (cd *customerDetector) recordOrder(email, drink string) (map[string]interface{}, error) {
+	if email == "" || drink == "" {
+		return nil, fmt.Errorf("record_order requires both email and drink")
+	}
+
+	cd.mu.Lock()
+	rec, exists := cd.customers[email]
+	if !exists {
+		cd.mu.Unlock()
+		cd.logger.Debugf("record_order: no customer for %q — nothing to remember", email)
+		return map[string]interface{}{"recorded": false, "reason": "unknown customer"}, nil
+	}
+	rec.Orders = append(rec.Orders, orderHistoryEntry{Drink: drink, At: time.Now()})
+	if len(rec.Orders) > maxOrderHistory {
+		// Keep only the most recent maxOrderHistory entries.
+		rec.Orders = append([]orderHistoryEntry(nil), rec.Orders[len(rec.Orders)-maxOrderHistory:]...)
+	}
+	count := len(rec.Orders)
+	cd.mu.Unlock()
+
+	if err := cd.saveCustomers(); err != nil {
+		return nil, fmt.Errorf("failed to persist order history: %w", err)
+	}
+	cd.logger.Infof("recorded %q for %q (%d in history)", drink, email, count)
+	return map[string]interface{}{"recorded": true, "email": email, "drink": drink}, nil
+}
+
+// getUsual returns the customer's "usual" drink, derived from their recorded
+// order history via usualDrink. Returns {has_usual:false} when the customer is
+// unknown or has no history (or usualDrink declines to pick one).
+func (cd *customerDetector) getUsual(email string) (map[string]interface{}, error) {
+	if email == "" {
+		return nil, fmt.Errorf("get_usual requires an email")
+	}
+
+	cd.mu.RLock()
+	rec, exists := cd.customers[email]
+	var orders []orderHistoryEntry
+	if exists {
+		// Copy so usualDrink reads a stable slice outside the lock.
+		orders = append(orders, rec.Orders...)
+	}
+	cd.mu.RUnlock()
+
+	if !exists || len(orders) == 0 {
+		return map[string]interface{}{"has_usual": false}, nil
+	}
+
+	drink, count := usualDrink(orders)
+	if drink == "" {
+		return map[string]interface{}{"has_usual": false}, nil
+	}
+	return map[string]interface{}{
+		"has_usual": true,
+		"drink":     drink,
+		"count":     count,
+	}, nil
+}
+
+// usualDrink computes a customer's "usual" from their order history.
+//
+// `orders` is non-empty and in chronological order (oldest first). Return the
+// drink id to treat as the usual and a count that backs that choice; return
+// ("", 0) to report no usual.
+//
+// TODO(julie): implement the aggregation. The behaviour here is a genuine
+// product decision — pick one (or invent your own):
+//
+//   - most-frequent: tally drinks, return the one with the highest count.
+//     Stable favorite, but slow to adapt if your taste changes.
+//
+//   - most-recent: return orders[len(orders)-1].Drink (count 1). Adapts
+//     instantly, but a one-off "I'll try a lungo today" overwrites the usual.
+//
+//   - frequency with a recency tiebreak: most-frequent overall, newest order
+//     wins when two drinks are tied. The "usual" usual.
+//
+// Whatever you return flows straight into get_usual and into Status()'s
+// usual_drink — which is what voice-command speaks as "your usual <drink>?".
+func usualDrink(orders []orderHistoryEntry) (drink string, count int) {
+	// TODO(julie): your logic here.
+	return "", 0
+}
+
 // customersFilePath returns the path to the JSON file that persists customer records.
 func (cd *customerDetector) customersFilePath() string {
 	return filepath.Join(cd.dataDir, "customers.json")
@@ -448,10 +572,67 @@ func (cd *customerDetector) saveCustomers() error {
 	return os.WriteFile(cd.customersFilePath(), data, 0o644)
 }
 
+// Status reports the customer currently in front of the camera and their
+// usual, so a poller (notably voice-command's command_status) can greet them
+// by name and offer their usual on its first turn. Results are cached for
+// statusCacheTTL so per-turn polling doesn't re-run identification every call.
+// Never returns an error — recognition failures surface as {recognized:false}.
 func (cd *customerDetector) Status(ctx context.Context) (map[string]interface{}, error) {
-	_, span := trace.StartSpan(ctx, "customer-detector::Status")
+	ctx, span := trace.StartSpan(ctx, "customer-detector::Status")
 	defer span.End()
-	return map[string]interface{}{}, nil
+
+	cd.mu.RLock()
+	if cd.lastStatus != nil && time.Since(cd.lastStatusAt) < statusCacheTTL {
+		cached := cd.lastStatus
+		cd.mu.RUnlock()
+		return cached, nil
+	}
+	cd.mu.RUnlock()
+
+	status := cd.currentCustomerStatus(ctx)
+
+	cd.mu.Lock()
+	cd.lastStatus = status
+	cd.lastStatusAt = time.Now()
+	cd.mu.Unlock()
+	return status, nil
+}
+
+// currentCustomerStatus runs a best-effort identification and, when it
+// recognizes a registered customer, folds in their usual. Returns
+// {recognized:false} on any failure (no vision service yet, no face in frame,
+// camera error) so Status() callers always get a well-formed map.
+func (cd *customerDetector) currentCustomerStatus(ctx context.Context) map[string]interface{} {
+	res, err := cd.identifyCustomer(ctx)
+	if err != nil {
+		cd.logger.Debugf("Status identify failed: %v", err)
+		return map[string]interface{}{"recognized": false}
+	}
+	if identified, _ := res["identified"].(bool); !identified {
+		return map[string]interface{}{"recognized": false}
+	}
+
+	status := map[string]interface{}{
+		"recognized": true,
+		"confidence": res["confidence"],
+	}
+	email, _ := res["email"].(string)
+	if email != "" {
+		status["email"] = email
+	}
+	if name, ok := res["name"].(string); ok && name != "" {
+		status["name"] = name
+	}
+	// Fold in the usual so the poller has identity + preference in one place.
+	if email != "" {
+		if usual, err := cd.getUsual(email); err == nil {
+			if has, _ := usual["has_usual"].(bool); has {
+				status["usual_drink"] = usual["drink"]
+				status["usual_count"] = usual["count"]
+			}
+		}
+	}
+	return status
 }
 
 func (cd *customerDetector) Close(context.Context) error {

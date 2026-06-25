@@ -202,6 +202,26 @@ func (s *beanjaminCoffee) sayAlways(ctx context.Context, text string) error {
 	return err
 }
 
+// recordOrderHistory credits a completed drink to the recognized customer's
+// order history via the customer-detector's record_order DoCommand, so it can
+// later be offered as "the usual". Best-effort and fully optional: a no-op when
+// the order has no customer_email or no customer_detector_name is configured.
+// An unknown email is not an error on the detector side (anonymous walk-ups),
+// so this only logs on a genuine dispatch failure.
+func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order Order) {
+	if s.customerDetector == nil || order.CustomerEmail == "" {
+		return
+	}
+	if _, err := s.customerDetector.DoCommand(ctx, map[string]interface{}{
+		"record_order": map[string]interface{}{
+			"email": order.CustomerEmail,
+			"drink": order.Drink,
+		},
+	}); err != nil {
+		s.activeOrderLogger().Warnf("failed to record order history for %q: %v", order.CustomerEmail, err)
+	}
+}
+
 var coffeeBrewingCollisions = []AllowedCollision{
 	{Frame1: componentFilter, Frame2: "coffee-machine-actuation-area"},
 	{Frame1: "portafilter-handle", Frame2: "coffee-machine-actuation-area"},

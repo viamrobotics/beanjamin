@@ -24,17 +24,24 @@ type StepEntry struct {
 
 // Order represents a customer coffee order in the queue.
 //
-// The first six fields are set at construction time and never change.
-// RawStep, StepHistory and CompletedAt are mutated as the order moves
-// through the espresso routine; all are guarded by OrderQueue.mu and must
-// only be updated through OrderQueue methods.
+// The identity/greeting fields are fixed once the order is enqueued (most by
+// NewOrder; CustomerEmail by enqueueOrder) and never change. RawStep,
+// StepHistory and CompletedAt are mutated as the order moves through the
+// espresso routine; all are guarded by OrderQueue.mu and must only be updated
+// through OrderQueue methods.
 type Order struct {
-	ID           string    `json:"id"`
-	Drink        string    `json:"drink"`
-	CustomerName string    `json:"customer_name"`
-	Greeting     string    `json:"greeting"`
-	Completion   string    `json:"completion"`
-	EnqueuedAt   time.Time `json:"enqueued_at"`
+	ID           string `json:"id"`
+	Drink        string `json:"drink"`
+	CustomerName string `json:"customer_name"`
+	// CustomerEmail is the recognized customer's identity key (from the
+	// customer-detector), set at enqueue time when supplied. Used after a
+	// successful brew to credit the drink to that customer's order history.
+	// Empty for anonymous/walk-up orders. Not part of the construction-time
+	// signature (NewOrder) — set directly in enqueueOrder.
+	CustomerEmail string    `json:"customer_email,omitempty"`
+	Greeting      string    `json:"greeting"`
+	Completion    string    `json:"completion"`
+	EnqueuedAt    time.Time `json:"enqueued_at"`
 
 	// BatchIndex / BatchSize identify this order's slot within a multi-drink
 	// batch (1-based, e.g. "2 of 3"). Both zero for single orders. Set at
@@ -335,6 +342,12 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 		// are not rolled back — they reflect real physical use.
 		if execErr == nil {
 			s.incrementSensorReading(ctx, s.usageSensor, "consecutive orders", "successful_consecutive_orders", 1)
+			// Credit the completed drink to the recognized customer's order
+			// history so it can later be offered as "the usual". Best-effort:
+			// a no-op when the order carries no email or no customer-detector
+			// is wired in. Recording only here (not on faults/cancels) keeps
+			// history to drinks the machine actually made.
+			s.recordOrderHistory(ctx, order)
 		} else {
 			s.setSensorReading(ctx, s.usageSensor, "consecutive orders", "successful_consecutive_orders", 0)
 		}
@@ -417,6 +430,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}
 
 	drink, _ := order["drink"].(string)
 	customerName, _ := order["customer_name"].(string)
+	customerEmail, _ := order["customer_email"].(string)
 	s.logger.Infof("order request: drink=%q customer=%q", drink, customerName)
 
 	switch drink {
@@ -471,6 +485,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}
 			greeting = pickGreeting(drink, customerName)
 		}
 		o := NewOrder(drink, customerName, greeting, completionStatement)
+		o.CustomerEmail = customerEmail
 		if count > 1 {
 			o.BatchIndex = i + 1
 			o.BatchSize = count

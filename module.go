@@ -110,6 +110,12 @@ type Config struct {
 	// cancels alike. Unset disables notifications.
 	SlackNotifierName string `json:"slack_notifier_name,omitempty"`
 
+	// CustomerDetectorName, when set, names the viam:beanjamin:customer-detector
+	// service the coffee service credits each completed order to (via its
+	// record_order DoCommand) so a recognized customer's history powers "the
+	// usual". Optional: unset disables order-history recording entirely.
+	CustomerDetectorName string `json:"customer_detector_name,omitempty"`
+
 	// Conversational, when true, makes the coffee service speak its own
 	// status-narrating lines through speech_service_name — initial
 	// greetings, almost-ready prompts, order confirmations, rejection
@@ -264,6 +270,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.SlackNotifierName != "" {
 		optDeps = append(optDeps, generic.Named(cfg.SlackNotifierName).String())
 	}
+	if cfg.CustomerDetectorName != "" {
+		optDeps = append(optDeps, generic.Named(cfg.CustomerDetectorName).String())
+	}
 
 	if cfg.CupVisionServiceName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_vision_service_name")
@@ -348,6 +357,7 @@ type beanjaminCoffee struct {
 	camStorage             generic.Service // optional; mux over video stores; nil if cam_storage_mux_name unset
 	iceBoard               board.Board     // optional; drives the ice-machine GPIO pin; nil if ice_board_name unset
 	slackNotifier          generic.Service // optional; viam:notifications:slack; nil if slack_notifier_name unset
+	customerDetector       generic.Service // optional; viam:beanjamin:customer-detector; nil if customer_detector_name unset
 	machineLogsURL         string          // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
 	dataLocationID         string          // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
 	pendingOrderClipsDir   string          // optional; directory for pending-clip records to survive restarts
@@ -564,6 +574,17 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger.Infof("slack notifier %q connected", conf.SlackNotifierName)
 	}
 
+	var customerDetector generic.Service
+	if conf.CustomerDetectorName != "" {
+		detector, err := generic.FromProvider(deps, conf.CustomerDetectorName)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("customer_detector_name %q: %w", conf.CustomerDetectorName, err)
+		}
+		customerDetector = detector
+		logger.Infof("customer detector %q connected — order history recording enabled", conf.CustomerDetectorName)
+	}
+
 	var pendingOrderClipsDir string
 	if conf.DataDir != "" {
 		pendingOrderClipsDir = filepath.Join(conf.DataDir, "pending-clips")
@@ -627,6 +648,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		camStorage:           camStorage,
 		iceBoard:             iceBoard,
 		slackNotifier:        slackNotifier,
+		customerDetector:     customerDetector,
 		machineLogsURL:       buildMachineLogsURL(os.Getenv("VIAM_MACHINE_ID"), os.Getenv("VIAM_PRIMARY_ORG_ID")),
 		dataLocationID:       os.Getenv("VIAM_LOCATION_ID"),
 		pendingOrderClipsDir: pendingOrderClipsDir,
