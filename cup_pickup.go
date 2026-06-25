@@ -27,6 +27,7 @@ import (
 	"github.com/golang/geo/r3"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/module/trace"
+	"go.viam.com/rdk/pointcloud"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/services/vision"
 	"go.viam.com/rdk/spatialmath"
@@ -151,6 +152,48 @@ func cameraToWorld(
 	return worldPose.Pose().Point(), nil
 }
 
+// worldBoundingBox builds an axis-aligned bounding box (orientation OZ=1) in the
+// world frame around the given camera-frame point cloud. The cloud is
+// transformed into world coordinates and the box spans its world min/max
+// extents, centered at their midpoint. Returns a nil geometry for an empty
+// cloud. label is set on the returned box.
+func worldBoundingBox(
+	fs *referenceframe.FrameSystem,
+	fsInputs referenceframe.FrameSystemInputs,
+	cameraFrame string,
+	cloud pointcloud.PointCloud,
+	label string,
+) (spatialmath.Geometry, error) {
+	if cloud == nil || cloud.Size() == 0 {
+		return nil, nil
+	}
+
+	// Resolve the camera→world pose once and transform the whole cloud into world.
+	camPIF := referenceframe.NewPoseInFrame(cameraFrame, spatialmath.NewZeroPose())
+	tf, err := fs.Transform(fsInputs.ToLinearInputs(), camPIF, referenceframe.World)
+	if err != nil {
+		return nil, fmt.Errorf("transform %q to world: %w", cameraFrame, err)
+	}
+	camToWorld := tf.(*referenceframe.PoseInFrame).Pose()
+
+	worldCloud := pointcloud.NewBasicEmpty()
+	if err := pointcloud.ApplyOffset(cloud, camToWorld, worldCloud); err != nil {
+		return nil, fmt.Errorf("transform point cloud to world: %w", err)
+	}
+
+	meta := worldCloud.MetaData()
+	min := r3.Vector{X: meta.MinX, Y: meta.MinY, Z: meta.MinZ}
+	max := r3.Vector{X: meta.MaxX, Y: meta.MaxY, Z: meta.MaxZ}
+	center := min.Add(max).Mul(0.5)
+	dims := max.Sub(min)
+	pose := spatialmath.NewPoseFromPoint(center)
+	box, err := spatialmath.NewBox(pose, dims, label)
+	if err != nil {
+		return nil, fmt.Errorf("new bounding box: %w", err)
+	}
+	return box, nil
+}
+
 // gripperWorldPoint returns the world-frame position of the gripper — the
 // componentClaws frame the grab actually moves onto a cup/glass. Dynamic pickup
 // ranks detected items by proximity to this point (findCandidates), so the item
@@ -270,11 +313,16 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 		if err != nil {
 			return nil, err
 		}
-		// Lift the full detection geometry (not just its centroid) into world so
-		// the held-item tracker can attach the detected shape after the grab.
-		geomWorld, err := geometryToWorld(fs, fsInputs, t.cameraName, obj.Geometry)
+		// Build the detection geometry as a world-frame, axis-aligned (orientation
+		// OZ=1) bounding box around the detection's point cloud, rather than using
+		// the vision service's geometry. The held-item tracker attaches this shape
+		// to the gripper after the grab, and it is drawn in the saved snapshot.
+		geomWorld, err := worldBoundingBox(fs, fsInputs, t.cameraName, obj.PointCloud, t.label)
 		if err != nil {
 			return nil, err
+		}
+		if geomWorld == nil {
+			continue
 		}
 		if floor := t.centroidMinZMm; floor != 0 && world.Z < floor {
 			delta := floor - world.Z
