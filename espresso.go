@@ -202,12 +202,9 @@ func (s *beanjaminCoffee) sayAlways(ctx context.Context, text string) error {
 	return err
 }
 
-// recordOrderHistory credits a completed drink to the recognized customer's
-// order history via the customer-detector's record_order DoCommand, so it can
-// later be offered as "the usual". Best-effort and fully optional: a no-op when
-// the order has no customer_email or no customer_detector_name is configured.
-// An unknown email is not an error on the detector side (anonymous walk-ups),
-// so this only logs on a genuine dispatch failure.
+// recordOrderHistory credits a completed drink to the customer's history via
+// the customer-detector, to later offer as "the usual". No-op without an email
+// or detector; best-effort, so it only logs on a dispatch failure.
 func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order Order) {
 	if s.customerDetector == nil || order.CustomerEmail == "" {
 		return

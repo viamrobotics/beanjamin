@@ -218,9 +218,8 @@ export function Kiosk() {
         drink: selectedDrink!,
         drinkLabel: drinkLabel(selectedDrink!),
         customerName: misspelledName,
-        // Forward the recognized/entered email so the completed drink is
-        // credited to this customer's order history (powers "the usual").
-        // Empty for anonymous customers — the backend simply won't record it.
+        // Forward the email so the drink is credited to this customer's history
+        // ("the usual"); empty for anonymous customers, which the backend ignores.
         customerEmail: email,
         pronunciation: undefined,
       });

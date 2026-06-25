@@ -110,10 +110,8 @@ type Config struct {
 	// cancels alike. Unset disables notifications.
 	SlackNotifierName string `json:"slack_notifier_name,omitempty"`
 
-	// CustomerDetectorName, when set, names the viam:beanjamin:customer-detector
-	// service the coffee service credits each completed order to (via its
-	// record_order DoCommand) so a recognized customer's history powers "the
-	// usual". Optional: unset disables order-history recording entirely.
+	// CustomerDetectorName, when set, names the customer-detector that each
+	// completed order is credited to, powering "the usual". Unset disables it.
 	CustomerDetectorName string `json:"customer_detector_name,omitempty"`
 
 	// Conversational, when true, makes the coffee service speak its own

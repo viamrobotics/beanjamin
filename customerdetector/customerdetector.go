@@ -65,8 +65,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}, nil
 }
 
-// orderHistoryEntry records one completed drink for a customer. The list of
-// these on a customerRecord is what "the usual" is derived from.
+// orderHistoryEntry is one completed drink; the list of these backs "the usual".
 type orderHistoryEntry struct {
 	Drink string    `json:"drink"`
 	At    time.Time `json:"at"`
@@ -77,14 +76,11 @@ type customerRecord struct {
 	Name     string `json:"name"`
 	Email    string `json:"email"`
 	ImageDir string `json:"image_dir"`
-	// Orders is the customer's completed-drink history, oldest first, capped
-	// at maxOrderHistory. Appended by record_order; consumed by get_usual.
-	// omitempty keeps pre-existing customers.json files loading cleanly.
+	// Orders is the drink history, oldest first, capped at maxOrderHistory.
 	Orders []orderHistoryEntry `json:"orders,omitempty"`
 }
 
-// maxOrderHistory caps how many past orders we retain per customer so
-// customers.json can't grow without bound. Oldest entries are dropped first.
+// maxOrderHistory caps retained orders per customer; oldest are dropped first.
 const maxOrderHistory = 50
 
 type customerDetector struct {
@@ -443,10 +439,8 @@ func (cd *customerDetector) removeCustomer(ctx context.Context, email string) (m
 	}, nil
 }
 
-// recordOrder appends a completed drink to a customer's history and persists
-// it. An unknown email (e.g. an anonymous walk-up the camera never registered)
-// is a no-op rather than an error, so the coffee service can call this for
-// every completed order without logging a failure for un-recognized customers.
+// recordOrder appends a completed drink to a customer's history and persists it.
+// An unknown email is a no-op (not an error), so callers can record every order.
 func (cd *customerDetector) recordOrder(email, drink string) (map[string]interface{}, error) {
 	if email == "" || drink == "" {
 		return nil, fmt.Errorf("record_order requires both email and drink")
@@ -461,7 +455,6 @@ func (cd *customerDetector) recordOrder(email, drink string) (map[string]interfa
 	}
 	rec.Orders = append(rec.Orders, orderHistoryEntry{Drink: drink, At: time.Now()})
 	if len(rec.Orders) > maxOrderHistory {
-		// Keep only the most recent maxOrderHistory entries.
 		rec.Orders = append([]orderHistoryEntry(nil), rec.Orders[len(rec.Orders)-maxOrderHistory:]...)
 	}
 	count := len(rec.Orders)
@@ -476,26 +469,20 @@ func (cd *customerDetector) recordOrder(email, drink string) (map[string]interfa
 
 // getUsual returns the customer's "usual" drink, derived from their recorded
 // order history via usualDrink. Returns {has_usual:false} when the customer is
-// unknown or has no history (or usualDrink declines to pick one).
+// unknown or has no history.
 func (cd *customerDetector) getUsual(email string) (map[string]interface{}, error) {
 	if email == "" {
 		return nil, fmt.Errorf("get_usual requires an email")
 	}
 
 	cd.mu.RLock()
-	rec, exists := cd.customers[email]
-	var orders []orderHistoryEntry
-	if exists {
-		// Copy so usualDrink reads a stable slice outside the lock.
-		orders = append(orders, rec.Orders...)
-	}
-	cd.mu.RUnlock()
+	defer cd.mu.RUnlock()
 
-	if !exists || len(orders) == 0 {
+	rec, exists := cd.customers[email]
+	if !exists || len(rec.Orders) == 0 {
 		return map[string]interface{}{"has_usual": false}, nil
 	}
-
-	drink, count := usualDrink(orders)
+	drink, count := usualDrink(rec.Orders)
 	if drink == "" {
 		return map[string]interface{}{"has_usual": false}, nil
 	}
@@ -506,31 +493,12 @@ func (cd *customerDetector) getUsual(email string) (map[string]interface{}, erro
 	}, nil
 }
 
-// usualDrink computes a customer's "usual" from their order history.
-//
-// `orders` is non-empty and in chronological order (oldest first). Return the
-// drink id to treat as the usual and a count that backs that choice; return
-// ("", 0) to report no usual.
-//
-// TODO(julie): implement the aggregation. The behaviour here is a genuine
-// product decision — pick one (or invent your own):
-//
-//   - most-frequent: tally drinks, return the one with the highest count.
-//     Stable favorite, but slow to adapt if your taste changes.
-//
-//   - most-recent: return orders[len(orders)-1].Drink (count 1). Adapts
-//     instantly, but a one-off "I'll try a lungo today" overwrites the usual.
-//
-//   - frequency with a recency tiebreak: most-frequent overall, newest order
-//     wins when two drinks are tied. The "usual" usual.
-//
-// Whatever you return flows straight into get_usual and into Status()'s
-// usual_drink — which is what voice-command speaks as "your usual <drink>?".
+// usualDrink picks a customer's "usual": the most-frequent drink, with ties
+// broken toward the most recently ordered — so a long-standing favorite stays
+// stable while a recent shift in taste wins once it draws level. orders is
+// non-empty and chronological (oldest first).
 func usualDrink(orders []orderHistoryEntry) (drink string, count int) {
-	// Tally how often each drink appears, and track the most recent time we
-	// saw each so ties resolve toward the drink ordered most recently. This
-	// keeps a long-standing favorite stable while letting a recent change in
-	// taste win once it draws level.
+	// Tally each drink's count and its most-recent timestamp.
 	counts := make(map[string]int)
 	lastAt := make(map[string]time.Time)
 	for _, o := range orders {
@@ -576,30 +544,21 @@ func (cd *customerDetector) saveCustomers() error {
 	return os.WriteFile(cd.customersFilePath(), data, 0o644)
 }
 
-// Status reports the customer currently in front of the camera and their
-// usual, so a poller (notably voice-command's command_status) can greet them
-// by name and offer their usual on its first turn. It recognizes fresh on
-// every call — always current, and a failed/empty frame is simply retried by
-// the next call. Never returns an error: recognition failures surface as
-// {recognized:false}.
+// Status reports who is in front of the camera and their usual, for a poller
+// like voice-command's command_status to greet by name. Recognizes fresh each
+// call; a miss (no vision, no face, camera error) surfaces as
+// {recognized:false}, never an error.
 func (cd *customerDetector) Status(ctx context.Context) (map[string]interface{}, error) {
 	ctx, span := trace.StartSpan(ctx, "customer-detector::Status")
 	defer span.End()
-	return cd.currentCustomerStatus(ctx), nil
-}
 
-// currentCustomerStatus runs a best-effort identification and, when it
-// recognizes a registered customer, folds in their usual. Returns
-// {recognized:false} on any failure (no vision service yet, no face in frame,
-// camera error) so Status() callers always get a well-formed map.
-func (cd *customerDetector) currentCustomerStatus(ctx context.Context) map[string]interface{} {
 	res, err := cd.identifyCustomer(ctx)
 	if err != nil {
 		cd.logger.Debugf("Status identify failed: %v", err)
-		return map[string]interface{}{"recognized": false}
+		return map[string]interface{}{"recognized": false}, nil
 	}
 	if identified, _ := res["identified"].(bool); !identified {
-		return map[string]interface{}{"recognized": false}
+		return map[string]interface{}{"recognized": false}, nil
 	}
 
 	status := map[string]interface{}{
@@ -613,7 +572,7 @@ func (cd *customerDetector) currentCustomerStatus(ctx context.Context) map[strin
 	if name, ok := res["name"].(string); ok && name != "" {
 		status["name"] = name
 	}
-	// Fold in the usual so the poller has identity + preference in one place.
+	// Fold in the usual so the poller has identity + preference together.
 	if email != "" {
 		if usual, err := cd.getUsual(email); err == nil {
 			if has, _ := usual["has_usual"].(bool); has {
@@ -622,7 +581,7 @@ func (cd *customerDetector) currentCustomerStatus(ctx context.Context) map[strin
 			}
 		}
 	}
-	return status
+	return status, nil
 }
 
 func (cd *customerDetector) Close(context.Context) error {

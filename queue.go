@@ -33,11 +33,8 @@ type Order struct {
 	ID           string `json:"id"`
 	Drink        string `json:"drink"`
 	CustomerName string `json:"customer_name"`
-	// CustomerEmail is the recognized customer's identity key (from the
-	// customer-detector), set at enqueue time when supplied. Used after a
-	// successful brew to credit the drink to that customer's order history.
-	// Empty for anonymous/walk-up orders. Not part of the construction-time
-	// signature (NewOrder) — set directly in enqueueOrder.
+	// CustomerEmail identifies the recognized customer (set in enqueueOrder, not
+	// NewOrder); used after a successful brew to credit their order history.
 	CustomerEmail string    `json:"customer_email,omitempty"`
 	Greeting      string    `json:"greeting"`
 	Completion    string    `json:"completion"`
