@@ -37,8 +37,8 @@ const heldItemFrameName = "held-item"
 // (as lifted in observeVantage). It is expressed relative to the gripper frame
 // at the current (grab) pose and cached by label so a later re-grab of the same
 // item (reattachGeometry) can restore it without re-detecting. No-op when
-// track_held_geometry is off or geomWorld is nil (e.g. the static pickup path,
-// which has no detection).
+// track_held_geometry is off or geomWorld is nil (no detection geometry
+// available).
 func (s *beanjaminCoffee) attachDetectedGeometry(ctx context.Context, label string, geomWorld spatialmath.Geometry) error {
 	if !s.cfg.TrackHeldGeometry || geomWorld == nil {
 		return nil

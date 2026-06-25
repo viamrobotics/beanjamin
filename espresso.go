@@ -42,8 +42,6 @@ const (
 	clawPoseCoffeeButtonOff         = "coffee_button_off"
 	clawPoseFilterReleased          = "filter_released"
 	clawPoseCoffeeLockedFinal       = "coffee_locked_final"
-	clawPoseEmptyCupApproach        = "empty_cup_approach"
-	clawPoseEmptyCup                = "empty_cup"
 	clawPoseCupReadyForCoffee       = "cup_ready_for_coffee"
 	clawPoseCupUnderMachineApproach = "cup_under_machine_approach"
 
@@ -92,8 +90,8 @@ type requiredPose struct {
 // always required. Cleaning poses are likewise always included: the
 // cancel-recovery path in cancel() runs cleanPortafilter whenever the
 // portafilter holds grounds, which is the case for every order once grinding
-// starts. Optional features (decaf, cup placement/serving, dynamic pickup)
-// contribute their poses only when their config flag is set.
+// starts. Optional features (decaf, iced coffee) contribute their
+// poses only when their config flag is set.
 func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 	poses := []requiredPose{
 		// step 1: grind (regular)
@@ -133,39 +131,15 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		)
 	}
 
-	if s.cfg.PlaceCup {
-		// setCupForCoffee always seats the cup under the machine.
-		poses = append(poses,
-			requiredPose{componentClaws, clawPoseCupUnderMachineApproach},
-			requiredPose{componentClaws, clawPoseCupReadyForCoffee},
-		)
-		if s.cfg.DynamicCupPickup {
-			// pickCupDynamic observes from the camera-observe switch. The extra
-			// vantages are enumerated at runtime, but cup_observe must exist as
-			// the home/recovery pose.
-			poses = append(poses, requiredPose{componentCam, camPoseCupObserve})
-		} else {
-			// Static pickup grabs from the fixed empty-cup poses.
-			poses = append(poses,
-				requiredPose{componentClaws, clawPoseEmptyCupApproach},
-				requiredPose{componentClaws, clawPoseEmptyCup},
-			)
-		}
-		// Serving: placeFullCupOnShelf composes world poses at runtime (no
-		// named pose to validate); giveFullCupToCustomer hands the cup back
-		// via the empty-cup poses.
-		if !s.cfg.PlaceCupInServingArea {
-			poses = append(poses,
-				requiredPose{componentClaws, clawPoseEmptyCupApproach},
-				requiredPose{componentClaws, clawPoseEmptyCup},
-			)
-		}
-	}
+	poses = append(poses,
+		requiredPose{componentClaws, clawPoseCupUnderMachineApproach},
+		requiredPose{componentClaws, clawPoseCupReadyForCoffee},
+		requiredPose{componentCam, camPoseCupObserve},
+	)
 
 	if s.cfg.CanServeIced {
 		// serveIcedCoffee dispenses ice, stages the glass, and pours the
-		// espresso over the ice (Validate requires PlaceCup=true, so the
-		// cup-retrieval poses above are already included).
+		// espresso over the ice (the cup-retrieval poses above always run).
 		poses = append(poses,
 			requiredPose{componentClaws, clawPoseIceMachineApproach},
 			requiredPose{componentClaws, clawPoseIceMachineDispense},
@@ -173,9 +147,6 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 			requiredPose{componentClaws, clawPoseStaging},
 			requiredPose{componentClaws, clawPosePourApproach},
 			requiredPose{componentClaws, clawPosePour},
-			// The glass is vision-detected (can_serve_iced requires
-			// dynamic_glass_pickup); the extra observe vantages are enumerated at
-			// runtime, but glass_observe must exist as the home/recovery pose.
 			requiredPose{componentGlassCam, glassPoseObserve},
 		)
 	}
@@ -255,11 +226,6 @@ var clawCoffeeButtonCollisions = []AllowedCollision{
 	{Frame1: "gripper:claws", Frame2: "coffee-machine-buffer-front"},
 }
 
-var cupGrabCollisions = []AllowedCollision{
-	{Frame1: componentClaws, Frame2: "empty-cup"},
-	{Frame1: "gripper:claws", Frame2: "empty-cup"},
-}
-
 // Held-item surface collisions (track_held_geometry). When a cup/glass geometry
 // is attached to the gripper, the held item must be allowed to approach the
 // modeled surfaces it legitimately gets close to during a contact phase — the
@@ -275,16 +241,7 @@ var heldItemServingAreaCollisions = []AllowedCollision{
 	{Frame1: heldItemFrameName, Frame2: servingAreaFrameName},
 }
 
-var heldItemEmptyCupCollisions = []AllowedCollision{
-	{Frame1: heldItemFrameName, Frame2: "empty-cup"},
-}
-
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {
-	giveCupFunc := s.giveFullCupToCustomer
-	if s.cfg.PlaceCupInServingArea {
-		giveCupFunc = s.placeFullCupOnShelf
-	}
-
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
 		"grind_coffee":              s.grindCoffee,
 		"grind_decaf":               s.grindDecaf,
@@ -297,7 +254,7 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 		"turn_coffee_button_off":    s.turnCoffeeButtonOff,
 		"brew_coffee":               s.brewCoffee,
 		"set_cup_for_coffee":        s.setCupForCoffee,
-		"give_full_cup_to_customer": giveCupFunc,
+		"give_full_cup_to_customer": s.placeFullCupOnShelf,
 		"clean_portafilter":         s.cleanPortafilter,
 	}
 
@@ -381,8 +338,8 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 
 	brewTime := s.drinkBrewTime(drink)
 
-	logger.Infof("starting %s preparation (place_cup=%t, clean_after_use=%t, brew_time=%v)",
-		drink, s.cfg.PlaceCup, s.cfg.CleanAfterUse, brewTime)
+	logger.Infof("starting %s preparation (clean_after_use=%t, brew_time=%v)",
+		drink, s.cfg.CleanAfterUse, brewTime)
 
 	if err := s.normalizeGripperAtStart(ctx); err != nil {
 		return fmt.Errorf("normalize gripper before brew: %w", err)
@@ -443,17 +400,15 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		}
 	}
 
-	if s.cfg.PlaceCup {
-		s.setStep(stepPlacingCup)
-		logger.Infof("step 5/9: placing cup (place_cup=true)")
+	s.setStep(stepPlacingCup)
+	logger.Infof("step 5/9: placing cup")
+	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::placing_cup")
 		err := s.setCupForCoffee(ctx, cancelCtx)
 		stepSpan.End()
 		if err != nil {
 			return err
 		}
-	} else {
-		logger.Infof("step 5/9: skipping cup placement (place_cup=false)")
 	}
 
 	s.setStep(stepBrewing)
@@ -471,18 +426,15 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		s.incrementSensorReading(ctx, s.usageSensor, "water", "usage", waterDelta(drink))
 	}
 
-	if s.cfg.PlaceCup {
-		s.setStep(stepServing)
-		logger.Infof("step 6b/9: serving cup (place_cup=true, place_cup_in_serving_area=%t)", s.cfg.PlaceCupInServingArea)
+	s.setStep(stepServing)
+	logger.Infof("step 6b/9: serving cup")
+	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::serving")
 		var err error
-		switch {
-		case isIcedDrink(drink):
+		if isIcedDrink(drink) {
 			err = s.serveIcedCoffee(ctx, cancelCtx)
-		case s.cfg.PlaceCupInServingArea:
+		} else {
 			err = s.placeFullCupOnShelf(ctx, cancelCtx)
-		default:
-			err = s.giveFullCupToCustomer(ctx, cancelCtx)
 		}
 		stepSpan.End()
 		if err != nil {
@@ -491,8 +443,6 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		if err := s.sayAlways(ctx, pickDrinkReady(drink, customerName, batchIndex, batchSize)); err != nil {
 			logger.Warnf("failed to say drink-ready: %v", err)
 		}
-	} else {
-		logger.Infof("step 6b/9: skipping cup handoff (place_cup=false)")
 	}
 
 	s.setStep(stepGrabbingFilter)
@@ -520,13 +470,6 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 	if s.cfg.CleanAfterUse {
 		s.setStep(stepCleaning)
 		logger.Infof("post: cleaning portafilter (clean_after_use=true)")
-		if !s.cfg.PlaceCup {
-			logger.Infof("post: waiting for manual cup removal (place_cup=false)")
-			if err := s.say(ctx, "Please remove the cup before we start the cleaning process!"); err != nil {
-				logger.Warnf("failed to say cup-removal prompt: %v", err)
-			}
-			time.Sleep(10 * time.Second)
-		}
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::cleaning")
 		err := s.cleanPortafilter(ctx, cancelCtx)
 		stepSpan.End()
@@ -705,34 +648,8 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 		return fmt.Errorf("set_cup_for_coffee: no gripper configured")
 	}
 
-	if s.cfg.DynamicCupPickup {
-		if err := s.pickCupDynamic(ctx, cancelCtx); err != nil {
-			return err
-		}
-	} else {
-		// Static pickup: approach -> open gripper -> grab -> retreat.
-		approachStep := Step{PoseName: clawPoseEmptyCupApproach, Component: componentClaws, Pause: shortPause}
-		if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
-			return fmt.Errorf("set_cup_for_coffee: %w", err)
-		}
-
-		if err := s.gripper.Open(ctx, nil); err != nil {
-			return fmt.Errorf("set_cup_for_coffee: open gripper: %w", err)
-		}
-		time.Sleep(gripperPause)
-
-		grabStep := Step{PoseName: clawPoseEmptyCup, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, Pause: shortPause}
-		if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
-			return fmt.Errorf("set_cup_for_coffee: %w", err)
-		}
-		if err := s.grabAndVerifyHolding(ctx); err != nil {
-			return fmt.Errorf("set_cup_for_coffee: grab gripper: %w", err)
-		}
-
-		retreatStep := Step{PoseName: clawPoseEmptyCupApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, Pause: shortPause}
-		if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
-			return fmt.Errorf("set_cup_for_coffee: %w", err)
-		}
+	if err := s.pickCupDynamic(ctx, cancelCtx); err != nil {
+		return err
 	}
 
 	cupPlacementApproach := Step{PoseName: clawPoseCupUnderMachineApproach, Component: componentClaws, Pause: shortPause}
@@ -768,8 +685,7 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 }
 
 // placeFullCupOnShelf retrieves the brewed cup from cup_ready_for_coffee and
-// drops it in the serving area. Replaces giveFullCupToCustomer when
-// PlaceCupInServingArea=true.
+// drops it on the serving-area shelf at the next round-robin slot.
 func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) error {
 	if err := s.grabBrewedCupFromMachine(ctx, cancelCtx); err != nil {
 		return err
@@ -905,17 +821,9 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 // sweep + shelf placement on hardware.
 //
 // It assumes the portafilter has been physically removed from the claws — the
-// flow never touches portafilter state. Requires dynamic_cup_pickup and
-// place_cup_in_serving_area: each placement advances the shelf-slot counter inside
-// placeFullCupOnShelf.
+// flow never touches portafilter state. Each placement advances the shelf-slot
+// counter inside placeFullCupOnShelf.
 func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string]interface{}, error) {
-	if !s.cfg.DynamicCupPickup {
-		return nil, errors.New("run_cup_flow requires dynamic_cup_pickup=true")
-	}
-	if !s.cfg.PlaceCupInServingArea {
-		return nil, errors.New("run_cup_flow requires place_cup_in_serving_area=true")
-	}
-
 	if !s.running.CompareAndSwap(false, true) {
 		return nil, errors.New("a sequence is already running")
 	}
@@ -949,76 +857,6 @@ func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string
 
 	logger.Infof("run_cup_flow: complete (%d iteration(s))", count)
 	return map[string]interface{}{"status": "complete", "iterations": count}, nil
-}
-
-func (s *beanjaminCoffee) giveFullCupToCustomer(ctx, cancelCtx context.Context) error {
-	if s.gripper == nil {
-		return fmt.Errorf("give_full_cup_to_customer: no gripper configured")
-	}
-
-	// Approach the cup under the machine.
-	approachStep := Step{PoseName: clawPoseCupUnderMachineApproach, Component: componentClaws, Pause: shortPause}
-	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
-		return fmt.Errorf("give_full_cup_to_customer: %w", err)
-	}
-
-	// Open gripper to prepare for grabbing.
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("give_full_cup_to_customer: open gripper: %w", err)
-	}
-	time.Sleep(gripperPause)
-
-	// Move down to the cup and grab it.
-	grabStep := Step{PoseName: clawPoseCupReadyForCoffee, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
-	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
-		return fmt.Errorf("give_full_cup_to_customer: %w", err)
-	}
-	if err := s.grabAndVerifyHolding(ctx); err != nil {
-		return fmt.Errorf("give_full_cup_to_customer: grab gripper: %w", err)
-	}
-	// The cup was tracked at pickup and released under the machine; restore its
-	// geometry now that it's back in the gripper. grabAndVerifyHolding only
-	// returns nil on a confirmed grab, so this never reattaches onto empty jaws.
-	if err := s.reattachGeometry(pickupLabelCup); err != nil {
-		s.activeOrderLogger().Warnf("give_full_cup_to_customer: reattach cup geometry failed, continuing untracked: %v", err)
-	}
-
-	// Retreat from the machine.
-	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions)}
-	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
-		return fmt.Errorf("give_full_cup_to_customer: %w", err)
-	}
-
-	// Move to the customer cup position.
-	customerApproachStep := Step{PoseName: clawPoseEmptyCupApproach, Component: componentClaws, Pause: shortPause}
-	if err := s.executeStep(ctx, cancelCtx, customerApproachStep); err != nil {
-		return fmt.Errorf("give_full_cup_to_customer: %w", err)
-	}
-	placeStep := Step{PoseName: clawPoseEmptyCup, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: append(cupGrabCollisions, s.heldItemSurfaceCollisions(heldItemEmptyCupCollisions)...), Pause: shortPause}
-	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
-		return fmt.Errorf("give_full_cup_to_customer: %w", err)
-	}
-
-	// Release the cup.
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("give_full_cup_to_customer: open gripper: %w", err)
-	}
-	time.Sleep(gripperPause)
-	// Cup handed off; it no longer travels with the gripper.
-	s.detachHeldGeometry()
-
-	// Move away from the cup.
-	exitStep := Step{PoseName: clawPoseEmptyCupApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cupGrabCollisions, Pause: shortPause}
-	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
-		return fmt.Errorf("give_full_cup_to_customer: %w", err)
-	}
-
-	// Close the gripper after moving away.
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		return fmt.Errorf("give_full_cup_to_customer: close gripper: %w", err)
-	}
-	time.Sleep(gripperPause)
-	return nil
 }
 
 // serveIcedCoffee finishes an iced_coffee order after the espresso has brewed

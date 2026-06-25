@@ -44,7 +44,6 @@ type orderReading struct {
 	traceID           string // OTel trace ID; links the reading to the order's full trace
 	// Path flags: which conditional branches the order took. Explain why a
 	// given step ran (or didn't) without cross-referencing config.
-	placeCup      bool
 	cleanAfterUse bool
 	decaf         bool
 	startedAt     time.Time
@@ -131,7 +130,6 @@ func (s *orderSensor) pushOrderReading(r orderReading) {
 		"error_message":      errMsg,
 		"failed_step":        failedStep,
 		"trace_id":           r.traceID,
-		"place_cup":          r.placeCup,
 		"clean_after_use":    r.cleanAfterUse,
 		"decaf":              r.decaf,
 		"start_time":         r.startedAt.UTC().Format(time.RFC3339Nano),

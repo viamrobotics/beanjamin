@@ -1,8 +1,8 @@
-// Package beanjamin: dynamic cup pickup.
+// Package beanjamin: vision-based cup pickup.
 //
-// pickCupDynamic replaces the static empty_cup grab in setCupForCoffee
-// when dynamic_cup_pickup is enabled. It sweeps the poses on the dedicated
-// camera-observe switch (camera_observe_pose_switcher_name) one at a time,
+// pickCupDynamic is how setCupForCoffee acquires the empty cup. It sweeps the
+// poses on the dedicated camera-observe switch
+// (camera_observe_pose_switcher_name) one at a time,
 // calling a vision service for cup detections at each. As soon as a pose
 // yields at least one detection the sweep stops — the next observe pose is
 // only tried when the current one failed to find a cup. Detections are lifted
@@ -493,15 +493,14 @@ func (s *beanjaminCoffee) recoverToObserve(ctx, cancelCtx context.Context, t *pi
 	}
 }
 
-// pickCupDynamic picks an empty cup via the dynamic pipeline. Called by
-// setCupForCoffee when DynamicCupPickup=true.
+// pickCupDynamic picks an empty cup via the vision pipeline. Called by
+// setCupForCoffee.
 func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 	return s.pickDynamic(ctx, cancelCtx, s.cupPickupTarget())
 }
 
-// pickGlassDynamic picks an iced-coffee glass via the dynamic pipeline (its own
-// vision service + observe switch). Called by fetchGlass when
-// DynamicGlassPickup=true.
+// pickGlassDynamic picks an iced-coffee glass via the vision pipeline (its own
+// vision service + observe switch). Called by fetchGlass (can_serve_iced).
 func (s *beanjaminCoffee) pickGlassDynamic(ctx, cancelCtx context.Context) error {
 	return s.pickDynamic(ctx, cancelCtx, s.glassPickupTarget())
 }

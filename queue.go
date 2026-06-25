@@ -340,7 +340,6 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 			// Only meaningful alongside a failure, hence the execErr guard.
 			operatorCancelled: execErr != nil && orderCancelCtx.Err() != nil,
 			traceID:           traceIDFromContext(ctx),
-			placeCup:          s.cfg.PlaceCup,
 			cleanAfterUse:     s.cfg.CleanAfterUse,
 			decaf:             isDecafDrink(order.Drink),
 			startedAt:         startedAt,
