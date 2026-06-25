@@ -325,6 +325,7 @@ export async function prepareOrder(
     drink: string;
     drinkLabel: string;
     customerName: string;
+    customerEmail?: string;
     pronunciation?: string;
   }
 ): Promise<{ status: string; queue_position?: number; order_id?: string }> {
@@ -356,6 +357,7 @@ export async function prepareOrder(
     prepare_order: {
       drink: opts.drink,
       customer_name: opts.customerName,
+      ...(opts.customerEmail && { customer_email: opts.customerEmail }),
       ...(greeting && { initial_greeting: greeting }),
     },
   });

@@ -539,8 +539,24 @@ func (cd *customerDetector) getUsual(email string) (map[string]interface{}, erro
 // Whatever you return flows straight into get_usual and into Status()'s
 // usual_drink — which is what voice-command speaks as "your usual <drink>?".
 func usualDrink(orders []orderHistoryEntry) (drink string, count int) {
-	// TODO(julie): your logic here.
-	return "", 0
+	// Tally how often each drink appears, and track the most recent time we
+	// saw each so ties resolve toward the drink ordered most recently. This
+	// keeps a long-standing favorite stable while letting a recent change in
+	// taste win once it draws level.
+	counts := make(map[string]int)
+	lastAt := make(map[string]time.Time)
+	for _, o := range orders {
+		counts[o.Drink]++
+		if o.At.After(lastAt[o.Drink]) {
+			lastAt[o.Drink] = o.At
+		}
+	}
+	for d, c := range counts {
+		if c > count || (c == count && lastAt[d].After(lastAt[drink])) {
+			drink, count = d, c
+		}
+	}
+	return drink, count
 }
 
 // customersFilePath returns the path to the JSON file that persists customer records.
