@@ -276,6 +276,13 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 	cancelCtx := s.cancelCtx
 	s.mu.Unlock()
 
+	// Pick up any out-of-band frame-system edits before planning. Guarded so a
+	// held item or locked filter established by a prior action call (manual
+	// step-by-step sequences span separate DoCommands) is preserved.
+	if err := s.refreshFrameSystemIfClean(ctx); err != nil {
+		return nil, fmt.Errorf("refresh frame system before action %q: %w", name, err)
+	}
+
 	s.logger.Infof("executing action %q", name)
 
 	if err := action(ctx, cancelCtx); err != nil {
@@ -335,6 +342,13 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 	s.mu.Lock()
 	cancelCtx := s.cancelCtx
 	s.mu.Unlock()
+
+	// Pick up any out-of-band frame-system edits (e.g. portafilter handle geometry
+	// changed during calibration) before planning. Guarded so an in-flight held
+	// item or locked filter from a prior call is preserved.
+	if err := s.refreshFrameSystemIfClean(ctx); err != nil {
+		return fmt.Errorf("refresh frame system before brew: %w", err)
+	}
 
 	brewTime := s.drinkBrewTime(drink)
 
@@ -841,6 +855,12 @@ func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string
 	// Not tied to a queued order, so there is no order ID to tag — use the
 	// base service logger.
 	logger := s.logger
+
+	// Pick up any out-of-band frame-system edits before planning. Guarded so a
+	// held item or locked filter from a prior call is preserved.
+	if err := s.refreshFrameSystemIfClean(ctx); err != nil {
+		return nil, fmt.Errorf("run_cup_flow: refresh frame system: %w", err)
+	}
 
 	logger.Infof("run_cup_flow: starting %d iteration(s) (assumes portafilter physically removed)", count)
 	for i := 1; i <= count; i++ {
