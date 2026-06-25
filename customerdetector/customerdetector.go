@@ -87,12 +87,6 @@ type customerRecord struct {
 // customers.json can't grow without bound. Oldest entries are dropped first.
 const maxOrderHistory = 50
 
-// statusCacheTTL throttles the live identification Status() performs: within
-// this window repeated polls reuse the last result instead of re-capturing
-// from the camera and re-running the vision model. voice-command's
-// command_status polls Status() every LLM turn, so this matters.
-const statusCacheTTL = 2 * time.Second
-
 type customerDetector struct {
 	resource.AlwaysRebuild
 
@@ -107,12 +101,6 @@ type customerDetector struct {
 	mu        sync.RWMutex
 	customers map[string]*customerRecord // keyed by email
 	vision    vision.Service             // lazily resolved; may be nil at startup
-
-	// lastStatus caches the most recent currentCustomerStatus() result so
-	// frequent Status() polls don't re-run identification every call. Guarded
-	// by mu; see statusCacheTTL.
-	lastStatus   map[string]interface{}
-	lastStatusAt time.Time
 }
 
 func newCustomerDetector(
@@ -590,28 +578,14 @@ func (cd *customerDetector) saveCustomers() error {
 
 // Status reports the customer currently in front of the camera and their
 // usual, so a poller (notably voice-command's command_status) can greet them
-// by name and offer their usual on its first turn. Results are cached for
-// statusCacheTTL so per-turn polling doesn't re-run identification every call.
-// Never returns an error — recognition failures surface as {recognized:false}.
+// by name and offer their usual on its first turn. It recognizes fresh on
+// every call — always current, and a failed/empty frame is simply retried by
+// the next call. Never returns an error: recognition failures surface as
+// {recognized:false}.
 func (cd *customerDetector) Status(ctx context.Context) (map[string]interface{}, error) {
 	ctx, span := trace.StartSpan(ctx, "customer-detector::Status")
 	defer span.End()
-
-	cd.mu.RLock()
-	if cd.lastStatus != nil && time.Since(cd.lastStatusAt) < statusCacheTTL {
-		cached := cd.lastStatus
-		cd.mu.RUnlock()
-		return cached, nil
-	}
-	cd.mu.RUnlock()
-
-	status := cd.currentCustomerStatus(ctx)
-
-	cd.mu.Lock()
-	cd.lastStatus = status
-	cd.lastStatusAt = time.Now()
-	cd.mu.Unlock()
-	return status, nil
+	return cd.currentCustomerStatus(ctx), nil
 }
 
 // currentCustomerStatus runs a best-effort identification and, when it
