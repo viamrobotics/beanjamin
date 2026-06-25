@@ -132,35 +132,105 @@ const (
 	vizMaxFailures = 3
 )
 
-// drawViz sends the current frame system to the visualizer with a timeout.
-// After vizMaxFailures consecutive failures the visualizer is automatically
-// disabled so that an unreachable server does not slow down every motion call.
-func (s *beanjaminCoffee) drawViz(fsInputs referenceframe.FrameSystemInputs) {
+// runVizDraw executes a single visualizer draw with a timeout. After
+// vizMaxFailures consecutive failures the visualizer is automatically disabled
+// so that an unreachable server does not slow down every motion call. desc
+// labels the operation in failure logs.
+func (s *beanjaminCoffee) runVizDraw(desc string, draw func() error) {
 	logger := s.activeOrderLogger()
 	done := make(chan error, 1)
 	go func() {
-		done <- viz.DrawFrameSystem(s.cachedFS, fsInputs)
+		done <- draw()
 	}()
 
 	select {
 	case err := <-done:
 		if err != nil {
 			s.vizConsecutiveFailures++
-			logger.Warnf("viz: failed to draw frame system (%d/%d): %v",
-				s.vizConsecutiveFailures, vizMaxFailures, err)
+			logger.Warnf("viz: failed to %s (%d/%d): %v",
+				desc, s.vizConsecutiveFailures, vizMaxFailures, err)
 		} else {
 			s.vizConsecutiveFailures = 0
 		}
 	case <-time.After(vizTimeout):
 		s.vizConsecutiveFailures++
-		logger.Warnf("viz: draw timed out after %v (%d/%d)",
-			vizTimeout, s.vizConsecutiveFailures, vizMaxFailures)
+		logger.Warnf("viz: %s timed out after %v (%d/%d)",
+			desc, vizTimeout, s.vizConsecutiveFailures, vizMaxFailures)
 	}
 
 	if s.vizConsecutiveFailures >= vizMaxFailures {
 		logger.Warnf("viz: disabling visualizer after %d consecutive failures", vizMaxFailures)
 		s.vizEnabled = false
 	}
+}
+
+// drawViz sends the current frame system to the visualizer.
+func (s *beanjaminCoffee) drawViz(fsInputs referenceframe.FrameSystemInputs) {
+	s.runVizDraw("draw frame system", func() error {
+		return viz.DrawFrameSystem(s.cachedFS, fsInputs)
+	})
+}
+
+// drawVizGeometries draws detected item geometries (already in world frame) to
+// the visualizer, namespaced by prefix ("cup"/"glass"). Each geometry is
+// relabeled "<prefix>_<i>" so successive observations update the shapes in place
+// instead of accumulating; labels drawn for this prefix on the previous
+// observation but absent now are removed so stale shapes don't linger. The input
+// geometries are not mutated — a copy is relabeled, since the held-item tracker
+// later attaches the original to the gripper.
+func (s *beanjaminCoffee) drawVizGeometries(prefix, color string, geoms []spatialmath.Geometry) {
+	if s.vizDrawnGeomLabels == nil {
+		s.vizDrawnGeomLabels = make(map[string][]string)
+	}
+
+	labeled := make([]spatialmath.Geometry, 0, len(geoms))
+	labels := make([]string, 0, len(geoms))
+	colors := make([]string, 0, len(geoms))
+	for i, g := range geoms {
+		if g == nil {
+			continue
+		}
+		label := fmt.Sprintf("%s_%d", prefix, i)
+		clone := g.Transform(spatialmath.NewZeroPose())
+		clone.SetLabel(label)
+		labeled = append(labeled, clone)
+		labels = append(labels, label)
+		colors = append(colors, color)
+	}
+
+	// Clear geometries drawn for this prefix last observation that aren't redrawn now.
+	if stale := labelsNotIn(s.vizDrawnGeomLabels[prefix], labels); len(stale) > 0 {
+		s.runVizDraw("remove stale "+prefix+" geometries", func() error {
+			return viz.RemoveSpatialObjects(stale)
+		})
+	}
+	s.vizDrawnGeomLabels[prefix] = labels
+
+	if len(labeled) == 0 {
+		return
+	}
+	gif := referenceframe.NewGeometriesInFrame(referenceframe.World, labeled)
+	s.runVizDraw("draw "+prefix+" geometries", func() error {
+		return viz.DrawGeometries(gif, colors)
+	})
+}
+
+// labelsNotIn returns the elements of prev that do not appear in current.
+func labelsNotIn(prev, current []string) []string {
+	if len(prev) == 0 {
+		return nil
+	}
+	keep := make(map[string]struct{}, len(current))
+	for _, c := range current {
+		keep[c] = struct{}{}
+	}
+	var stale []string
+	for _, p := range prev {
+		if _, ok := keep[p]; !ok {
+			stale = append(stale, p)
+		}
+	}
+	return stale
 }
 
 // lockFilterFrame re-parents the "filter" frame from the arm subtree to the

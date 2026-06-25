@@ -344,6 +344,7 @@ type beanjaminCoffee struct {
 	speech                 resource.Resource           // nil when speech_service_name is not configured
 	vizEnabled             bool                        // true when viz_url is configured
 	vizConsecutiveFailures int                         // auto-disables viz after repeated failures
+	vizDrawnGeomLabels     map[string][]string         // per-prefix geometry labels drawn last observation, for stale-clearing
 	gripper                gripper.Gripper
 	camStorage             generic.Service // optional; mux over video stores; nil if cam_storage_mux_name unset
 	iceBoard               board.Board     // optional; drives the ice-machine GPIO pin; nil if ice_board_name unset
