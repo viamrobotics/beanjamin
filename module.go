@@ -110,8 +110,8 @@ type Config struct {
 	// cancels alike. Unset disables notifications.
 	SlackNotifierName string `json:"slack_notifier_name,omitempty"`
 
-	// CustomerDetectorName, when set, names the customer-detector that each
-	// completed order is credited to, powering "the usual". Unset disables it.
+	// CustomerDetectorName: customer-detector that completed orders are credited
+	// to, for "the usual". Unset disables recording.
 	CustomerDetectorName string `json:"customer_detector_name,omitempty"`
 
 	// Conversational, when true, makes the coffee service speak its own

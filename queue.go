@@ -33,8 +33,7 @@ type Order struct {
 	ID           string `json:"id"`
 	Drink        string `json:"drink"`
 	CustomerName string `json:"customer_name"`
-	// CustomerEmail identifies the recognized customer (set in enqueueOrder, not
-	// NewOrder); used after a successful brew to credit their order history.
+	// CustomerEmail identifies the recognized customer, to credit their history.
 	CustomerEmail string    `json:"customer_email,omitempty"`
 	Greeting      string    `json:"greeting"`
 	Completion    string    `json:"completion"`
