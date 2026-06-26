@@ -286,19 +286,15 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 		"set_cup_for_coffee":        s.setCupForCoffee,
 		"give_full_cup_to_customer": s.placeFullCupOnShelf,
 		"clean_portafilter":         s.cleanPortafilter,
-		// Iced-coffee debug steps. These run individual stages of serveIcedCoffee
-		// for pose tuning / hardware checks. Except for fetch_glass and
-		// pulse_ice_pin (self-contained), they assume the gripper already holds
-		// the right vessel — manually stage it (or run the prior step) first.
-		"fetch_glass":       s.fetchGlass,               // vision-grab a glass off the shelf
-		"pulse_ice_pin":     s.pulseIcePin,              // hardware only, no arm motion
-		"dispense_ice":      s.dispenseIce,              // arm to chute + pulse + retreat
-		"stage_glass":       s.stageGlass,               // set held glass down, release
-		"grab_brewed_cup":   s.grabBrewedCupFromMachine, // retrieve cup from under machine
-		"pour_espresso":     s.pourEspresso,             // pour held cup over staged glass
-		"grab_staged_glass": s.grabStagedGlass,          // re-grab the staged glass
-		"place_held":        s.placeHeldInServingArea,   // place held vessel in serving area
-		"serve_iced_coffee": s.serveIcedCoffee,          // full sequence end-to-end
+		"fetch_glass":               s.fetchGlass,               // vision-grab a glass off the shelf
+		"pulse_ice_pin":             s.pulseIcePin,              // hardware only, no arm motion
+		"dispense_ice":              s.dispenseIce,              // arm to chute + pulse + retreat
+		"stage_glass":               s.stageGlass,               // set held glass down, release
+		"grab_brewed_cup":           s.grabBrewedCupFromMachine, // retrieve cup from under machine
+		"pour_espresso":             s.pourEspresso,             // pour held cup over staged glass
+		"grab_staged_glass":         s.grabStagedGlass,          // re-grab the staged glass
+		"place_held":                s.placeHeldInServingArea,   // place held vessel in serving area
+		"serve_iced_coffee":         s.serveIcedCoffee,          // full sequence end-to-end
 	}
 
 	action, ok := actions[name]
