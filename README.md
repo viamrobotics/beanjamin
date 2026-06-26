@@ -210,6 +210,8 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
   "camera_observe_pose_switcher_name": "camera-observe-switch",
   "cup_approach_relative_pose": { "x": -80, "y": 0, "z": 0, "o_x": 0, "o_y": 0, "o_z": 1, "theta": 0 },
   "cup_grab_relative_pose": { "x": -20, "y": 0, "z": 0, "o_x": 0, "o_y": 0, "o_z": 1, "theta": 0 },
+  "serving_approach_relative_pose": { "x": -80, "y": 0, "z": 0, "o_x": 0, "o_y": 0, "o_z": 1, "theta": 0 },
+  "serving_grab_relative_pose": { "x": -20, "y": 0, "z": 0, "o_x": 0, "o_y": 0, "o_z": 1, "theta": 0 },
   "input_range_override": {
     "my-arm": {
       "5": { "min_degs": -270, "max_degs": 270 }
@@ -259,6 +261,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `cam_storage_mux_name` | string | No   | Name of a [`viam:multiplexer:resource-multiplexer`](https://github.com/viam-modules/multiplexer) generic service whose dependencies are `viam:video:storage` stores; when set, saves a clip per order attempt (synchronous `save`) to all configured stores. |
 | `data_dir`                 | string | No       | Directory for persistent module data. When set alongside `cam_storage_mux_name`, a pending-clip record is written under `<data_dir>/pending-clips` when each order starts and removed only once that order's clip has been saved successfully — a save that fails (or never runs because the process died first) leaves the record in place. Use with a Viam scheduled job calling `cleanup_pending_clips` to recover clips for any order whose save was interrupted or failed. |
 | `slack_notifier_name`      | string | No       | Name of a [`viam:notifications:slack`](https://github.com/viam-modules/notifications) generic service. When set, the coffee service sends a best-effort Slack message on every non-successful order attempt (faults and operator cancels). See "Slack notifications" above. |
+| `customer_detector_name`   | string | No       | Name of a `viam:beanjamin:customer-detector` service. When set, the coffee service credits each **successfully** completed order (when the `prepare_order` carried a `customer_email`) to that customer's order history via the detector's `record_order` DoCommand, powering "the usual". Setting the field automatically registers it as a dependency. Unset disables order-history recording. |
 | `input_range_override`     | object | No       | Narrows joint limits on named frames before motion planning. Outer key is the frame name (typically the arm); inner key is either the joint name or its stringified index (e.g. `"5"` for the last joint of a 6-DoF arm). Each value is `{ "min_degs": number, "max_degs": number }`. |
 | `conversational`           | bool   | No       | When true, the coffee service speaks its own greetings, almost-ready prompts, order-received lines, and rejection quips through `speech_service_name`. When false (default), the service stays silent except for the drink-ready announcement at cup handoff — leaving the rest of the talking to an external orchestrator (e.g. `viam:conversation-bundle:voice-command`). |
 | `cup_vision_service_name`             | string | Yes      | Name of a `rdk:service:vision` segmenter that returns cup detections via `GetObjectPointClouds`. Cup pickup is always vision-guided — the arm detects the empty cup rather than grabbing from a fixed pose. |
@@ -281,12 +284,14 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `glass_grab_relative_pose`            | object | When `can_serve_iced` is enabled | 6-DoF gripper offset for the final glass grab pose. |
 | `glass_centroid_min_z_mm`             | float  | No       | Floor each glass detection's world-frame Z to this value. Default `0` disables. |
 | `glass_dimensions`                    | object | No       | Predefined glass size, overriding the dimensions derived from the detection point cloud. Same shape and behavior as `cup_dimensions` (`{ "diameter_mm", "height_mm" }`, both > 0), applied to the glass held-item geometry. Unset (default) uses the point-cloud extents. |
+| `serving_approach_relative_pose`      | object | Yes      | 6-DoF gripper offset composed onto the serving-area slot anchor for the pre-release approach pose (same shape as `cup_approach_relative_pose`). Used for both the hot cup and the iced glass. |
+| `serving_grab_relative_pose`          | object | Yes      | 6-DoF gripper offset composed onto the serving-area slot anchor for the release pose. Same shape as `serving_approach_relative_pose`; shared by cup and glass placement. |
 | `track_held_geometry`                 | bool   | No       | When `true`, the vision-detected geometry of a picked-up cup/glass is attached to the gripper frame in the cached frame system as a `held-item` frame, so motion planning routes around the held item until it is set down (and is restored on each re-grab — the brewed cup from under the machine, the staged glass). The gripper-overlap collision pairs are allowed automatically on every move while an item is held; contact phases near a modeled surface (under the machine, the serving-area shelf) allow the held item against that surface too. The held-item frame is dropped when the frame system is rebuilt (`reset_world`, cancel recovery). Default `false`. |
 | `no_spill_carry`                      | bool   | No       | When `true`, the brewed cup is carried from under the machine to the serving-area shelf along a straight line broken into waypoints (one every 200 mm). Each waypoint commands the **held-item (container) frame** — the start and approach poses are converted onto it — interpolating the pose from the container's **upright** start to the approach pose, with a goal pose cloud (small tilt + wider twist + a little translational slack) that loosens the orientation so the planner has IK room while the drink stays close to level. The waypoints are planned as one multi-goal trajectory; the existing linear descent then settles the cup into the slot. It commands the held-item frame, so it requires `track_held_geometry=true`. The pose-cloud leeways are conservative constants in `motion.go` (`noSpillGoalCloud`) — which axis is safe to widen depends on the grasp, so tune them on hardware. Default `false` (the carry free-plans straight to the approach pose). |
 
 Glass pickup reuses `cup_photos_per_vantage` and `cup_pickup_max_attempts` (item-agnostic operational knobs); there are no glass-specific versions.
 
-**Serving-area placement.** Every finished cup (and, for iced coffee, the iced glass) is placed on a dedicated served-drinks shelf. Slots are tiled along the shelf's long axis (120 mm spacing, 60 mm margin from each end) on the midline of the shelf top — as many slots as the shelf length allows; the placement anchor is set so the held container's bottom rests on the shelf top. With `track_held_geometry` on, the anchor is half the tracked container's height above the surface (so a taller iced glass is not driven into the shelf the way a fixed offset did); it falls back to a fixed 30 mm when no held-item geometry is tracked. The anchor is composed with `cup_grab_relative_pose` to derive the actual claws pose, mirroring how the pickup uses the detected cup centroid. Slots are filled **sequentially (round-robin)**: a process-local counter advances one slot per placement and wraps back to the first slot when it reaches the end, on the assumption that by the time it wraps the earliest-placed cup has been picked up. If the arm cannot plan a path to a slot (approach or descent), that slot is **skipped and the next one is tried**, continuing around the ring until one is reachable (the order fails only if every slot is unreachable). There is no vision-based occupancy check — placement is fully decoupled from pickup observation. The counter resets to the first slot on module restart/reconfigure. Requires a `serving-area` (or `serving-area_origin`) Box geometry in the framesystem; this is checked at runtime, not at config time. An optional `serving-area-shield` Box obstacle may be added to the framesystem to enclose the standing-cup zone above the shelf: it stays a hard obstacle during the lateral carry (so the arm steers clear of cups already on the shelf) but is allowed to be passed through by the gripper, claws, and held container on the linearly constrained descent into a slot and the retreat back out. Size it with clearance above the cups so the approach pose stays outside it; when the frame is absent the allowances are inert and placement behaves as before.
+**Serving-area placement.** Every finished cup (and, for iced coffee, the iced glass) is placed on a dedicated served-drinks shelf. Slots are tiled along the shelf's long axis (120 mm spacing, 60 mm margin from each end) on the midline of the shelf top — as many slots as the shelf length allows; the placement anchor is set so the held container's bottom rests on the shelf top. With `track_held_geometry` on, the anchor is half the tracked container's height above the surface (so a taller iced glass is not driven into the shelf the way a fixed offset did); it falls back to a fixed 30 mm when no held-item geometry is tracked. The anchor is composed with `serving_grab_relative_pose` (and `serving_approach_relative_pose` for the approach) to derive the actual claws pose, mirroring how the pickup composes its offsets onto the detected cup centroid. Slots are filled **sequentially (round-robin)**: a process-local counter advances one slot per placement and wraps back to the first slot when it reaches the end, on the assumption that by the time it wraps the earliest-placed cup has been picked up. If the arm cannot plan a path to a slot (approach or descent), that slot is **skipped and the next one is tried**, continuing around the ring until one is reachable (the order fails only if every slot is unreachable). There is no vision-based occupancy check — placement is fully decoupled from pickup observation. The counter resets to the first slot on module restart/reconfigure. Requires a `serving-area` (or `serving-area_origin`) Box geometry in the framesystem; this is checked at runtime, not at config time. An optional `serving-area-shield` Box obstacle may be added to the framesystem to enclose the standing-cup zone above the shelf: it stays a hard obstacle during the lateral carry (so the arm steers clear of cups already on the shelf) but is allowed to be passed through by the gripper, claws, and held container on the linearly constrained descent into a slot and the retreat back out. Size it with clearance above the cups so the approach pose stays outside it; when the frame is absent the allowances are inert and placement behaves as before.
 
 **Iced coffee — required poses on the claws pose switcher (`claws_pose_switcher_name`):**
 
@@ -328,6 +333,7 @@ When `can_serve_iced` is enabled, the dedicated glass-observe switch must hold o
   "prepare_order": {
     "drink": "espresso",
     "customer_name": "Alice",
+    "customer_email": "alice@example.com",
     "initial_greeting": "optional custom greeting",
     "completion_statement": "optional custom completion message",
     "count": 3
@@ -335,7 +341,7 @@ When `can_serve_iced` is enabled, the dedicated glass-observe switch must hold o
 }
 ```
 
-Only `drink` is required. If `initial_greeting` is omitted, a random greeting is generated. If `customer_name` is provided, it personalizes the greeting and completion messages. Orders are added to a queue and processed sequentially.
+Only `drink` is required. If `initial_greeting` is omitted, a random greeting is generated. If `customer_name` is provided, it personalizes the greeting and completion messages. If `customer_email` is provided **and** `customer_detector_name` is configured, the completed drink is credited to that customer's order history (see "the usual"). Orders are added to a queue and processed sequentially.
 
 `count` is an optional positive integer (default 1) that enqueues N identical orders in one call — each gets its own UUID. The cap is `max_batch_size` (default 10). When `count > 1`, the response also includes `order_ids: [...]` (one per enqueued order) and `count`; existing `order_id` and `queue_position` keys still refer to the first order so existing callers keep working. To keep audio sane, the per-order "Order received…" line is replaced with a single consolidated batch announcement at submission time; the per-cup drink-ready announcement at cup handoff still fires once per order as each cup completes.
 
@@ -812,9 +818,52 @@ Returns:
 {"removed": "alice@example.com"}
 ```
 
+**`record_order`** — Append a completed drink to a customer's order history (the data behind "the usual"). The coffee service calls this automatically after a successful brew when `customer_detector_name` is configured and the order carried a `customer_email`; you can also call it directly. An unknown email is a no-op (not an error), so it's safe to call for anonymous walk-ups.
+
+```json
+{"record_order": {"email": "alice@example.com", "drink": "espresso"}}
+```
+
+Returns:
+
+```json
+{"recorded": true, "email": "alice@example.com", "drink": "espresso"}
+```
+
+**`get_usual`** — Return a customer's usual drink, derived from their recorded order history. Returns `{"has_usual": false}` when the customer is unknown or has no history.
+
+```json
+{"get_usual": "alice@example.com"}
+```
+
+Returns:
+
+```json
+{"has_usual": true, "drink": "espresso", "count": 7}
+```
+
+### `Status()`
+
+`Status()` reports the customer currently in front of the camera and their usual, so a poller (notably `viam:conversation-bundle:voice-command`'s `command_status`) can greet them by name and offer their usual. It runs a best-effort identification and folds in `get_usual`; results are cached briefly so per-turn polling doesn't re-run the vision model on every call.
+
+When a registered customer is recognized:
+
+```json
+{
+  "recognized": true,
+  "name": "Alice Smith",
+  "email": "alice@example.com",
+  "confidence": 0.87,
+  "usual_drink": "espresso",
+  "usual_count": 7
+}
+```
+
+Otherwise: `{"recognized": false}`.
+
 ### Storage
 
-Customer records (name, email, image directory) are persisted to `<data_dir>/customers.json`. Face images are stored under `<data_dir>/known_faces/<email>/` — one subdirectory per customer, which is the directory structure the face-identification vision service expects. Registering the same customer multiple times adds additional face samples, improving recognition accuracy.
+Customer records (name, email, image directory, order history) are persisted to `<data_dir>/customers.json`. Order history is capped at the most recent 50 entries per customer. Face images are stored under `<data_dir>/known_faces/<email>/` — one subdirectory per customer, which is the directory structure the face-identification vision service expects. Registering the same customer multiple times adds additional face samples, improving recognition accuracy.
 
 ---
 

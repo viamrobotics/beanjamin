@@ -249,6 +249,8 @@ export function Kiosk() {
         drink: selectedDrink!,
         drinkLabel: drinkLabel(selectedDrink!),
         customerName: misspelledName,
+        // Credits the drink to this customer's history; empty = anonymous (ignored).
+        customerEmail: email,
         pronunciation: undefined,
       });
       setStep("confirmation");
