@@ -239,6 +239,14 @@ var heldItemMachineCollisions = []AllowedCollision{
 
 var heldItemServingAreaCollisions = []AllowedCollision{
 	{Frame1: heldItemFrameName, Frame2: servingAreaFrameName},
+	{Frame1: heldItemFrameName, Frame2: "shelf-top"},
+}
+
+// heldItemStagingCollisions allows the held glass to approach the table surfaces
+// it legitimately gets close to while being set down in the staging area.
+var heldItemStagingCollisions = []AllowedCollision{
+	{Frame1: heldItemFrameName, Frame2: "table"},
+	{Frame1: heldItemFrameName, Frame2: "table-right"},
 }
 
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {
@@ -1073,7 +1081,7 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
-	placeStep := Step{PoseName: clawPoseStaging, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	placeStep := Step{PoseName: clawPoseStaging, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemStagingCollisions)}
 	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
