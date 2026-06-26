@@ -259,6 +259,7 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 		}
 	}
 
+	s.filterFrameLocked = true
 	logger.Infof("locked filter frame at world pose %v (%d descendants preserved)", worldPose.Point(), len(descendants))
 	return nil
 }
@@ -279,8 +280,29 @@ func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 	s.cachedFS = fs
 	// The rebuilt frame system has no held-item frame, and any cached grasp no
 	// longer corresponds to reality — forget it so a stale geometry can't be
-	// re-attached after a cancel/reset.
+	// re-attached after a cancel/reset. The rebuilt frame system also restores the
+	// filter frame to the arm subtree, undoing any lockFilterFrame mutation.
 	s.clearHeldGeometry()
+	s.filterFrameLocked = false
+	return nil
+}
+
+// refreshFrameSystemIfClean rebuilds cachedFS from the service when no in-flight
+// state would be lost — i.e. nothing is held and the filter frame is not locked —
+// so a manually-invoked action picks up out-of-band config edits (e.g. the
+// portafilter handle geometry being changed during calibration) instead of
+// planning against a stale snapshot. When an item is held or the filter is locked,
+// cachedFS carries state that must persist across separate DoCommand calls, so it
+// is left untouched. Must be called on the motion sequence goroutine (gated by the
+// running flag), like resetFrameSystem.
+func (s *beanjaminCoffee) refreshFrameSystemIfClean(ctx context.Context) error {
+	if s.heldItemAttached || s.filterFrameLocked {
+		return nil
+	}
+	if err := s.resetFrameSystem(ctx); err != nil {
+		return err
+	}
+	s.activeOrderLogger().Infof("refreshed frame system from service")
 	return nil
 }
 

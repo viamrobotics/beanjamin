@@ -205,3 +205,34 @@ func (s *beanjaminCoffee) heldItemSurfaceCollisions(pairs []AllowedCollision) []
 	}
 	return pairs
 }
+
+// heldItemHalfHeightMm returns half the vertical (Z) extent, in mm, of the
+// currently tracked held-item geometry, and true when an item is attached and
+// its geometry is a Box. The held-item box is modeled upright (overriddenBox /
+// worldBoundingBox build it with OZ=1 and Z = container height) and a Box keeps
+// its dims under the transform into the gripper frame, so its Z dimension is the
+// container's vertical extent once placed upright at the drop pose. Returns false
+// when nothing is attached or the geometry is not a Box, so callers fall back to
+// a fixed offset.
+func (s *beanjaminCoffee) heldItemHalfHeightMm() (float64, bool) {
+	if !s.heldItemAttached {
+		return 0, false
+	}
+	frame := s.cachedFS.Frame(heldItemFrameName)
+	if frame == nil {
+		return 0, false
+	}
+	gif, err := frame.Geometries([]referenceframe.Input{})
+	if err != nil {
+		return 0, false
+	}
+	geos := gif.Geometries()
+	if len(geos) == 0 {
+		return 0, false
+	}
+	box := geos[0].ToProtobuf().GetBox()
+	if box == nil || box.DimsMm == nil {
+		return 0, false
+	}
+	return box.DimsMm.Z / 2, true
+}

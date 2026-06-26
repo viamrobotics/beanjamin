@@ -112,6 +112,42 @@ func TestValidate_RejectsNegativeMaxAttempts(t *testing.T) {
 	}
 }
 
+func TestValidate_AcceptsCupAndGlassDimensions(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.CupDimensions = &ContainerDimensions{DiameterMm: 80, HeightMm: 95}
+	cfg.GlassDimensions = &ContainerDimensions{DiameterMm: 70, HeightMm: 140}
+	if _, _, err := cfg.Validate(""); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidate_RejectsNonPositiveCupDiameter(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.CupDimensions = &ContainerDimensions{DiameterMm: 0, HeightMm: 95}
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "cup_dimensions.diameter_mm") {
+		t.Fatalf("expected cup_dimensions.diameter_mm error, got %v", err)
+	}
+}
+
+func TestValidate_RejectsNonPositiveCupHeight(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.CupDimensions = &ContainerDimensions{DiameterMm: 80, HeightMm: -1}
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "cup_dimensions.height_mm") {
+		t.Fatalf("expected cup_dimensions.height_mm error, got %v", err)
+	}
+}
+
+func TestValidate_RejectsNonPositiveGlassDimensions(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.GlassDimensions = &ContainerDimensions{DiameterMm: 70, HeightMm: 0}
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "glass_dimensions.height_mm") {
+		t.Fatalf("expected glass_dimensions.height_mm error, got %v", err)
+	}
+}
+
 func TestValidate_AppendsCupDeps(t *testing.T) {
 	cfg := validBaseConfig()
 	req, _, err := cfg.Validate("")
