@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/data"
@@ -64,12 +65,23 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}, nil
 }
 
+// orderHistoryEntry is one completed drink.
+type orderHistoryEntry struct {
+	Drink string    `json:"drink"`
+	At    time.Time `json:"at"`
+}
+
 // customerRecord stores metadata about a registered customer.
 type customerRecord struct {
 	Name     string `json:"name"`
 	Email    string `json:"email"`
 	ImageDir string `json:"image_dir"`
+	// Orders: drink history, oldest first, capped at maxOrderHistory.
+	Orders []orderHistoryEntry `json:"orders,omitempty"`
 }
+
+// maxOrderHistory caps retained orders per customer.
+const maxOrderHistory = 50
 
 type customerDetector struct {
 	resource.AlwaysRebuild
@@ -177,12 +189,20 @@ func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]interf
 	if email, ok := cmd["remove_customer"].(string); ok {
 		return cd.removeCustomer(ctx, email)
 	}
+	if rec, ok := cmd["record_order"].(map[string]interface{}); ok {
+		email, _ := rec["email"].(string)
+		drink, _ := rec["drink"].(string)
+		return cd.recordOrder(email, drink)
+	}
+	if email, ok := cmd["get_usual"].(string); ok {
+		return cd.getUsual(email)
+	}
 	if _, ok := cmd["get_info"]; ok {
 		return map[string]interface{}{
 			"camera_name": cd.camera.Name().ShortName(),
 		}, nil
 	}
-	return nil, fmt.Errorf("unknown command, supported: register_customer, finish_registration, identify_customer, list_customers, remove_customer, get_info")
+	return nil, fmt.Errorf("unknown command, supported: register_customer, finish_registration, identify_customer, list_customers, remove_customer, record_order, get_usual, get_info")
 }
 
 // registerCustomer captures an image from the camera and stores it as a known
@@ -419,6 +439,76 @@ func (cd *customerDetector) removeCustomer(ctx context.Context, email string) (m
 	}, nil
 }
 
+// recordOrder appends a drink to a customer's history; unknown email is a no-op.
+func (cd *customerDetector) recordOrder(email, drink string) (map[string]interface{}, error) {
+	if email == "" || drink == "" {
+		return nil, fmt.Errorf("record_order requires both email and drink")
+	}
+
+	cd.mu.Lock()
+	rec, exists := cd.customers[email]
+	if !exists {
+		cd.mu.Unlock()
+		cd.logger.Debugf("record_order: no customer for %q — nothing to remember", email)
+		return map[string]interface{}{"recorded": false, "reason": "unknown customer"}, nil
+	}
+	rec.Orders = append(rec.Orders, orderHistoryEntry{Drink: drink, At: time.Now()})
+	if len(rec.Orders) > maxOrderHistory {
+		rec.Orders = append([]orderHistoryEntry(nil), rec.Orders[len(rec.Orders)-maxOrderHistory:]...)
+	}
+	count := len(rec.Orders)
+	cd.mu.Unlock()
+
+	if err := cd.saveCustomers(); err != nil {
+		return nil, fmt.Errorf("failed to persist order history: %w", err)
+	}
+	cd.logger.Infof("recorded %q for %q (%d in history)", drink, email, count)
+	return map[string]interface{}{"recorded": true, "email": email, "drink": drink}, nil
+}
+
+// getUsual returns the customer's usual drink, or {has_usual:false} if none.
+func (cd *customerDetector) getUsual(email string) (map[string]interface{}, error) {
+	if email == "" {
+		return nil, fmt.Errorf("get_usual requires an email")
+	}
+
+	cd.mu.RLock()
+	defer cd.mu.RUnlock()
+
+	rec, exists := cd.customers[email]
+	if !exists || len(rec.Orders) == 0 {
+		return map[string]interface{}{"has_usual": false}, nil
+	}
+	drink, count := usualDrink(rec.Orders)
+	if drink == "" {
+		return map[string]interface{}{"has_usual": false}, nil
+	}
+	return map[string]interface{}{
+		"has_usual": true,
+		"drink":     drink,
+		"count":     count,
+	}, nil
+}
+
+// usualDrink picks the most-frequent drink, breaking ties toward the most recent.
+func usualDrink(orders []orderHistoryEntry) (drink string, count int) {
+	// Tally each drink's count and its most-recent timestamp.
+	counts := make(map[string]int)
+	lastAt := make(map[string]time.Time)
+	for _, o := range orders {
+		counts[o.Drink]++
+		if o.At.After(lastAt[o.Drink]) {
+			lastAt[o.Drink] = o.At
+		}
+	}
+	for d, c := range counts {
+		if c > count || (c == count && lastAt[d].After(lastAt[drink])) {
+			drink, count = d, c
+		}
+	}
+	return drink, count
+}
+
 // customersFilePath returns the path to the JSON file that persists customer records.
 func (cd *customerDetector) customersFilePath() string {
 	return filepath.Join(cd.dataDir, "customers.json")
@@ -448,10 +538,40 @@ func (cd *customerDetector) saveCustomers() error {
 	return os.WriteFile(cd.customersFilePath(), data, 0o644)
 }
 
+// Status reports who is at the camera and their usual; a miss is {recognized:false}.
 func (cd *customerDetector) Status(ctx context.Context) (map[string]interface{}, error) {
-	_, span := trace.StartSpan(ctx, "customer-detector::Status")
+	ctx, span := trace.StartSpan(ctx, "customer-detector::Status")
 	defer span.End()
-	return map[string]interface{}{}, nil
+
+	res, err := cd.identifyCustomer(ctx)
+	if err != nil {
+		cd.logger.Debugf("Status identify failed: %v", err)
+		return map[string]interface{}{"recognized": false}, nil
+	}
+	if identified, _ := res["identified"].(bool); !identified {
+		return map[string]interface{}{"recognized": false}, nil
+	}
+
+	status := map[string]interface{}{
+		"recognized": true,
+		"confidence": res["confidence"],
+	}
+	email, _ := res["email"].(string)
+	if email != "" {
+		status["email"] = email
+	}
+	if name, ok := res["name"].(string); ok && name != "" {
+		status["name"] = name
+	}
+	if email != "" {
+		if usual, err := cd.getUsual(email); err == nil {
+			if has, _ := usual["has_usual"].(bool); has {
+				status["usual_drink"] = usual["drink"]
+				status["usual_count"] = usual["count"]
+			}
+		}
+	}
+	return status, nil
 }
 
 func (cd *customerDetector) Close(context.Context) error {
