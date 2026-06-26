@@ -23,6 +23,8 @@ func validBaseConfig() *Config {
 		CameraObservePoseSwitcherName: "observe-switch",
 		CupApproachRelativePose:       &RelativePose{},
 		CupGrabRelativePose:           &RelativePose{},
+		ServingApproachRelativePose:   &RelativePose{},
+		ServingGrabRelativePose:       &RelativePose{},
 	}
 }
 
@@ -91,6 +93,24 @@ func TestValidate_RequiresCupGrabRelativePose(t *testing.T) {
 	_, _, err := cfg.Validate("")
 	if err == nil || !strings.Contains(err.Error(), "cup_grab_relative_pose") {
 		t.Fatalf("expected cup_grab_relative_pose required error, got %v", err)
+	}
+}
+
+func TestValidate_RequiresServingApproachRelativePose(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.ServingApproachRelativePose = nil
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "serving_approach_relative_pose") {
+		t.Fatalf("expected serving_approach_relative_pose required error, got %v", err)
+	}
+}
+
+func TestValidate_RequiresServingGrabRelativePose(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.ServingGrabRelativePose = nil
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "serving_grab_relative_pose") {
+		t.Fatalf("expected serving_grab_relative_pose required error, got %v", err)
 	}
 }
 
