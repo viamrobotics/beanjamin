@@ -512,16 +512,26 @@ func nearestGeometry(c r3.Vector, originals []pickupCandidate) spatialmath.Geome
 	return best
 }
 
-// tryGrab attempts a full approach-grab-retreat cycle on one candidate
-// centroid. On failure after the approach step, it best-effort restores the
-// arm to the target's observe home pose so the caller can attempt a different
-// candidate from a known good state.
+// tryGrab plans the approach + grab-descent for one candidate WITHOUT moving the
+// arm, and — only if both legs plan — executes those exact plans: approach → open
+// gripper → linear descent → verify holding → attach geometry → retreat. Planning
+// both legs up front means an unreachable candidate is discarded with the arm
+// still parked at the observe pose (no wasted reach-and-retreat), and the
+// validated plans are executed directly rather than re-planned.
 //
-// Returned errors fall into two categories the caller distinguishes via
-// errors.Is:
-//   - wraps errMotionPlanning → planning failure; try a different candidate.
-//   - anything else → execution error or operator cancel; bubble up.
+// The descent is planned from the approach plan's end configuration, i.e. exactly
+// where the arm lands after executing the approach. The retreat is planned fresh
+// after the grab — the held-item geometry is attached by then, which changes the
+// collision set, so it cannot be planned ahead of the grab.
+//
+// Returned errors the caller (pickDynamic) distinguishes via errors.Is:
+//   - wraps errMotionPlanning → a leg could not be planned; NO motion happened,
+//     try a different candidate.
+//   - wraps errGripMissed → the jaws closed on nothing; the arm recovered to the
+//     observe pose, try a different candidate.
+//   - anything else → an execution error or operator cancel; bubble up.
 func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarget, cand pickupCandidate) error {
+	logger := s.activeOrderLogger()
 	centroid := cand.centroid
 	// For the glass, grab at the geometry centroid's Z (the middle of the box)
 	// while keeping the detected X/Y. The point-cloud centroid Z can land high on
@@ -529,7 +539,7 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	if t.graspZFromGeom && cand.geom != nil {
 		geomZ := cand.geom.Pose().Point().Z
 		if geomZ != centroid.Z {
-			s.activeOrderLogger().Infof("dynamic %s pickup: grasping at geometry-centroid Z %.1f (was detected-centroid Z %.1f)", t.label, geomZ, centroid.Z)
+			logger.Infof("dynamic %s pickup: grasping at geometry-centroid Z %.1f (was detected-centroid Z %.1f)", t.label, geomZ, centroid.Z)
 		}
 		centroid.Z = geomZ
 	}
@@ -544,9 +554,32 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 		componentName: componentClaws,
 	}
 
-	// 1. Approach (free planning). On failure the arm has not moved.
-	if err := s.moveToRawPose(ctx, approachPD, nil, nil, nil); err != nil {
-		return fmt.Errorf("approach centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
+	// --- Plan both legs first, WITHOUT moving. If either can't be planned the
+	//     candidate is unreachable: return errMotionPlanning with the arm still
+	//     parked, so the caller skips to the next candidate. ---
+	approachPlan, err := s.planRawPose(ctx, approachPD, nil, nil, nil, "grab")
+	if err != nil {
+		return fmt.Errorf("plan approach centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
+	}
+	traj := approachPlan.Trajectory()
+	if len(traj) == 0 {
+		return fmt.Errorf("%w: approach plan has no trajectory for centroid (x=%.1f, y=%.1f, z=%.1f)",
+			errMotionPlanning, centroid.X, centroid.Y, centroid.Z)
+	}
+	// Plan the descent from where the approach ends, matching where the arm lands
+	// after executing the approach plan.
+	grabPlan, err := s.planRawPose(ctx, grabPD, defaultApproachConstraint, nil, traj[len(traj)-1], "grab")
+	if err != nil {
+		return fmt.Errorf("plan grab descent centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
+	}
+
+	// --- Both legs planned. Execute the validated plans directly (no re-planning). ---
+	// 1. Approach (precomputed plan). An execution failure here (unlike a planning
+	// failure, which happened above before any motion) means the arm moved partway,
+	// so recover it to the observe pose before bubbling the (fatal) error.
+	if err := s.executePlan(ctx, approachPlan, nil, nil); err != nil {
+		s.recoverToObserve(ctx, cancelCtx, t)
+		return fmt.Errorf("execute approach centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
 
 	// 2. Open gripper before descending.
@@ -556,10 +589,10 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	}
 	time.Sleep(gripperPause)
 
-	// 3. Linear descent to grab pose.
-	if err := s.moveToRawPose(ctx, grabPD, defaultApproachConstraint, nil, nil); err != nil {
+	// 3. Linear descent to grab pose (precomputed plan).
+	if err := s.executePlan(ctx, grabPlan, defaultApproachConstraint, nil); err != nil {
 		s.recoverToObserve(ctx, cancelCtx, t)
-		return fmt.Errorf("grab centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
+		return fmt.Errorf("execute grab descent centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
 
 	if err := s.grabAndVerifyHolding(ctx); err != nil {
@@ -572,13 +605,14 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	// item. Best-effort: a tracking-attach hiccup degrades to untracked motion
 	// (the prior behavior) rather than aborting a physical order mid-grab.
 	if err := s.attachDetectedGeometry(ctx, t.label, cand.geom); err != nil {
-		s.activeOrderLogger().Warnf("dynamic %s pickup: attach geometry failed, continuing untracked: %v", t.label, err)
+		logger.Warnf("dynamic %s pickup: attach geometry failed, continuing untracked: %v", t.label, err)
 	}
 
-	// 5. Linear retreat with the item in hand. A failure here is fatal — we
-	// can't drop the item safely by recovering to observe. Strip the
-	// errMotionPlanning chain (%v, not %w) so the caller does not treat this
-	// as a try-another-candidate planning failure.
+	// 4. Linear retreat with the item in hand — planned fresh here (NOT reused),
+	// because the held-item geometry is now attached and changes the collision
+	// set. A failure is fatal: we can't drop the item safely by recovering to
+	// observe. Strip the errMotionPlanning chain (%v, not %w) so the caller does
+	// not treat this as a try-another-candidate planning failure.
 	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, nil, nil); err != nil {
 		return fmt.Errorf("retreat with %s grabbed (centroid x=%.1f, y=%.1f, z=%.1f): %v", t.label, centroid.X, centroid.Y, centroid.Z, err)
 	}
@@ -674,22 +708,43 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 		}
 
 		logger.Infof("dynamic %s pickup: attempt %d/%d — %d candidate(s) to try", t.label, attempt, maxAttempts, len(candidates))
+
+		// Walk the ranked candidates (closest first). tryGrab plans the full
+		// approach+grab with NO arm motion first, so an unreachable candidate is
+		// skipped without moving. Only a candidate that fully plans gets a real grab
+		// attempt. On a planning failure or grab miss we fall through to the next
+		// candidate in this batch — re-observing (the next outer attempt) happens
+		// only once every candidate here is exhausted, so a phantom/slipped grab
+		// doesn't block the remaining detected items.
 		for i, cand := range candidates {
-			err := s.tryGrab(ctx, cancelCtx, t, cand)
+			// Operator cancel always wins — check before each candidate.
+			if ctx.Err() != nil {
+				return fmt.Errorf("dynamic_%s_pickup: cancelled: %w", t.label, ctx.Err())
+			}
+
+			// tryGrab plans the approach+descent first (no motion); an unreachable
+			// candidate returns errMotionPlanning with the arm unmoved. Only a
+			// candidate whose legs both plan is physically grabbed — and the
+			// validated plans are executed directly — then verified and retreated.
+			err = s.tryGrab(ctx, cancelCtx, t, cand)
 			if err == nil {
 				return nil
 			}
 			lastErr = err
 
-			// Operator cancel always wins.
+			// PlanMotion wraps a cancelled context as errMotionPlanning, so check for
+			// cancel before classifying the error.
 			if ctx.Err() != nil {
 				return fmt.Errorf("dynamic_%s_pickup: cancelled: %w", t.label, err)
 			}
-
+			// errMotionPlanning (unreachable — no motion happened) and errGripMissed
+			// (jaws closed on nothing — arm recovered to observe) both mean "try the
+			// next candidate". Anything else is an execution/setup error that
+			// re-observing won't fix, so surface it.
 			if !errors.Is(err, errMotionPlanning) && !errors.Is(err, errGripMissed) {
 				return err
 			}
-			logger.Warnf("dynamic %s pickup: attempt %d, candidate %d/%d failed (planning or grab miss) — trying next: %v",
+			logger.Infof("dynamic %s pickup: attempt %d, candidate %d/%d unreachable or grab missed — trying next: %v",
 				t.label, attempt, i+1, len(candidates), err)
 		}
 	}

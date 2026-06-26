@@ -524,19 +524,34 @@ func (s *beanjaminCoffee) savePlanResponse(plan motionplan.Plan, label string) {
 	logger.Infof("saved motion response to %s", filename)
 }
 
-// moveToRawPose plans a motion using armplanning and executes it on the arm.
-func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
+// planRawPose plans a motion to pd's pose without executing it. start is the
+// planning start configuration; pass nil to plan from the arm's current state.
+// Returns a wrapped errMotionPlanning on a planning failure. No arm motion
+// happens here — callers use this to validate reachability before committing to
+// physical motion (see tryGrab in cup_pickup.go, which plans both grab legs
+// before moving the arm).
+func (s *beanjaminCoffee) planRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision, start referenceframe.FrameSystemInputs, label string) (motionplan.Plan, error) {
 	logger := s.activeOrderLogger()
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	// Overlay any caller-provided start config (e.g. a prior plan's end
+	// configuration) onto the full current input set. currentInputs zero-fills
+	// every frame, so overlaying keeps the start state COMPLETE even when `start`
+	// only carries the planned-over frames (a plan Trajectory step typically holds
+	// just the arm's joints). fsInputs then doubles as the planning start state and
+	// the inputs used to resolve the goal's reference frame — so a non-world goal
+	// resolves against the same configuration the motion starts from.
+	for frame, inputs := range start {
+		fsInputs[frame] = inputs
 	}
 
 	// Transform destination to world frame.
 	destination := referenceframe.NewPoseInFrame(pd.refFrame, pd.pose)
 	tf, err := fs.Transform(fsInputs.ToLinearInputs(), destination, referenceframe.World)
 	if err != nil {
-		return fmt.Errorf("transform destination to world: %w", err)
+		return nil, fmt.Errorf("transform destination to world: %w", err)
 	}
 	goalPose := tf.(*referenceframe.PoseInFrame)
 
@@ -550,7 +565,6 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 		logger.Infof("allowing %d collision pair(s)", len(allowedCollisions))
 	}
 
-	// Plan.
 	req := &armplanning.PlanRequest{
 		FrameSystem: fs,
 		Goals: []*armplanning.PlanState{
@@ -559,15 +573,19 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 		StartState:  armplanning.NewPlanState(nil, fsInputs),
 		Constraints: constraints,
 	}
-	s.savePlanRequest(req, "move")
+	s.savePlanRequest(req, label)
 	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
 	if err != nil {
-		return fmt.Errorf("%w: %w", errMotionPlanning, err)
+		return nil, fmt.Errorf("%w: %w", errMotionPlanning, err)
 	}
-	s.savePlanResponse(plan, "move")
+	s.savePlanResponse(plan, label)
+	return plan, nil
+}
 
-	// Execute — extract joint positions for the arm frame (not the end-effector
-	// component name used for the goal pose) and send to arm.
+// executePlan runs a previously computed plan on the arm. Extracts joint
+// positions for the arm frame (not the end-effector component name used for the
+// goal pose) and sends them to the arm.
+func (s *beanjaminCoffee) executePlan(ctx context.Context, plan motionplan.Plan, lc *StepLinearConstraint, moveOpts *StepMoveOptions) error {
 	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
 	if err != nil {
 		return fmt.Errorf("get frame inputs from plan: %w", err)
@@ -577,6 +595,16 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 		opts = s.slowMovementMoveOptions()
 	}
 	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
+}
+
+// moveToRawPose plans then executes a motion to pd's pose. Preserves the
+// original behavior and signature for all existing callers.
+func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
+	plan, err := s.planRawPose(ctx, pd, lc, allowedCollisions, nil, "move")
+	if err != nil {
+		return err
+	}
+	return s.executePlan(ctx, plan, lc, moveOpts)
 }
 
 func (s *beanjaminCoffee) switchForComponent(componentName string) (toggleswitch.Switch, error) {
