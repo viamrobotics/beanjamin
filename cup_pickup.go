@@ -253,6 +253,7 @@ type pickupTarget struct {
 	centroidMinZMm   float64              // floor detection Z to this (0 = disabled)
 	dimsOverride     *ContainerDimensions // predefined box size; nil uses point-cloud extents
 	noItemSpeak      string               // spoken on "nothing detected" before a retry wait
+	graspZFromGeom   bool                 // grab at the geometry centroid's Z (keep detected X/Y); for the tall glass whose detected Z can sit high on the rim
 }
 
 // cupPickupTarget describes dynamic cup pickup. Reproduces the values the cup
@@ -295,6 +296,7 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 		centroidMinZMm:   s.cfg.GlassCentroidMinZMm,
 		dimsOverride:     s.cfg.GlassDimensions,
 		noItemSpeak:      "I don't see a glass yet — please place one on the top shelf. Trying again in 15 seconds.",
+		graspZFromGeom:   true,
 	}
 }
 
@@ -521,6 +523,16 @@ func nearestGeometry(c r3.Vector, originals []pickupCandidate) spatialmath.Geome
 //   - anything else → execution error or operator cancel; bubble up.
 func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarget, cand pickupCandidate) error {
 	centroid := cand.centroid
+	// For the glass, grab at the geometry centroid's Z (the middle of the box)
+	// while keeping the detected X/Y. The point-cloud centroid Z can land high on
+	// the rim; the box center is a more stable mid-height grasp point.
+	if t.graspZFromGeom && cand.geom != nil {
+		geomZ := cand.geom.Pose().Point().Z
+		if geomZ != centroid.Z {
+			s.activeOrderLogger().Infof("dynamic %s pickup: grasping at geometry-centroid Z %.1f (was detected-centroid Z %.1f)", t.label, geomZ, centroid.Z)
+		}
+		centroid.Z = geomZ
+	}
 	approachPD := &poseData{
 		pose:          composeCupPose(centroid, relativePoseToSpatial(t.approachRel)),
 		refFrame:      referenceframe.World,
