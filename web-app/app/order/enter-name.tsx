@@ -41,7 +41,7 @@ export function EnterName({
         </svg>
       </button>
       <div className="w-full max-w-[512px] flex flex-col gap-8">
-        <h1 className="anim-in text-4xl font-semibold text-neutral-900 text-center">
+        <h1 className="anim-in text-3xl tracking-tight font-semibold text-neutral-900 text-center">
           What&apos;s your name?
         </h1>
 

@@ -36,7 +36,7 @@ type Step = "welcome" | "drink" | "name" | "face-register" | "confirmation";
 type TrackerMode = "hidden" | "auto" | "manual";
 
 // Width of the order tracker panel in both auto and manual modes.
-const TRACKER_PANEL_WIDTH = "w-[560px]";
+const TRACKER_PANEL_WIDTH = "w-[min(560px,45vw)]";
 
 const LOST_CONNECTION_MSG =
   "Lost connection to the machine. Please wait for it to reconnect and try again.";
@@ -423,7 +423,7 @@ export function Kiosk() {
         />
 
         <h1
-          className={`anim-in-hero text-4xl font-mono font-bold text-neutral-900 mb-4 ${machineName ? "" : "invisible"}`}
+          className={`anim-in-hero text-3xl sm:text-4xl font-mono font-bold text-neutral-900 mb-4 text-center break-words max-w-full ${machineName ? "" : "invisible"}`}
           style={{ animationDelay: "500ms" }}
         >
           Hi, I&apos;m {machineName ?? "Beanjamin"}
@@ -479,7 +479,7 @@ export function Kiosk() {
             setStep("drink");
           }}
           disabled={!connected}
-          className="anim-in-hero press px-20 py-4 text-lg font-medium bg-neutral-900 text-white rounded-full transition-colors hover:bg-neutral-800 disabled:bg-neutral-300 disabled:cursor-not-allowed disabled:hover:bg-neutral-300"
+          className="anim-in-hero press px-12 sm:px-20 py-4 text-lg font-medium whitespace-nowrap bg-neutral-900 text-white rounded-full transition-colors hover:bg-neutral-800 disabled:bg-neutral-300 disabled:cursor-not-allowed disabled:hover:bg-neutral-300"
           style={{ animationDelay: welcomeBack ? "1400ms" : "1200ms" }}
         >
           Place an order
