@@ -286,6 +286,19 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 		"set_cup_for_coffee":        s.setCupForCoffee,
 		"give_full_cup_to_customer": s.placeFullCupOnShelf,
 		"clean_portafilter":         s.cleanPortafilter,
+		// Iced-coffee debug steps. These run individual stages of serveIcedCoffee
+		// for pose tuning / hardware checks. Except for fetch_glass and
+		// pulse_ice_pin (self-contained), they assume the gripper already holds
+		// the right vessel — manually stage it (or run the prior step) first.
+		"fetch_glass":       s.fetchGlass,               // vision-grab a glass off the shelf
+		"pulse_ice_pin":     s.pulseIcePin,              // hardware only, no arm motion
+		"dispense_ice":      s.dispenseIce,              // arm to chute + pulse + retreat
+		"stage_glass":       s.stageGlass,               // set held glass down, release
+		"grab_brewed_cup":   s.grabBrewedCupFromMachine, // retrieve cup from under machine
+		"pour_espresso":     s.pourEspresso,             // pour held cup over staged glass
+		"grab_staged_glass": s.grabStagedGlass,          // re-grab the staged glass
+		"place_held":        s.placeHeldInServingArea,   // place held vessel in serving area
+		"serve_iced_coffee": s.serveIcedCoffee,          // full sequence end-to-end
 	}
 
 	action, ok := actions[name]
@@ -1057,7 +1070,6 @@ func (s *beanjaminCoffee) fetchGlass(ctx, cancelCtx context.Context) error {
 // always driven back LOW — including on cancel — so the ice machine can't be
 // left running.
 func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
-	logger := s.activeOrderLogger()
 	approachStep := Step{PoseName: clawPoseIceMachineApproach, Component: componentClaws, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("dispense_ice: %w", err)
@@ -1067,35 +1079,8 @@ func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("dispense_ice: %w", err)
 	}
 
-	pinName := s.icePinName()
-	pin, err := s.iceBoard.GPIOPinByName(pinName)
-	if err != nil {
-		return fmt.Errorf("dispense_ice: get pin %q: %w", pinName, err)
-	}
-	dwell := time.Duration(s.iceDispenseSec() * float64(time.Second))
-	logger.Infof("dispensing ice: pin %q HIGH for %s", pinName, dwell)
-	if err := pin.Set(ctx, true, nil); err != nil {
-		return fmt.Errorf("dispense_ice: set pin %q high: %w", pinName, err)
-	}
-	// Drive the pin LOW with a fresh context so the write still lands if ctx is
-	// already cancelled.
-	stop := func() error {
-		if err := pin.Set(context.Background(), false, nil); err != nil {
-			return fmt.Errorf("dispense_ice: set pin %q low: %w", pinName, err)
-		}
-		return nil
-	}
-	select {
-	case <-time.After(dwell):
-	case <-ctx.Done():
-		_ = stop()
-		return fmt.Errorf("dispense_ice: cancelled during dispense: %w", ctx.Err())
-	case <-cancelCtx.Done():
-		_ = stop()
-		return fmt.Errorf("dispense_ice: cancelled during dispense")
-	}
-	if err := stop(); err != nil {
-		return err
+	if err := s.pulseIcePin(ctx, cancelCtx); err != nil {
+		return fmt.Errorf("dispense_ice: %w", err)
 	}
 
 	retreatStep := Step{PoseName: clawPoseIceMachineApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
@@ -1103,6 +1088,41 @@ func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("dispense_ice: %w", err)
 	}
 	return nil
+}
+
+func (s *beanjaminCoffee) pulseIcePin(ctx, cancelCtx context.Context) error {
+	if s.iceBoard == nil {
+		return fmt.Errorf("pulse_ice_pin: no ice board configured (set ice_board_name)")
+	}
+	logger := s.activeOrderLogger()
+	pinName := s.icePinName()
+	pin, err := s.iceBoard.GPIOPinByName(pinName)
+	if err != nil {
+		return fmt.Errorf("pulse_ice_pin: get pin %q: %w", pinName, err)
+	}
+	dwell := time.Duration(s.iceDispenseSec() * float64(time.Second))
+	logger.Infof("dispensing ice: pin %q HIGH for %s", pinName, dwell)
+	if err := pin.Set(ctx, true, nil); err != nil {
+		return fmt.Errorf("pulse_ice_pin: set pin %q high: %w", pinName, err)
+	}
+	// Drive the pin LOW with a fresh context so the write still lands if ctx is
+	// already cancelled.
+	stop := func() error {
+		if err := pin.Set(context.Background(), false, nil); err != nil {
+			return fmt.Errorf("pulse_ice_pin: set pin %q low: %w", pinName, err)
+		}
+		return nil
+	}
+	select {
+	case <-time.After(dwell):
+	case <-ctx.Done():
+		_ = stop()
+		return fmt.Errorf("pulse_ice_pin: cancelled during dispense: %w", ctx.Err())
+	case <-cancelCtx.Done():
+		_ = stop()
+		return fmt.Errorf("pulse_ice_pin: cancelled during dispense")
+	}
+	return stop()
 }
 
 // stageGlass sets the held glass down in the staging area and releases it,
