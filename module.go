@@ -155,6 +155,12 @@ type Config struct {
 	// ContainerDimensions). Unset keeps the point-cloud-derived size.
 	GlassDimensions *ContainerDimensions `json:"glass_dimensions,omitempty"`
 
+	// Serving placement offsets are composed onto the serving-area slot anchor
+	// when releasing a finished drink onto the served shelf. The same pair is
+	// used for both the hot cup and the iced glass. Both are required.
+	ServingApproachRelativePose *RelativePose `json:"serving_approach_relative_pose,omitempty"`
+	ServingGrabRelativePose     *RelativePose `json:"serving_grab_relative_pose,omitempty"`
+
 	// TrackHeldGeometry, when true, attaches the vision-detected geometry of a
 	// picked-up cup/glass to the gripper frame in the cached frame system, so
 	// motion planning routes around the held item until it is set down (see
@@ -320,6 +326,12 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 	if cfg.CupGrabRelativePose == nil {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_grab_relative_pose")
+	}
+	if cfg.ServingApproachRelativePose == nil {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "serving_approach_relative_pose")
+	}
+	if cfg.ServingGrabRelativePose == nil {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "serving_grab_relative_pose")
 	}
 	if cfg.CupPhotosPerVantage < 0 {
 		return nil, nil, fmt.Errorf("%s: cup_photos_per_vantage must be >= 0", path)

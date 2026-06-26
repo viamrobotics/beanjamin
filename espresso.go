@@ -799,10 +799,9 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context)
 // half-height, so its bottom rests on the shelf regardless of its height),
 // release, then retreat linearly and close the gripper.
 //
-// CupGrabRelativePose is the same relative offset used at pickup (composed onto
-// the detected cup centroid) — composing it onto the placement anchor here
-// keeps the claws-to-cup geometry identical between grab and release, so the
-// cup lands centered on the slot.
+// ServingGrabRelativePose is the claws-to-container offset used at release
+// (composed onto the placement anchor here) — shared by the hot cup and the
+// iced glass so either lands centered on the slot.
 //
 // Returned errors split like tryGrabCup so placeFullCupOnShelf can react via
 // errors.Is:
@@ -818,8 +817,8 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 		Y: tileWorld.Y,
 		Z: shelfTopZ + s.servingAreaDropZOffset(),
 	}
-	dropPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.CupGrabRelativePose))
-	approachPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.CupApproachRelativePose))
+	dropPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.ServingGrabRelativePose))
+	approachPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.ServingApproachRelativePose))
 
 	approachPD := &poseData{pose: approachPose, refFrame: referenceframe.World, componentName: componentClaws}
 	dropPD := &poseData{pose: dropPose, refFrame: referenceframe.World, componentName: componentClaws}
