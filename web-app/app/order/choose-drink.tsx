@@ -40,7 +40,7 @@ export function ChooseDrink({
             : "bg-neutral-100 border-2 border-transparent scale-100"
         }`}
       >
-        <div className="flex flex-col items-center gap-1">
+        <div className="flex flex-col items-center gap-1 -translate-y-2">
           <Image
             src={drink.image}
             alt={drink.label}
@@ -48,11 +48,8 @@ export function ChooseDrink({
             height={140}
             className="object-contain h-[min(140px,14vh)] w-auto"
           />
-          <p className="font-mono font-semibold text-base text-black uppercase tracking-wider leading-tight">
+          <p className="font-sans font-medium text-base text-black leading-tight">
             {drink.label}
-          </p>
-          <p className="font-sans font-medium text-sm text-black/60 leading-tight text-pretty">
-            {drink.description}
           </p>
         </div>
       </button>
@@ -60,30 +57,32 @@ export function ChooseDrink({
   };
 
   return (
-    <main className="relative h-full bg-white flex flex-col items-center overflow-y-auto p-6 font-sans">
-      <button
-        type="button"
-        onClick={onBack}
-        aria-label="Go back"
-        className="anim-in absolute left-6 top-6 h-11 w-11 rounded-full border border-neutral-200 bg-white text-neutral-900 transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400"
-        style={{ animationDelay: "80ms" }}
-      >
-        <svg
-          aria-hidden="true"
-          viewBox="0 0 24 24"
-          className="mx-auto h-5 w-5"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
+    <main className="relative h-full bg-white flex flex-col overflow-y-auto font-sans">
+      <header className="sticky top-0 z-10 w-full bg-white px-10 pt-6 pb-2">
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Go back"
+          className="anim-in h-11 w-11 rounded-full border border-neutral-200 bg-white text-neutral-900 transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400"
+          style={{ animationDelay: "80ms" }}
         >
-          <path d="M15 18l-6-6 6-6" />
-        </svg>
-      </button>
-      <div className="my-auto flex flex-col gap-6 w-full max-w-[1200px]">
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+            className="mx-auto h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
+      </header>
+      <div className="my-auto flex flex-col gap-6 w-full max-w-[900px] mx-auto px-10 pb-6">
         <div className="anim-in flex items-center justify-between gap-4">
-          <h1 className="text-4xl font-semibold text-[#0a0a0a]">
+          <h1 className="text-3xl tracking-tight font-semibold text-[#0a0a0a] whitespace-nowrap">
             Choose your drink
           </h1>
 
@@ -126,7 +125,7 @@ export function ChooseDrink({
           </button>
         </div>
 
-        <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(300px,1fr))]">
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3">
           {GRID_DRINKS.map((drink, i) => renderDrinkCard(drink, i))}
         </div>
 
@@ -141,11 +140,10 @@ export function ChooseDrink({
             Waiting to reconnect to the machine…
           </p>
         )}
-
         <button
           onClick={onNext}
           disabled={!selectedDrink || !connected}
-          className="anim-in press w-full py-4 text-base font-medium bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
+          className="anim-in press w-full py-4 text-base font-mono font-semibold uppercase tracking-wider bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
           style={{ animationDelay: "600ms" }}
         >
           Next
