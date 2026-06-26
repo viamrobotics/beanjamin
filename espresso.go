@@ -249,6 +249,28 @@ var heldItemStagingCollisions = []AllowedCollision{
 	{Frame1: heldItemFrameName, Frame2: "table-right"},
 }
 
+// servingAreaShieldCollisions returns the allowed-collision pairs that let the
+// gripper bodies, claws, and (while an item is held) the held container pass
+// through the serving-area-shield obstacle. The shield stays a hard obstacle on
+// the lateral carry so the arm avoids cups already standing on the shelf; these
+// pairs are applied only on the linearly constrained descent into a slot and the
+// retreat back out, which move straight down/up into the target slot.
+//
+// The gripper sub-frames (gripper:claws, gripper:case-gripper) only exist on the
+// real gripper; filterFakeModeCollisions (applied in moveToRawPose) drops them
+// under FakeMode. The held-item pair is gated by heldItemSurfaceCollisions so it
+// is omitted once the container has been released (on the retreat).
+func (s *beanjaminCoffee) servingAreaShieldCollisions() []AllowedCollision {
+	out := []AllowedCollision{
+		{Frame1: componentClaws, Frame2: servingAreaShieldFrameName},
+		{Frame1: "gripper:claws", Frame2: servingAreaShieldFrameName},
+		{Frame1: "gripper:case-gripper", Frame2: servingAreaShieldFrameName},
+	}
+	return append(out, s.heldItemSurfaceCollisions([]AllowedCollision{
+		{Frame1: heldItemFrameName, Frame2: servingAreaShieldFrameName},
+	})...)
+}
+
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
 		"grind_coffee":              s.grindCoffee,
@@ -763,9 +785,10 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context)
 }
 
 // tryDropCupInSlot drops the held cup at one serving-area slot: free-plan to the
-// approach pose above the slot, descend linearly to the drop pose
-// (claws-middle = shelfTopZ + shelfDropZOffsetMm), release, then retreat
-// linearly and close the gripper.
+// approach pose above the slot, descend linearly to the drop pose (placement
+// anchor = shelfTopZ + servingAreaDropZOffset, i.e. the held container's
+// half-height, so its bottom rests on the shelf regardless of its height),
+// release, then retreat linearly and close the gripper.
 //
 // CupGrabRelativePose is the same relative offset used at pickup (composed onto
 // the detected cup centroid) — composing it onto the placement anchor here
@@ -784,7 +807,7 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 	dropAnchor := r3.Vector{
 		X: tileWorld.X,
 		Y: tileWorld.Y,
-		Z: shelfTopZ + shelfDropZOffsetMm,
+		Z: shelfTopZ + s.servingAreaDropZOffset(),
 	}
 	dropPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.CupGrabRelativePose))
 	approachPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.CupApproachRelativePose))
@@ -810,11 +833,17 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 
 	// The cup is held during the approach and descent, so allow its geometry to
 	// approach the shelf surface (no-op when tracking is off / nothing attached).
-	shelfCollisions := s.heldItemSurfaceCollisions(heldItemServingAreaCollisions)
+	// The shield pairs additionally let the gripper/claws/held cup descend
+	// straight through the serving-area-shield into the target slot — the shield
+	// stays a hard obstacle on the lateral carry above so the arm avoids cups
+	// already on the shelf. Build a fresh slice so neither package-level
+	// allow-list is aliased by append.
+	descentCollisions := append([]AllowedCollision{}, s.heldItemSurfaceCollisions(heldItemServingAreaCollisions)...)
+	descentCollisions = append(descentCollisions, s.servingAreaShieldCollisions()...)
 
 	// 2. Linear descent to the drop pose. A planning failure leaves the arm at
 	// the approach pose still holding the cup — caller can try the next slot.
-	if err := s.moveToRawPose(ctx, dropPD, defaultApproachConstraint, shelfCollisions, nil); err != nil {
+	if err := s.moveToRawPose(ctx, dropPD, defaultApproachConstraint, descentCollisions, nil); err != nil {
 		return fmt.Errorf("descend into slot (x=%.1f, y=%.1f): %w", tileWorld.X, tileWorld.Y, err)
 	}
 
@@ -828,8 +857,11 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 	// Cup is released onto the shelf; it no longer travels with the gripper.
 	s.detachHeldGeometry()
 
-	// 4. Linear retreat back to the approach pose.
-	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, nil, nil); err != nil {
+	// 4. Linear retreat back to the approach pose. The cup is released, but the
+	// gripper/claws start inside the serving-area-shield, so the shield must stay
+	// allowed for the straight-up retreat to plan out of the slot (the held-item
+	// pair drops out now that nothing is attached).
+	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, s.servingAreaShieldCollisions(), nil); err != nil {
 		return fmt.Errorf("retreat after releasing cup (slot x=%.1f, y=%.1f): %v", tileWorld.X, tileWorld.Y, err)
 	}
 
