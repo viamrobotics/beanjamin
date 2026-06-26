@@ -1173,11 +1173,20 @@ func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
-	pourStep := Step{PoseName: clawPosePour, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: pourPause}
+	// Tilt to pour as a fixed-point pivot: the claws rotate the cup in place
+	// (slerp waypoints follow the geodesic between the upright and poured
+	// orientations — a pure rotation about the world X axis, since both share
+	// OX=0) so the stream stays over the glass instead of spilling. The pivot
+	// requires pour_approach and pour to be co-located within 0.5mm; the linear
+	// constraint also bounds per-waypoint orientation drift to 2°.
+	pourStep := Step{PoseName: clawPosePour, Component: componentClaws, PivotFromPose: clawPosePourApproach, PivotDegreesPerStep: 5,
+		Pause: pourPause}
 	if err := s.executeStep(ctx, cancelCtx, pourStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
-	uprightStep := Step{PoseName: clawPosePourApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	// Return upright along the same pivot so any residual drip stays over the glass.
+	uprightStep := Step{PoseName: clawPosePourApproach, Component: componentClaws, PivotFromPose: clawPosePour, PivotDegreesPerStep: 5,
+		Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
