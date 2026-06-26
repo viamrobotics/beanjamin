@@ -13,6 +13,7 @@ import (
 
 	"github.com/golang/geo/r3"
 	viz "github.com/viam-labs/motion-tools/client/client"
+	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/motionplan"
 	"go.viam.com/rdk/motionplan/armplanning"
 	"go.viam.com/rdk/referenceframe"
@@ -630,7 +631,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 			step.PivotFromPose, step.PoseName, dist, pivotPositionToleranceMm)
 	}
 
-	poses := computePivotPoses(startPD.pose, endPD.pose, step.PivotDegreesPerStep)
+	poses := computePivotPoses(logger, startPD.pose, endPD.pose, step.PivotDegreesPerStep)
 	logger.Infof("pivot %q → %q: %d waypoints (%.1f°/step)",
 		step.PivotFromPose, step.PoseName, len(poses)-1, step.PivotDegreesPerStep)
 
@@ -917,12 +918,18 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData) er
 
 // computePivotPoses returns interpolated poses between startPose and endPose.
 // The step count is derived from the total rotation angle divided by degreesPerStep.
-func computePivotPoses(startPose, endPose spatialmath.Pose, degreesPerStep float64) []spatialmath.Pose {
+func computePivotPoses(logger logging.Logger, startPose, endPose spatialmath.Pose, degreesPerStep float64) []spatialmath.Pose {
 	diff := spatialmath.OrientationBetween(startPose.Orientation(), endPose.Orientation())
-	totalRadians := diff.AxisAngles().Theta
+	// AxisAngles().Theta is signed: the axis/angle pair can come back as
+	// (axis, +θ) or (-axis, -θ) depending on the rotation. Use the magnitude so a
+	// negative angle doesn't collapse numSteps to 1 (max(1, round(negative)) == 1),
+	// which would degenerate the pivot into a single straight-to-goal waypoint.
+	totalRadians := math.Abs(diff.AxisAngles().Theta)
 	totalDegrees := totalRadians * 180.0 / math.Pi
 
 	numSteps := max(1, int(math.Round(totalDegrees/degreesPerStep)))
+
+	logger.Infof("pivot rotation: %.1f° total (%d steps at %.1f°/step)", totalDegrees, numSteps, degreesPerStep)
 
 	poses := make([]spatialmath.Pose, numSteps+1)
 	for i := 0; i <= numSteps; i++ {

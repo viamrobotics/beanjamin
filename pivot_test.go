@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/golang/geo/r3"
+	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/spatialmath"
 )
 
@@ -19,7 +20,7 @@ func TestComputePivotPoses_StepCount(t *testing.T) {
 		&spatialmath.OrientationVectorDegrees{OX: 0, OY: 0, OZ: 1, Theta: 45},
 	)
 
-	poses := computePivotPoses(start, end, 5)
+	poses := computePivotPoses(logging.NewTestLogger(t), start, end, 5)
 
 	if len(poses) != 10 {
 		t.Errorf("expected 10 poses (9 steps + start), got %d", len(poses))
@@ -36,7 +37,7 @@ func TestComputePivotPoses_Endpoints(t *testing.T) {
 		&spatialmath.OrientationVectorDegrees{OX: 0, OY: 0, OZ: 1, Theta: 30},
 	)
 
-	poses := computePivotPoses(start, end, 5)
+	poses := computePivotPoses(logging.NewTestLogger(t), start, end, 5)
 
 	// First pose should match start position.
 	first := poses[0]
@@ -68,7 +69,7 @@ func TestComputePivotPoses_MonotonicRotation(t *testing.T) {
 		&spatialmath.OrientationVectorDegrees{OX: 0, OY: 0, OZ: 1, Theta: 45},
 	)
 
-	poses := computePivotPoses(start, end, 5)
+	poses := computePivotPoses(logging.NewTestLogger(t), start, end, 5)
 
 	prevAngle := 0.0
 	for i := 1; i < len(poses); i++ {
@@ -106,7 +107,7 @@ func TestComputePivotPoses_OrientationVectorChange(t *testing.T) {
 	expectedSteps := int(math.Round(totalDeg / degreesPerStep))
 	t.Logf("OV change with fixed Theta=20°: total rotation = %.2f°, expected %d steps", totalDeg, expectedSteps)
 
-	poses := computePivotPoses(start, end, degreesPerStep)
+	poses := computePivotPoses(logging.NewTestLogger(t), start, end, degreesPerStep)
 
 	if len(poses) != expectedSteps+1 {
 		t.Errorf("expected %d poses (%d steps + start), got %d", expectedSteps+1, expectedSteps, len(poses))
@@ -137,5 +138,46 @@ func TestComputePivotPoses_OrientationVectorChange(t *testing.T) {
 
 	if math.Abs(prevAngle-totalDeg) > 0.1 {
 		t.Errorf("final rotation angle %.4f° differs from expected %.4f°", prevAngle, totalDeg)
+	}
+}
+
+// TestComputePivotPoses_NegativeAxisAngle guards a sign bug: for some rotations
+// OrientationBetween(...).AxisAngles() returns the (-axis, -θ) form, so the raw
+// Theta is negative. computePivotPoses must use the angle's magnitude — otherwise
+// max(1, round(negativeDegrees/step)) collapses to a single step and the pivot
+// degenerates into one straight-to-goal waypoint. These are the espresso-pour
+// claw orientations, whose relative rotation reports a negative Theta (~ -106.7°).
+func TestComputePivotPoses_NegativeAxisAngle(t *testing.T) {
+	start := spatialmath.NewPoseFromOrientation(
+		&spatialmath.OrientationVectorDegrees{OX: 0, OY: 1, OZ: 0, Theta: -180},
+	)
+	end := spatialmath.NewPoseFromOrientation(
+		&spatialmath.OrientationVectorDegrees{OX: 0, OY: -0.3, OZ: -1, Theta: 0},
+	)
+
+	rawTheta := spatialmath.OrientationBetween(start.Orientation(), end.Orientation()).AxisAngles().Theta
+	if rawTheta >= 0 {
+		t.Fatalf("test premise broken: expected a negative raw AxisAngles().Theta, got %.4f rad", rawTheta)
+	}
+
+	const degreesPerStep = 5.0
+	expectedSteps := int(math.Round(math.Abs(rawTheta) * 180.0 / math.Pi / degreesPerStep))
+
+	// Both directions must produce intermediate waypoints, not a single goal.
+	for _, tc := range []struct {
+		name       string
+		start, end spatialmath.Pose
+	}{
+		{"pour", start, end},
+		{"upright-return", end, start},
+	} {
+		poses := computePivotPoses(logging.NewTestLogger(t), tc.start, tc.end, degreesPerStep)
+		if len(poses) < 3 {
+			t.Errorf("%s: pivot degenerated to %d poses (%d waypoints); expected ~%d steps",
+				tc.name, len(poses), len(poses)-1, expectedSteps)
+		}
+		if len(poses) != expectedSteps+1 {
+			t.Errorf("%s: expected %d poses (%d steps + start), got %d", tc.name, expectedSteps+1, expectedSteps, len(poses))
+		}
 	}
 }
