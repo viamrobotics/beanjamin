@@ -31,6 +31,10 @@ import (
 // geometry of the cup/glass currently held by the gripper.
 const heldItemFrameName = "held-item"
 
+// stagedGlassFrameName is the static World-parented frame carrying a glass set
+// down in the staging area, so it stays a collision obstacle once released.
+const stagedGlassFrameName = "staged-glass"
+
 // attachDetectedGeometry records the vision-detected geometry of a freshly
 // grabbed item and adds the held-item frame under the gripper so subsequent
 // motion plans account for it. geomWorld is the detection in world coordinates
@@ -131,6 +135,95 @@ func (s *beanjaminCoffee) detachHeldGeometry() {
 	}
 	s.heldItemAttached = false
 	s.activeOrderLogger().Infof("detached held-item geometry from gripper")
+}
+
+// stageGlassAsObstacle is stageGlass's release path: it lifts the held glass
+// geometry into world coordinates and re-parents it from the gripper to a static
+// World frame, so the released glass stays a collision obstacle. No-op when nothing
+// is attached (e.g. track_held_geometry is off), like detachHeldGeometry.
+func (s *beanjaminCoffee) stageGlassAsObstacle(ctx context.Context) error {
+	if !s.heldItemAttached {
+		return nil
+	}
+	_, fsInputs, err := s.currentInputs(ctx)
+	if err != nil {
+		return err
+	}
+	heldFrame := s.cachedFS.Frame(heldItemFrameName)
+	if heldFrame == nil {
+		s.heldItemAttached = false
+		return nil
+	}
+	gif, err := heldFrame.Geometries([]referenceframe.Input{})
+	if err != nil {
+		return fmt.Errorf("get held-item geometry: %w", err)
+	}
+	geos := gif.Geometries()
+	if len(geos) == 0 {
+		return fmt.Errorf("held-item frame carries no geometry to stage")
+	}
+	// Lift the gripper-local geometry into world coordinates at the current pose.
+	worldTF, err := s.cachedFS.Transform(
+		fsInputs.ToLinearInputs(),
+		referenceframe.NewGeometriesInFrame(heldItemFrameName, geos),
+		referenceframe.World,
+	)
+	if err != nil {
+		return fmt.Errorf("transform staged glass geometry to world: %w", err)
+	}
+	worldGeos := worldTF.(*referenceframe.GeometriesInFrame).Geometries()
+	if len(worldGeos) == 0 {
+		return fmt.Errorf("no glass geometry after transform to world")
+	}
+	worldGeom := worldGeos[0]
+
+	// Release the gripper-parented held-item frame.
+	s.cachedFS.RemoveFrame(heldFrame)
+	s.heldItemAttached = false
+
+	// Re-add as a static world obstacle: identity frame transform, geometry carries
+	// its own world pose (like addHeldItemFrame, but parented to World).
+	if existing := s.cachedFS.Frame(stagedGlassFrameName); existing != nil {
+		s.cachedFS.RemoveFrame(existing)
+	}
+	obstacle, err := referenceframe.NewStaticFrameWithGeometry(stagedGlassFrameName, spatialmath.NewZeroPose(), worldGeom)
+	if err != nil {
+		return fmt.Errorf("create staged-glass obstacle frame: %w", err)
+	}
+	if err := s.cachedFS.AddFrame(obstacle, s.cachedFS.World()); err != nil {
+		return fmt.Errorf("add staged-glass obstacle to world: %w", err)
+	}
+	s.stagedGlassPlaced = true
+	s.activeOrderLogger().Infof("staged glass as world obstacle at %v", worldGeom.Pose().Point())
+	return nil
+}
+
+// removeStagedGlassObstacle drops the static world obstacle created by
+// stageGlassAsObstacle (e.g. once the glass is re-grabbed). No-op when none is set.
+func (s *beanjaminCoffee) removeStagedGlassObstacle() {
+	if !s.stagedGlassPlaced {
+		return
+	}
+	if existing := s.cachedFS.Frame(stagedGlassFrameName); existing != nil {
+		s.cachedFS.RemoveFrame(existing)
+	}
+	s.stagedGlassPlaced = false
+	s.activeOrderLogger().Infof("removed staged-glass world obstacle")
+}
+
+// stagedGlassGrabCollisions allows the gripper jaws to contact the staged-glass
+// obstacle while re-grabbing it (the rest of the arm still routes around it).
+// Returns nil when no glass is staged. The gripper sub-frames only exist on the
+// real gripper; filterFakeModeCollisions drops them under FakeMode.
+func (s *beanjaminCoffee) stagedGlassGrabCollisions() []AllowedCollision {
+	if !s.stagedGlassPlaced {
+		return nil
+	}
+	return []AllowedCollision{
+		{Frame1: stagedGlassFrameName, Frame2: componentClaws},
+		{Frame1: stagedGlassFrameName, Frame2: "gripper:claws"},
+		{Frame1: stagedGlassFrameName, Frame2: "gripper:case-gripper"},
+	}
 }
 
 // clearHeldGeometry forgets all cached item geometry and clears the attached
