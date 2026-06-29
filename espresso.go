@@ -1045,16 +1045,18 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 		return fmt.Errorf("grab_staged_glass: open gripper: %w", err)
 	}
 	time.Sleep(gripperPause)
-	grabStep := Step{PoseName: clawPoseStaging, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	// Descend onto the glass; it stays a world obstacle, but allow the jaws to
+	// contact it for this step (the rest of the arm still routes around it).
+	grabStep := Step{PoseName: clawPoseStaging, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.stagedGlassGrabCollisions()}
 	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
 		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
 	if err := s.grabAndVerifyHolding(ctx); err != nil {
 		return fmt.Errorf("grab_staged_glass: grab gripper: %w", err)
 	}
-	// The glass was tracked at pickup and set down in staging; restore its
-	// geometry now that it's back in the gripper. grabAndVerifyHolding only
-	// returns nil on a confirmed grab, so this never reattaches onto empty jaws.
+	// Glass is back in the gripper: drop the world obstacle, then restore it as a
+	// held item (obstacle first, so the held glass doesn't collide with its double).
+	s.removeStagedGlassObstacle()
 	if err := s.reattachGeometry(pickupLabelGlass); err != nil {
 		s.activeOrderLogger().Warnf("grab_staged_glass: reattach glass geometry failed, continuing untracked: %v", err)
 	}
@@ -1152,8 +1154,11 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("stage_glass: open gripper: %w", err)
 	}
 	time.Sleep(gripperPause)
-	// Glass is set down in the staging area; it no longer travels with the gripper.
-	s.detachHeldGeometry()
+	// Glass is set down; keep it as a static world obstacle (rather than dropping
+	// it) so the cup-retrieval, pour, and serving moves route around it.
+	if err := s.stageGlassAsObstacle(ctx); err != nil {
+		return fmt.Errorf("stage_glass: %w", err)
+	}
 	exitStep := Step{PoseName: clawPoseStagingApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
@@ -1176,9 +1181,8 @@ func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 	// Tilt to pour as a fixed-point pivot: the claws rotate the cup in place
 	// (slerp waypoints follow the geodesic between the upright and poured
 	// orientations — a pure rotation about the world X axis, since both share
-	// OX=0) so the stream stays over the glass instead of spilling. The pivot
-	// requires pour_approach and pour to be co-located within 0.5mm; the linear
-	// constraint also bounds per-waypoint orientation drift to 2°.
+	// OX=0) so the stream stays over the glass instead of spilling. The staged
+	// glass stays a hard obstacle here — the cup must clear it, never drive in.
 	pourStep := Step{PoseName: clawPosePour, Component: componentClaws, PivotFromPose: clawPosePourApproach, PivotDegreesPerStep: 5,
 		Pause: pourPause}
 	if err := s.executeStep(ctx, cancelCtx, pourStep); err != nil {

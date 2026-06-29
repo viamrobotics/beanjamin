@@ -476,6 +476,10 @@ type beanjaminCoffee struct {
 	// frame to world in cachedFS (i.e. an in-flight lock that must be preserved).
 	// Mutated only on the motion sequence goroutine, like cachedFS.
 	filterFrameLocked bool
+
+	// stagedGlassPlaced tracks whether stageGlassAsObstacle has added the released
+	// glass geometry to world in cachedFS
+	stagedGlassPlaced bool
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {

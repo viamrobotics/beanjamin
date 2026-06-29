@@ -282,22 +282,25 @@ func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 	// The rebuilt frame system has no held-item frame, and any cached grasp no
 	// longer corresponds to reality — forget it so a stale geometry can't be
 	// re-attached after a cancel/reset. The rebuilt frame system also restores the
-	// filter frame to the arm subtree, undoing any lockFilterFrame mutation.
+	// filter frame to the arm subtree (undoing any lockFilterFrame mutation) and
+	// drops the staged-glass obstacle (undoing any stageGlassAsObstacle mutation).
 	s.clearHeldGeometry()
 	s.filterFrameLocked = false
+	s.stagedGlassPlaced = false
 	return nil
 }
 
 // refreshFrameSystemIfClean rebuilds cachedFS from the service when no in-flight
-// state would be lost — i.e. nothing is held and the filter frame is not locked —
-// so a manually-invoked action picks up out-of-band config edits (e.g. the
-// portafilter handle geometry being changed during calibration) instead of
-// planning against a stale snapshot. When an item is held or the filter is locked,
-// cachedFS carries state that must persist across separate DoCommand calls, so it
-// is left untouched. Must be called on the motion sequence goroutine (gated by the
-// running flag), like resetFrameSystem.
+// state would be lost — i.e. nothing is held, the filter frame is not locked, and
+// no glass is staged as an obstacle — so a manually-invoked action picks up
+// out-of-band config edits (e.g. the portafilter handle geometry being changed
+// during calibration) instead of planning against a stale snapshot. When an item
+// is held, the filter is locked, or a glass is staged, cachedFS carries state that
+// must persist across separate DoCommand calls, so it is left untouched. Must be
+// called on the motion sequence goroutine (gated by the running flag), like
+// resetFrameSystem.
 func (s *beanjaminCoffee) refreshFrameSystemIfClean(ctx context.Context) error {
-	if s.heldItemAttached || s.filterFrameLocked {
+	if s.heldItemAttached || s.filterFrameLocked || s.stagedGlassPlaced {
 		return nil
 	}
 	if err := s.resetFrameSystem(ctx); err != nil {
