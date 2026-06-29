@@ -7,9 +7,9 @@ require (
 	github.com/golang/geo v0.0.0-20230421003525-6adc56603217
 	github.com/google/uuid v1.6.0
 	github.com/viam-labs/motion-tools v1.34.6
-	go.viam.com/api v0.1.561
-	go.viam.com/rdk v0.131.0
-	go.viam.com/utils v0.6.3
+	go.viam.com/api v0.1.563
+	go.viam.com/rdk v0.132.0
+	go.viam.com/utils v0.6.6
 	gonum.org/v1/gonum v0.17.0
 	google.golang.org/api v0.271.0
 )
@@ -225,7 +225,7 @@ require (
 	gonum.org/v1/plot v0.15.2 // indirect
 	google.golang.org/genproto v0.0.0-20260128011058-8636f8732409 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260226221140-a57be14db171 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260615183401-62b3387ff324 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260622175928-b703f567277d // indirect
 	google.golang.org/grpc v1.81.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
