@@ -8,7 +8,11 @@ import { drinkLabel } from "./order/drinks";
 import { ChooseDrink } from "./order/choose-drink";
 import { EnterName } from "./order/enter-name";
 import dynamic from "next/dynamic";
-const FaceRegister = dynamic(() => import("./order/face-register").then(m => ({ default: m.FaceRegister })), { ssr: false });
+const FaceRegister = dynamic(
+  () =>
+    import("./order/face-register").then((m) => ({ default: m.FaceRegister })),
+  { ssr: false },
+);
 import { OrderConfirmation } from "./order/order-confirmation";
 import { OrderTracker } from "./order/order-tracker";
 import { CamFeed } from "./order/cam-feed";
@@ -32,7 +36,7 @@ type Step = "welcome" | "drink" | "name" | "face-register" | "confirmation";
 type TrackerMode = "hidden" | "auto" | "manual";
 
 // Width of the order tracker panel in both auto and manual modes.
-const TRACKER_PANEL_WIDTH = "w-[560px]";
+const TRACKER_PANEL_WIDTH = "w-[min(560px,45vw)]";
 
 const LOST_CONNECTION_MSG =
   "Lost connection to the machine. Please wait for it to reconnect and try again.";
@@ -41,6 +45,27 @@ export function Kiosk() {
   const searchParams = useSearchParams();
   const partId = searchParams.get("partId") ?? "";
   const kioskMode = searchParams.get("kiosk") === "1";
+
+  // iOS Safari doesn't shrink the layout viewport (dvh/vh) when the on-screen
+  // keyboard opens — only the visual viewport. Mirror visualViewport.height into
+  // --app-height so the full-height wrappers track the keyboard and centered
+  // content lifts above it. Falls back to 100dvh when unavailable (SSR/no JS).
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const apply = () =>
+      document.documentElement.style.setProperty(
+        "--app-height",
+        `${vv.height}px`,
+      );
+    apply();
+    vv.addEventListener("resize", apply);
+    vv.addEventListener("scroll", apply);
+    return () => {
+      vv.removeEventListener("resize", apply);
+      vv.removeEventListener("scroll", apply);
+    };
+  }, []);
 
   const [step, setStep] = useState<Step>("welcome");
   const [name, setName] = useState("");
@@ -88,7 +113,7 @@ export function Kiosk() {
       if (cancelled) return;
       if (!key) {
         setAppError(
-          'Machine metadata missing "anthropic_api_key". Set it in the Viam app.'
+          'Machine metadata missing "anthropic_api_key". Set it in the Viam app.',
         );
         return;
       }
@@ -162,7 +187,13 @@ export function Kiosk() {
     if (!selectedDrink) return;
     setDrinkRejection(null);
 
-    const supportedDrinks = new Set(["espresso", "lungo", "decaf", "decaf_lungo", "iced_coffee"]);
+    const supportedDrinks = new Set([
+      "espresso",
+      "lungo",
+      "decaf",
+      "decaf_lungo",
+      "iced_coffee",
+    ]);
     if (supportedDrinks.has(selectedDrink)) {
       setStep("name");
       return;
@@ -218,6 +249,8 @@ export function Kiosk() {
         drink: selectedDrink!,
         drinkLabel: drinkLabel(selectedDrink!),
         customerName: misspelledName,
+        // Credits the drink to this customer's history; empty = anonymous (ignored).
+        customerEmail: email,
         pronunciation: undefined,
       });
       setStep("confirmation");
@@ -243,12 +276,19 @@ export function Kiosk() {
 
       // If the customer provided an email and wasn't already identified,
       // offer face registration before proceeding to the order.
-      console.log("[app] handleSubmit:", { email: email.trim(), welcomeBack, name });
+      console.log("[app] handleSubmit:", {
+        email: email.trim(),
+        welcomeBack,
+        name,
+      });
       if (email.trim() && !welcomeBack) {
         console.log("[app] routing to face-register");
         setStep("face-register");
       } else {
-        console.log("[app] skipping face-register:", !email.trim() ? "no email" : "returning customer");
+        console.log(
+          "[app] skipping face-register:",
+          !email.trim() ? "no email" : "returning customer",
+        );
         await placeOrder(result.misspelled || name);
       }
     } catch (err) {
@@ -385,7 +425,7 @@ export function Kiosk() {
         />
 
         <h1
-          className={`anim-in-hero text-4xl font-mono font-bold text-neutral-900 mb-4 ${machineName ? "" : "invisible"}`}
+          className={`anim-in-hero text-3xl sm:text-4xl font-mono font-bold text-neutral-900 mb-4 text-center break-words max-w-full ${machineName ? "" : "invisible"}`}
           style={{ animationDelay: "500ms" }}
         >
           Hi, I&apos;m {machineName ?? "Beanjamin"}
@@ -406,13 +446,15 @@ export function Kiosk() {
               Welcome back, {welcomeBack}! 👋
             </p>
             <p className="text-neutral-500 text-sm mt-1">
-              {[
-                "Nice to see you again ☕",
-                "Couldn't stay away, huh? ☕",
-                "Back so soon? We're flattered ☕",
-                "Oh look who it is! Your usual? 👀",
-                "At this point, we should charge rent 💅",
-              ][Math.floor(Math.random() * 5)]}
+              {
+                [
+                  "Nice to see you again ☕",
+                  "Couldn't stay away, huh? ☕",
+                  "Back so soon? We're flattered ☕",
+                  "Oh look who it is! Your usual? 👀",
+                  "At this point, we should charge rent 💅",
+                ][Math.floor(Math.random() * 5)]
+              }
             </p>
           </div>
         )}
@@ -430,9 +472,16 @@ export function Kiosk() {
         )}
 
         <button
-          onClick={() => setStep("drink")}
+          onClick={() => {
+            // Start every new order flow fresh. Going back within the flow
+            // (name -> drink) still preserves the selection; only entering from
+            // welcome clears it.
+            setSelectedDrink(null);
+            setDrinkRejection(null);
+            setStep("drink");
+          }}
           disabled={!connected}
-          className="anim-in-hero press px-20 py-4 text-lg font-medium bg-neutral-900 text-white rounded-full transition-colors hover:bg-neutral-800 disabled:bg-neutral-300 disabled:cursor-not-allowed disabled:hover:bg-neutral-300"
+          className="anim-in-hero press px-12 sm:px-20 py-4 text-lg font-medium whitespace-nowrap bg-neutral-900 text-white rounded-full transition-colors hover:bg-neutral-800 disabled:bg-neutral-300 disabled:cursor-not-allowed disabled:hover:bg-neutral-300"
           style={{ animationDelay: welcomeBack ? "1400ms" : "1200ms" }}
         >
           Place an order
@@ -456,11 +505,13 @@ export function Kiosk() {
   // the left, order list on the right. The ordering flow is hidden.
   if (trackerMode === "manual") {
     return (
-      <div className="h-dvh flex">
+      <div className="flex h-[var(--app-height,100dvh)]">
         <div className="flex-1 min-w-0 h-full bg-neutral-900">
           <CamFeed viamConn={viamConn} cameraName={camName} fill />
         </div>
-        <div className={`${TRACKER_PANEL_WIDTH} shrink-0 border-l border-neutral-200`}>
+        <div
+          className={`${TRACKER_PANEL_WIDTH} shrink-0 border-l border-neutral-200`}
+        >
           <OrderTracker
             viamConn={viamConn}
             onEmpty={handleTrackerEmpty}
@@ -473,7 +524,7 @@ export function Kiosk() {
   }
 
   return (
-    <div className="h-dvh flex">
+    <div className="flex h-[var(--app-height,100dvh)]">
       {/* Left panel: ordering flow */}
       <div className="flex-1 min-w-0 relative transition-all duration-500">
         {renderStep()}
@@ -481,17 +532,16 @@ export function Kiosk() {
 
       {/* Right panel: live cam feed + order tracker */}
       {trackerMode === "auto" && (
-        <div className={`${TRACKER_PANEL_WIDTH} shrink-0 border-l border-neutral-200 flex flex-col`}>
+        <div
+          className={`${TRACKER_PANEL_WIDTH} shrink-0 border-l border-neutral-200 flex flex-col`}
+        >
           <CamFeed
             viamConn={viamConn}
             cameraName={camName}
             onExpand={() => setTrackerMode("manual")}
           />
           <div className="flex-1 min-h-0">
-            <OrderTracker
-              viamConn={viamConn}
-              onEmpty={handleTrackerEmpty}
-            />
+            <OrderTracker viamConn={viamConn} onEmpty={handleTrackerEmpty} />
           </div>
         </div>
       )}

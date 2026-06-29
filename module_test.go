@@ -23,6 +23,8 @@ func validBaseConfig() *Config {
 		CameraObservePoseSwitcherName: "observe-switch",
 		CupApproachRelativePose:       &RelativePose{},
 		CupGrabRelativePose:           &RelativePose{},
+		ServingApproachRelativePose:   &RelativePose{},
+		ServingGrabRelativePose:       &RelativePose{},
 	}
 }
 
@@ -94,6 +96,24 @@ func TestValidate_RequiresCupGrabRelativePose(t *testing.T) {
 	}
 }
 
+func TestValidate_RequiresServingApproachRelativePose(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.ServingApproachRelativePose = nil
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "serving_approach_relative_pose") {
+		t.Fatalf("expected serving_approach_relative_pose required error, got %v", err)
+	}
+}
+
+func TestValidate_RequiresServingGrabRelativePose(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.ServingGrabRelativePose = nil
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "serving_grab_relative_pose") {
+		t.Fatalf("expected serving_grab_relative_pose required error, got %v", err)
+	}
+}
+
 func TestValidate_RejectsNegativePhotosPerVantage(t *testing.T) {
 	cfg := validBaseConfig()
 	cfg.CupPhotosPerVantage = -1
@@ -109,6 +129,42 @@ func TestValidate_RejectsNegativeMaxAttempts(t *testing.T) {
 	_, _, err := cfg.Validate("")
 	if err == nil || !strings.Contains(err.Error(), "cup_pickup_max_attempts") {
 		t.Fatalf("expected cup_pickup_max_attempts error, got %v", err)
+	}
+}
+
+func TestValidate_AcceptsCupAndGlassDimensions(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.CupDimensions = &ContainerDimensions{DiameterMm: 80, HeightMm: 95}
+	cfg.GlassDimensions = &ContainerDimensions{DiameterMm: 70, HeightMm: 140}
+	if _, _, err := cfg.Validate(""); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidate_RejectsNonPositiveCupDiameter(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.CupDimensions = &ContainerDimensions{DiameterMm: 0, HeightMm: 95}
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "cup_dimensions.diameter_mm") {
+		t.Fatalf("expected cup_dimensions.diameter_mm error, got %v", err)
+	}
+}
+
+func TestValidate_RejectsNonPositiveCupHeight(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.CupDimensions = &ContainerDimensions{DiameterMm: 80, HeightMm: -1}
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "cup_dimensions.height_mm") {
+		t.Fatalf("expected cup_dimensions.height_mm error, got %v", err)
+	}
+}
+
+func TestValidate_RejectsNonPositiveGlassDimensions(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.GlassDimensions = &ContainerDimensions{DiameterMm: 70, HeightMm: 0}
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "glass_dimensions.height_mm") {
+		t.Fatalf("expected glass_dimensions.height_mm error, got %v", err)
 	}
 }
 

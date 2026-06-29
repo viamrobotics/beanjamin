@@ -111,7 +111,7 @@ function getDevStep(): string {
   const stepDuration = DEV_ORDER_DURATION_MS / DEV_STEPS.length;
   const stepIndex = Math.min(
     Math.floor(elapsed / stepDuration),
-    DEV_STEPS.length - 1
+    DEV_STEPS.length - 1,
   );
   return DEV_STEPS[stepIndex];
 }
@@ -192,21 +192,19 @@ export async function connectToViam(partId: string): Promise<ViamConnection> {
 /** Read a key from the machine's user-defined metadata. */
 export async function getMachineMetadataKey(
   conn: ViamConnection,
-  key: string
+  key: string,
 ): Promise<string | undefined> {
   if (isDevMode()) return "dev-mock-key";
 
   const metadata = await conn.viamClient.appClient.getRobotMetadata(
-    conn.machineId
+    conn.machineId,
   );
   const value = metadata[key];
   return typeof value === "string" ? value : undefined;
 }
 
 /** Get the human-readable machine name from the Viam app. */
-export async function getMachineName(
-  conn: ViamConnection
-): Promise<string> {
+export async function getMachineName(conn: ViamConnection): Promise<string> {
   const robot = await conn.viamClient.appClient.getRobot(conn.machineId);
   return robot?.name ?? "";
 }
@@ -268,7 +266,7 @@ export async function hasCoffeeService(conn: ViamConnection): Promise<boolean> {
     (n) =>
       n.name === COFFEE_SERVICE_NAME &&
       n.type === "service" &&
-      n.subtype === "generic"
+      n.subtype === "generic",
   );
 }
 
@@ -278,17 +276,15 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
     const devStep = getDevStep();
     // Recent first (most-recent-first), then pending — same shape as the
     // real backend's List() / Status() output.
-    const recentOrders: QueueOrder[] = [...devRecent]
-      .reverse()
-      .map((r) => ({
-        id: r.id,
-        drink: "espresso",
-        customer_name: r.name,
-        enqueued_at: new Date(r.completedAt).toISOString(),
-        raw_step: r.rawStep,
-        step_history: [],
-        completed_at: new Date(r.completedAt).toISOString(),
-      }));
+    const recentOrders: QueueOrder[] = [...devRecent].reverse().map((r) => ({
+      id: r.id,
+      drink: "espresso",
+      customer_name: r.name,
+      enqueued_at: new Date(r.completedAt).toISOString(),
+      raw_step: r.rawStep,
+      step_history: [],
+      completed_at: new Date(r.completedAt).toISOString(),
+    }));
     const pendingOrders: QueueOrder[] = devQueue.map((o, i) => ({
       id: o.id,
       drink: "espresso",
@@ -313,7 +309,7 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
   const sdk = await loadSDK();
   const coffeeService = new sdk.GenericServiceClient(
     conn.robotClient,
-    COFFEE_SERVICE_NAME
+    COFFEE_SERVICE_NAME,
   );
   const result = await coffeeService.getStatus();
   return result as unknown as QueueStatus;
@@ -325,15 +321,23 @@ export async function prepareOrder(
     drink: string;
     drinkLabel: string;
     customerName: string;
+    customerEmail?: string;
     pronunciation?: string;
-  }
+  },
 ): Promise<{ status: string; queue_position?: number; order_id?: string }> {
   if (isDevMode()) {
     if (opts.customerName) {
       const id = `dev-${++devOrderCounter}`;
       devQueue.push({ id, name: opts.customerName });
       startDevProcessing();
-      console.log("[dev] order queued:", opts.customerName, "id:", id, "queue:", devQueue.map((o) => o.name));
+      console.log(
+        "[dev] order queued:",
+        opts.customerName,
+        "id:",
+        id,
+        "queue:",
+        devQueue.map((o) => o.name),
+      );
     }
     return {
       status: "queued",
@@ -345,7 +349,7 @@ export async function prepareOrder(
   const sdk = await loadSDK();
   const coffeeService = new sdk.GenericServiceClient(
     conn.robotClient,
-    COFFEE_SERVICE_NAME
+    COFFEE_SERVICE_NAME,
   );
 
   const greeting = opts.pronunciation
@@ -356,6 +360,7 @@ export async function prepareOrder(
     prepare_order: {
       drink: opts.drink,
       customer_name: opts.customerName,
+      ...(opts.customerEmail && { customer_email: opts.customerEmail }),
       ...(greeting && { initial_greeting: greeting }),
     },
   });
@@ -368,12 +373,12 @@ export async function prepareOrder(
 export async function registerCustomerFace(
   conn: ViamConnection,
   name: string,
-  email: string
+  email: string,
 ): Promise<{ registered: string; name: string; image_path: string }> {
   const sdk = await loadSDK();
   const svc = new sdk.GenericServiceClient(
     conn.robotClient,
-    CUSTOMER_DETECTOR_SERVICE_NAME
+    CUSTOMER_DETECTOR_SERVICE_NAME,
   );
   const result = await svc.doCommand({
     register_customer: { name, email },
@@ -387,12 +392,12 @@ export async function registerCustomerFace(
 
 export async function finishRegistration(
   conn: ViamConnection,
-  email: string
+  email: string,
 ): Promise<{ email: string; name: string; face_images: number }> {
   const sdk = await loadSDK();
   const svc = new sdk.GenericServiceClient(
     conn.robotClient,
-    CUSTOMER_DETECTOR_SERVICE_NAME
+    CUSTOMER_DETECTOR_SERVICE_NAME,
   );
   const result = await svc.doCommand({ finish_registration: email });
   return result as unknown as {
@@ -402,9 +407,7 @@ export async function finishRegistration(
   };
 }
 
-export async function identifyCustomer(
-  conn: ViamConnection
-): Promise<{
+export async function identifyCustomer(conn: ViamConnection): Promise<{
   identified: boolean;
   name?: string;
   email?: string;
@@ -418,7 +421,7 @@ export async function identifyCustomer(
   const sdk = await loadSDK();
   const svc = new sdk.GenericServiceClient(
     conn.robotClient,
-    CUSTOMER_DETECTOR_SERVICE_NAME
+    CUSTOMER_DETECTOR_SERVICE_NAME,
   );
   const result = await svc.doCommand({ identify_customer: true });
   return result as unknown as {
@@ -431,12 +434,18 @@ export async function identifyCustomer(
 }
 
 export async function getCustomerDetectorInfo(
-  conn: ViamConnection
+  conn: ViamConnection,
 ): Promise<{ camera_name: string }> {
+  if (isDevMode()) {
+    // No customer-detector in dev; let the caller's catch path skip face
+    // registration rather than stranding it on an empty camera stream.
+    throw new Error("dev mode: customer detector unavailable");
+  }
+
   const sdk = await loadSDK();
   const svc = new sdk.GenericServiceClient(
     conn.robotClient,
-    CUSTOMER_DETECTOR_SERVICE_NAME
+    CUSTOMER_DETECTOR_SERVICE_NAME,
   );
   const result = await svc.doCommand({ get_info: true });
   return result as unknown as { camera_name: string };

@@ -152,6 +152,28 @@ func cameraToWorld(
 	return worldPose.Pose().Point(), nil
 }
 
+// boxDims converts a diameter/height override into axis-aligned box extents:
+// width and depth both equal the diameter (a square footprint approximating the
+// round container), height equals the height.
+func (d *ContainerDimensions) boxDims() r3.Vector {
+	return r3.Vector{X: d.DiameterMm, Y: d.DiameterMm, Z: d.HeightMm}
+}
+
+// overriddenBox builds the held-item geometry from operator-supplied container
+// dimensions (cup_dimensions / glass_dimensions): an axis-aligned box
+// (orientation OZ=1) of the configured size, centered on the grasp centroid —
+// the point the gripper is sent to — rather than on a point-cloud midpoint.
+// Modeling a known-size container around its grasp point avoids a center skewed
+// by a point cloud that only captured part of the container. label is set on the
+// box.
+func overriddenBox(centroid r3.Vector, dims *ContainerDimensions, label string) (spatialmath.Geometry, error) {
+	box, err := spatialmath.NewBox(spatialmath.NewPoseFromPoint(centroid), dims.boxDims(), label)
+	if err != nil {
+		return nil, fmt.Errorf("new %s bounding box: %w", label, err)
+	}
+	return box, nil
+}
+
 // worldBoundingBox builds an axis-aligned bounding box (orientation OZ=1) in the
 // world frame around the given camera-frame point cloud. The cloud is
 // transformed into world coordinates and the box spans its world min/max
@@ -218,18 +240,20 @@ func (s *beanjaminCoffee) gripperWorldPoint(ctx context.Context) (r3.Vector, err
 // detection — its own vision service and observe poses, tuned for the taller
 // glass — fully independent of cup detection while sharing one implementation.
 type pickupTarget struct {
-	label            string              // "cup" / "glass" — logs, spans, errors
-	vision           vision.Service      // detector for this item
-	cameraName       string              // camera frame for centroid->world (shared)
-	observeSw        toggleswitch.Switch // switch holding the observe vantages
-	observeComponent string              // routing key for executeStep/switchForComponent
-	observeHomePose  string              // recovery pose name on observeSw
-	approachRel      *RelativePose       // gripper offset for the pre-grab pose
-	grabRel          *RelativePose       // gripper offset for the grab pose
-	photosPerVantage int                 // vision frames per observe pose
-	maxAttempts      int                 // full observe-and-grab attempts
-	centroidMinZMm   float64             // floor detection Z to this (0 = disabled)
-	noItemSpeak      string              // spoken on "nothing detected" before a retry wait
+	label            string               // "cup" / "glass" — logs, spans, errors
+	vision           vision.Service       // detector for this item
+	cameraName       string               // camera frame for centroid->world (shared)
+	observeSw        toggleswitch.Switch  // switch holding the observe vantages
+	observeComponent string               // routing key for executeStep/switchForComponent
+	observeHomePose  string               // recovery pose name on observeSw
+	approachRel      *RelativePose        // gripper offset for the pre-grab pose
+	grabRel          *RelativePose        // gripper offset for the grab pose
+	photosPerVantage int                  // vision frames per observe pose
+	maxAttempts      int                  // full observe-and-grab attempts
+	centroidMinZMm   float64              // floor detection Z to this (0 = disabled)
+	dimsOverride     *ContainerDimensions // predefined box size; nil uses point-cloud extents
+	noItemSpeak      string               // spoken on "nothing detected" before a retry wait
+	graspZFromGeom   bool                 // grab at the geometry centroid's Z (keep detected X/Y); for the tall glass whose detected Z can sit high on the rim
 }
 
 // cupPickupTarget describes dynamic cup pickup. Reproduces the values the cup
@@ -247,6 +271,7 @@ func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 		photosPerVantage: pickupPhotosPerVantage(s.cfg.CupPhotosPerVantage),
 		maxAttempts:      pickupMaxAttempts(s.cfg.CupPickupMaxAttempts),
 		centroidMinZMm:   s.cfg.CupCentroidMinZMm,
+		dimsOverride:     s.cfg.CupDimensions,
 		noItemSpeak:      "I don't see a cup yet — please place one on the shelf. Trying again in 15 seconds.",
 	}
 }
@@ -269,7 +294,9 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 		photosPerVantage: pickupPhotosPerVantage(s.cfg.CupPhotosPerVantage),
 		maxAttempts:      pickupMaxAttempts(s.cfg.CupPickupMaxAttempts),
 		centroidMinZMm:   s.cfg.GlassCentroidMinZMm,
+		dimsOverride:     s.cfg.GlassDimensions,
 		noItemSpeak:      "I don't see a glass yet — please place one on the top shelf. Trying again in 15 seconds.",
+		graspZFromGeom:   true,
 	}
 }
 
@@ -314,10 +341,19 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 			return nil, err
 		}
 		// Build the detection geometry as a world-frame, axis-aligned (orientation
-		// OZ=1) bounding box around the detection's point cloud, rather than using
-		// the vision service's geometry. The held-item tracker attaches this shape
-		// to the gripper after the grab, and it is drawn in the saved snapshot.
-		geomWorld, err := worldBoundingBox(fs, fsInputs, t.cameraName, obj.PointCloud, t.label)
+		// OZ=1) box. By default this is the bounding box of the detection's point
+		// cloud (not the vision service's own geometry). When dimsOverride is
+		// configured, use the operator-supplied size centered on the grasp centroid
+		// instead — a known-size container is modeled around where it is actually
+		// grasped, sidestepping a skewed point-cloud midpoint. The held-item tracker
+		// attaches this shape to the gripper after the grab, and it is drawn in the
+		// saved snapshot.
+		var geomWorld spatialmath.Geometry
+		if t.dimsOverride != nil {
+			geomWorld, err = overriddenBox(world, t.dimsOverride, t.label)
+		} else {
+			geomWorld, err = worldBoundingBox(fs, fsInputs, t.cameraName, obj.PointCloud, t.label)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -487,6 +523,16 @@ func nearestGeometry(c r3.Vector, originals []pickupCandidate) spatialmath.Geome
 //   - anything else → execution error or operator cancel; bubble up.
 func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarget, cand pickupCandidate) error {
 	centroid := cand.centroid
+	// For the glass, grab at the geometry centroid's Z (the middle of the box)
+	// while keeping the detected X/Y. The point-cloud centroid Z can land high on
+	// the rim; the box center is a more stable mid-height grasp point.
+	if t.graspZFromGeom && cand.geom != nil {
+		geomZ := cand.geom.Pose().Point().Z
+		if geomZ != centroid.Z {
+			s.activeOrderLogger().Infof("dynamic %s pickup: grasping at geometry-centroid Z %.1f (was detected-centroid Z %.1f)", t.label, geomZ, centroid.Z)
+		}
+		centroid.Z = geomZ
+	}
 	approachPD := &poseData{
 		pose:          composeCupPose(centroid, relativePoseToSpatial(t.approachRel)),
 		refFrame:      referenceframe.World,

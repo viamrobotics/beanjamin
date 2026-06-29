@@ -29,12 +29,23 @@ const (
 	servingAreaFrameName       = "serving-area"
 	servingAreaOriginFrameName = "serving-area_origin"
 
+	// servingAreaShieldFrameName is an obstacle defined in the machine frame
+	// system (like serving-area / shelf-top) enclosing the standing-cup zone
+	// above the serving area. It stays a hard obstacle on the lateral carry so
+	// the arm steers clear of cups already on the shelf; only the linearly
+	// constrained descent into a slot and the retreat back out are allowed to
+	// pass through it (servingAreaShieldCollisions).
+	servingAreaShieldFrameName = "serving-area-shield"
+
 	shelfTileSpacingMm = 120.0
 	shelfTileMarginMm  = 60.0
-	// shelfDropZOffsetMm is the Z height of the placement anchor above the
-	// shelf top surface. The anchor plays the same role as the detected cup
-	// centroid at pickup: it is composed with CupGrabRelativePose to derive
-	// the world-frame claws pose used for the drop.
+	// shelfDropZOffsetMm is the fallback Z height of the placement anchor above
+	// the shelf top surface, used only when no held-item geometry is tracked.
+	// With a cup/glass geometry attached, servingAreaDropZOffset derives the
+	// offset from the container's own height instead, so taller containers (e.g.
+	// the iced glass) are not driven into the shelf. The anchor plays the same
+	// role as the detected cup centroid at pickup: it is composed with
+	// CupGrabRelativePose to derive the world-frame claws pose used for the drop.
 	shelfDropZOffsetMm    = 30.0
 	shelfApproachZExtraMm = 80.0
 )
@@ -184,4 +195,18 @@ func (s *beanjaminCoffee) servingAreaSlots(ctx context.Context) ([]r3.Vector, fl
 	logger.Infof("shelf placement: serving area at %v, dims %v, %d slot(s) (shelf top Z=%.1fmm)",
 		shelfWorldPose.Point(), dimsMm, len(tiles), shelfTopZ)
 	return tiles, shelfTopZ, nil
+}
+
+// servingAreaDropZOffset returns the Z height of the placement anchor above the
+// serving-area top surface. With a held-item geometry tracked it is half the
+// container's height: the held-item box is modeled upright and centered on the
+// grasp anchor, so its bottom sits halfHeight below the anchor — placing the
+// container's bottom on the shelf regardless of its height (so a taller iced
+// glass is not driven into the shelf the way the fixed offset did). Falls back
+// to shelfDropZOffsetMm (tuned for the cup) when nothing is tracked.
+func (s *beanjaminCoffee) servingAreaDropZOffset() float64 {
+	if half, ok := s.heldItemHalfHeightMm(); ok {
+		return half
+	}
+	return shelfDropZOffsetMm
 }

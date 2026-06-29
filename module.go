@@ -110,6 +110,10 @@ type Config struct {
 	// cancels alike. Unset disables notifications.
 	SlackNotifierName string `json:"slack_notifier_name,omitempty"`
 
+	// CustomerDetectorName: customer-detector that completed orders are credited
+	// to, for "the usual". Unset disables recording.
+	CustomerDetectorName string `json:"customer_detector_name,omitempty"`
+
 	// Conversational, when true, makes the coffee service speak its own
 	// status-narrating lines through speech_service_name — initial
 	// greetings, almost-ready prompts, order confirmations, rejection
@@ -137,6 +141,10 @@ type Config struct {
 	// noise that puts the centroid slightly below the physical cup base
 	// and trips the planner. Zero (default) disables clamping.
 	CupCentroidMinZMm float64 `json:"cup_centroid_min_z_mm,omitempty"`
+	// CupDimensions optionally overrides the cup size derived from the
+	// detection point cloud with a known diameter/height (see
+	// ContainerDimensions). Unset keeps the point-cloud-derived size.
+	CupDimensions *ContainerDimensions `json:"cup_dimensions,omitempty"`
 
 	// Glass pickup (iced coffee) mirrors cup pickup but with its own vision
 	// service and observe-pose switch, tuned for the taller iced-coffee glass.
@@ -146,6 +154,16 @@ type Config struct {
 	GlassApproachRelativePose    *RelativePose `json:"glass_approach_relative_pose,omitempty"`
 	GlassGrabRelativePose        *RelativePose `json:"glass_grab_relative_pose,omitempty"`
 	GlassCentroidMinZMm          float64       `json:"glass_centroid_min_z_mm,omitempty"`
+	// GlassDimensions optionally overrides the glass size derived from the
+	// detection point cloud with a known diameter/height (see
+	// ContainerDimensions). Unset keeps the point-cloud-derived size.
+	GlassDimensions *ContainerDimensions `json:"glass_dimensions,omitempty"`
+
+	// Serving placement offsets are composed onto the serving-area slot anchor
+	// when releasing a finished drink onto the served shelf. The same pair is
+	// used for both the hot cup and the iced glass. Both are required.
+	ServingApproachRelativePose *RelativePose `json:"serving_approach_relative_pose,omitempty"`
+	ServingGrabRelativePose     *RelativePose `json:"serving_grab_relative_pose,omitempty"`
 
 	// TrackHeldGeometry, when true, attaches the vision-detected geometry of a
 	// picked-up cup/glass to the gripper frame in the cached frame system, so
@@ -233,6 +251,39 @@ type RelativePose struct {
 	Theta float64 `json:"theta"`
 }
 
+// ContainerDimensions is an optional, operator-supplied size for a picked-up
+// container (cup or glass). When set on the coffee service config
+// (cup_dimensions / glass_dimensions), it replaces the size derived from the
+// detection point cloud: the held-item bounding box is built with
+// width = depth = DiameterMm and height = HeightMm, centered on the grasp
+// centroid (the point the gripper is sent to) rather than on the point-cloud
+// midpoint. The grasp centroid itself is unaffected — only the
+// collision/visualization geometry changes. Round containers (cups/glasses)
+// are well approximated by a square-footprint box of the rim diameter, and a
+// known size centered on the grasp point avoids the point cloud under-reading or
+// skewing the box for a partially-observed container. Unset (the default) keeps
+// the point-cloud-derived dimensions.
+type ContainerDimensions struct {
+	DiameterMm float64 `json:"diameter_mm"`
+	HeightMm   float64 `json:"height_mm"`
+}
+
+// validate checks an optional ContainerDimensions override: a nil override is
+// allowed (point-cloud dimensions are used), but when present both diameter and
+// height must be positive. field is the JSON config key for error messages.
+func (d *ContainerDimensions) validate(path, field string) error {
+	if d == nil {
+		return nil
+	}
+	if d.DiameterMm <= 0 {
+		return fmt.Errorf("%s: %s.diameter_mm must be > 0", path, field)
+	}
+	if d.HeightMm <= 0 {
+		return fmt.Errorf("%s: %s.height_mm must be > 0", path, field)
+	}
+	return nil
+}
+
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.PoseSwitcherName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "pose_switcher_name")
@@ -264,6 +315,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.SlackNotifierName != "" {
 		optDeps = append(optDeps, generic.Named(cfg.SlackNotifierName).String())
 	}
+	if cfg.CustomerDetectorName != "" {
+		optDeps = append(optDeps, generic.Named(cfg.CustomerDetectorName).String())
+	}
 
 	if cfg.CupVisionServiceName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_vision_service_name")
@@ -280,11 +334,23 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.CupGrabRelativePose == nil {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_grab_relative_pose")
 	}
+	if cfg.ServingApproachRelativePose == nil {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "serving_approach_relative_pose")
+	}
+	if cfg.ServingGrabRelativePose == nil {
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "serving_grab_relative_pose")
+	}
 	if cfg.CupPhotosPerVantage < 0 {
 		return nil, nil, fmt.Errorf("%s: cup_photos_per_vantage must be >= 0", path)
 	}
 	if cfg.CupPickupMaxAttempts < 0 {
 		return nil, nil, fmt.Errorf("%s: cup_pickup_max_attempts must be >= 0", path)
+	}
+	if err := cfg.CupDimensions.validate(path, "cup_dimensions"); err != nil {
+		return nil, nil, err
+	}
+	if err := cfg.GlassDimensions.validate(path, "glass_dimensions"); err != nil {
+		return nil, nil, err
 	}
 	reqDeps = append(reqDeps,
 		vision.Named(cfg.CupVisionServiceName).String(),
@@ -348,6 +414,7 @@ type beanjaminCoffee struct {
 	camStorage             generic.Service // optional; mux over video stores; nil if cam_storage_mux_name unset
 	iceBoard               board.Board     // optional; drives the ice-machine GPIO pin; nil if ice_board_name unset
 	slackNotifier          generic.Service // optional; viam:notifications:slack; nil if slack_notifier_name unset
+	customerDetector       generic.Service // optional; viam:beanjamin:customer-detector; nil if customer_detector_name unset
 	machineLogsURL         string          // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
 	dataLocationID         string          // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
 	pendingOrderClipsDir   string          // optional; directory for pending-clip records to survive restarts
@@ -569,6 +636,17 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger.Infof("slack notifier %q connected", conf.SlackNotifierName)
 	}
 
+	var customerDetector generic.Service
+	if conf.CustomerDetectorName != "" {
+		detector, err := generic.FromProvider(deps, conf.CustomerDetectorName)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("customer_detector_name %q: %w", conf.CustomerDetectorName, err)
+		}
+		customerDetector = detector
+		logger.Infof("customer detector %q connected — order history recording enabled", conf.CustomerDetectorName)
+	}
+
 	var pendingOrderClipsDir string
 	if conf.DataDir != "" {
 		pendingOrderClipsDir = filepath.Join(conf.DataDir, "pending-clips")
@@ -632,6 +710,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		camStorage:           camStorage,
 		iceBoard:             iceBoard,
 		slackNotifier:        slackNotifier,
+		customerDetector:     customerDetector,
 		machineLogsURL:       buildMachineLogsURL(os.Getenv("VIAM_MACHINE_ID"), os.Getenv("VIAM_PRIMARY_ORG_ID")),
 		dataLocationID:       os.Getenv("VIAM_LOCATION_ID"),
 		pendingOrderClipsDir: pendingOrderClipsDir,

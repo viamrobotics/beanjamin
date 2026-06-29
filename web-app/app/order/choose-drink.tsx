@@ -1,7 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { DRINKS } from "./drinks";
+import { useState } from "react";
+import { GRID_DRINKS, applyDecaf, baseDrinkId, isDecafId } from "./drinks";
 
 export function ChooseDrink({
   selectedDrink,
@@ -18,32 +19,28 @@ export function ChooseDrink({
   onBack: () => void;
   onNext: () => void;
 }) {
-  const firstRowDrinks = DRINKS.filter(
-    (drink) => drink.id === "espresso" || drink.id === "lungo",
-  );
-  const decafDrinks = DRINKS.filter(
-    (drink) => drink.id === "decaf" || drink.id === "decaf_lungo",
-  );
-  const icedDrinks = DRINKS.filter((drink) => drink.id === "iced_coffee");
-  const secondRowDrinks = DRINKS.filter(
-    (drink) =>
-      drink.id === "americano" || drink.id === "cappuccino" || drink.id === "latte",
-  );
+  const [decaf, setDecaf] = useState(isDecafId(selectedDrink ?? ""));
+  const selectedBase = selectedDrink ? baseDrinkId(selectedDrink) : null;
 
-  const renderDrinkCard = (drink: (typeof DRINKS)[number], i: number) => {
-    const isSelected = selectedDrink === drink.id;
+  const handleDecaf = (next: boolean) => {
+    setDecaf(next);
+    if (selectedBase) onSelect(applyDecaf(selectedBase, next));
+  };
+
+  const renderDrinkCard = (drink: (typeof GRID_DRINKS)[number], i: number) => {
+    const isSelected = selectedBase === drink.id;
     return (
       <button
         key={drink.id}
-        onClick={() => onSelect(drink.id)}
+        onClick={() => onSelect(applyDecaf(drink.id, decaf))}
         style={{ animationDelay: `${150 + i * 100}ms` }}
-        className={`anim-in drink-card relative w-full flex flex-col items-center justify-center gap-1 p-3 rounded-2xl transition-[background-color,border-color,transform] duration-150 ${
+        className={`anim-in drink-card relative w-full flex flex-col items-center justify-center gap-1 py-4 rounded-2xl transition-[background-color,border-color,transform] duration-150 ${
           isSelected
             ? "bg-[#ebebeb] border-2 border-black scale-[1.02]"
             : "bg-neutral-100 border-2 border-transparent scale-100"
         }`}
       >
-        <div className="flex flex-col items-center gap-1">
+        <div className="flex flex-col items-center gap-1 -translate-y-2">
           <Image
             src={drink.image}
             alt={drink.label}
@@ -51,11 +48,8 @@ export function ChooseDrink({
             height={140}
             className="object-contain h-[min(140px,14vh)] w-auto"
           />
-          <p className="font-mono font-semibold text-base text-black uppercase tracking-wider leading-tight">
+          <p className="font-sans font-medium text-base text-black leading-tight">
             {drink.label}
-          </p>
-          <p className="font-sans font-medium text-sm text-black/60 leading-tight text-pretty">
-            {drink.description}
           </p>
         </div>
       </button>
@@ -63,54 +57,76 @@ export function ChooseDrink({
   };
 
   return (
-    <main className="relative h-full bg-white flex flex-col items-center justify-center p-4 font-sans">
-      <button
-        type="button"
-        onClick={onBack}
-        aria-label="Go back"
-        className="anim-in absolute left-6 top-6 h-11 w-11 rounded-full border border-neutral-200 bg-white text-neutral-900 transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400"
-        style={{ animationDelay: "80ms" }}
-      >
-        <svg
-          aria-hidden="true"
-          viewBox="0 0 24 24"
-          className="mx-auto h-5 w-5"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
+    <main className="relative h-full bg-white flex flex-col overflow-y-auto font-sans">
+      <header className="sticky top-0 z-10 w-full bg-white px-10 pt-6 pb-2">
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Go back"
+          className="anim-in h-11 w-11 rounded-full border border-neutral-200 bg-white text-neutral-900 transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400"
+          style={{ animationDelay: "80ms" }}
         >
-          <path d="M15 18l-6-6 6-6" />
-        </svg>
-      </button>
-      <div className="flex flex-col gap-4 w-full max-w-[720px]">
-        <h1 className="anim-in text-2xl font-semibold text-[#0a0a0a] text-center">
-          Choose your drink
-        </h1>
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+            className="mx-auto h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
+      </header>
+      <div className="my-auto flex flex-col gap-6 w-full max-w-[900px] mx-auto px-10 pb-6">
+        <div className="anim-in flex items-center justify-between gap-4">
+          <h1 className="text-3xl tracking-tight font-semibold text-[#0a0a0a] whitespace-nowrap">
+            Choose your drink
+          </h1>
 
-        <div className="flex flex-col gap-3">
-          <div className="grid grid-cols-2 gap-3">
-            {firstRowDrinks.map((drink, i) => renderDrinkCard(drink, i))}
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            {decafDrinks.map((drink, i) =>
-              renderDrinkCard(drink, i + firstRowDrinks.length),
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            {icedDrinks.map((drink, i) =>
-              renderDrinkCard(drink, i + firstRowDrinks.length + decafDrinks.length),
-            )}
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            {secondRowDrinks.map((drink, i) =>
-              renderDrinkCard(
-                drink,
-                i + firstRowDrinks.length + decafDrinks.length + icedDrinks.length,
-              ),
-            )}
-          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={decaf}
+            onClick={() => handleDecaf(!decaf)}
+            className="flex items-center gap-3 p-4 transition-colors"
+          >
+            <svg
+              aria-hidden="true"
+              xmlns="http://www.w3.org/2000/svg"
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-5 w-5 text-neutral-400"
+            >
+              <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" />
+            </svg>
+            <span className="font-mono font-semibold text-base text-black uppercase tracking-wider">
+              Decaf
+            </span>
+            <span
+              className={`relative h-7 w-12 rounded-full transition-colors duration-150 ${
+                decaf ? "bg-black" : "bg-neutral-300"
+              }`}
+            >
+              <span
+                className={`absolute top-1 left-1 h-5 w-5 rounded-full bg-white transition-transform duration-150 ${
+                  decaf ? "translate-x-5" : "translate-x-0"
+                }`}
+              />
+            </span>
+          </button>
+        </div>
+
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3">
+          {GRID_DRINKS.map((drink, i) => renderDrinkCard(drink, i))}
         </div>
 
         {rejection && (
@@ -124,11 +140,10 @@ export function ChooseDrink({
             Waiting to reconnect to the machine…
           </p>
         )}
-
         <button
           onClick={onNext}
           disabled={!selectedDrink || !connected}
-          className="anim-in press w-full py-3 text-base font-medium bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
+          className="anim-in press w-full py-4 text-base font-mono font-semibold uppercase tracking-wider bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
           style={{ animationDelay: "600ms" }}
         >
           Next

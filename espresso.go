@@ -202,6 +202,22 @@ func (s *beanjaminCoffee) sayAlways(ctx context.Context, text string) error {
 	return err
 }
 
+// recordOrderHistory credits a completed drink to the customer's history; no-op
+// without an email or detector, best-effort otherwise.
+func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order Order) {
+	if s.customerDetector == nil || order.CustomerEmail == "" {
+		return
+	}
+	if _, err := s.customerDetector.DoCommand(ctx, map[string]interface{}{
+		"record_order": map[string]interface{}{
+			"email": order.CustomerEmail,
+			"drink": order.Drink,
+		},
+	}); err != nil {
+		s.activeOrderLogger().Warnf("failed to record order history for %q: %v", order.CustomerEmail, err)
+	}
+}
+
 var coffeeBrewingCollisions = []AllowedCollision{
 	{Frame1: componentFilter, Frame2: "coffee-machine-actuation-area"},
 	{Frame1: "portafilter-handle", Frame2: "coffee-machine-actuation-area"},
@@ -239,6 +255,36 @@ var heldItemMachineCollisions = []AllowedCollision{
 
 var heldItemServingAreaCollisions = []AllowedCollision{
 	{Frame1: heldItemFrameName, Frame2: servingAreaFrameName},
+	{Frame1: heldItemFrameName, Frame2: "shelf-top"},
+}
+
+// heldItemStagingCollisions allows the held glass to approach the table surfaces
+// it legitimately gets close to while being set down in the staging area.
+var heldItemStagingCollisions = []AllowedCollision{
+	{Frame1: heldItemFrameName, Frame2: "table"},
+	{Frame1: heldItemFrameName, Frame2: "table-right"},
+}
+
+// servingAreaShieldCollisions returns the allowed-collision pairs that let the
+// gripper bodies, claws, and (while an item is held) the held container pass
+// through the serving-area-shield obstacle. The shield stays a hard obstacle on
+// the lateral carry so the arm avoids cups already standing on the shelf; these
+// pairs are applied only on the linearly constrained descent into a slot and the
+// retreat back out, which move straight down/up into the target slot.
+//
+// The gripper sub-frames (gripper:claws, gripper:case-gripper) only exist on the
+// real gripper; filterFakeModeCollisions (applied in moveToRawPose) drops them
+// under FakeMode. The held-item pair is gated by heldItemSurfaceCollisions so it
+// is omitted once the container has been released (on the retreat).
+func (s *beanjaminCoffee) servingAreaShieldCollisions() []AllowedCollision {
+	out := []AllowedCollision{
+		{Frame1: componentClaws, Frame2: servingAreaShieldFrameName},
+		{Frame1: "gripper:claws", Frame2: servingAreaShieldFrameName},
+		{Frame1: "gripper:case-gripper", Frame2: servingAreaShieldFrameName},
+	}
+	return append(out, s.heldItemSurfaceCollisions([]AllowedCollision{
+		{Frame1: heldItemFrameName, Frame2: servingAreaShieldFrameName},
+	})...)
 }
 
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {
@@ -256,6 +302,15 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 		"set_cup_for_coffee":        s.setCupForCoffee,
 		"give_full_cup_to_customer": s.placeFullCupOnShelf,
 		"clean_portafilter":         s.cleanPortafilter,
+		"fetch_glass":               s.fetchGlass,               // vision-grab a glass off the shelf
+		"pulse_ice_pin":             s.pulseIcePin,              // hardware only, no arm motion
+		"dispense_ice":              s.dispenseIce,              // arm to chute + pulse + retreat
+		"stage_glass":               s.stageGlass,               // set held glass down, release
+		"grab_brewed_cup":           s.grabBrewedCupFromMachine, // retrieve cup from under machine
+		"pour_espresso":             s.pourEspresso,             // pour held cup over staged glass
+		"grab_staged_glass":         s.grabStagedGlass,          // re-grab the staged glass
+		"place_held":                s.placeHeldInServingArea,   // place held vessel in serving area
+		"serve_iced_coffee":         s.serveIcedCoffee,          // full sequence end-to-end
 	}
 
 	action, ok := actions[name]
@@ -755,14 +810,14 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context)
 }
 
 // tryDropCupInSlot drops the held cup at one serving-area slot: free-plan to the
-// approach pose above the slot, descend linearly to the drop pose
-// (claws-middle = shelfTopZ + shelfDropZOffsetMm), release, then retreat
-// linearly and close the gripper.
+// approach pose above the slot, descend linearly to the drop pose (placement
+// anchor = shelfTopZ + servingAreaDropZOffset, i.e. the held container's
+// half-height, so its bottom rests on the shelf regardless of its height),
+// release, then retreat linearly and close the gripper.
 //
-// CupGrabRelativePose is the same relative offset used at pickup (composed onto
-// the detected cup centroid) — composing it onto the placement anchor here
-// keeps the claws-to-cup geometry identical between grab and release, so the
-// cup lands centered on the slot.
+// ServingGrabRelativePose is the claws-to-container offset used at release
+// (composed onto the placement anchor here) — shared by the hot cup and the
+// iced glass so either lands centered on the slot.
 //
 // Returned errors split like tryGrabCup so placeFullCupOnShelf can react via
 // errors.Is:
@@ -776,10 +831,10 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 	dropAnchor := r3.Vector{
 		X: tileWorld.X,
 		Y: tileWorld.Y,
-		Z: shelfTopZ + shelfDropZOffsetMm,
+		Z: shelfTopZ + s.servingAreaDropZOffset(),
 	}
-	dropPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.CupGrabRelativePose))
-	approachPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.CupApproachRelativePose))
+	dropPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.ServingGrabRelativePose))
+	approachPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.ServingApproachRelativePose))
 
 	approachPD := &poseData{pose: approachPose, refFrame: referenceframe.World, componentName: componentClaws}
 	dropPD := &poseData{pose: dropPose, refFrame: referenceframe.World, componentName: componentClaws}
@@ -802,11 +857,17 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 
 	// The cup is held during the approach and descent, so allow its geometry to
 	// approach the shelf surface (no-op when tracking is off / nothing attached).
-	shelfCollisions := s.heldItemSurfaceCollisions(heldItemServingAreaCollisions)
+	// The shield pairs additionally let the gripper/claws/held cup descend
+	// straight through the serving-area-shield into the target slot — the shield
+	// stays a hard obstacle on the lateral carry above so the arm avoids cups
+	// already on the shelf. Build a fresh slice so neither package-level
+	// allow-list is aliased by append.
+	descentCollisions := append([]AllowedCollision{}, s.heldItemSurfaceCollisions(heldItemServingAreaCollisions)...)
+	descentCollisions = append(descentCollisions, s.servingAreaShieldCollisions()...)
 
 	// 2. Linear descent to the drop pose. A planning failure leaves the arm at
 	// the approach pose still holding the cup — caller can try the next slot.
-	if err := s.moveToRawPose(ctx, dropPD, defaultApproachConstraint, shelfCollisions, nil); err != nil {
+	if err := s.moveToRawPose(ctx, dropPD, defaultApproachConstraint, descentCollisions, nil); err != nil {
 		return fmt.Errorf("descend into slot (x=%.1f, y=%.1f): %w", tileWorld.X, tileWorld.Y, err)
 	}
 
@@ -820,8 +881,11 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 	// Cup is released onto the shelf; it no longer travels with the gripper.
 	s.detachHeldGeometry()
 
-	// 4. Linear retreat back to the approach pose.
-	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, nil, nil); err != nil {
+	// 4. Linear retreat back to the approach pose. The cup is released, but the
+	// gripper/claws start inside the serving-area-shield, so the shield must stay
+	// allowed for the straight-up retreat to plan out of the slot (the held-item
+	// pair drops out now that nothing is attached).
+	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, s.servingAreaShieldCollisions(), nil); err != nil {
 		return fmt.Errorf("retreat after releasing cup (slot x=%.1f, y=%.1f): %v", tileWorld.X, tileWorld.Y, err)
 	}
 
@@ -1017,7 +1081,6 @@ func (s *beanjaminCoffee) fetchGlass(ctx, cancelCtx context.Context) error {
 // always driven back LOW — including on cancel — so the ice machine can't be
 // left running.
 func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
-	logger := s.activeOrderLogger()
 	approachStep := Step{PoseName: clawPoseIceMachineApproach, Component: componentClaws, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("dispense_ice: %w", err)
@@ -1027,35 +1090,8 @@ func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("dispense_ice: %w", err)
 	}
 
-	pinName := s.icePinName()
-	pin, err := s.iceBoard.GPIOPinByName(pinName)
-	if err != nil {
-		return fmt.Errorf("dispense_ice: get pin %q: %w", pinName, err)
-	}
-	dwell := time.Duration(s.iceDispenseSec() * float64(time.Second))
-	logger.Infof("dispensing ice: pin %q HIGH for %s", pinName, dwell)
-	if err := pin.Set(ctx, true, nil); err != nil {
-		return fmt.Errorf("dispense_ice: set pin %q high: %w", pinName, err)
-	}
-	// Drive the pin LOW with a fresh context so the write still lands if ctx is
-	// already cancelled.
-	stop := func() error {
-		if err := pin.Set(context.Background(), false, nil); err != nil {
-			return fmt.Errorf("dispense_ice: set pin %q low: %w", pinName, err)
-		}
-		return nil
-	}
-	select {
-	case <-time.After(dwell):
-	case <-ctx.Done():
-		_ = stop()
-		return fmt.Errorf("dispense_ice: cancelled during dispense: %w", ctx.Err())
-	case <-cancelCtx.Done():
-		_ = stop()
-		return fmt.Errorf("dispense_ice: cancelled during dispense")
-	}
-	if err := stop(); err != nil {
-		return err
+	if err := s.pulseIcePin(ctx, cancelCtx); err != nil {
+		return fmt.Errorf("dispense_ice: %w", err)
 	}
 
 	retreatStep := Step{PoseName: clawPoseIceMachineApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
@@ -1063,6 +1099,41 @@ func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("dispense_ice: %w", err)
 	}
 	return nil
+}
+
+func (s *beanjaminCoffee) pulseIcePin(ctx, cancelCtx context.Context) error {
+	if s.iceBoard == nil {
+		return fmt.Errorf("pulse_ice_pin: no ice board configured (set ice_board_name)")
+	}
+	logger := s.activeOrderLogger()
+	pinName := s.icePinName()
+	pin, err := s.iceBoard.GPIOPinByName(pinName)
+	if err != nil {
+		return fmt.Errorf("pulse_ice_pin: get pin %q: %w", pinName, err)
+	}
+	dwell := time.Duration(s.iceDispenseSec() * float64(time.Second))
+	logger.Infof("dispensing ice: pin %q HIGH for %s", pinName, dwell)
+	if err := pin.Set(ctx, true, nil); err != nil {
+		return fmt.Errorf("pulse_ice_pin: set pin %q high: %w", pinName, err)
+	}
+	// Drive the pin LOW with a fresh context so the write still lands if ctx is
+	// already cancelled.
+	stop := func() error {
+		if err := pin.Set(context.Background(), false, nil); err != nil {
+			return fmt.Errorf("pulse_ice_pin: set pin %q low: %w", pinName, err)
+		}
+		return nil
+	}
+	select {
+	case <-time.After(dwell):
+	case <-ctx.Done():
+		_ = stop()
+		return fmt.Errorf("pulse_ice_pin: cancelled during dispense: %w", ctx.Err())
+	case <-cancelCtx.Done():
+		_ = stop()
+		return fmt.Errorf("pulse_ice_pin: cancelled during dispense")
+	}
+	return stop()
 }
 
 // stageGlass sets the held glass down in the staging area and releases it,
@@ -1073,7 +1144,7 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
-	placeStep := Step{PoseName: clawPoseStaging, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	placeStep := Step{PoseName: clawPoseStaging, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemStagingCollisions)}
 	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
@@ -1102,11 +1173,20 @@ func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
-	pourStep := Step{PoseName: clawPosePour, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: pourPause}
+	// Tilt to pour as a fixed-point pivot: the claws rotate the cup in place
+	// (slerp waypoints follow the geodesic between the upright and poured
+	// orientations — a pure rotation about the world X axis, since both share
+	// OX=0) so the stream stays over the glass instead of spilling. The pivot
+	// requires pour_approach and pour to be co-located within 0.5mm; the linear
+	// constraint also bounds per-waypoint orientation drift to 2°.
+	pourStep := Step{PoseName: clawPosePour, Component: componentClaws, PivotFromPose: clawPosePourApproach, PivotDegreesPerStep: 5,
+		Pause: pourPause}
 	if err := s.executeStep(ctx, cancelCtx, pourStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
-	uprightStep := Step{PoseName: clawPosePourApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	// Return upright along the same pivot so any residual drip stays over the glass.
+	uprightStep := Step{PoseName: clawPosePourApproach, Component: componentClaws, PivotFromPose: clawPosePour, PivotDegreesPerStep: 5,
+		Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}

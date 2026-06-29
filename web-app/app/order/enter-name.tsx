@@ -40,12 +40,12 @@ export function EnterName({
           <path d="M15 18l-6-6 6-6" />
         </svg>
       </button>
-      <div className="w-full max-w-[512px] flex flex-col gap-5">
-        <h1 className="anim-in text-2xl font-semibold text-neutral-900 text-center">
+      <div className="w-full max-w-[512px] flex flex-col gap-8">
+        <h1 className="anim-in text-3xl tracking-tight font-semibold text-neutral-900 text-center">
           What&apos;s your name?
         </h1>
 
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-4">
           <input
             type="text"
             value={name}
@@ -83,7 +83,7 @@ export function EnterName({
         <button
           onClick={onSubmit}
           disabled={!name.trim() || loading || !connected}
-          className="anim-in press w-full py-3 text-base font-medium bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
+          className="anim-in press w-full py-5 text-base font-medium bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
           style={{ animationDelay: "200ms" }}
         >
           {loading ? "Placing order..." : "Place order"}

@@ -295,3 +295,64 @@ func TestHeldItemSurfaceCollisions(t *testing.T) {
 		t.Fatalf("expected the pairs when attached, got %v", got)
 	}
 }
+
+func TestHeldItemHalfHeightMm(t *testing.T) {
+	fs := clawsStaticFS(t, spatialmath.NewZeroPose())
+	s := heldGeomService(t, fs)
+
+	// Nothing attached: no height available, callers fall back to a fixed offset.
+	if _, ok := s.heldItemHalfHeightMm(); ok {
+		t.Fatalf("expected ok=false when nothing is attached")
+	}
+
+	// Attached: half of the test box's 80mm Z extent, regardless of how the box
+	// is rotated into the gripper frame (a Box keeps its dims under transform).
+	rotated := spatialmath.NewPose(
+		r3.Vector{X: 10, Y: 20, Z: 30},
+		&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: 37},
+	)
+	if err := s.addHeldItemFrame(testBox(t, rotated)); err != nil {
+		t.Fatalf("addHeldItemFrame: %v", err)
+	}
+	got, ok := s.heldItemHalfHeightMm()
+	if !ok {
+		t.Fatalf("expected ok=true when attached")
+	}
+	if math.Abs(got-40) > 1e-6 {
+		t.Fatalf("half-height = %g, want 40", got)
+	}
+}
+
+func TestServingAreaShieldCollisions(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{}}
+
+	// Detached (the retreat): gripper + claws pairs only, no held-item pair.
+	got := s.servingAreaShieldCollisions()
+	if len(got) != 3 {
+		t.Fatalf("expected 3 pairs when detached, got %d (%v)", len(got), got)
+	}
+	for _, ac := range got {
+		if ac.Frame2 != servingAreaShieldFrameName {
+			t.Fatalf("expected Frame2=%q, got %q", servingAreaShieldFrameName, ac.Frame2)
+		}
+		if ac.Frame1 == heldItemFrameName {
+			t.Fatalf("held-item pair must be omitted when detached, got %v", got)
+		}
+	}
+
+	// Attached (the descent): adds the held-item↔shield pair.
+	s.heldItemAttached = true
+	got = s.servingAreaShieldCollisions()
+	if len(got) != 4 {
+		t.Fatalf("expected 4 pairs when attached, got %d (%v)", len(got), got)
+	}
+	var hasHeld bool
+	for _, ac := range got {
+		if ac.Frame1 == heldItemFrameName && ac.Frame2 == servingAreaShieldFrameName {
+			hasHeld = true
+		}
+	}
+	if !hasHeld {
+		t.Fatalf("expected held-item↔shield pair when attached, got %v", got)
+	}
+}
