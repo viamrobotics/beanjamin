@@ -26,7 +26,8 @@
     {
       "api": "rdk:component:sensor",
       "model": "viam:beanjamin:maintenance-sensor",
-      "short_description": "Sensor that reports safe=false when the arm is moving or orders are queued."
+      "short_description": "Sensor that reports safe=false when the arm is moving or orders are queued.",
+      "markdown_link": "README.md#model-viambeanjaminmaintenance-sensor"
     },
     {
       "api": "rdk:component:sensor",
@@ -43,7 +44,8 @@
     {
       "api": "rdk:service:generic",
       "model": "viam:beanjamin:customer-detector",
-      "short_description": "Identifies return customers via facial recognition using the face-identification vision service."
+      "short_description": "Identifies return customers via facial recognition using the face-identification vision service.",
+      "markdown_link": "README.md#model-viambeanjamincustomer-detector"
     }
   ],
   "entrypoint": "bin/beanjamin",
