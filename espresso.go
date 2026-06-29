@@ -819,7 +819,7 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context)
 // (composed onto the placement anchor here) — shared by the hot cup and the
 // iced glass so either lands centered on the slot.
 //
-// Returned errors split like tryGrabCup so placeFullCupOnShelf can react via
+// Returned errors split like tryGrab so placeHeldInServingArea can react via
 // errors.Is:
 //   - wraps errMotionPlanning → the approach or descent could not be planned;
 //     the cup is still held and the arm has not committed to the slot, so the
@@ -1070,7 +1070,7 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 // fetchGlass vision-detects an iced-coffee glass off the top shelf and grabs it,
 // leaving it held by the gripper (see pickGlassDynamic). Iced coffee always uses
 // vision glass pickup — there is no static fallback (can_serve_iced requires
-// dynamic_glass_pickup).
+// glass_vision_service_name and glass_observe_pose_switcher_name).
 func (s *beanjaminCoffee) fetchGlass(ctx, cancelCtx context.Context) error {
 	if err := s.pickGlassDynamic(ctx, cancelCtx); err != nil {
 		return fmt.Errorf("fetch_glass: %w", err)

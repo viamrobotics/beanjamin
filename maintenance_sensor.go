@@ -84,8 +84,7 @@ func (m *maintenanceSensor) Status(ctx context.Context) (map[string]interface{},
 func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]interface{}) (map[string]interface{}, error) {
 	ctx, span := trace.StartSpan(ctx, "maintenance-sensor::Readings")
 	defer span.End()
-	// Check if the arm is physically moving.
-	armMoving, err := m.arm.IsMoving(ctx)
+	isArmMoving, err := m.arm.IsMoving(ctx)
 	if err != nil {
 		m.logger.CWarnw(
 			ctx, "is_safe debugging: failed to check arm movement",
@@ -107,10 +106,10 @@ func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]inter
 	isBusy, _ := resp["is_busy"].(bool)
 	queueCount, _ := resp["count"].(float64)
 
-	isSafe := !armMoving && !isBusy && queueCount == 0
+	isSafe := !isArmMoving && !isBusy && queueCount == 0
 	m.logger.CDebugf(
 		ctx, "is_safe debugging: is_safe: %v, arm_moving: %v, is_busy: %v, queue_count: %v",
-		isSafe, armMoving, isBusy, queueCount,
+		isSafe, isArmMoving, isBusy, queueCount,
 	)
 
 	return map[string]interface{}{

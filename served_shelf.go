@@ -46,8 +46,7 @@ const (
 	// the iced glass) are not driven into the shelf. The anchor plays the same
 	// role as the detected cup centroid at pickup: it is composed with
 	// CupGrabRelativePose to derive the world-frame claws pose used for the drop.
-	shelfDropZOffsetMm    = 30.0
-	shelfApproachZExtraMm = 80.0
+	shelfDropZOffsetMm = 30.0
 )
 
 // computeShelfTileCenters returns world-frame tile centers spaced spacingMm

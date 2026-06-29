@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - A Go **Viam module** (`cmd/module/main.go`) registering seven models — see `meta.json` and `README.md` for the full list and per-model configuration docs. The headline model is `viam:beanjamin:coffee` (generic service) which orchestrates the full brew cycle.
 - A Next.js **web app** (`web-app/`) that exposes the customer-facing ordering UI and talks to the machine via `@viamrobotics/sdk`. Packaged as its own Viam module via `web-app-module`.
 
-The top-level Go package is `beanjamin` (`module.go`, `espresso.go`, `motion.go`, `queue.go`, `greetings.go`, `maintenance_sensor.go`, `order_sensor.go`, `cam_storage.go`). Sibling packages in subdirectories each back one of the other models: `customerdetector/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`, `texttospeech/`.
+The top-level Go package is `beanjamin`; its files split by concern — lifecycle and orchestration (`module.go`, `espresso.go`, `queue.go`), motion planning (`motion.go`, `held_geometry.go`, `joints.go`), vision-driven pickup and serving-area placement (`cup_pickup.go`, `served_shelf.go`, `gripper_state.go`), and peripheral integrations (`greetings.go`, `cam_storage.go`, `slack_notify.go`, `sensor_usage.go`, `maintenance_sensor.go`, `order_sensor.go`). Sibling packages in subdirectories each back one of the other models: `customerdetector/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`, `texttospeech/`.
 
 ## Common commands
 
@@ -19,7 +19,7 @@ Go module (run from repo root):
 make                  # build bin/beanjamin (default target)
 make test             # go test ./...
 make lint             # gofmt -s -w . && golangci-lint run
-make module.tar.gz    # package for Viam (runs tests first via `make module`)
+make module.tar.gz    # package for Viam (use `make module` to run tests first)
 make setup            # install nlopt (brew on macOS, apt on Linux) + go mod tidy
 ```
 
@@ -66,7 +66,7 @@ All models follow the standard Viam `Validate`/`newX` pattern — see `DEVELOPER
 
 ### Web app
 
-`web-app/app/page.tsx` is the **fleet dashboard** (machine list with a per-machine status dot and queue summary, order charts, and leaderboards). `web-app/app/machine/page.tsx` is the **kiosk flow** for a single machine (`welcome` → `drink` → `name` → `face-register` → `confirmation`, with a right-rail `order-tracker`). `web-app/app/lib/viamClient.ts` wraps the Viam TS SDK and is where `DoCommand`s are issued against the coffee and customer-detector services. Connection lifecycle helpers live in `web-app/app/lib/connectionManager.ts`: `withTimeout`/`disconnectQuietly` (the dial-timeout and teardown primitives) plus `createConnectionManager`, a per-machine connection pool with in-flight dedup that the dashboard uses (one pooled connection per machine). `useViamConnection.ts` is the kiosk's single connection — it dials directly with those shared helpers and runs a heartbeat, without the pool. The tracker polls `get_queue` to render step state and ready-to-pick-up cards; the dashboard polls each machine and colors its status dot green (coffee service answering), yellow (reachable but coffee service absent), or gray (offline).
+`web-app/app/page.tsx` is a thin view selector: it renders the **fleet dashboard** (`web-app/app/dashboard.tsx`, with `web-app/app/home/` components — a machine list with a per-machine status dot and queue summary, order charts, and leaderboards) or the single-machine **kiosk** (`web-app/app/kiosk.tsx`, with `web-app/app/order/` components — `welcome` → `drink` → `name` → `face-register` → `confirmation`, with a right-rail `order-tracker`) based on the `?view=` query param (`?view=machine` selects the kiosk). Everything is served from one static entrypoint, so the kiosk can't have its own route — a refresh on a nested path would 404. `web-app/app/lib/viamClient.ts` wraps the Viam TS SDK and is where `DoCommand`s are issued against the coffee and customer-detector services. Connection lifecycle helpers live in `web-app/app/lib/connectionManager.ts`: `withTimeout`/`disconnectQuietly` (the dial-timeout and teardown primitives) plus `createConnectionManager`, a per-machine connection pool with in-flight dedup that the dashboard uses (one pooled connection per machine). `useViamConnection.ts` is the kiosk's single connection — it dials directly with those shared helpers and runs a heartbeat, without the pool. The tracker polls `get_queue` to render step state and ready-to-pick-up cards; the dashboard polls each machine and colors its status dot green (coffee service answering), yellow (reachable but coffee service absent), or gray (offline).
 
 ## Lint and style
 

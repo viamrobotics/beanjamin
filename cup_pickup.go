@@ -256,8 +256,7 @@ type pickupTarget struct {
 	graspZFromGeom   bool                 // grab at the geometry centroid's Z (keep detected X/Y); for the tall glass whose detected Z can sit high on the rim
 }
 
-// cupPickupTarget describes dynamic cup pickup. Reproduces the values the cup
-// pipeline used before the generic refactor.
+// cupPickupTarget describes dynamic cup pickup.
 func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 	return &pickupTarget{
 		label:            pickupLabelCup,
@@ -562,6 +561,7 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 		return fmt.Errorf("grab centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
 
+	// 4. Grab and verify the gripper is holding the item.
 	if err := s.grabAndVerifyHolding(ctx); err != nil {
 		s.recoverToObserve(ctx, cancelCtx, t)
 		return fmt.Errorf("grab %s: %w", t.label, err)
