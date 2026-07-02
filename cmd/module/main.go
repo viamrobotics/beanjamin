@@ -6,7 +6,6 @@ import (
 	"beanjamin/dialcontrolmotion"
 	"beanjamin/maintenancesensor"
 	"beanjamin/multiposesexecutionswitch"
-	"beanjamin/texttospeech"
 
 	"go.viam.com/rdk/components/sensor"
 	toggleswitch "go.viam.com/rdk/components/switch"
@@ -19,7 +18,6 @@ func main() {
 	module.ModularMain(
 		resource.APIModel{API: generic.API, Model: coffee.Model},
 		resource.APIModel{API: toggleswitch.API, Model: multiposesexecutionswitch.Model},
-		resource.APIModel{API: generic.API, Model: texttospeech.Model},
 		resource.APIModel{API: sensor.API, Model: maintenancesensor.Model},
 		resource.APIModel{API: sensor.API, Model: coffee.OrderSensor},
 		resource.APIModel{API: generic.API, Model: dialcontrolmotion.Model},

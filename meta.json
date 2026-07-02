@@ -18,12 +18,6 @@
       "markdown_link": "README.md#model-viambeanjaminmulti-poses-execution-switch"
     },
     {
-      "api": "rdk:service:generic",
-      "model": "viam:beanjamin:text-to-speech",
-      "short_description": "[DEPRECATED: use viam:conversation-bundle:text-to-speech] Google Cloud TTS with audioout playback.",
-      "markdown_link": "README.md#model-viambeanjamintext-to-speech"
-    },
-    {
       "api": "rdk:component:sensor",
       "model": "viam:beanjamin:maintenance-sensor",
       "short_description": "Sensor that reports safe=false when the arm is moving or orders are queued.",

@@ -18,6 +18,17 @@
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
+# macOS Finder metadata
+.DS_Store
+
+# Motion-request debug dumps written by save_motion_requests_dir
+# (timestamped <label>.json / <label>_response.json plus framesystem snapshots)
+*_move.json
+*_move_response.json
+*_circular.json
+*_circular_response.json
+*_framesystem.json
+
 # Dependency directories (remove the comment below to include it)
 # vendor/
 

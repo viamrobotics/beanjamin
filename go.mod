@@ -3,7 +3,6 @@ module beanjamin
 go 1.25.9
 
 require (
-	cloud.google.com/go/texttospeech v1.16.0
 	github.com/golang/geo v0.0.0-20230421003525-6adc56603217
 	github.com/google/uuid v1.6.0
 	github.com/viam-labs/motion-tools v1.34.6
@@ -11,7 +10,6 @@ require (
 	go.viam.com/rdk v0.132.0
 	go.viam.com/utils v0.6.6
 	gonum.org/v1/gonum v0.17.0
-	google.golang.org/api v0.271.0
 )
 
 require (
@@ -21,7 +19,6 @@ require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	cloud.google.com/go/iam v1.5.3 // indirect
-	cloud.google.com/go/longrunning v0.8.0 // indirect
 	cloud.google.com/go/monitoring v1.24.3 // indirect
 	cloud.google.com/go/storage v1.61.3 // indirect
 	codeberg.org/go-fonts/liberation v0.5.0 // indirect
@@ -223,6 +220,7 @@ require (
 	golang.org/x/tools v0.45.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	gonum.org/v1/plot v0.15.2 // indirect
+	google.golang.org/api v0.271.0 // indirect
 	google.golang.org/genproto v0.0.0-20260128011058-8636f8732409 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260226221140-a57be14db171 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260622175928-b703f567277d // indirect
