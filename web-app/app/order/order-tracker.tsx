@@ -74,6 +74,9 @@ export function OrderTracker({ viamConn, onEmpty, persistent, onClose }: OrderTr
   // Poll every second
   useEffect(() => {
     if (!viamConn) return;
+    // poll() is async: setOrders runs after `await getQueue`, so it is not the
+    // synchronous in-effect setState (cascading render) this rule guards against.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     poll();
     const interval = setInterval(poll, 1000);
     return () => clearInterval(interval);
