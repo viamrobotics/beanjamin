@@ -260,10 +260,7 @@ func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 
 // iceDispenseSec returns the configured or default ice-dispense duration in seconds.
 func (s *beanjaminCoffee) iceDispenseSec() float64 {
-	if s.cfg.IceDispenseSec > 0 {
-		return s.cfg.IceDispenseSec
-	}
-	return defaultIceDispenseSec
+	return orDefault(s.cfg.IceDispenseSec, defaultIceDispenseSec)
 }
 
 // icePinName returns the ice-machine board pin name. Validate requires it to be

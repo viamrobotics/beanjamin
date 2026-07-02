@@ -43,17 +43,11 @@ const (
 var errGripMissed = errors.New("gripper did not close on an object")
 
 func (s *beanjaminCoffee) gripperHoldMinPos() float64 {
-	if s.cfg.GripperHoldMinPos > 0 {
-		return s.cfg.GripperHoldMinPos
-	}
-	return gripperHoldMinPosDefault
+	return orDefault(s.cfg.GripperHoldMinPos, gripperHoldMinPosDefault)
 }
 
 func (s *beanjaminCoffee) gripperHoldMaxPos() float64 {
-	if s.cfg.GripperHoldMaxPos > 0 {
-		return s.cfg.GripperHoldMaxPos
-	}
-	return gripperHoldMaxPosDefault
+	return orDefault(s.cfg.GripperHoldMaxPos, gripperHoldMaxPosDefault)
 }
 
 // classifyGripper maps a raw jaw position to a coarse state. Pure: the only

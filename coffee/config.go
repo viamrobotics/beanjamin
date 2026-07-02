@@ -180,6 +180,15 @@ type Config struct {
 // defaultMaxBatchSize is used when Config.MaxBatchSize is unset or zero.
 const defaultMaxBatchSize = 10
 
+// orDefault returns v when it is positive, otherwise def. It backs the
+// "configured tunable or default constant" pattern used by the numeric getters.
+func orDefault[T ~int | ~float64](v, def T) T {
+	if v > 0 {
+		return v
+	}
+	return def
+}
+
 // maxBatchSize returns the configured cap on prepare_order count, falling
 // back to defaultMaxBatchSize.
 func (s *beanjaminCoffee) maxBatchSize() int {
@@ -197,19 +206,13 @@ const defaultCupPickupMaxAttempts = 3
 // attempts (cup or glass), falling back to defaultCupPickupMaxAttempts when
 // unset or non-positive.
 func pickupMaxAttempts(configured int) int {
-	if configured > 0 {
-		return configured
-	}
-	return defaultCupPickupMaxAttempts
+	return orDefault(configured, defaultCupPickupMaxAttempts)
 }
 
 // pickupPhotosPerVantage returns the number of vision frames to capture at each
 // observation pose, defaulting to 1.
 func pickupPhotosPerVantage(configured int) int {
-	if configured > 1 {
-		return configured
-	}
-	return 1
+	return orDefault(configured, 1)
 }
 
 // RelativePose is a 6-DoF offset (translation in millimeters + orientation as
