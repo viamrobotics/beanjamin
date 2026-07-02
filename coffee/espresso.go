@@ -497,6 +497,17 @@ const (
 	defaultIceDispenseSec = 5.0
 )
 
+// runSteps executes each step in order, wrapping the first failure with label
+// (e.g. "tamp_ground") so the caller's error identifies the failed phase.
+func (s *beanjaminCoffee) runSteps(ctx, cancelCtx context.Context, label string, steps ...Step) error {
+	for _, step := range steps {
+		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+			return fmt.Errorf("%s: %w", label, err)
+		}
+	}
+	return nil
+}
+
 func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step) error {
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::executeStep::"+step.PoseName)

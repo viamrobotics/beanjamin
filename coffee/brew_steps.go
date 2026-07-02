@@ -11,36 +11,23 @@ import (
 )
 
 func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
-	steps := []Step{
-		{PoseName: filterPoseGrinderApproach, Component: componentFilter, Pause: shortPause},
-		{PoseName: filterPoseGrinderActivate, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
-		{PoseName: filterPoseGrinderApproach, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
-		// Circle under the grinder chute to distribute grounds evenly while the grinder dispenses.
-		{PoseName: filterPoseGrinderApproach, Component: componentFilter,
-			CircularRadiusMm: 8, CircularDurationSec: s.grindDurationSec(), CircularPointsPerRev: 8,
-			LinearConstraint: defaultApproachConstraint},
-	}
-	for _, step := range steps {
-		// Mark grounds only as we reach the activate pose: the approach move
-		// keeps the filter clean, and the grinder dispenses once it's under the
-		// chute. From here onward any cancel must clean the filter before home.
-		if step.PoseName == filterPoseGrinderActivate {
-			s.portafilterHasGrounds.Store(true)
-		}
-		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-			return fmt.Errorf("grind_coffee: %w", err)
-		}
-	}
-	return nil
+	return s.grind(ctx, cancelCtx, filterPoseGrinderApproach, filterPoseGrinderActivate, "grind_coffee")
 }
 
 func (s *beanjaminCoffee) grindDecaf(ctx, cancelCtx context.Context) error {
+	return s.grind(ctx, cancelCtx, filterPoseDecafGrinderApproach, filterPoseDecafGrinderActivate, "grind_decaf")
+}
+
+// grind approaches a grinder chute, circles under it to distribute grounds
+// evenly while the grinder dispenses, then returns to the approach pose. The
+// approach and activate poses select which grinder (regular vs decaf); label
+// identifies the phase in wrapped errors.
+func (s *beanjaminCoffee) grind(ctx, cancelCtx context.Context, approachPose, activatePose, label string) error {
 	steps := []Step{
-		{PoseName: filterPoseDecafGrinderApproach, Component: componentFilter, Pause: shortPause},
-		{PoseName: filterPoseDecafGrinderActivate, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
-		{PoseName: filterPoseDecafGrinderApproach, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
-		// Circle under the decaf grinder chute to distribute grounds evenly while the grinder dispenses.
-		{PoseName: filterPoseDecafGrinderApproach, Component: componentFilter,
+		{PoseName: approachPose, Component: componentFilter, Pause: shortPause},
+		{PoseName: activatePose, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
+		{PoseName: approachPose, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
+		{PoseName: approachPose, Component: componentFilter,
 			CircularRadiusMm: 8, CircularDurationSec: s.grindDurationSec(), CircularPointsPerRev: 8,
 			LinearConstraint: defaultApproachConstraint},
 	}
@@ -48,41 +35,32 @@ func (s *beanjaminCoffee) grindDecaf(ctx, cancelCtx context.Context) error {
 		// Mark grounds only as we reach the activate pose: the approach move
 		// keeps the filter clean, and the grinder dispenses once it's under the
 		// chute. From here onward any cancel must clean the filter before home.
-		if step.PoseName == filterPoseDecafGrinderActivate {
+		if step.PoseName == activatePose {
 			s.portafilterHasGrounds.Store(true)
 		}
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-			return fmt.Errorf("grind_decaf: %w", err)
+			return fmt.Errorf("%s: %w", label, err)
 		}
 	}
 	return nil
 }
 
 func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
-	steps := []Step{
-		{PoseName: filterPoseTamperApproach, Component: componentFilter, Pause: shortPause},
-		{PoseName: filterPoseTamperActivate, Component: componentFilter, Pause: 3000 * time.Millisecond, LinearConstraint: defaultApproachConstraint},
-		{PoseName: filterPoseTamperApproach, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
-	}
-	for _, step := range steps {
-		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-			return fmt.Errorf("tamp_ground: %w", err)
-		}
-	}
-	return nil
+	return s.runSteps(ctx, cancelCtx, "tamp_ground",
+		Step{PoseName: filterPoseTamperApproach, Component: componentFilter, Pause: shortPause},
+		Step{PoseName: filterPoseTamperActivate, Component: componentFilter, Pause: 3000 * time.Millisecond, LinearConstraint: defaultApproachConstraint},
+		Step{PoseName: filterPoseTamperApproach, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
+	)
 }
 
 func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error {
-	steps := []Step{
-		{PoseName: filterPoseCoffeeApproach, Component: componentFilter, Pause: shortPause},
-		{PoseName: filterPoseCoffeeIn, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
-		{PoseName: filterPoseCoffeeLockedFinal, Component: componentFilter, PivotFromPose: filterPoseCoffeeIn, PivotDegreesPerStep: 5,
+	if err := s.runSteps(ctx, cancelCtx, "lock_portafilter",
+		Step{PoseName: filterPoseCoffeeApproach, Component: componentFilter, Pause: shortPause},
+		Step{PoseName: filterPoseCoffeeIn, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
+		Step{PoseName: filterPoseCoffeeLockedFinal, Component: componentFilter, PivotFromPose: filterPoseCoffeeIn, PivotDegreesPerStep: 5,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
-	}
-	for _, step := range steps {
-		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-			return fmt.Errorf("lock_portafilter: %w", err)
-		}
+	); err != nil {
+		return err
 	}
 	if err := s.lockFilterFrame(ctx); err != nil {
 		return fmt.Errorf("lock filter frame: %w", err)
@@ -94,22 +72,16 @@ func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) erro
 	if err := s.unlockFilterFrame(ctx); err != nil {
 		return fmt.Errorf("unlock filter frame: %w", err)
 	}
-	steps := []Step{
-		{PoseName: filterPoseCoffeeIn, Component: componentFilter, PivotFromPose: filterPoseCoffeeLockedFinal, PivotDegreesPerStep: 5,
+	return s.runSteps(ctx, cancelCtx, "unlock_portafilter",
+		Step{PoseName: filterPoseCoffeeIn, Component: componentFilter, PivotFromPose: filterPoseCoffeeLockedFinal, PivotDegreesPerStep: 5,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
-		{PoseName: filterPoseCoffeeShake, Component: componentFilter, AllowedCollisions: coffeeBrewingCollisions, LinearConstraint: defaultApproachConstraint},
+		Step{PoseName: filterPoseCoffeeShake, Component: componentFilter, AllowedCollisions: coffeeBrewingCollisions, LinearConstraint: defaultApproachConstraint},
 		// Shake the filter laterally to dislodge the puck.
-		{PoseName: filterPoseCoffeeShake, Component: componentFilter,
+		Step{PoseName: filterPoseCoffeeShake, Component: componentFilter,
 			CircularRadiusMm: 4, CircularDurationSec: s.cfg.PortafilterShakeSec, CircularPointsPerRev: 8,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
-		{PoseName: filterPoseCoffeeApproach, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
-	}
-	for _, step := range steps {
-		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-			return fmt.Errorf("unlock_portafilter: %w", err)
-		}
-	}
-	return nil
+		Step{PoseName: filterPoseCoffeeApproach, Component: componentFilter, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
+	)
 }
 
 func (s *beanjaminCoffee) releaseFilter(ctx, cancelCtx context.Context) error {
@@ -162,29 +134,17 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 }
 
 func (s *beanjaminCoffee) turnCoffeeButtonOn(ctx, cancelCtx context.Context) error {
-	steps := []Step{
-		{PoseName: clawPoseCoffeeButtonApproach, Component: componentClaws},
-		{PoseName: clawPoseCoffeeButtonOn, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
-	}
-	for _, step := range steps {
-		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-			return fmt.Errorf("turn_coffee_button_on: %w", err)
-		}
-	}
-	return nil
+	return s.runSteps(ctx, cancelCtx, "turn_coffee_button_on",
+		Step{PoseName: clawPoseCoffeeButtonApproach, Component: componentClaws},
+		Step{PoseName: clawPoseCoffeeButtonOn, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
+	)
 }
 
 func (s *beanjaminCoffee) turnCoffeeButtonOff(ctx, cancelCtx context.Context) error {
-	steps := []Step{
-		{PoseName: clawPoseCoffeeButtonOff, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
-		{PoseName: clawPoseCoffeeButtonApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
-	}
-	for _, step := range steps {
-		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-			return fmt.Errorf("turn_coffee_button_off: %w", err)
-		}
-	}
-	return nil
+	return s.runSteps(ctx, cancelCtx, "turn_coffee_button_off",
+		Step{PoseName: clawPoseCoffeeButtonOff, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
+		Step{PoseName: clawPoseCoffeeButtonApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
+	)
 }
 
 // brewCoffee is the execute_action entry point — uses the espresso default brew time.
@@ -214,10 +174,7 @@ func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, brewTime time.Dur
 
 // grindDurationSec returns the configured or default grind duration in seconds.
 func (s *beanjaminCoffee) grindDurationSec() float64 {
-	if s.cfg.GrindTimeSec > 0 {
-		return s.cfg.GrindTimeSec
-	}
-	return defaultGrindTimeSec
+	return orDefault(s.cfg.GrindTimeSec, defaultGrindTimeSec)
 }
 
 // drinkBrewTime returns the configured or default brew duration for the given drink.
@@ -237,22 +194,19 @@ func (s *beanjaminCoffee) drinkBrewTime(drink string) time.Duration {
 }
 
 func (s *beanjaminCoffee) cleanPortafilter(ctx, cancelCtx context.Context) error {
-	steps := []Step{
-		{PoseName: filterPoseCloseToCleaning, Component: componentFilter},
-		{PoseName: filterPoseApproachToCleaningScrapper, Component: componentFilter, AllowedCollisions: cleaningCollisions, Pause: shortPause},
-		{PoseName: filterPoseCleaningScrapperActive, Component: componentFilter, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions},
-		{PoseName: filterPoseCleaningScrapperActive, Component: componentFilter, AllowedCollisions: cleaningCollisions, CircularRadiusMm: 3, CircularDurationSec: 2.5, CircularPointsPerRev: 8},
-		{PoseName: filterPoseApproachToCleaningScrapper, Component: componentFilter, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, Pause: shortPause},
-		{PoseName: filterPoseApproachToCleaningBrush, Component: componentFilter, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, Pause: shortPause},
-		{PoseName: filterPoseCleaningBrushActive, Component: componentFilter, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions},
-		{PoseName: filterPoseCleaningBrushActive, Component: componentFilter, AllowedCollisions: cleaningCollisions, CircularRadiusMm: 3, CircularDurationSec: 2.5, CircularPointsPerRev: 8},
-		{PoseName: filterPoseApproachToCleaningBrush, Component: componentFilter, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, Pause: shortPause},
-		{PoseName: filterPoseCloseToCleaning, Component: componentFilter, AllowedCollisions: cleaningCollisions, Pause: shortPause},
-	}
-	for _, step := range steps {
-		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-			return fmt.Errorf("clean_portafilter: %w", err)
-		}
+	if err := s.runSteps(ctx, cancelCtx, "clean_portafilter",
+		Step{PoseName: filterPoseCloseToCleaning, Component: componentFilter},
+		Step{PoseName: filterPoseApproachToCleaningScrapper, Component: componentFilter, AllowedCollisions: cleaningCollisions, Pause: shortPause},
+		Step{PoseName: filterPoseCleaningScrapperActive, Component: componentFilter, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions},
+		Step{PoseName: filterPoseCleaningScrapperActive, Component: componentFilter, AllowedCollisions: cleaningCollisions, CircularRadiusMm: 3, CircularDurationSec: 2.5, CircularPointsPerRev: 8},
+		Step{PoseName: filterPoseApproachToCleaningScrapper, Component: componentFilter, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, Pause: shortPause},
+		Step{PoseName: filterPoseApproachToCleaningBrush, Component: componentFilter, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, Pause: shortPause},
+		Step{PoseName: filterPoseCleaningBrushActive, Component: componentFilter, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions},
+		Step{PoseName: filterPoseCleaningBrushActive, Component: componentFilter, AllowedCollisions: cleaningCollisions, CircularRadiusMm: 3, CircularDurationSec: 2.5, CircularPointsPerRev: 8},
+		Step{PoseName: filterPoseApproachToCleaningBrush, Component: componentFilter, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, Pause: shortPause},
+		Step{PoseName: filterPoseCloseToCleaning, Component: componentFilter, AllowedCollisions: cleaningCollisions, Pause: shortPause},
+	); err != nil {
+		return err
 	}
 	s.portafilterHasGrounds.Store(false)
 	return nil
