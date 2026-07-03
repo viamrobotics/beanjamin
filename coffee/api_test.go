@@ -108,3 +108,15 @@ func TestProceedQueueSignal(t *testing.T) {
 		t.Error("second proceed with the buffer full should error")
 	}
 }
+
+// TestDoCommandNonStringActionFallsThrough: a non-string execute_action/action
+// value isn't matched and falls through to the unknown-command error.
+func TestDoCommandNonStringActionFallsThrough(t *testing.T) {
+	s := newStatusService(t, &Config{})
+	ctx := context.Background()
+	for _, key := range []string{"execute_action", "action"} {
+		if _, err := s.DoCommand(ctx, map[string]interface{}{key: 123}); err == nil {
+			t.Errorf("%s with a non-string value should fall through to the unknown-command error", key)
+		}
+	}
+}

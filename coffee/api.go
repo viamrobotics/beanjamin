@@ -107,96 +107,112 @@ func parseCupFlowCount(v interface{}) (int, error) {
 	return count, nil
 }
 
+// commandDef is one entry in the DoCommand dispatch table. needsStr restricts a
+// match to string values (execute_action/action dispatch on the string); logErr
+// logs a returned error at Error level, so operator no-ops can stay quiet.
+type commandDef struct {
+	key      string
+	needsStr bool
+	logErr   bool
+	// spanName overrides the trace-span suffix; nil uses key verbatim.
+	spanName func(cmd map[string]interface{}) string
+	run      func(s *beanjaminCoffee, ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error)
+}
+
+func (d commandDef) matches(cmd map[string]interface{}) bool {
+	v, ok := cmd[d.key]
+	if !ok {
+		return false
+	}
+	if d.needsStr {
+		_, isStr := v.(string)
+		return isStr
+	}
+	return true
+}
+
+// coffeeCommands is the ordered DoCommand dispatch table (first match wins).
+var coffeeCommands = []commandDef{
+	{key: "prepare_order", logErr: true, run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+		return s.enqueueOrder(ctx, cmd["prepare_order"])
+	}},
+	{key: "execute_action", needsStr: true, logErr: true,
+		spanName: func(cmd map[string]interface{}) string {
+			return "execute_action[" + cmd["execute_action"].(string) + "]"
+		},
+		run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+			return s.executeAction(ctx, cmd["execute_action"].(string))
+		}},
+	{key: "cancel", logErr: true, run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
+		return s.cancel(ctx)
+	}},
+	{key: "get_queue", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
+		return s.Status(ctx)
+	}},
+	{key: "proceed", run: func(s *beanjaminCoffee, _ context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
+		return s.proceedQueue()
+	}},
+	{key: "clear_queue", run: func(s *beanjaminCoffee, _ context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
+		return s.clearQueue()
+	}},
+	{key: "cleanup_pending_clips", run: func(s *beanjaminCoffee, _ context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
+		return s.cleanupPendingClips()
+	}},
+	{key: "reset_world", logErr: true, run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
+		return s.resetWorld(ctx)
+	}},
+	{key: "run_cup_flow", logErr: true, run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+		count, err := parseCupFlowCount(cmd["run_cup_flow"])
+		if err != nil {
+			return nil, err
+		}
+		return s.runCupFlow(ctx, count)
+	}},
+	// Stream deck key commands.
+	{key: "action", needsStr: true,
+		spanName: func(cmd map[string]interface{}) string { return "action[" + cmd["action"].(string) + "]" },
+		run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+			switch action := cmd["action"].(string); action {
+			case "open_gripper":
+				return s.handleOpenGripper(ctx)
+			case "close_gripper":
+				return s.handleCloseGripper(ctx)
+			default:
+				return nil, fmt.Errorf("unknown action %q", action)
+			}
+		}},
+}
+
 func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	ctx, span := trace.StartSpan(ctx, "beanjamin::DoCommand")
 	defer span.End()
-	if orderRaw, ok := cmd["prepare_order"]; ok {
-		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::prepare_order")
-		defer cmdSpan.End()
-		res, err := s.enqueueOrder(ctx, orderRaw)
-		if err != nil {
-			s.logger.Errorw("DoCommand", "error", err)
+
+	for _, def := range coffeeCommands {
+		if def.matches(cmd) {
+			return s.runCommand(ctx, def, cmd)
 		}
-		return res, err
-	}
-	if actionName, ok := cmd["execute_action"].(string); ok {
-		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::execute_action["+actionName+"]")
-		defer cmdSpan.End()
-		res, err := s.executeAction(ctx, actionName)
-		if err != nil {
-			s.logger.Errorw("DoCommand", "error", err)
-		}
-		return res, err
-	}
-	if _, ok := cmd["cancel"]; ok {
-		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::cancel")
-		defer cmdSpan.End()
-		res, err := s.cancel(ctx)
-		if err != nil {
-			s.logger.Errorw("DoCommand", "error", err)
-		}
-		return res, err
-	}
-	if _, ok := cmd["get_queue"]; ok {
-		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::get_queue")
-		defer cmdSpan.End()
-		return s.Status(ctx)
-	}
-	if _, ok := cmd["proceed"]; ok {
-		_, cmdSpan := trace.StartSpan(ctx, "beanjamin::proceed")
-		defer cmdSpan.End()
-		return s.proceedQueue()
-	}
-	if _, ok := cmd["clear_queue"]; ok {
-		_, cmdSpan := trace.StartSpan(ctx, "beanjamin::clear_queue")
-		defer cmdSpan.End()
-		return s.clearQueue()
-	}
-	if _, ok := cmd["cleanup_pending_clips"]; ok {
-		_, cmdSpan := trace.StartSpan(ctx, "beanjamin::cleanup_pending_clips")
-		defer cmdSpan.End()
-		return s.cleanupPendingClips()
 	}
 
-	if _, ok := cmd["reset_world"]; ok {
-		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::reset_world")
-		defer cmdSpan.End()
-		res, err := s.resetWorld(ctx)
-		if err != nil {
-			s.logger.Errorw("DoCommand", "error", err)
-		}
-		return res, err
-	}
-	if countRaw, ok := cmd["run_cup_flow"]; ok {
-		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::run_cup_flow")
-		defer cmdSpan.End()
-		count, err := parseCupFlowCount(countRaw)
-		if err != nil {
-			s.logger.Errorw("DoCommand", "error", err)
-			return nil, err
-		}
-		res, err := s.runCupFlow(ctx, count)
-		if err != nil {
-			s.logger.Errorw("DoCommand", "error", err)
-		}
-		return res, err
-	}
-	// Stream deck key commands
-	if action, ok := cmd["action"].(string); ok {
-		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::action["+action+"]")
-		defer cmdSpan.End()
-		switch action {
-		case "open_gripper":
-			return s.handleOpenGripper(ctx)
-		case "close_gripper":
-			return s.handleCloseGripper(ctx)
-		default:
-			return nil, fmt.Errorf("unknown action %q", action)
-		}
-	}
 	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
+}
+
+// runCommand runs a matched command inside its trace span, logging a returned
+// error when the command opts in.
+func (s *beanjaminCoffee) runCommand(ctx context.Context, def commandDef, cmd map[string]interface{}) (map[string]interface{}, error) {
+	suffix := def.key
+	if def.spanName != nil {
+		suffix = def.spanName(cmd)
+	}
+	ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::"+suffix)
+	defer cmdSpan.End()
+
+	res, err := def.run(s, ctx, cmd)
+	if err != nil && def.logErr {
+		s.logger.Errorw("DoCommand", "error", err)
+	}
+	return res, err
 }
 
 func (s *beanjaminCoffee) handleOpenGripper(ctx context.Context) (map[string]interface{}, error) {
