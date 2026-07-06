@@ -254,6 +254,7 @@ type pickupTarget struct {
 	centroidMinZMm   float64              // floor detection Z to this (0 = disabled)
 	dimsOverride     *ContainerDimensions // predefined box size; nil uses point-cloud extents
 	noItemSpeak      string               // spoken on "nothing detected" before a retry wait
+	unreachableSpeak string               // spoken when items were seen but none could be grabbed, before a retry wait
 	graspZFromGeom   bool                 // grab at the geometry centroid's Z (keep detected X/Y); for the tall glass whose detected Z can sit high on the rim
 }
 
@@ -273,6 +274,7 @@ func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 		centroidMinZMm:   s.cfg.CupCentroidMinZMm,
 		dimsOverride:     s.cfg.CupDimensions,
 		noItemSpeak:      "I don't see a cup yet — please place one on the shelf. Trying again in 15 seconds.",
+		unreachableSpeak: "I can see a cup but I'm having trouble grabbing it — could you nudge it a little? Trying again in 15 seconds.",
 	}
 }
 
@@ -296,6 +298,7 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 		centroidMinZMm:   s.cfg.GlassCentroidMinZMm,
 		dimsOverride:     s.cfg.GlassDimensions,
 		noItemSpeak:      "I don't see a glass yet — please place one on the top shelf. Trying again in 15 seconds.",
+		unreachableSpeak: "I can see a glass but I'm having trouble grabbing it — could you nudge it a little? Trying again in 15 seconds.",
 		graspZFromGeom:   true,
 	}
 }
@@ -617,6 +620,31 @@ func (s *beanjaminCoffee) pickGlassDynamic(ctx, cancelCtx context.Context) error
 	return s.pickDynamic(ctx, cancelCtx, s.glassPickupTarget())
 }
 
+// announceAndWaitForRetry recovers the arm to the observe home pose, speaks the
+// given prompt to the customer regardless of conversational mode (sayAlways), and
+// waits noItemRetryDelay before the caller re-observes. This is the shared
+// recovery for both "no item detected" (please place one) and "item seen but
+// unreachable" (please nudge it) — in both cases the fix is physical and needs
+// the customer, so the prompt is always spoken. Returns a cancellation error if
+// the context is cancelled during the wait; move/speech failures are logged and
+// swallowed so a flaky peripheral does not abort the retry.
+func (s *beanjaminCoffee) announceAndWaitForRetry(ctx, cancelCtx context.Context, t *pickupTarget, prompt string) error {
+	logger := s.activeOrderLogger()
+	recoverStep := Step{PoseName: t.observeHomePose, Component: t.observeComponent, Pause: shortPause}
+	if mvErr := s.executeStep(ctx, cancelCtx, recoverStep); mvErr != nil {
+		logger.Warnf("dynamic %s pickup: return to %q before retry wait: %v", t.label, t.observeHomePose, mvErr)
+	}
+	if sayErr := s.sayAlways(ctx, prompt); sayErr != nil {
+		logger.Warnf("dynamic %s pickup: announcement failed: %v", t.label, sayErr)
+	}
+	select {
+	case <-time.After(noItemRetryDelay):
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("dynamic_%s_pickup: cancelled during retry wait: %w", t.label, ctx.Err())
+	}
+}
+
 // pickDynamic sweeps the target's observe poses (findCandidates, stopping at the
 // first pose that sees a reachable item) and walks the ranked candidate list
 // grabbing the first reachable one. Falls through to the next candidate on
@@ -654,19 +682,10 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 			// (e.g. an unreachable observe pose or a transform error) —
 			// re-observing won't change those.
 			if errors.Is(err, errNoItemsDetected) && attempt < maxAttempts {
-				recoverStep := Step{PoseName: t.observeHomePose, Component: t.observeComponent, Pause: shortPause}
-				if mvErr := s.executeStep(ctx, cancelCtx, recoverStep); mvErr != nil {
-					logger.Warnf("dynamic %s pickup: return to %q before retry wait: %v", t.label, t.observeHomePose, mvErr)
-				}
-				if sayErr := s.sayAlways(ctx, t.noItemSpeak); sayErr != nil {
-					logger.Warnf("dynamic %s pickup: announcement failed: %v", t.label, sayErr)
-				}
-				logger.Infof("dynamic %s pickup: nothing detected on attempt %d/%d — waiting %s before retry",
+				logger.Infof("dynamic %s pickup: nothing detected on attempt %d/%d — asking for a cup/glass and waiting %s before retry",
 					t.label, attempt, maxAttempts, noItemRetryDelay)
-				select {
-				case <-time.After(noItemRetryDelay):
-				case <-ctx.Done():
-					return fmt.Errorf("dynamic_%s_pickup: cancelled during no-item wait: %w", t.label, ctx.Err())
+				if waitErr := s.announceAndWaitForRetry(ctx, cancelCtx, t, t.noItemSpeak); waitErr != nil {
+					return waitErr
 				}
 				lastErr = err
 				continue
@@ -692,6 +711,18 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 			}
 			logger.Warnf("dynamic %s pickup: attempt %d, candidate %d/%d failed (planning or grab miss) — trying next: %v",
 				t.label, attempt, i+1, len(candidates), err)
+		}
+
+		// Every candidate this batch failed with a recoverable error (fatal ones
+		// returned above): an item is there but the arm couldn't reach it. Ask the
+		// customer to nudge it before re-observing, so the next attempt sees it from
+		// a slightly different position.
+		if attempt < maxAttempts {
+			logger.Infof("dynamic %s pickup: all %d candidate(s) unreachable on attempt %d/%d — asking for a nudge and waiting %s before retry",
+				t.label, len(candidates), attempt, maxAttempts, noItemRetryDelay)
+			if waitErr := s.announceAndWaitForRetry(ctx, cancelCtx, t, t.unreachableSpeak); waitErr != nil {
+				return waitErr
+			}
 		}
 	}
 	return fmt.Errorf("dynamic_%s_pickup: exhausted %d attempt(s); last error: %w", t.label, maxAttempts, lastErr)
