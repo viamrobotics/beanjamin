@@ -108,12 +108,10 @@ func parseCupFlowCount(v interface{}) (int, error) {
 }
 
 // commandDef is one entry in the DoCommand dispatch table. needsStr restricts a
-// match to string values (execute_action/action dispatch on the string); logErr
-// logs a returned error at Error level, so operator no-ops can stay quiet.
+// match to string values (execute_action/action dispatch on the string).
 type commandDef struct {
 	key      string
 	needsStr bool
-	logErr   bool
 	// spanName overrides the trace-span suffix; nil uses key verbatim.
 	spanName func(cmd map[string]interface{}) string
 	run      func(s *beanjaminCoffee, ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error)
@@ -133,17 +131,17 @@ func (d commandDef) matches(cmd map[string]interface{}) bool {
 
 // coffeeCommands is the ordered DoCommand dispatch table (first match wins).
 var coffeeCommands = []commandDef{
-	{key: "prepare_order", logErr: true, run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	{key: "prepare_order", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 		return s.enqueueOrder(ctx, cmd["prepare_order"])
 	}},
-	{key: "execute_action", needsStr: true, logErr: true,
+	{key: "execute_action", needsStr: true,
 		spanName: func(cmd map[string]interface{}) string {
 			return "execute_action[" + cmd["execute_action"].(string) + "]"
 		},
 		run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 			return s.executeAction(ctx, cmd["execute_action"].(string))
 		}},
-	{key: "cancel", logErr: true, run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
+	{key: "cancel", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
 		return s.cancel(ctx)
 	}},
 	{key: "get_queue", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
@@ -158,10 +156,10 @@ var coffeeCommands = []commandDef{
 	{key: "cleanup_pending_clips", run: func(s *beanjaminCoffee, _ context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
 		return s.cleanupPendingClips()
 	}},
-	{key: "reset_world", logErr: true, run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
+	{key: "reset_world", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
 		return s.resetWorld(ctx)
 	}},
-	{key: "run_cup_flow", logErr: true, run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	{key: "run_cup_flow", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 		count, err := parseCupFlowCount(cmd["run_cup_flow"])
 		if err != nil {
 			return nil, err
@@ -198,8 +196,8 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interfac
 	return nil, err
 }
 
-// runCommand runs a matched command inside its trace span, logging a returned
-// error when the command opts in.
+// runCommand runs a matched command inside its trace span, logging any
+// returned error.
 func (s *beanjaminCoffee) runCommand(ctx context.Context, def commandDef, cmd map[string]interface{}) (map[string]interface{}, error) {
 	suffix := def.key
 	if def.spanName != nil {
@@ -209,7 +207,7 @@ func (s *beanjaminCoffee) runCommand(ctx context.Context, def commandDef, cmd ma
 	defer cmdSpan.End()
 
 	res, err := def.run(s, ctx, cmd)
-	if err != nil && def.logErr {
+	if err != nil {
 		s.logger.Errorw("DoCommand", "error", err)
 	}
 	return res, err
