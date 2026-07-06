@@ -310,10 +310,10 @@ func (s *dialControlMotion) Close(_ context.Context) error {
 	return nil
 }
 
-func (s *dialControlMotion) Status(ctx context.Context) (map[string]interface{}, error) {
+func (s *dialControlMotion) Status(ctx context.Context) (map[string]any, error) {
 	_, span := trace.StartSpan(ctx, "dial-control-motion::Status")
 	defer span.End()
-	return map[string]interface{}{}, nil
+	return map[string]any{}, nil
 }
 
 var supportedAxes = map[string]string{
@@ -326,7 +326,7 @@ var supportedAxes = map[string]string{
 	"dial_move_rz":          "rz",
 }
 
-func (s *dialControlMotion) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+func (s *dialControlMotion) DoCommand(ctx context.Context, cmd map[string]any) (map[string]any, error) {
 	_, span := trace.StartSpan(ctx, "dial-control-motion::DoCommand")
 	defer span.End()
 
@@ -346,7 +346,7 @@ func (s *dialControlMotion) DoCommand(ctx context.Context, cmd map[string]interf
 		s.dialMu.Lock()
 		mode := s.axisMode
 		s.dialMu.Unlock()
-		return map[string]interface{}{"axis_mode": mode}, nil
+		return map[string]any{"axis_mode": mode}, nil
 	}
 
 	for key, axis := range supportedAxes {
@@ -360,7 +360,7 @@ func (s *dialControlMotion) DoCommand(ctx context.Context, cmd map[string]interf
 	return nil, err
 }
 
-func (s *dialControlMotion) toggleAxisMode() (map[string]interface{}, error) {
+func (s *dialControlMotion) toggleAxisMode() (map[string]any, error) {
 	s.dialMu.Lock()
 	if s.axisMode == axisModeRotation {
 		s.axisMode = axisModeTranslation
@@ -370,10 +370,10 @@ func (s *dialControlMotion) toggleAxisMode() (map[string]interface{}, error) {
 	mode := s.axisMode
 	s.dialMu.Unlock()
 	s.logger.Infow("axis mode toggled", "axis_mode", mode)
-	return map[string]interface{}{"status": "toggled", "axis_mode": mode}, nil
+	return map[string]any{"status": "toggled", "axis_mode": mode}, nil
 }
 
-func (s *dialControlMotion) setAxisMode(v interface{}) (map[string]interface{}, error) {
+func (s *dialControlMotion) setAxisMode(v any) (map[string]any, error) {
 	requested, ok := v.(string)
 	if !ok {
 		return nil, fmt.Errorf("set_axis_mode: value must be %q or %q, got %T", axisModeTranslation, axisModeRotation, v)
@@ -385,12 +385,12 @@ func (s *dialControlMotion) setAxisMode(v interface{}) (map[string]interface{}, 
 	s.axisMode = requested
 	s.dialMu.Unlock()
 	s.logger.Infow("axis mode set", "axis_mode", requested)
-	return map[string]interface{}{"status": "set", "axis_mode": requested}, nil
+	return map[string]any{"status": "set", "axis_mode": requested}, nil
 }
 
 // handleDialMove converts an absolute dial reading into a signed step and
 // enqueues it. It does NOT call the arm; drainLoop flushes accumulated moves.
-func (s *dialControlMotion) handleDialMove(axis string, dialValue interface{}) (map[string]interface{}, error) {
+func (s *dialControlMotion) handleDialMove(axis string, dialValue any) (map[string]any, error) {
 	dialVal, ok := toFloat64(dialValue)
 	if !ok {
 		return nil, fmt.Errorf("%s: invalid dial value %v", axis, dialValue)
@@ -415,7 +415,7 @@ func (s *dialControlMotion) handleDialMove(axis string, dialValue interface{}) (
 		v := dialVal
 		s.lastDial[axis] = &v
 		s.dialMu.Unlock()
-		return map[string]interface{}{"status": "dial_initialized", "axis": axis, "position": dialVal}, nil
+		return map[string]any{"status": "dial_initialized", "axis": axis, "position": dialVal}, nil
 	}
 
 	maxPos := s.cfg.maxPosition()
@@ -440,7 +440,7 @@ func (s *dialControlMotion) handleDialMove(axis string, dialValue interface{}) (
 		if !atZero && !atMax {
 			*last = dialVal
 			s.dialMu.Unlock()
-			return map[string]interface{}{"status": "no_change", "axis": axis, "position": dialVal}, nil
+			return map[string]any{"status": "no_change", "axis": axis, "position": dialVal}, nil
 		}
 		delta = lastDir
 	}
@@ -495,7 +495,7 @@ func (s *dialControlMotion) handleDialMove(axis string, dialValue interface{}) (
 		"count", countForAxis,
 	)
 
-	return map[string]interface{}{"status": "queued", "axis": axis, "step": step}, nil
+	return map[string]any{"status": "queued", "axis": axis, "step": step}, nil
 }
 
 // drainLoop ticks at drain_interval_ms. Every tick it advances the per-axis
@@ -581,7 +581,7 @@ func (s *dialControlMotion) accelMultiplier(smoothed float64, axis string) float
 // rotation axes are composed onto the orientation quaternion. Multipliers
 // (one per axis) are pre-computed by drainLoop from the smoothed EWMA.
 func (s *dialControlMotion) flushMoves(pending, multipliers map[string]float64) error {
-	currentPose, err := s.arm.EndPosition(s.cancelCtx, map[string]interface{}{})
+	currentPose, err := s.arm.EndPosition(s.cancelCtx, map[string]any{})
 	if err != nil {
 		return fmt.Errorf("failed to get arm position: %w", err)
 	}
@@ -632,7 +632,7 @@ func (s *dialControlMotion) flushMoves(pending, multipliers map[string]float64) 
 		ori = newPose.Orientation()
 	}
 
-	return s.arm.MoveToPosition(s.cancelCtx, spatialmath.NewPose(pt, ori), map[string]interface{}{})
+	return s.arm.MoveToPosition(s.cancelCtx, spatialmath.NewPose(pt, ori), map[string]any{})
 }
 
 // rotatePose applies a rotation of deg degrees around the given body-frame
@@ -690,7 +690,7 @@ func rotatePose(pose spatialmath.Pose, axis string, deg float64) (spatialmath.Po
 	return spatialmath.NewPose(pose.Point(), ori), nil
 }
 
-func toFloat64(v interface{}) (float64, bool) {
+func toFloat64(v any) (float64, bool) {
 	switch n := v.(type) {
 	case float64:
 		return n, true

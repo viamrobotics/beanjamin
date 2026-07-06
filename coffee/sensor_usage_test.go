@@ -19,20 +19,20 @@ type fakeUsageSensor struct {
 	resource.TriviallyCloseable
 
 	mu         sync.Mutex
-	readings   map[string]interface{}
+	readings   map[string]any
 	readErr    error
 	doErr      error
-	doCommands []map[string]interface{}
+	doCommands []map[string]any
 }
 
-func newFakeUsageSensor(readings map[string]interface{}) *fakeUsageSensor {
+func newFakeUsageSensor(readings map[string]any) *fakeUsageSensor {
 	return &fakeUsageSensor{
 		Named:    resource.NewName(sensor.API, "usage-test").AsNamed(),
 		readings: readings,
 	}
 }
 
-func (f *fakeUsageSensor) Readings(_ context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
+func (f *fakeUsageSensor) Readings(_ context.Context, _ map[string]any) (map[string]any, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.readErr != nil {
@@ -41,14 +41,14 @@ func (f *fakeUsageSensor) Readings(_ context.Context, _ map[string]interface{}) 
 	return f.readings, nil
 }
 
-func (f *fakeUsageSensor) DoCommand(_ context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+func (f *fakeUsageSensor) DoCommand(_ context.Context, cmd map[string]any) (map[string]any, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.doCommands = append(f.doCommands, cmd)
 	if f.doErr != nil {
 		return nil, f.doErr
 	}
-	return map[string]interface{}{}, nil
+	return map[string]any{}, nil
 }
 
 // lastSet returns the value written by the most recent DoCommand({"set": {field: v}}).
@@ -60,7 +60,7 @@ func (f *fakeUsageSensor) lastSet(t *testing.T, field string) float64 {
 		t.Fatalf("no DoCommand recorded")
 	}
 	cmd := f.doCommands[len(f.doCommands)-1]
-	set, ok := cmd["set"].(map[string]interface{})
+	set, ok := cmd["set"].(map[string]any)
 	if !ok {
 		t.Fatalf("DoCommand missing set object: %#v", cmd)
 	}
@@ -72,7 +72,7 @@ func (f *fakeUsageSensor) lastSet(t *testing.T, field string) float64 {
 }
 
 // lastSetMap returns the full map written by the most recent DoCommand({"set": {...}}).
-func (f *fakeUsageSensor) lastSetMap(t *testing.T) map[string]interface{} {
+func (f *fakeUsageSensor) lastSetMap(t *testing.T) map[string]any {
 	t.Helper()
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -80,7 +80,7 @@ func (f *fakeUsageSensor) lastSetMap(t *testing.T) map[string]interface{} {
 		t.Fatalf("no DoCommand recorded")
 	}
 	cmd := f.doCommands[len(f.doCommands)-1]
-	set, ok := cmd["set"].(map[string]interface{})
+	set, ok := cmd["set"].(map[string]any)
 	if !ok {
 		t.Fatalf("DoCommand missing set object: %#v", cmd)
 	}
@@ -95,7 +95,7 @@ func (f *fakeUsageSensor) doCount() int {
 
 func TestIncrementSensorReading_ExistingValue(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	sen := newFakeUsageSensor(map[string]interface{}{"regular_grinds": float64(4)})
+	sen := newFakeUsageSensor(map[string]any{"regular_grinds": float64(4)})
 	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
 	if got := sen.lastSet(t, "regular_grinds"); got != 5 {
 		t.Fatalf("grinds = %v, want 5", got)
@@ -104,7 +104,7 @@ func TestIncrementSensorReading_ExistingValue(t *testing.T) {
 
 func TestIncrementSensorReading_MissingFieldStartsAtZero(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	sen := newFakeUsageSensor(map[string]interface{}{})
+	sen := newFakeUsageSensor(map[string]any{})
 	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
 	if got := sen.lastSet(t, "regular_grinds"); got != 1 {
 		t.Fatalf("grinds = %v, want 1", got)
@@ -113,7 +113,7 @@ func TestIncrementSensorReading_MissingFieldStartsAtZero(t *testing.T) {
 
 func TestIncrementSensorReading_IntFieldAccepted(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	sen := newFakeUsageSensor(map[string]interface{}{"regular_grinds": 7})
+	sen := newFakeUsageSensor(map[string]any{"regular_grinds": 7})
 	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
 	if got := sen.lastSet(t, "regular_grinds"); got != 8 {
 		t.Fatalf("grinds = %v, want 8", got)
@@ -122,7 +122,7 @@ func TestIncrementSensorReading_IntFieldAccepted(t *testing.T) {
 
 func TestIncrementSensorReading_NonNumericSkipsWrite(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	sen := newFakeUsageSensor(map[string]interface{}{"regular_grinds": "oops"})
+	sen := newFakeUsageSensor(map[string]any{"regular_grinds": "oops"})
 	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
 	if n := sen.doCount(); n != 0 {
 		t.Fatalf("expected no DoCommand for non-numeric field, got %d", n)
@@ -131,7 +131,7 @@ func TestIncrementSensorReading_NonNumericSkipsWrite(t *testing.T) {
 
 func TestIncrementSensorReading_JSONNumberAccepted(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	sen := newFakeUsageSensor(map[string]interface{}{"regular_grinds": json.Number("4")})
+	sen := newFakeUsageSensor(map[string]any{"regular_grinds": json.Number("4")})
 	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
 	if got := sen.lastSet(t, "regular_grinds"); got != 5 {
 		t.Fatalf("grinds = %v, want 5", got)
@@ -142,7 +142,7 @@ func TestIncrementSensorReading_DistinctKeysOnOneSensor(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
 	// A single usage sensor carries every counter under its own key; each
 	// update reads and writes only that key.
-	sen := newFakeUsageSensor(map[string]interface{}{
+	sen := newFakeUsageSensor(map[string]any{
 		"regular_grinds":                float64(2),
 		"decaf_grinds":                  float64(5),
 		"usage":                         float64(10),
@@ -167,7 +167,7 @@ func TestIncrementSensorReading_PreservesOtherKeys(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
 	// Bumping one counter must write back every other key untouched, because
 	// the sensor replaces its whole readings map on `set`.
-	sen := newFakeUsageSensor(map[string]interface{}{
+	sen := newFakeUsageSensor(map[string]any{
 		"regular_grinds":                float64(2),
 		"decaf_grinds":                  float64(5),
 		"usage":                         float64(10),
@@ -197,7 +197,7 @@ func TestSetSensorReading_PreservesOtherKeys(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
 	// The failure path resets only successful_consecutive_orders; consumable
 	// counters must survive the write.
-	sen := newFakeUsageSensor(map[string]interface{}{
+	sen := newFakeUsageSensor(map[string]any{
 		"regular_grinds":                float64(2),
 		"cleanings":                     float64(4),
 		"successful_consecutive_orders": float64(7),
@@ -221,7 +221,7 @@ func TestSetSensorReading_PreservesOtherKeys(t *testing.T) {
 
 func TestIncrementSensorReading_ReadErrorSkipsWrite(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	sen := newFakeUsageSensor(map[string]interface{}{"regular_grinds": float64(4)})
+	sen := newFakeUsageSensor(map[string]any{"regular_grinds": float64(4)})
 	sen.readErr = errors.New("boom")
 	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
 	if n := sen.doCount(); n != 0 {
@@ -231,7 +231,7 @@ func TestIncrementSensorReading_ReadErrorSkipsWrite(t *testing.T) {
 
 func TestIncrementSensorReading_WriteErrorIsBestEffort(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	sen := newFakeUsageSensor(map[string]interface{}{"regular_grinds": float64(4)})
+	sen := newFakeUsageSensor(map[string]any{"regular_grinds": float64(4)})
 	sen.doErr = errors.New("boom")
 	// Must not panic or block; failure is swallowed.
 	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
@@ -253,7 +253,7 @@ func TestSetSensorReading_NilSensorNoOp(t *testing.T) {
 
 func TestConsecutiveOrders_SuccessIncrementsResetOnFailure(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	sen := newFakeUsageSensor(map[string]interface{}{"successful_consecutive_orders": float64(3)})
+	sen := newFakeUsageSensor(map[string]any{"successful_consecutive_orders": float64(3)})
 
 	// Success bumps the streak.
 	s.incrementSensorReading(context.Background(), sen, "consecutive orders", "successful_consecutive_orders", 1)

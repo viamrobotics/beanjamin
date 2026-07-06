@@ -265,13 +265,13 @@ func (s *multiPosesExecutionSwitch) Name() resource.Name {
 	return s.name
 }
 
-func (s *multiPosesExecutionSwitch) Status(ctx context.Context) (map[string]interface{}, error) {
+func (s *multiPosesExecutionSwitch) Status(ctx context.Context) (map[string]any, error) {
 	_, span := trace.StartSpan(ctx, "multi-poses-execution-switch::Status")
 	defer span.End()
-	return map[string]interface{}{}, nil
+	return map[string]any{}, nil
 }
 
-func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[string]any) (map[string]any, error) {
 	ctx, span := trace.StartSpan(ctx, "multi-poses-execution-switch::DoCommand")
 	defer span.End()
 	if name, ok := cmd["set_position_by_name"].(string); ok {
@@ -297,7 +297,7 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 		s.mu.Lock()
 		pos := s.position
 		s.mu.Unlock()
-		return map[string]interface{}{
+		return map[string]any{
 			"position_name": s.poseNames[pos],
 		}, nil
 	}
@@ -308,7 +308,7 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 		for i, pn := range s.poseNames {
 			if pn == name {
 				rp := s.resolvedPoses[i]
-				return map[string]interface{}{
+				return map[string]any{
 					"x":               rp.X,
 					"y":               rp.Y,
 					"z":               rp.Z,
@@ -331,13 +331,13 @@ func (s *multiPosesExecutionSwitch) DoCommand(ctx context.Context, cmd map[strin
 	return nil, err
 }
 
-func (s *multiPosesExecutionSwitch) GetNumberOfPositions(ctx context.Context, extra map[string]interface{}) (uint32, []string, error) {
+func (s *multiPosesExecutionSwitch) GetNumberOfPositions(ctx context.Context, extra map[string]any) (uint32, []string, error) {
 	_, span := trace.StartSpan(ctx, "multi-poses-execution-switch::GetNumberOfPositions")
 	defer span.End()
 	return uint32(len(s.poseNames)), s.poseNames, nil
 }
 
-func (s *multiPosesExecutionSwitch) GetPosition(ctx context.Context, extra map[string]interface{}) (uint32, error) {
+func (s *multiPosesExecutionSwitch) GetPosition(ctx context.Context, extra map[string]any) (uint32, error) {
 	_, span := trace.StartSpan(ctx, "multi-poses-execution-switch::GetPosition")
 	defer span.End()
 	s.mu.Lock()
@@ -345,7 +345,7 @@ func (s *multiPosesExecutionSwitch) GetPosition(ctx context.Context, extra map[s
 	return s.position, nil
 }
 
-func (s *multiPosesExecutionSwitch) SetPosition(ctx context.Context, position uint32, extra map[string]interface{}) error {
+func (s *multiPosesExecutionSwitch) SetPosition(ctx context.Context, position uint32, extra map[string]any) error {
 	ctx, span := trace.StartSpan(ctx, "multi-poses-execution-switch::SetPosition")
 	defer span.End()
 	if position > uint32(len(s.poseNames))-1 {

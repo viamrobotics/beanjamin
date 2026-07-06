@@ -61,7 +61,7 @@ type orderSensor struct {
 	logger logging.Logger
 
 	mu      sync.Mutex
-	pending []map[string]interface{}
+	pending []map[string]any
 }
 
 func newOrderSensor(_ context.Context, _ resource.Dependencies, rawConf resource.Config, logger logging.Logger) (sensor.Sensor, error) {
@@ -79,11 +79,11 @@ func (s *orderSensor) Name() resource.Name {
 	return s.name
 }
 
-func (s *orderSensor) Status(context.Context) (map[string]interface{}, error) {
-	return map[string]interface{}{}, nil
+func (s *orderSensor) Status(context.Context) (map[string]any, error) {
+	return map[string]any{}, nil
 }
 
-func (s *orderSensor) Readings(ctx context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
+func (s *orderSensor) Readings(ctx context.Context, _ map[string]any) (map[string]any, error) {
 	_, span := trace.StartSpan(ctx, "order-sensor::Readings")
 	defer span.End()
 	s.mu.Lock()
@@ -97,7 +97,7 @@ func (s *orderSensor) Readings(ctx context.Context, _ map[string]interface{}) (m
 	return payload, nil
 }
 
-func (*orderSensor) DoCommand(ctx context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
+func (*orderSensor) DoCommand(ctx context.Context, _ map[string]any) (map[string]any, error) {
 	_, span := trace.StartSpan(ctx, "order-sensor::DoCommand")
 	defer span.End()
 	return nil, nil
@@ -120,7 +120,7 @@ func (s *orderSensor) pushOrderReading(r orderReading) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pending = append(s.pending, map[string]interface{}{
+	s.pending = append(s.pending, map[string]any{
 		"order_id":           r.order.ID,
 		"drink":              r.order.Drink,
 		"customer_name":      r.order.CustomerName,

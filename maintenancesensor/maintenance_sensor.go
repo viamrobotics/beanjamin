@@ -80,11 +80,11 @@ func (m *maintenanceSensor) Name() resource.Name {
 	return m.name
 }
 
-func (m *maintenanceSensor) Status(ctx context.Context) (map[string]interface{}, error) {
-	return map[string]interface{}{}, nil
+func (m *maintenanceSensor) Status(ctx context.Context) (map[string]any, error) {
+	return map[string]any{}, nil
 }
 
-func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]interface{}) (map[string]interface{}, error) {
+func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]any) (map[string]any, error) {
 	ctx, span := trace.StartSpan(ctx, "maintenance-sensor::Readings")
 	defer span.End()
 	isArmMoving, err := m.arm.IsMoving(ctx)
@@ -97,7 +97,7 @@ func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]inter
 	}
 
 	// Query the coffee service for queue and running state via DoCommand.
-	resp, err := m.coffee.DoCommand(ctx, map[string]interface{}{"get_queue": true})
+	resp, err := m.coffee.DoCommand(ctx, map[string]any{"get_queue": true})
 	if err != nil {
 		m.logger.CWarnw(
 			ctx, "is_safe debugging: failed to query coffee service",
@@ -115,12 +115,12 @@ func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]inter
 		isSafe, isArmMoving, isBusy, queueCount,
 	)
 
-	return map[string]interface{}{
+	return map[string]any{
 		"is_safe": isSafe,
 	}, nil
 }
 
-func (m *maintenanceSensor) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+func (m *maintenanceSensor) DoCommand(ctx context.Context, cmd map[string]any) (map[string]any, error) {
 	_, span := trace.StartSpan(ctx, "maintenance-sensor::DoCommand")
 	defer span.End()
 	return nil, nil

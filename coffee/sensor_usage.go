@@ -58,14 +58,14 @@ func (s *beanjaminCoffee) setSensorReading(ctx context.Context, sen sensor.Senso
 // copy the caller may modify freely. The returned ok is false on a hard
 // Readings error, in which case the caller must skip the write rather than
 // clobber the real counters with a partial map.
-func (s *beanjaminCoffee) readSensorFields(ctx context.Context, sen sensor.Sensor, label string) (map[string]interface{}, bool) {
+func (s *beanjaminCoffee) readSensorFields(ctx context.Context, sen sensor.Sensor, label string) (map[string]any, bool) {
 	logger := s.activeOrderLogger()
 	readings, err := sen.Readings(ctx, nil)
 	if err != nil {
 		logger.Warnf("usage sensor %s: read failed, skipping update: %v", label, err)
 		return nil, false
 	}
-	out := make(map[string]interface{}, len(readings)+1)
+	out := make(map[string]any, len(readings)+1)
 	for k, v := range readings {
 		out[k] = v
 	}
@@ -75,9 +75,9 @@ func (s *beanjaminCoffee) readSensorFields(ctx context.Context, sen sensor.Senso
 // setSensorReadings writes the full readings map back via
 // DoCommand({"set": readings}). Failures log a warning and are otherwise
 // ignored (best effort).
-func (s *beanjaminCoffee) setSensorReadings(ctx context.Context, sen sensor.Sensor, label string, readings map[string]interface{}) {
+func (s *beanjaminCoffee) setSensorReadings(ctx context.Context, sen sensor.Sensor, label string, readings map[string]any) {
 	logger := s.activeOrderLogger()
-	_, err := sen.DoCommand(ctx, map[string]interface{}{"set": readings})
+	_, err := sen.DoCommand(ctx, map[string]any{"set": readings})
 	if err != nil {
 		logger.Warnf("usage sensor %s: set failed: %v", label, err)
 	}
@@ -88,7 +88,7 @@ func (s *beanjaminCoffee) setSensorReadings(ctx context.Context, sen sensor.Sens
 // absent field (nil) is treated as 0 with ok=true so the first increment still
 // lands. Values arrive as float64 over the wire; int/int64/json.Number are
 // accepted defensively.
-func numericReading(v interface{}) (float64, bool) {
+func numericReading(v any) (float64, bool) {
 	switch v := v.(type) {
 	case float64:
 		return v, true

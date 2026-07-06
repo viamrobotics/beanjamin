@@ -12,19 +12,19 @@ import (
 	"go.viam.com/rdk/logging"
 )
 
-func (s *beanjaminCoffee) proceedQueue() (map[string]interface{}, error) {
+func (s *beanjaminCoffee) proceedQueue() (map[string]any, error) {
 	select {
 	case s.queue.proceed <- struct{}{}:
-		return map[string]interface{}{"status": "resumed"}, nil
+		return map[string]any{"status": "resumed"}, nil
 	default:
 		return nil, errors.New("not currently paused between orders")
 	}
 }
 
-func (s *beanjaminCoffee) clearQueue() (map[string]interface{}, error) {
+func (s *beanjaminCoffee) clearQueue() (map[string]any, error) {
 	removed := s.queue.Clear()
 	s.logger.Infof("cleared %d orders from queue", removed)
-	return map[string]interface{}{"status": "cleared", "removed": removed}, nil
+	return map[string]any{"status": "cleared", "removed": removed}, nil
 }
 
 // resetWorld brings the service back to an idle state from anywhere: cancels a
@@ -34,7 +34,7 @@ func (s *beanjaminCoffee) clearQueue() (map[string]interface{}, error) {
 // by lockFilterFrame), and releases the cancel-induced queue pause so
 // processQueue is ready for new orders. Each step is best-effort and skipped
 // when not applicable, so it is safe to call from any state.
-func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]interface{}, error) {
+func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error) {
 	cancelled := s.signalCancel()
 	if cancelled {
 		if err := s.waitForIdle(ctx, resetCancelWaitTimeout); err != nil {
@@ -68,7 +68,7 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]interface{
 
 	s.logger.Infof("reset_world: cancelled=%v cleared=%d unpaused=%v frame_system_reset=true",
 		cancelled, removed, unpaused)
-	return map[string]interface{}{
+	return map[string]any{
 		"status":    "reset",
 		"cancelled": cancelled,
 		"cleared":   removed,
@@ -137,7 +137,7 @@ func (s *beanjaminCoffee) activeOrderLogger() logging.Logger {
 // route the arm away while the bayonet is partially engaged. There is no
 // safe automated recovery for that narrow window — the operator must
 // intervene manually.
-func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]interface{}, error) {
+func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]any, error) {
 	cancelled := s.signalCancel()
 	if cancelled {
 		if err := s.waitForIdle(ctx, resetCancelWaitTimeout); err != nil {
@@ -224,7 +224,7 @@ func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]interface{}, e
 	s.currentStep.Store("")
 	logger.Infof("cancel: cancelled=%v recovered=%v — queue paused, send 'proceed' to resume",
 		cancelled, recovered)
-	return map[string]interface{}{
+	return map[string]any{
 		"status":    "cancelled",
 		"cancelled": cancelled,
 		"recovered": recovered,

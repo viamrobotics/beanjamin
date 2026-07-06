@@ -195,7 +195,7 @@ func (s *beanjaminCoffee) sayAlways(ctx context.Context, text string) error {
 	if s.speech == nil {
 		return nil
 	}
-	_, err := s.speech.DoCommand(ctx, map[string]interface{}{
+	_, err := s.speech.DoCommand(ctx, map[string]any{
 		"say_async": text,
 	})
 	return err
@@ -207,8 +207,8 @@ func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order Order) {
 	if s.customerDetector == nil || order.CustomerEmail == "" {
 		return
 	}
-	if _, err := s.customerDetector.DoCommand(ctx, map[string]interface{}{
-		"record_order": map[string]interface{}{
+	if _, err := s.customerDetector.DoCommand(ctx, map[string]any{
+		"record_order": map[string]any{
 			"email": order.CustomerEmail,
 			"drink": order.Drink,
 		},
@@ -217,7 +217,7 @@ func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order Order) {
 	}
 }
 
-func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]interface{}, error) {
+func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]any, error) {
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
 		"grind_coffee":              s.grindCoffee,
 		"grind_decaf":               s.grindDecaf,
@@ -275,7 +275,7 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 	}
 
 	s.logger.Infof("action %q complete", name)
-	return map[string]interface{}{"status": "complete", "action": name}, nil
+	return map[string]any{"status": "complete", "action": name}, nil
 }
 
 // isDecafDrink reports whether the drink uses the decaf grinding path.

@@ -59,27 +59,27 @@ func TestSaveOrderVideoAndClear_ClearsOnlyOnSuccess(t *testing.T) {
 	now := time.Now().UTC()
 	cases := []struct {
 		name      string
-		doFunc    func(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error)
+		doFunc    func(ctx context.Context, cmd map[string]any) (map[string]any, error)
 		wantClear bool
 	}{
 		{
 			name: "success clears record",
-			doFunc: func(_ context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
-				return map[string]interface{}{"filename": "clip.mp4"}, nil
+			doFunc: func(_ context.Context, _ map[string]any) (map[string]any, error) {
+				return map[string]any{"filename": "clip.mp4"}, nil
 			},
 			wantClear: true,
 		},
 		{
 			name: "transport error keeps record",
-			doFunc: func(_ context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
+			doFunc: func(_ context.Context, _ map[string]any) (map[string]any, error) {
 				return nil, context.DeadlineExceeded
 			},
 			wantClear: false,
 		},
 		{
 			name: "per-store errors keep record",
-			doFunc: func(_ context.Context, _ map[string]interface{}) (map[string]interface{}, error) {
-				return map[string]interface{}{"errors": map[string]any{"store0": "filename too long"}}, nil
+			doFunc: func(_ context.Context, _ map[string]any) (map[string]any, error) {
+				return map[string]any{"errors": map[string]any{"store0": "filename too long"}}, nil
 			},
 			wantClear: false,
 		},
@@ -137,10 +137,10 @@ func TestSaveOrderVideoAndClear_NoStorageDropsRecord(t *testing.T) {
 // can't blow the filename limit.
 func TestIssueVideoSave_RequestShape(t *testing.T) {
 	c, cam, _ := newCamStorageTestCoffee(t)
-	var got map[string]interface{}
-	cam.DoFunc = func(_ context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	var got map[string]any
+	cam.DoFunc = func(_ context.Context, cmd map[string]any) (map[string]any, error) {
 		got = cmd
-		return map[string]interface{}{}, nil
+		return map[string]any{}, nil
 	}
 
 	order := NewOrder("espresso", "Ada", "hi", "bye")

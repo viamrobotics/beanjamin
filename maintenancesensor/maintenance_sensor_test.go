@@ -20,9 +20,9 @@ type fakeCoffeeService struct {
 	queueCount float64
 }
 
-func (f *fakeCoffeeService) DoCommand(_ context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+func (f *fakeCoffeeService) DoCommand(_ context.Context, cmd map[string]any) (map[string]any, error) {
 	if _, ok := cmd["get_queue"]; ok {
-		return map[string]interface{}{
+		return map[string]any{
 			"is_busy": f.isBusy,
 			"count":   f.queueCount,
 		}, nil

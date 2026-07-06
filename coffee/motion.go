@@ -74,7 +74,7 @@ func (s *beanjaminCoffee) fetchPose(ctx context.Context, component, poseName str
 	if err != nil {
 		return nil, err
 	}
-	resp, err := sw.DoCommand(ctx, map[string]interface{}{
+	resp, err := sw.DoCommand(ctx, map[string]any{
 		"get_pose_by_name": poseName,
 	})
 	if err != nil {

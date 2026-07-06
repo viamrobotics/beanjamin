@@ -254,7 +254,7 @@ func TestValidate_CanServeIced_RequiresGlassApproachRelativePose(t *testing.T) {
 func TestParseCupFlowCount(t *testing.T) {
 	cases := []struct {
 		name    string
-		in      interface{}
+		in      any
 		want    int
 		wantErr bool
 	}{

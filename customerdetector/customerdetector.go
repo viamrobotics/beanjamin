@@ -169,10 +169,10 @@ func (cd *customerDetector) getVision() (vision.Service, error) {
 	return nil, fmt.Errorf("vision service %q is not available yet", cd.visionName)
 }
 
-func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]any) (map[string]any, error) {
 	ctx, span := trace.StartSpan(ctx, "customer-detector::DoCommand")
 	defer span.End()
-	if reg, ok := cmd["register_customer"].(map[string]interface{}); ok {
+	if reg, ok := cmd["register_customer"].(map[string]any); ok {
 		email, _ := reg["email"].(string)
 		name, _ := reg["name"].(string)
 		return cd.registerCustomer(ctx, name, email)
@@ -189,7 +189,7 @@ func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]interf
 	if email, ok := cmd["remove_customer"].(string); ok {
 		return cd.removeCustomer(ctx, email)
 	}
-	if rec, ok := cmd["record_order"].(map[string]interface{}); ok {
+	if rec, ok := cmd["record_order"].(map[string]any); ok {
 		email, _ := rec["email"].(string)
 		drink, _ := rec["drink"].(string)
 		return cd.recordOrder(email, drink)
@@ -198,7 +198,7 @@ func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]interf
 		return cd.getUsual(email)
 	}
 	if _, ok := cmd["get_info"]; ok {
-		return map[string]interface{}{
+		return map[string]any{
 			"camera_name": cd.camera.Name().ShortName(),
 		}, nil
 	}
@@ -208,7 +208,7 @@ func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]interf
 // registerCustomer captures an image from the camera and stores it as a known
 // face for the given email address. It then tells the vision service to
 // recompute its embeddings so the new face is immediately recognisable.
-func (cd *customerDetector) registerCustomer(ctx context.Context, name, email string) (map[string]interface{}, error) {
+func (cd *customerDetector) registerCustomer(ctx context.Context, name, email string) (map[string]any, error) {
 	if email == "" {
 		return nil, fmt.Errorf("email must not be empty")
 	}
@@ -261,7 +261,7 @@ func (cd *customerDetector) registerCustomer(ctx context.Context, name, email st
 		return nil, fmt.Errorf("failed to persist customer records: %w", err)
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"registered": email,
 		"name":       name,
 		"image_path": imgPath,
@@ -271,7 +271,7 @@ func (cd *customerDetector) registerCustomer(ctx context.Context, name, email st
 // finishRegistration signals that the app is done capturing face images for
 // a customer. It triggers the vision service to recompute its embeddings so
 // all the newly captured faces become recognisable.
-func (cd *customerDetector) finishRegistration(ctx context.Context, email string) (map[string]interface{}, error) {
+func (cd *customerDetector) finishRegistration(ctx context.Context, email string) (map[string]any, error) {
 	if email == "" {
 		return nil, fmt.Errorf("email must not be empty")
 	}
@@ -290,7 +290,7 @@ func (cd *customerDetector) finishRegistration(ctx context.Context, email string
 		return nil, err
 	}
 
-	if _, err := vis.DoCommand(ctx, map[string]interface{}{
+	if _, err := vis.DoCommand(ctx, map[string]any{
 		"command": "recompute_embeddings",
 	}); err != nil {
 		return nil, fmt.Errorf("failed to recompute embeddings: %w", err)
@@ -298,7 +298,7 @@ func (cd *customerDetector) finishRegistration(ctx context.Context, email string
 
 	cd.logger.Infof("finished registration for %q with %d face images", email, len(entries))
 
-	return map[string]interface{}{
+	return map[string]any{
 		"email":       email,
 		"name":        rec.Name,
 		"face_images": len(entries),
@@ -314,7 +314,7 @@ const defaultMinFaceAreaFraction = 0.08
 // customers, returning the best match above the confidence threshold whose
 // bounding box covers at least min_face_area_fraction of the image. When
 // multiple detections qualify, the largest (by bounding-box area) wins.
-func (cd *customerDetector) identifyCustomer(ctx context.Context) (map[string]interface{}, error) {
+func (cd *customerDetector) identifyCustomer(ctx context.Context) (map[string]any, error) {
 	vis, err := cd.getVision()
 	if err != nil {
 		return nil, err
@@ -365,7 +365,7 @@ func (cd *customerDetector) identifyCustomer(ctx context.Context) (map[string]in
 	}
 
 	if bestLabel == "" {
-		return map[string]interface{}{
+		return map[string]any{
 			"identified":     false,
 			"message":        "no known customer detected",
 			"num_detections": len(detections),
@@ -376,7 +376,7 @@ func (cd *customerDetector) identifyCustomer(ctx context.Context) (map[string]in
 	rec, isRegistered := cd.customers[bestLabel]
 	cd.mu.RUnlock()
 
-	result := map[string]interface{}{
+	result := map[string]any{
 		"identified":    true,
 		"email":         bestLabel,
 		"confidence":    bestConf,
@@ -388,25 +388,25 @@ func (cd *customerDetector) identifyCustomer(ctx context.Context) (map[string]in
 	return result, nil
 }
 
-func (cd *customerDetector) listCustomers() (map[string]interface{}, error) {
+func (cd *customerDetector) listCustomers() (map[string]any, error) {
 	cd.mu.RLock()
 	defer cd.mu.RUnlock()
 
-	customers := make([]map[string]interface{}, 0, len(cd.customers))
+	customers := make([]map[string]any, 0, len(cd.customers))
 	for _, rec := range cd.customers {
-		customers = append(customers, map[string]interface{}{
+		customers = append(customers, map[string]any{
 			"name":  rec.Name,
 			"email": rec.Email,
 		})
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"customers": customers,
 		"count":     len(customers),
 	}, nil
 }
 
-func (cd *customerDetector) removeCustomer(ctx context.Context, email string) (map[string]interface{}, error) {
+func (cd *customerDetector) removeCustomer(ctx context.Context, email string) (map[string]any, error) {
 	cd.mu.Lock()
 	rec, exists := cd.customers[email]
 	if !exists {
@@ -427,20 +427,20 @@ func (cd *customerDetector) removeCustomer(ctx context.Context, email string) (m
 
 	// Recompute embeddings so the vision service forgets this face.
 	if vis, err := cd.getVision(); err == nil {
-		if _, err := vis.DoCommand(ctx, map[string]interface{}{
+		if _, err := vis.DoCommand(ctx, map[string]any{
 			"command": "recompute_embeddings",
 		}); err != nil {
 			cd.logger.Warnf("failed to recompute embeddings after removing %q: %v", email, err)
 		}
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"removed": email,
 	}, nil
 }
 
 // recordOrder appends a drink to a customer's history; unknown email is a no-op.
-func (cd *customerDetector) recordOrder(email, drink string) (map[string]interface{}, error) {
+func (cd *customerDetector) recordOrder(email, drink string) (map[string]any, error) {
 	if email == "" || drink == "" {
 		return nil, fmt.Errorf("record_order requires both email and drink")
 	}
@@ -450,7 +450,7 @@ func (cd *customerDetector) recordOrder(email, drink string) (map[string]interfa
 	if !exists {
 		cd.mu.Unlock()
 		cd.logger.Debugf("record_order: no customer for %q — nothing to remember", email)
-		return map[string]interface{}{"recorded": false, "reason": "unknown customer"}, nil
+		return map[string]any{"recorded": false, "reason": "unknown customer"}, nil
 	}
 	rec.Orders = append(rec.Orders, orderHistoryEntry{Drink: drink, At: time.Now()})
 	if len(rec.Orders) > maxOrderHistory {
@@ -463,11 +463,11 @@ func (cd *customerDetector) recordOrder(email, drink string) (map[string]interfa
 		return nil, fmt.Errorf("failed to persist order history: %w", err)
 	}
 	cd.logger.Infof("recorded %q for %q (%d in history)", drink, email, count)
-	return map[string]interface{}{"recorded": true, "email": email, "drink": drink}, nil
+	return map[string]any{"recorded": true, "email": email, "drink": drink}, nil
 }
 
 // getUsual returns the customer's usual drink, or {has_usual:false} if none.
-func (cd *customerDetector) getUsual(email string) (map[string]interface{}, error) {
+func (cd *customerDetector) getUsual(email string) (map[string]any, error) {
 	if email == "" {
 		return nil, fmt.Errorf("get_usual requires an email")
 	}
@@ -477,13 +477,13 @@ func (cd *customerDetector) getUsual(email string) (map[string]interface{}, erro
 
 	rec, exists := cd.customers[email]
 	if !exists || len(rec.Orders) == 0 {
-		return map[string]interface{}{"has_usual": false}, nil
+		return map[string]any{"has_usual": false}, nil
 	}
 	drink, count := usualDrink(rec.Orders)
 	if drink == "" {
-		return map[string]interface{}{"has_usual": false}, nil
+		return map[string]any{"has_usual": false}, nil
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"has_usual": true,
 		"drink":     drink,
 		"count":     count,
@@ -539,20 +539,20 @@ func (cd *customerDetector) saveCustomers() error {
 }
 
 // Status reports who is at the camera and their usual; a miss is {recognized:false}.
-func (cd *customerDetector) Status(ctx context.Context) (map[string]interface{}, error) {
+func (cd *customerDetector) Status(ctx context.Context) (map[string]any, error) {
 	ctx, span := trace.StartSpan(ctx, "customer-detector::Status")
 	defer span.End()
 
 	res, err := cd.identifyCustomer(ctx)
 	if err != nil {
 		cd.logger.Debugf("Status identify failed: %v", err)
-		return map[string]interface{}{"recognized": false}, nil
+		return map[string]any{"recognized": false}, nil
 	}
 	if identified, _ := res["identified"].(bool); !identified {
-		return map[string]interface{}{"recognized": false}, nil
+		return map[string]any{"recognized": false}, nil
 	}
 
-	status := map[string]interface{}{
+	status := map[string]any{
 		"recognized": true,
 		"confidence": res["confidence"],
 	}

@@ -191,7 +191,7 @@ func TestConfigValidate(t *testing.T) {
 
 func TestToFloat64(t *testing.T) {
 	tests := []struct {
-		in     interface{}
+		in     any
 		want   float64
 		wantOK bool
 	}{
@@ -513,31 +513,31 @@ func TestDoCommand(t *testing.T) {
 	ctx := context.Background()
 
 	s := newTestService(t, &Config{})
-	if _, err := s.DoCommand(ctx, map[string]interface{}{"dial_move_speed": 5}); err == nil {
+	if _, err := s.DoCommand(ctx, map[string]any{"dial_move_speed": 5}); err == nil {
 		t.Error("dial_move_speed should return the removed-flag error")
 	}
 
-	res, err := s.DoCommand(ctx, map[string]interface{}{"toggle_axis_mode": true})
+	res, err := s.DoCommand(ctx, map[string]any{"toggle_axis_mode": true})
 	if err != nil || res["axis_mode"] != axisModeRotation {
 		t.Errorf("toggle_axis_mode = (%v, %v), want rotation", res, err)
 	}
 
-	res, err = s.DoCommand(ctx, map[string]interface{}{"set_axis_mode": axisModeTranslation})
+	res, err = s.DoCommand(ctx, map[string]any{"set_axis_mode": axisModeTranslation})
 	if err != nil || res["axis_mode"] != axisModeTranslation {
 		t.Errorf("set_axis_mode = (%v, %v), want translation", res, err)
 	}
 
-	res, err = s.DoCommand(ctx, map[string]interface{}{"get_axis_mode": true})
+	res, err = s.DoCommand(ctx, map[string]any{"get_axis_mode": true})
 	if err != nil || res["axis_mode"] != axisModeTranslation {
 		t.Errorf("get_axis_mode = (%v, %v), want translation", res, err)
 	}
 
-	res, err = s.DoCommand(ctx, map[string]interface{}{"dial_move_x": 50.0})
+	res, err = s.DoCommand(ctx, map[string]any{"dial_move_x": 50.0})
 	if err != nil || res["status"] != "dial_initialized" {
 		t.Errorf("dial_move_x = (%v, %v), want dial_initialized", res, err)
 	}
 
-	if _, err := s.DoCommand(ctx, map[string]interface{}{"nonsense": 1}); err == nil {
+	if _, err := s.DoCommand(ctx, map[string]any{"nonsense": 1}); err == nil {
 		t.Error("unknown command should return an error")
 	}
 }
@@ -552,10 +552,10 @@ func TestFlushMoves_Translation(t *testing.T) {
 
 	var captured spatialmath.Pose
 	s.arm = &inject.Arm{
-		EndPositionFunc: func(context.Context, map[string]interface{}) (spatialmath.Pose, error) {
+		EndPositionFunc: func(context.Context, map[string]any) (spatialmath.Pose, error) {
 			return start, nil
 		},
-		MoveToPositionFunc: func(_ context.Context, to spatialmath.Pose, _ map[string]interface{}) error {
+		MoveToPositionFunc: func(_ context.Context, to spatialmath.Pose, _ map[string]any) error {
 			captured = to
 			return nil
 		},
@@ -592,10 +592,10 @@ func TestFlushMoves_Rotation(t *testing.T) {
 
 	var captured spatialmath.Pose
 	s.arm = &inject.Arm{
-		EndPositionFunc: func(context.Context, map[string]interface{}) (spatialmath.Pose, error) {
+		EndPositionFunc: func(context.Context, map[string]any) (spatialmath.Pose, error) {
 			return start, nil
 		},
-		MoveToPositionFunc: func(_ context.Context, to spatialmath.Pose, _ map[string]interface{}) error {
+		MoveToPositionFunc: func(_ context.Context, to spatialmath.Pose, _ map[string]any) error {
 			captured = to
 			return nil
 		},
@@ -618,7 +618,7 @@ func TestFlushMoves_Rotation(t *testing.T) {
 func TestFlushMoves_EndPositionError(t *testing.T) {
 	s := newTestService(t, &Config{})
 	s.arm = &inject.Arm{
-		EndPositionFunc: func(context.Context, map[string]interface{}) (spatialmath.Pose, error) {
+		EndPositionFunc: func(context.Context, map[string]any) (spatialmath.Pose, error) {
 			return nil, errors.New("arm unreachable")
 		},
 	}

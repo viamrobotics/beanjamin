@@ -40,7 +40,7 @@ func (s *beanjaminCoffee) notifyOrderFailureSlack(r orderReading) {
 		// renders the rich layout; text is the notification/accessibility
 		// fallback Slack shows when blocks can't render. channel_id/webhook are
 		// configured on the service.
-		resp, err := s.slackNotifier.DoCommand(ctx, map[string]interface{}{
+		resp, err := s.slackNotifier.DoCommand(ctx, map[string]any{
 			"command": "send",
 			"text":    text,
 			"blocks":  blocks,
@@ -76,12 +76,12 @@ func slackFailureText(r orderReading) string {
 // distinguishes a fault from an operator cancel, a fields section with the
 // order details at a glance, the error in a code block (faults only), and a
 // context footer with the order ID, trace ID, and start time. Returned as
-// []interface{} of map[string]interface{} so it serializes cleanly through the
-// structpb-backed DoCommand wire format (which rejects []map[string]interface{}
+// []any of map[string]any so it serializes cleanly through the
+// structpb-backed DoCommand wire format (which rejects []map[string]any
 // as a list value). machineLogsURL and clipDataURL, when non-empty, add
 // clickable app.viam.com deep-links (machine logs, and the order's video clip
 // filtered by tag) to the footer.
-func slackFailureBlocks(r orderReading, machineLogsURL, clipDataURL string) []interface{} {
+func slackFailureBlocks(r orderReading, machineLogsURL, clipDataURL string) []any {
 	header := ":x: Order failed"
 	stepLabel := "*Failed at:*"
 	if r.operatorCancelled {
@@ -90,14 +90,14 @@ func slackFailureBlocks(r orderReading, machineLogsURL, clipDataURL string) []in
 	}
 
 	duration := r.endedAt.Sub(r.startedAt).Round(time.Second)
-	blocks := []interface{}{
-		map[string]interface{}{
+	blocks := []any{
+		map[string]any{
 			"type": "header",
-			"text": map[string]interface{}{"type": "plain_text", "text": header, "emoji": true},
+			"text": map[string]any{"type": "plain_text", "text": header, "emoji": true},
 		},
-		map[string]interface{}{
+		map[string]any{
 			"type": "section",
-			"fields": []interface{}{
+			"fields": []any{
 				slackField("*Drink:*", r.order.Drink),
 				slackField("*Customer:*", slackCustomer(r)),
 				slackField(stepLabel, slackStep(r)),
@@ -110,9 +110,9 @@ func slackFailureBlocks(r orderReading, machineLogsURL, clipDataURL string) []in
 	// Show the error in a code block for faults; an operator cancel has no
 	// meaningful error to surface.
 	if !r.operatorCancelled {
-		blocks = append(blocks, map[string]interface{}{
+		blocks = append(blocks, map[string]any{
 			"type": "section",
-			"text": map[string]interface{}{
+			"text": map[string]any{
 				"type": "mrkdwn",
 				"text": fmt.Sprintf("*Error:*\n```%s```", slackErrMsg(r)),
 			},
@@ -135,9 +135,9 @@ func slackFailureBlocks(r orderReading, machineLogsURL, clipDataURL string) []in
 	if clipDataURL != "" {
 		footer += fmt.Sprintf(" · <%s|video clip> _(may take ~a minute to appear)_", clipDataURL)
 	}
-	blocks = append(blocks, map[string]interface{}{
+	blocks = append(blocks, map[string]any{
 		"type":     "context",
-		"elements": []interface{}{map[string]interface{}{"type": "mrkdwn", "text": footer}},
+		"elements": []any{map[string]any{"type": "mrkdwn", "text": footer}},
 	})
 
 	return blocks
@@ -171,8 +171,8 @@ func buildClipDataURL(locationID, orderID string) string {
 
 // slackField builds a single mrkdwn field ("*Label:*\nvalue") for a Block Kit
 // section fields array.
-func slackField(label, value string) map[string]interface{} {
-	return map[string]interface{}{"type": "mrkdwn", "text": fmt.Sprintf("%s\n%s", label, value)}
+func slackField(label, value string) map[string]any {
+	return map[string]any{"type": "mrkdwn", "text": fmt.Sprintf("%s\n%s", label, value)}
 }
 
 func slackBool(b bool) string {
