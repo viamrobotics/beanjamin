@@ -37,20 +37,20 @@ func (s *beanjaminCoffee) setStep(step string) {
 	}
 }
 
-func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, error) {
+func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 	_, span := trace.StartSpan(ctx, "beanjamin::Status")
 	defer span.End()
 	orders := s.queue.List()
 	// structpb.NewStruct (used by RDK to serialize Status over the wire) only
-	// accepts []interface{} for list values, not []map[string]interface{}, so
-	// the slice element type must be interface{}.
-	orderMaps := make([]interface{}, len(orders))
+	// accepts []any for list values, not []map[string]any, so
+	// the slice element type must be any.
+	orderMaps := make([]any, len(orders))
 	for i, o := range orders {
-		// structpb.NewStruct rejects []map[string]interface{} as list values,
-		// so step_history must also be []interface{}.
-		history := make([]interface{}, len(o.StepHistory))
+		// structpb.NewStruct rejects []map[string]any as list values,
+		// so step_history must also be []any.
+		history := make([]any, len(o.StepHistory))
 		for j, e := range o.StepHistory {
-			history[j] = map[string]interface{}{
+			history[j] = map[string]any{
 				"step":       e.Step,
 				"started_at": e.StartedAt.Format(time.RFC3339),
 			}
@@ -61,7 +61,7 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 		if !o.CompletedAt.IsZero() {
 			completedAt = o.CompletedAt.Format(time.RFC3339)
 		}
-		orderMaps[i] = map[string]interface{}{
+		orderMaps[i] = map[string]any{
 			"id":            o.ID,
 			"drink":         o.Drink,
 			"customer_name": o.CustomerName,
@@ -72,7 +72,7 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 		}
 	}
 	step, _ := s.currentStep.Load().(string)
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		// count reports pending depth only — orders waiting to be made.
 		// Recently-completed orders are visible in `orders` but don't add
 		// to depth. Returned as float64 so in-process callers see the
@@ -91,7 +91,7 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]interface{}, e
 
 // parseCupFlowCount extracts the iteration count from a run_cup_flow command
 // value. A JSON number is the count; bool true means a single iteration.
-func parseCupFlowCount(v interface{}) (int, error) {
+func parseCupFlowCount(v any) (int, error) {
 	count := 1
 	switch n := v.(type) {
 	case bool:
@@ -107,109 +107,123 @@ func parseCupFlowCount(v interface{}) (int, error) {
 	return count, nil
 }
 
-func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
-	ctx, span := trace.StartSpan(ctx, "beanjamin::DoCommand")
-	defer span.End()
-	if orderRaw, ok := cmd["prepare_order"]; ok {
-		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::prepare_order")
-		defer cmdSpan.End()
-		res, err := s.enqueueOrder(ctx, orderRaw)
-		if err != nil {
-			s.logger.Errorw("DoCommand", "error", err)
-		}
-		return res, err
-	}
-	if actionName, ok := cmd["execute_action"].(string); ok {
-		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::execute_action["+actionName+"]")
-		defer cmdSpan.End()
-		res, err := s.executeAction(ctx, actionName)
-		if err != nil {
-			s.logger.Errorw("DoCommand", "error", err)
-		}
-		return res, err
-	}
-	if _, ok := cmd["cancel"]; ok {
-		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::cancel")
-		defer cmdSpan.End()
-		res, err := s.cancel(ctx)
-		if err != nil {
-			s.logger.Errorw("DoCommand", "error", err)
-		}
-		return res, err
-	}
-	if _, ok := cmd["get_queue"]; ok {
-		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::get_queue")
-		defer cmdSpan.End()
-		return s.Status(ctx)
-	}
-	if _, ok := cmd["proceed"]; ok {
-		_, cmdSpan := trace.StartSpan(ctx, "beanjamin::proceed")
-		defer cmdSpan.End()
-		return s.proceedQueue()
-	}
-	if _, ok := cmd["clear_queue"]; ok {
-		_, cmdSpan := trace.StartSpan(ctx, "beanjamin::clear_queue")
-		defer cmdSpan.End()
-		return s.clearQueue()
-	}
-	if _, ok := cmd["cleanup_pending_clips"]; ok {
-		_, cmdSpan := trace.StartSpan(ctx, "beanjamin::cleanup_pending_clips")
-		defer cmdSpan.End()
-		return s.cleanupPendingClips()
-	}
+// commandDef is one entry in the DoCommand dispatch table. needsStr restricts a
+// match to string values (execute_action/action dispatch on the string).
+type commandDef struct {
+	key      string
+	needsStr bool
+	// spanName overrides the trace-span suffix; nil uses key verbatim.
+	spanName func(cmd map[string]any) string
+	run      func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error)
+}
 
-	if _, ok := cmd["reset_world"]; ok {
-		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::reset_world")
-		defer cmdSpan.End()
-		res, err := s.resetWorld(ctx)
-		if err != nil {
-			s.logger.Errorw("DoCommand", "error", err)
-		}
-		return res, err
+func (d commandDef) matches(cmd map[string]any) bool {
+	v, ok := cmd[d.key]
+	if !ok {
+		return false
 	}
-	if countRaw, ok := cmd["run_cup_flow"]; ok {
-		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::run_cup_flow")
-		defer cmdSpan.End()
-		count, err := parseCupFlowCount(countRaw)
+	if d.needsStr {
+		_, isStr := v.(string)
+		return isStr
+	}
+	return true
+}
+
+// coffeeCommands is the ordered DoCommand dispatch table (first match wins).
+var coffeeCommands = []commandDef{
+	{key: "prepare_order", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
+		return s.enqueueOrder(ctx, cmd["prepare_order"])
+	}},
+	{key: "execute_action", needsStr: true,
+		spanName: func(cmd map[string]any) string {
+			return "execute_action[" + cmd["execute_action"].(string) + "]"
+		},
+		run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
+			return s.executeAction(ctx, cmd["execute_action"].(string))
+		}},
+	{key: "cancel", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
+		return s.cancel(ctx)
+	}},
+	{key: "get_queue", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
+		return s.Status(ctx)
+	}},
+	{key: "proceed", run: func(s *beanjaminCoffee, _ context.Context, _ map[string]any) (map[string]any, error) {
+		return s.proceedQueue()
+	}},
+	{key: "clear_queue", run: func(s *beanjaminCoffee, _ context.Context, _ map[string]any) (map[string]any, error) {
+		return s.clearQueue()
+	}},
+	{key: "cleanup_pending_clips", run: func(s *beanjaminCoffee, _ context.Context, _ map[string]any) (map[string]any, error) {
+		return s.cleanupPendingClips()
+	}},
+	{key: "reset_world", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
+		return s.resetWorld(ctx)
+	}},
+	{key: "run_cup_flow", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
+		count, err := parseCupFlowCount(cmd["run_cup_flow"])
 		if err != nil {
-			s.logger.Errorw("DoCommand", "error", err)
 			return nil, err
 		}
-		res, err := s.runCupFlow(ctx, count)
-		if err != nil {
-			s.logger.Errorw("DoCommand", "error", err)
+		return s.runCupFlow(ctx, count)
+	}},
+	// Stream deck key commands.
+	{key: "action", needsStr: true,
+		spanName: func(cmd map[string]any) string { return "action[" + cmd["action"].(string) + "]" },
+		run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
+			switch action := cmd["action"].(string); action {
+			case "open_gripper":
+				return s.handleOpenGripper(ctx)
+			case "close_gripper":
+				return s.handleCloseGripper(ctx)
+			default:
+				return nil, fmt.Errorf("unknown action %q", action)
+			}
+		}},
+}
+
+func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]any) (map[string]any, error) {
+	ctx, span := trace.StartSpan(ctx, "beanjamin::DoCommand")
+	defer span.End()
+
+	for _, def := range coffeeCommands {
+		if def.matches(cmd) {
+			return s.runCommand(ctx, def, cmd)
 		}
-		return res, err
 	}
-	// Stream deck key commands
-	if action, ok := cmd["action"].(string); ok {
-		ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::action["+action+"]")
-		defer cmdSpan.End()
-		switch action {
-		case "open_gripper":
-			return s.handleOpenGripper(ctx)
-		case "close_gripper":
-			return s.handleCloseGripper(ctx)
-		default:
-			return nil, fmt.Errorf("unknown action %q", action)
-		}
-	}
+
 	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }
 
-func (s *beanjaminCoffee) handleOpenGripper(ctx context.Context) (map[string]interface{}, error) {
+// runCommand runs a matched command inside its trace span, logging any
+// returned error.
+func (s *beanjaminCoffee) runCommand(ctx context.Context, def commandDef, cmd map[string]any) (map[string]any, error) {
+	suffix := def.key
+	if def.spanName != nil {
+		suffix = def.spanName(cmd)
+	}
+	ctx, cmdSpan := trace.StartSpan(ctx, "beanjamin::"+suffix)
+	defer cmdSpan.End()
+
+	res, err := def.run(s, ctx, cmd)
+	if err != nil {
+		s.logger.Errorw("DoCommand", "error", err)
+	}
+	return res, err
+}
+
+func (s *beanjaminCoffee) handleOpenGripper(ctx context.Context) (map[string]any, error) {
 	if s.gripper == nil {
 		return nil, fmt.Errorf("no gripper configured")
 	}
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		return nil, fmt.Errorf("failed to open gripper: %w", err)
 	}
-	return map[string]interface{}{"status": "opened"}, nil
+	return map[string]any{"status": "opened"}, nil
 }
 
-func (s *beanjaminCoffee) handleCloseGripper(ctx context.Context) (map[string]interface{}, error) {
+func (s *beanjaminCoffee) handleCloseGripper(ctx context.Context) (map[string]any, error) {
 	if s.gripper == nil {
 		return nil, fmt.Errorf("no gripper configured")
 	}
@@ -217,5 +231,5 @@ func (s *beanjaminCoffee) handleCloseGripper(ctx context.Context) (map[string]in
 	if err != nil {
 		return nil, fmt.Errorf("failed to close gripper: %w", err)
 	}
-	return map[string]interface{}{"status": "closed", "grabbed": grabbed}, nil
+	return map[string]any{"status": "closed", "grabbed": grabbed}, nil
 }

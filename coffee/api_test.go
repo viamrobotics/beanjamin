@@ -54,9 +54,9 @@ func TestStatusReportsQueueAndFlags(t *testing.T) {
 	if st["is_paused"] != false || st["is_busy"] != false {
 		t.Errorf("is_paused/is_busy = %v/%v, want false/false", st["is_paused"], st["is_busy"])
 	}
-	orders, ok := st["orders"].([]interface{})
+	orders, ok := st["orders"].([]any)
 	if !ok || len(orders) != 2 {
-		t.Fatalf("orders = %v, want a 2-element []interface{}", st["orders"])
+		t.Fatalf("orders = %v, want a 2-element []any", st["orders"])
 	}
 }
 
@@ -68,7 +68,7 @@ func TestDoCommandDispatch(t *testing.T) {
 	s := newStatusService(t, &Config{})
 	s.queue.Enqueue(Order{ID: "o1", Drink: "espresso"})
 
-	res, err := s.DoCommand(ctx, map[string]interface{}{"get_queue": true})
+	res, err := s.DoCommand(ctx, map[string]any{"get_queue": true})
 	if err != nil {
 		t.Fatalf("get_queue error: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestDoCommandDispatch(t *testing.T) {
 		t.Errorf("get_queue count = %v, want 1", res["count"])
 	}
 
-	if _, err := s.DoCommand(ctx, map[string]interface{}{"clear_queue": true}); err != nil {
+	if _, err := s.DoCommand(ctx, map[string]any{"clear_queue": true}); err != nil {
 		t.Fatalf("clear_queue error: %v", err)
 	}
 	if s.queue.Len() != 0 {
@@ -84,14 +84,14 @@ func TestDoCommandDispatch(t *testing.T) {
 	}
 
 	// run_cup_flow validates its count before doing anything.
-	if _, err := s.DoCommand(ctx, map[string]interface{}{"run_cup_flow": float64(0)}); err == nil {
+	if _, err := s.DoCommand(ctx, map[string]any{"run_cup_flow": float64(0)}); err == nil {
 		t.Error("run_cup_flow with count 0 should error")
 	}
 
-	if _, err := s.DoCommand(ctx, map[string]interface{}{"action": "teleport"}); err == nil {
+	if _, err := s.DoCommand(ctx, map[string]any{"action": "teleport"}); err == nil {
 		t.Error("unknown action should error")
 	}
-	if _, err := s.DoCommand(ctx, map[string]interface{}{"nonsense": true}); err == nil {
+	if _, err := s.DoCommand(ctx, map[string]any{"nonsense": true}); err == nil {
 		t.Error("unknown command should error")
 	}
 }
@@ -106,5 +106,17 @@ func TestProceedQueueSignal(t *testing.T) {
 	}
 	if _, err := s.proceedQueue(); err == nil {
 		t.Error("second proceed with the buffer full should error")
+	}
+}
+
+// TestDoCommandNonStringActionFallsThrough: a non-string execute_action/action
+// value isn't matched and falls through to the unknown-command error.
+func TestDoCommandNonStringActionFallsThrough(t *testing.T) {
+	s := newStatusService(t, &Config{})
+	ctx := context.Background()
+	for _, key := range []string{"execute_action", "action"} {
+		if _, err := s.DoCommand(ctx, map[string]any{key: 123}); err == nil {
+			t.Errorf("%s with a non-string value should fall through to the unknown-command error", key)
+		}
 	}
 }

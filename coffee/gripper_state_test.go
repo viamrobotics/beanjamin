@@ -30,21 +30,21 @@ func TestClassifyGripper(t *testing.T) {
 func TestGrabAndVerifyHolding(t *testing.T) {
 	cases := []struct {
 		name     string
-		doResp   map[string]interface{}
+		doResp   map[string]any
 		doErr    error
 		wantErr  bool
 		wantMiss bool // expect errors.Is(err, errGripMissed)
 	}{
-		{name: "holding", doResp: map[string]interface{}{"pos": 520.0}},
-		{name: "miss", doResp: map[string]interface{}{"pos": 357.0}, wantErr: true, wantMiss: true},
+		{name: "holding", doResp: map[string]any{"pos": 520.0}},
+		{name: "miss", doResp: map[string]any{"pos": 357.0}, wantErr: true, wantMiss: true},
 		{name: "read error not miss", doErr: errors.New("boom"), wantErr: true, wantMiss: false},
-		{name: "malformed resp", doResp: map[string]interface{}{}, wantErr: true, wantMiss: false},
+		{name: "malformed resp", doResp: map[string]any{}, wantErr: true, wantMiss: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			g := inject.NewGripper("g")
-			g.GrabFunc = func(context.Context, map[string]interface{}) (bool, error) { return true, nil }
-			g.DoFunc = func(context.Context, map[string]interface{}) (map[string]interface{}, error) {
+			g.GrabFunc = func(context.Context, map[string]any) (bool, error) { return true, nil }
+			g.DoFunc = func(context.Context, map[string]any) (map[string]any, error) {
 				return tc.doResp, tc.doErr
 			}
 			s := &beanjaminCoffee{cfg: &Config{}, gripper: g, logger: logging.NewTestLogger(t)}
@@ -89,10 +89,10 @@ func TestDropHeldContainer(t *testing.T) {
 			var opened, grabbed bool
 			if !tc.noGripper {
 				g := inject.NewGripper("g")
-				g.OpenFunc = func(context.Context, map[string]interface{}) error { opened = true; return nil }
-				g.GrabFunc = func(context.Context, map[string]interface{}) (bool, error) { grabbed = true; return true, nil }
-				g.DoFunc = func(context.Context, map[string]interface{}) (map[string]interface{}, error) {
-					return map[string]interface{}{"pos": tc.pos}, tc.doErr
+				g.OpenFunc = func(context.Context, map[string]any) error { opened = true; return nil }
+				g.GrabFunc = func(context.Context, map[string]any) (bool, error) { grabbed = true; return true, nil }
+				g.DoFunc = func(context.Context, map[string]any) (map[string]any, error) {
+					return map[string]any{"pos": tc.pos}, tc.doErr
 				}
 				s.gripper = g
 			}
@@ -130,17 +130,17 @@ func TestNormalizeGripperAtStart(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			g := inject.NewGripper("g")
 			var grabbed bool
-			g.GrabFunc = func(context.Context, map[string]interface{}) (bool, error) {
+			g.GrabFunc = func(context.Context, map[string]any) (bool, error) {
 				grabbed = true
 				return true, nil
 			}
 			i := 0
-			g.DoFunc = func(context.Context, map[string]interface{}) (map[string]interface{}, error) {
+			g.DoFunc = func(context.Context, map[string]any) (map[string]any, error) {
 				pos := tc.positions[i]
 				if i < len(tc.positions)-1 {
 					i++
 				}
-				return map[string]interface{}{"pos": pos}, nil
+				return map[string]any{"pos": pos}, nil
 			}
 			s := &beanjaminCoffee{cfg: &Config{}, gripper: g, logger: logging.NewTestLogger(t)}
 			err := s.normalizeGripperAtStart(context.Background())

@@ -68,7 +68,7 @@ func (s *beanjaminCoffee) classifyGripper(pos float64) gripperState {
 // Position is only exposed via DoCommand{"get": true}; the standard Gripper API
 // (Grab/Open) does not surface it.
 func (s *beanjaminCoffee) gripperPos(ctx context.Context) (float64, error) {
-	resp, err := s.gripper.DoCommand(ctx, map[string]interface{}{"get": true})
+	resp, err := s.gripper.DoCommand(ctx, map[string]any{"get": true})
 	if err != nil {
 		return 0, fmt.Errorf("gripper_pos: %w", err)
 	}

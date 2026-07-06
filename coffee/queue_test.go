@@ -257,17 +257,17 @@ type fakeSpeech struct {
 }
 
 func (f *fakeSpeech) Name() resource.Name { return resource.Name{} }
-func (f *fakeSpeech) DoCommand(_ context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+func (f *fakeSpeech) DoCommand(_ context.Context, cmd map[string]any) (map[string]any, error) {
 	if t, ok := cmd["say_async"].(string); ok {
 		f.mu.Lock()
 		f.said = append(f.said, t)
 		f.mu.Unlock()
 	}
-	return map[string]interface{}{}, nil
+	return map[string]any{}, nil
 }
 func (f *fakeSpeech) Close(_ context.Context) error { return nil }
-func (f *fakeSpeech) Status(_ context.Context) (map[string]interface{}, error) {
-	return map[string]interface{}{}, nil
+func (f *fakeSpeech) Status(_ context.Context) (map[string]any, error) {
+	return map[string]any{}, nil
 }
 func (f *fakeSpeech) calls() []string {
 	f.mu.Lock()
@@ -296,7 +296,7 @@ func newTestCoffee(t *testing.T, cfg *Config) (*beanjaminCoffee, *fakeSpeech) {
 
 func TestEnqueueOrder_DefaultsCountToOne(t *testing.T) {
 	c, _ := newTestCoffee(t, nil)
-	resp, err := c.enqueueOrder(context.Background(), map[string]interface{}{
+	resp, err := c.enqueueOrder(context.Background(), map[string]any{
 		"drink":         "espresso",
 		"customer_name": "Alice",
 	})
@@ -320,7 +320,7 @@ func TestEnqueueOrder_DefaultsCountToOne(t *testing.T) {
 
 func TestEnqueueOrder_BatchEnqueuesN(t *testing.T) {
 	c, _ := newTestCoffee(t, nil)
-	resp, err := c.enqueueOrder(context.Background(), map[string]interface{}{
+	resp, err := c.enqueueOrder(context.Background(), map[string]any{
 		"drink":         "espresso",
 		"customer_name": "Esha",
 		"count":         float64(3),
@@ -356,7 +356,7 @@ func TestEnqueueOrder_BatchEnqueuesN(t *testing.T) {
 func TestEnqueueOrder_RejectsBadCount(t *testing.T) {
 	cases := []struct {
 		name string
-		v    interface{}
+		v    any
 	}{
 		{"zero", float64(0)},
 		{"negative", float64(-1)},
@@ -368,7 +368,7 @@ func TestEnqueueOrder_RejectsBadCount(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c, _ := newTestCoffee(t, nil)
-			_, err := c.enqueueOrder(context.Background(), map[string]interface{}{
+			_, err := c.enqueueOrder(context.Background(), map[string]any{
 				"drink": "espresso",
 				"count": tc.v,
 			})
@@ -384,7 +384,7 @@ func TestEnqueueOrder_RejectsBadCount(t *testing.T) {
 
 func TestEnqueueOrder_RejectsAboveCap(t *testing.T) {
 	c, _ := newTestCoffee(t, &Config{CanServeDecaf: true, MaxBatchSize: 5})
-	if _, err := c.enqueueOrder(context.Background(), map[string]interface{}{
+	if _, err := c.enqueueOrder(context.Background(), map[string]any{
 		"drink": "espresso",
 		"count": float64(5),
 	}); err != nil {
@@ -395,7 +395,7 @@ func TestEnqueueOrder_RejectsAboveCap(t *testing.T) {
 	}
 
 	c2, _ := newTestCoffee(t, &Config{CanServeDecaf: true, MaxBatchSize: 5})
-	if _, err := c2.enqueueOrder(context.Background(), map[string]interface{}{
+	if _, err := c2.enqueueOrder(context.Background(), map[string]any{
 		"drink": "espresso",
 		"count": float64(6),
 	}); err == nil {
@@ -413,7 +413,7 @@ func TestEnqueueOrder_BatchSuppressesPerOrderAnnouncement(t *testing.T) {
 	// pickOrderReceivedBatch line instead.
 	c.queue.Enqueue(NewOrder("lungo", "Bob", "", ""))
 
-	if _, err := c.enqueueOrder(context.Background(), map[string]interface{}{
+	if _, err := c.enqueueOrder(context.Background(), map[string]any{
 		"drink":         "espresso",
 		"customer_name": "Esha",
 		"count":         float64(5),
@@ -432,7 +432,7 @@ func TestEnqueueOrder_BatchSuppressesPerOrderAnnouncement(t *testing.T) {
 
 func TestEnqueueOrder_RejectsBatchOfUnsupportedDrink(t *testing.T) {
 	c, _ := newTestCoffee(t, &Config{CanServeDecaf: false})
-	if _, err := c.enqueueOrder(context.Background(), map[string]interface{}{
+	if _, err := c.enqueueOrder(context.Background(), map[string]any{
 		"drink": "decaf",
 		"count": float64(3),
 	}); err == nil {
@@ -446,7 +446,7 @@ func TestEnqueueOrder_RejectsBatchOfUnsupportedDrink(t *testing.T) {
 func TestEnqueueOrder_IcedGatedByCanServeIced(t *testing.T) {
 	// Rejected when can_serve_iced is off.
 	c, _ := newTestCoffee(t, &Config{})
-	if _, err := c.enqueueOrder(context.Background(), map[string]interface{}{
+	if _, err := c.enqueueOrder(context.Background(), map[string]any{
 		"drink": "iced_coffee",
 	}); err == nil {
 		t.Fatal("expected rejection for iced_coffee when can_serve_iced=false")
@@ -457,7 +457,7 @@ func TestEnqueueOrder_IcedGatedByCanServeIced(t *testing.T) {
 
 	// Accepted when can_serve_iced is on.
 	c2, _ := newTestCoffee(t, &Config{CanServeIced: true})
-	if _, err := c2.enqueueOrder(context.Background(), map[string]interface{}{
+	if _, err := c2.enqueueOrder(context.Background(), map[string]any{
 		"drink": "iced_coffee",
 	}); err != nil {
 		t.Fatalf("unexpected error enqueuing iced_coffee with can_serve_iced=true: %v", err)

@@ -18,7 +18,7 @@ import (
 // It assumes the portafilter has been physically removed from the claws — the
 // flow never touches portafilter state. Each placement advances the shelf-slot
 // counter inside placeFullCupOnShelf.
-func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string]interface{}, error) {
+func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string]any, error) {
 	if !s.running.CompareAndSwap(false, true) {
 		return nil, errors.New("a sequence is already running")
 	}
@@ -57,5 +57,5 @@ func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string
 	}
 
 	logger.Infof("run_cup_flow: complete (%d iteration(s))", count)
-	return map[string]interface{}{"status": "complete", "iterations": count}, nil
+	return map[string]any{"status": "complete", "iterations": count}, nil
 }

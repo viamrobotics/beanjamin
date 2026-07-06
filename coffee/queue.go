@@ -415,10 +415,10 @@ func traceIDFromContext(ctx context.Context) string {
 // "count" field is > 1, N identical orders are enqueued back-to-back
 // (each with its own UUID) and the per-order "Order received" line is
 // replaced with a single consolidated batch announcement.
-func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}) (map[string]interface{}, error) {
+func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[string]any, error) {
 	s.logger.Infof("received order request")
 
-	order, ok := orderRaw.(map[string]interface{})
+	order, ok := orderRaw.(map[string]any)
 	if !ok {
 		s.logger.Warnf("rejected order: invalid payload type %T", orderRaw)
 		return nil, fmt.Errorf("prepare_order value must be an object with keys: drink, customer_name, initial_greeting, completion_statement, count")
@@ -510,7 +510,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}
 		}
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"status":         "queued",
 		"order_id":       ids[0],
 		"queue_position": firstPos,
@@ -523,7 +523,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw interface{}
 // parseOrderCount validates and coerces the optional "count" field on a
 // prepare_order payload. Absent/nil → 1. Non-numeric, fractional,
 // out-of-range values → error. Caller should reject before any enqueue.
-func (s *beanjaminCoffee) parseOrderCount(v interface{}) (int, error) {
+func (s *beanjaminCoffee) parseOrderCount(v any) (int, error) {
 	if v == nil {
 		return 1, nil
 	}

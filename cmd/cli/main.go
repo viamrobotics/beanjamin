@@ -106,7 +106,7 @@ func runSay(args []string) error {
 		return fmt.Errorf("getting speech service %q: %w", *serviceName, err)
 	}
 
-	resp, err := speechSvc.DoCommand(ctx, map[string]interface{}{
+	resp, err := speechSvc.DoCommand(ctx, map[string]any{
 		"say": text,
 	})
 	if err != nil {
