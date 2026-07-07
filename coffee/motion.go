@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/golang/geo/r3"
@@ -413,24 +414,78 @@ func buildMoveOptions(opts *StepMoveOptions) *arm.MoveOptions {
 	}
 }
 
-// savePlanRequest persists a PlanRequest to the configured directory. It is a
-// no-op when SaveMotionRequestsDir is empty.
-func (s *beanjaminCoffee) savePlanRequest(req *armplanning.PlanRequest, label string) {
+// Planning-outcome tag values for synced plan-request files (see planRequestTagDir).
+const (
+	tagPlanningSuccess = "planning_success"
+	tagPlanningFailure = "planning_failure"
+)
+
+// savePlanRequestAndResponse persists a PlanRequest together with the plan it
+// produced — nil on a planning failure — to a single JSON file, using RDK's
+// WriteRequestAndResponseToFile so the pair round-trips through
+// ReadRequestAndResponseFromFile. It is a no-op when SaveMotionRequestsDir is
+// empty.
+func (s *beanjaminCoffee) savePlanRequestAndResponse(req *armplanning.PlanRequest, plan motionplan.Plan, label string, planErr error) {
 	logger := s.activeOrderLogger()
 	dir := s.cfg.SaveMotionRequestsDir
 	if dir == "" {
 		return
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		logger.Warnf("save motion request: create dir: %v", err)
+	outcome := tagPlanningSuccess
+	if planErr != nil {
+		outcome = tagPlanningFailure
+	}
+	orderID, _ := s.currentOrderID.Load().(string)
+	step, _ := s.currentStep.Load().(string)
+	tagDir := planRequestTagDir(dir, orderID, step, label, outcome)
+	if err := os.MkdirAll(tagDir, 0o755); err != nil {
+		logger.Warnf("save plan request: create dir: %v", err)
 		return
 	}
-	filename := filepath.Join(dir, fmt.Sprintf("%s_%s.json", time.Now().Format("20060102_150405.000"), label))
-	if err := req.WriteToFile(filename); err != nil {
-		logger.Warnf("save motion request: %v", err)
+	filename := filepath.Join(tagDir, fmt.Sprintf("%s_%s.json", time.Now().Format("20060102_150405.000"), label))
+	if err := req.WriteRequestAndResponseToFile(filename, plan); err != nil {
+		logger.Warnf("save plan request: %v", err)
 		return
 	}
-	logger.Infof("saved motion request to %s", filename)
+	logger.Infof("saved plan request+response (%s) to %s", outcome, filename)
+}
+
+// planRequestTagDir nests the file under tag=<value> directories — order ID,
+// step, motion label, and planning outcome — which the Viam data manager reads
+// on sync to tag the uploaded file (see inferTagsAndDatasetIDsFromPath), making
+// it filterable on the data page. Empty values (e.g. a plan issued outside an
+// order) are skipped.
+func planRequestTagDir(baseDir, orderID, step, label, outcome string) string {
+	parts := []string{baseDir}
+	for _, tag := range []string{orderID, stepTag(step), "motion_" + label, outcome} {
+		if tag == "" {
+			continue
+		}
+		parts = append(parts, "tag="+tag)
+	}
+	return filepath.Join(parts...)
+}
+
+// stepTag slugifies a step label ("Locking portafilter") into a tag-safe token
+// ("step_locking_portafilter"), or "" when there is no active step.
+func stepTag(step string) string {
+	var b strings.Builder
+	pendingUnderscore := false
+	for _, r := range strings.ToLower(strings.TrimSpace(step)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			if pendingUnderscore && b.Len() > 0 {
+				b.WriteByte('_')
+			}
+			pendingUnderscore = false
+			b.WriteRune(r)
+			continue
+		}
+		pendingUnderscore = true
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "step_" + b.String()
 }
 
 // frameSystemWithGeometries returns a deep copy of the cached frame system with
@@ -496,38 +551,6 @@ func (s *beanjaminCoffee) saveObservedItemsFrameSystem(label string, geoms []spa
 	logger.Infof("saved observed-%s frame system (%d geometries) to %s", label, len(geoms), filename)
 }
 
-// savePlanResponse persists a Plan's path and trajectory to the configured
-// directory. It is a no-op when SaveMotionRequestsDir is empty.
-func (s *beanjaminCoffee) savePlanResponse(plan motionplan.Plan, label string) {
-	logger := s.activeOrderLogger()
-	dir := s.cfg.SaveMotionRequestsDir
-	if dir == "" {
-		return
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		logger.Warnf("save motion response: create dir: %v", err)
-		return
-	}
-	resp := struct {
-		Path       motionplan.Path       `json:"path"`
-		Trajectory motionplan.Trajectory `json:"trajectory"`
-	}{
-		Path:       plan.Path(),
-		Trajectory: plan.Trajectory(),
-	}
-	data, err := json.MarshalIndent(resp, "", "  ")
-	if err != nil {
-		logger.Warnf("save motion response: marshal: %v", err)
-		return
-	}
-	filename := filepath.Join(dir, fmt.Sprintf("%s_%s_response.json", time.Now().Format("20060102_150405.000"), label))
-	if err := os.WriteFile(filename, data, 0o600); err != nil {
-		logger.Warnf("save motion response: %v", err)
-		return
-	}
-	logger.Infof("saved motion response to %s", filename)
-}
-
 // moveToRawPose plans a motion using armplanning and executes it on the arm.
 func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
 	logger := s.activeOrderLogger()
@@ -563,12 +586,11 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 		StartState:  armplanning.NewPlanState(nil, fsInputs),
 		Constraints: constraints,
 	}
-	s.savePlanRequest(req, "move")
 	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
+	s.savePlanRequestAndResponse(req, plan, "move", err)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errMotionPlanning, err)
 	}
-	s.savePlanResponse(plan, "move")
 
 	// Execute — extract joint positions for the arm frame (not the end-effector
 	// component name used for the goal pose) and send to arm.
@@ -668,12 +690,11 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 		StartState:  armplanning.NewPlanState(nil, fsInputs),
 		Constraints: constraints,
 	}
-	s.savePlanRequest(req, "pivot")
 	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
+	s.savePlanRequestAndResponse(req, plan, "pivot", err)
 	if err != nil {
 		return fmt.Errorf("plan pivot motion: %w", err)
 	}
-	s.savePlanResponse(plan, "pivot")
 
 	// Execute the full trajectory in one call — extract joint positions for the
 	// arm frame, not the end-effector component name used for goal poses.
@@ -756,12 +777,11 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 		StartState:  armplanning.NewPlanState(nil, fsInputs),
 		Constraints: constraints,
 	}
-	s.savePlanRequest(req, "circular")
 	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
+	s.savePlanRequestAndResponse(req, plan, "circular", err)
 	if err != nil {
 		return fmt.Errorf("plan circular motion: %w", err)
 	}
-	s.savePlanResponse(plan, "circular")
 
 	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
 	if err != nil {
@@ -905,12 +925,11 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData) er
 		StartState:  armplanning.NewPlanState(nil, fsInputs),
 		Constraints: constraints,
 	}
-	s.savePlanRequest(req, "carry")
 	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
+	s.savePlanRequestAndResponse(req, plan, "carry", err)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errMotionPlanning, err)
 	}
-	s.savePlanResponse(plan, "carry")
 
 	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
 	if err != nil {

@@ -27,7 +27,8 @@ func (s *beanjaminCoffee) notifyOrderFailureSlack(r orderReading) {
 	if s.camStorage != nil {
 		clipURL = buildClipDataURL(s.dataLocationID, r.order.ID)
 	}
-	blocks := slackFailureBlocks(r, s.machineLogsURL, clipURL)
+	planRequestURL := buildPlanRequestDataURL(s.dataLocationID, r.order.ID)
+	blocks := slackFailureBlocks(r, s.machineLogsURL, clipURL, planRequestURL)
 	// Tag with the order ID so the send logs join the rest of the order's
 	// trail. The send is queued and runs detached, possibly after the order
 	// has left the queue, so we build the tagged logger from the reading in
@@ -78,10 +79,11 @@ func slackFailureText(r orderReading) string {
 // context footer with the order ID, trace ID, and start time. Returned as
 // []any of map[string]any so it serializes cleanly through the
 // structpb-backed DoCommand wire format (which rejects []map[string]any
-// as a list value). machineLogsURL and clipDataURL, when non-empty, add
-// clickable app.viam.com deep-links (machine logs, and the order's video clip
-// filtered by tag) to the footer.
-func slackFailureBlocks(r orderReading, machineLogsURL, clipDataURL string) []any {
+// as a list value). machineLogsURL, clipDataURL, and planRequestURL, when
+// non-empty, add clickable app.viam.com deep-links (machine logs, the order's
+// video clip filtered by tag, and the order's plan-request files) to the
+// footer.
+func slackFailureBlocks(r orderReading, machineLogsURL, clipDataURL, planRequestURL string) []any {
 	header := ":x: Order failed"
 	stepLabel := "*Failed at:*"
 	if r.operatorCancelled {
@@ -135,6 +137,9 @@ func slackFailureBlocks(r orderReading, machineLogsURL, clipDataURL string) []an
 	if clipDataURL != "" {
 		footer += fmt.Sprintf(" · <%s|video clip> _(may take ~a minute to appear)_", clipDataURL)
 	}
+	if planRequestURL != "" {
+		footer += fmt.Sprintf(" · <%s|plan requests> _(may take ~a minute to appear)_", planRequestURL)
+	}
 	blocks = append(blocks, map[string]any{
 		"type":     "context",
 		"elements": []any{map[string]any{"type": "mrkdwn", "text": footer}},
@@ -167,6 +172,19 @@ func buildClipDataURL(locationID, orderID string) string {
 		return ""
 	}
 	return fmt.Sprintf("https://app.viam.com/data/all?locationId=%s&tags=%s&view=media", locationID, orderID)
+}
+
+// buildPlanRequestDataURL constructs an app.viam.com data-page deep-link to the
+// order's plan-request files, filtered by the order-ID tag (view=files keeps it
+// distinct from the order's video clip; the reader can narrow further by the
+// planning_failure or step tags). Returns "" when locationID is empty (e.g. a
+// local/test machine). Like the clip link, the files sync asynchronously, so the
+// page may be empty for the first sync interval.
+func buildPlanRequestDataURL(locationID, orderID string) string {
+	if locationID == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://app.viam.com/data/all?locationId=%s&tags=%s&view=files", locationID, orderID)
 }
 
 // slackField builds a single mrkdwn field ("*Label:*\nvalue") for a Block Kit
