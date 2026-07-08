@@ -42,6 +42,17 @@ const (
 	pickupLabelGlass = "glass"
 )
 
+// Clean-area shield obstacles enclosing the zone of standing clean cups / glasses
+// waiting to be picked up. Each is an obstacle defined in the machine frame
+// system (like serving-area-shield): it stays a hard obstacle on the free
+// approach so the arm steers clear of the neighbouring clean items, and only the
+// linear descent onto the grasp and the retreat back out are allowed to pass
+// through it (pickupAreaShieldCollisions).
+const (
+	cleanCupAreaShieldFrameName   = "clean-cup-area-shield"
+	cleanGlassAreaShieldFrameName = "clean-glass-area-shield"
+)
+
 // pickupCandidate is one detected item: its world-frame grasp centroid plus the
 // world-frame detected geometry (nil when geometry is unavailable). The geometry
 // rides alongside the centroid so the held-item tracker can attach the detected
@@ -255,6 +266,7 @@ type pickupTarget struct {
 	noItemSpeak      string               // spoken on "nothing detected" before a retry wait
 	unreachableSpeak string               // spoken when items were seen but none could be grabbed, before a retry wait
 	graspZFromGeom   bool                 // grab at the geometry centroid's Z (keep detected X/Y); for the tall glass whose detected Z can sit high on the rim
+	shieldFrame      string               // clean-area shield obstacle opened up on the grasp descent/retreat (pickupAreaShieldCollisions); "" disables
 }
 
 // cupPickupTarget describes dynamic cup pickup.
@@ -273,6 +285,7 @@ func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 		dimsOverride:     s.cfg.CupDimensions,
 		noItemSpeak:      "I don't see a cup yet — please place one on the shelf. Trying again in 15 seconds.",
 		unreachableSpeak: "I can see a cup but I'm having trouble grabbing it — could you nudge it a little? Trying again in 15 seconds.",
+		shieldFrame:      cleanCupAreaShieldFrameName,
 	}
 }
 
@@ -297,6 +310,7 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 		noItemSpeak:      "I don't see a glass yet — please place one on the top shelf. Trying again in 15 seconds.",
 		unreachableSpeak: "I can see a glass but I'm having trouble grabbing it — could you nudge it a little? Trying again in 15 seconds.",
 		graspZFromGeom:   true,
+		shieldFrame:      cleanGlassAreaShieldFrameName,
 	}
 }
 
@@ -512,6 +526,28 @@ func nearestGeometry(c r3.Vector, originals []pickupCandidate) spatialmath.Geome
 	return best
 }
 
+// pickupAreaShieldCollisions allows the claws, gripper sub-frames, and — once an
+// item is in hand — the held item to pass through the named clean-area shield
+// obstacle. Mirrors servingAreaShieldCollisions on the serving side: the shield
+// is a hard obstacle on the free approach so the arm avoids the neighbouring
+// clean cups/glasses, and this set is applied only on the linear grasp descent
+// and the retreat back out. The held-item pair is gated by
+// heldItemSurfaceCollisions so it is present only on the retreat (once grabbed),
+// not on the descent. Returns nil when the target has no shield configured.
+func (s *beanjaminCoffee) pickupAreaShieldCollisions(shieldFrame string) []AllowedCollision {
+	if shieldFrame == "" {
+		return nil
+	}
+	out := []AllowedCollision{
+		{Frame1: componentClaws, Frame2: shieldFrame},
+		{Frame1: "gripper:claws", Frame2: shieldFrame},
+		{Frame1: "gripper:case-gripper", Frame2: shieldFrame},
+	}
+	return append(out, s.heldItemSurfaceCollisions([]AllowedCollision{
+		{Frame1: heldItemFrameName, Frame2: shieldFrame},
+	})...)
+}
+
 // tryGrab attempts a full approach-grab-retreat cycle on one candidate
 // centroid. On failure after the approach step, it best-effort restores the
 // arm to the target's observe home pose so the caller can attempt a different
@@ -557,7 +593,7 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	time.Sleep(gripperPause)
 
 	// 3. Linear descent to grab pose.
-	if err := s.moveToRawPose(ctx, grabPD, defaultApproachConstraint, nil, nil); err != nil {
+	if err := s.moveToRawPose(ctx, grabPD, defaultApproachConstraint, s.pickupAreaShieldCollisions(t.shieldFrame), nil); err != nil {
 		s.recoverToObserve(ctx, cancelCtx, t)
 		return fmt.Errorf("grab centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
@@ -580,7 +616,7 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	// can't drop the item safely by recovering to observe. Strip the
 	// errMotionPlanning chain (%v, not %w) so the caller does not treat this
 	// as a try-another-candidate planning failure.
-	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, nil, nil); err != nil {
+	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, s.pickupAreaShieldCollisions(t.shieldFrame), nil); err != nil {
 		return fmt.Errorf("retreat with %s grabbed (centroid x=%.1f, y=%.1f, z=%.1f): %v", t.label, centroid.X, centroid.Y, centroid.Z, err)
 	}
 	return nil
