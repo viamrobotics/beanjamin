@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/golang/geo/r3"
+	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/module/trace"
 )
 
@@ -59,28 +60,20 @@ const (
 )
 
 const (
-	// component/frame names accepted by switchForComponent and used as
-	// AllowedCollision frame names.
+	// Frame names
 	componentFilter = "filter"
 	componentClaws  = "coffee-claws-middle"
-	componentCam    = "cam"
-	// componentGlassCam routes observe-pose fetches to the dedicated glass
-	// observe switch (glass_observe_pose_switcher_name) during dynamic glass
-	// pickup. The switch drives the same camera frame as componentCam.
-	componentGlassCam = "glass-cam"
 )
 
 // glassPoseObserve is the home/recovery observe pose on the glass observe
 // switch (parallel to camPoseCupObserve on the cup observe switch).
 const glassPoseObserve = "glass_observe"
 
-// requiredPose pairs a switch pose name with the component (pose switch) it
-// must resolve on. The component string matches the names accepted by
-// switchForComponent ("filter" / "coffee-claws-middle"). Used by
+// requiredPose pairs a pose name with the switch it must resolve on. Used by
 // validateConfiguredPoses.
 type requiredPose struct {
-	component string
-	poseName  string
+	sw       toggleswitch.Switch
+	poseName string
 }
 
 // requiredPoses returns the set of switch poses that the currently-enabled
@@ -94,59 +87,59 @@ type requiredPose struct {
 func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 	poses := []requiredPose{
 		// step 1: grind (regular)
-		{componentFilter, filterPoseGrinderApproach},
-		{componentFilter, filterPoseGrinderActivate},
+		{s.filterSw, filterPoseGrinderApproach},
+		{s.filterSw, filterPoseGrinderActivate},
 		// step 2: tamp
-		{componentFilter, filterPoseTamperApproach},
-		{componentFilter, filterPoseTamperActivate},
+		{s.filterSw, filterPoseTamperApproach},
+		{s.filterSw, filterPoseTamperActivate},
 		// step 3: lock portafilter
-		{componentFilter, filterPoseCoffeeApproach},
-		{componentFilter, filterPoseCoffeeIn},
-		{componentFilter, filterPoseCoffeeLockedFinal},
+		{s.filterSw, filterPoseCoffeeApproach},
+		{s.filterSw, filterPoseCoffeeIn},
+		{s.filterSw, filterPoseCoffeeLockedFinal},
 		// step 4: release filter
-		{componentClaws, clawPoseFilterReleased},
+		{s.clawsSw, clawPoseFilterReleased},
 		// step 6: brew (coffee button on/off)
-		{componentClaws, clawPoseCoffeeButtonApproach},
-		{componentClaws, clawPoseCoffeeButtonOn},
-		{componentClaws, clawPoseCoffeeButtonOff},
+		{s.clawsSw, clawPoseCoffeeButtonApproach},
+		{s.clawsSw, clawPoseCoffeeButtonOn},
+		{s.clawsSw, clawPoseCoffeeButtonOff},
 		// step 7: grab filter
-		{componentClaws, clawPoseCoffeeLockedFinal},
+		{s.clawsSw, clawPoseCoffeeLockedFinal},
 		// step 8: unlock portafilter (adds the shake pose to the lock poses)
-		{componentFilter, filterPoseCoffeeShake},
+		{s.filterSw, filterPoseCoffeeShake},
 		// step 9: home
-		{componentFilter, filterPoseHome},
+		{s.filterSw, filterPoseHome},
 		// cleaning (post-brew and cancel recovery)
-		{componentFilter, filterPoseCloseToCleaning},
-		{componentFilter, filterPoseApproachToCleaningScrapper},
-		{componentFilter, filterPoseCleaningScrapperActive},
-		{componentFilter, filterPoseApproachToCleaningBrush},
-		{componentFilter, filterPoseCleaningBrushActive},
+		{s.filterSw, filterPoseCloseToCleaning},
+		{s.filterSw, filterPoseApproachToCleaningScrapper},
+		{s.filterSw, filterPoseCleaningScrapperActive},
+		{s.filterSw, filterPoseApproachToCleaningBrush},
+		{s.filterSw, filterPoseCleaningBrushActive},
 	}
 
 	if s.cfg.CanServeDecaf {
 		poses = append(poses,
-			requiredPose{componentFilter, filterPoseDecafGrinderApproach},
-			requiredPose{componentFilter, filterPoseDecafGrinderActivate},
+			requiredPose{s.filterSw, filterPoseDecafGrinderApproach},
+			requiredPose{s.filterSw, filterPoseDecafGrinderActivate},
 		)
 	}
 
 	poses = append(poses,
-		requiredPose{componentClaws, clawPoseCupUnderMachineApproach},
-		requiredPose{componentClaws, clawPoseCupReadyForCoffee},
-		requiredPose{componentCam, camPoseCupObserve},
+		requiredPose{s.clawsSw, clawPoseCupUnderMachineApproach},
+		requiredPose{s.clawsSw, clawPoseCupReadyForCoffee},
+		requiredPose{s.cameraObserveSw, camPoseCupObserve},
 	)
 
 	if s.cfg.CanServeIced {
 		// serveIcedCoffee dispenses ice, stages the glass, and pours the
 		// espresso over the ice (the cup-retrieval poses above always run).
 		poses = append(poses,
-			requiredPose{componentClaws, clawPoseIceMachineApproach},
-			requiredPose{componentClaws, clawPoseIceMachineDispense},
-			requiredPose{componentClaws, clawPoseStagingApproach},
-			requiredPose{componentClaws, clawPoseStaging},
-			requiredPose{componentClaws, clawPosePourApproach},
-			requiredPose{componentClaws, clawPosePour},
-			requiredPose{componentGlassCam, glassPoseObserve},
+			requiredPose{s.clawsSw, clawPoseIceMachineApproach},
+			requiredPose{s.clawsSw, clawPoseIceMachineDispense},
+			requiredPose{s.clawsSw, clawPoseStagingApproach},
+			requiredPose{s.clawsSw, clawPoseStaging},
+			requiredPose{s.clawsSw, clawPosePourApproach},
+			requiredPose{s.clawsSw, clawPosePour},
+			requiredPose{s.glassObserveSw, glassPoseObserve},
 		)
 	}
 
@@ -162,12 +155,12 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 func (s *beanjaminCoffee) validateConfiguredPoses(ctx context.Context) error {
 	poses := s.requiredPoses()
 	for _, rp := range poses {
-		pd, err := s.fetchPose(ctx, rp.component, rp.poseName)
+		pd, err := s.fetchPose(ctx, rp.sw, rp.poseName)
 		if err != nil {
-			return fmt.Errorf("pose validation: required pose %q on %q switch: %w", rp.poseName, rp.component, err)
+			return fmt.Errorf("pose validation: required pose %q on %q switch: %w", rp.poseName, rp.sw.Name().ShortName(), err)
 		}
 		if pd.pose.Point() == (r3.Vector{}) {
-			return fmt.Errorf("pose validation: required pose %q on %q switch resolves to a zero position — is it configured?", rp.poseName, rp.component)
+			return fmt.Errorf("pose validation: required pose %q on %q switch resolves to a zero position — is it configured?", rp.poseName, rp.sw.Name().ShortName())
 		}
 	}
 	s.logger.Infof("pose validation: %d configured pose(s) resolved and non-zero", len(poses))
@@ -479,7 +472,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 
 	s.setStep(stepFinishingUp)
 	logger.Infof("step 9/9: moving to home pose")
-	homeStep := Step{PoseName: filterPoseHome, Component: componentFilter}
+	homeStep := Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw}
 	if err := s.executeStep(ctx, cancelCtx, homeStep); err != nil {
 		return err
 	}

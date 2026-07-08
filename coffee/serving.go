@@ -45,11 +45,11 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 		return err
 	}
 
-	cupPlacementApproach := Step{PoseName: clawPoseCupUnderMachineApproach, Component: componentClaws, Pause: shortPause}
+	cupPlacementApproach := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, cupPlacementApproach); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
-	readyStep := Step{PoseName: clawPoseCupReadyForCoffee, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions)}
+	readyStep := Step{PoseName: clawPoseCupReadyForCoffee, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions)}
 	if err := s.executeStep(ctx, cancelCtx, readyStep); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
@@ -64,7 +64,7 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	s.detachHeldGeometry()
 
 	// Move away from the cup.
-	exitStep := Step{PoseName: clawPoseCupUnderMachineApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	exitStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}

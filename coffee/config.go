@@ -13,6 +13,7 @@ import (
 	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/components/gripper"
 	"go.viam.com/rdk/components/sensor"
+	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot/framesystem"
 	generic "go.viam.com/rdk/services/generic"
@@ -42,7 +43,9 @@ type Step struct {
 	AllowedCollisions   []AllowedCollision    `json:"allowed_collisions,omitempty"`
 	PivotFromPose       string                `json:"pivot_from_pose,omitempty"`
 	PivotDegreesPerStep float64               `json:"pivot_degrees_per_step,omitempty"`
-	Component           string                `json:"component,omitempty"`
+
+	// PoseSwitch is the switch this step's pose is read from (fetchPose).
+	PoseSwitch toggleswitch.Switch `json:"-"`
 
 	// Circular motion: move in small circles around PoseName to distribute
 	// material (e.g. coffee grounds) evenly. The motion continues until

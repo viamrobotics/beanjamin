@@ -244,8 +244,7 @@ type pickupTarget struct {
 	label            string               // "cup" / "glass" — logs, spans, errors
 	vision           vision.Service       // detector for this item
 	cameraName       string               // camera frame for centroid->world (shared)
-	observeSw        toggleswitch.Switch  // switch holding the observe vantages
-	observeComponent string               // routing key for executeStep/switchForComponent
+	observeSw        toggleswitch.Switch  // switch holding the observe vantages; steps read poses from it directly
 	observeHomePose  string               // recovery pose name on observeSw
 	approachRel      *RelativePose        // gripper offset for the pre-grab pose
 	grabRel          *RelativePose        // gripper offset for the grab pose
@@ -265,7 +264,6 @@ func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 		vision:           s.cupVision,
 		cameraName:       s.cupCameraName,
 		observeSw:        s.cameraObserveSw,
-		observeComponent: componentCam,
 		observeHomePose:  camPoseCupObserve,
 		approachRel:      s.cfg.CupApproachRelativePose,
 		grabRel:          s.cfg.CupGrabRelativePose,
@@ -289,7 +287,6 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 		vision:           s.glassVision,
 		cameraName:       s.cupCameraName,
 		observeSw:        s.glassObserveSw,
-		observeComponent: componentGlassCam,
 		observeHomePose:  glassPoseObserve,
 		approachRel:      s.cfg.GlassApproachRelativePose,
 		grabRel:          s.cfg.GlassGrabRelativePose,
@@ -433,8 +430,8 @@ func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pick
 	for i, poseName := range poseNames {
 		logger.Infof("dynamic %s pickup: pass %d/%d — moving to observe pose %q", t.label, i+1, passes, poseName)
 		// Pause briefly after arriving so the camera frame is stable before
-		// detection. t.observeComponent routes the fetch to the right switch.
-		step := Step{PoseName: poseName, Component: t.observeComponent, Pause: shortPause}
+		// detection. The pose is read from t.observeSw (the item's observe switch).
+		step := Step{PoseName: poseName, PoseSwitch: t.observeSw, Pause: shortPause}
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 			logger.Warnf("dynamic %s pickup: pass %d/%d — observe pose %q unreachable, skipping pass: %v", t.label, i+1, passes, poseName, err)
 			continue
@@ -602,7 +599,7 @@ func (s *beanjaminCoffee) recoverToObserve(ctx, cancelCtx context.Context, t *pi
 	}
 	time.Sleep(gripperPause)
 
-	observeStep := Step{PoseName: t.observeHomePose, Component: t.observeComponent, Pause: shortPause}
+	observeStep := Step{PoseName: t.observeHomePose, PoseSwitch: t.observeSw, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, observeStep); err != nil {
 		logger.Warnf("dynamic %s pickup: recover to %q: %v", t.label, t.observeHomePose, err)
 	}
@@ -630,7 +627,7 @@ func (s *beanjaminCoffee) pickGlassDynamic(ctx, cancelCtx context.Context) error
 // swallowed so a flaky peripheral does not abort the retry.
 func (s *beanjaminCoffee) announceAndWaitForRetry(ctx, cancelCtx context.Context, t *pickupTarget, prompt string) error {
 	logger := s.activeOrderLogger()
-	recoverStep := Step{PoseName: t.observeHomePose, Component: t.observeComponent, Pause: shortPause}
+	recoverStep := Step{PoseName: t.observeHomePose, PoseSwitch: t.observeSw, Pause: shortPause}
 	if mvErr := s.executeStep(ctx, cancelCtx, recoverStep); mvErr != nil {
 		logger.Warnf("dynamic %s pickup: return to %q before retry wait: %v", t.label, t.observeHomePose, mvErr)
 	}
