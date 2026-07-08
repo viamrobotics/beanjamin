@@ -62,7 +62,7 @@ func (s *beanjaminCoffee) grabBrewedCupFromMachine(ctx, cancelCtx context.Contex
 	if s.gripper == nil {
 		return fmt.Errorf("grab_brewed_cup_from_machine: no gripper configured")
 	}
-	approachStep := Step{PoseName: clawPoseCupUnderMachineApproach, Component: componentClaws, Pause: shortPause}
+	approachStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("grab_brewed_cup_from_machine: %w", err)
 	}
@@ -70,7 +70,7 @@ func (s *beanjaminCoffee) grabBrewedCupFromMachine(ctx, cancelCtx context.Contex
 		return fmt.Errorf("grab_brewed_cup_from_machine: open gripper: %w", err)
 	}
 	time.Sleep(gripperPause)
-	grabStep := Step{PoseName: clawPoseCupReadyForCoffee, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	grabStep := Step{PoseName: clawPoseCupReadyForCoffee, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
 		return fmt.Errorf("grab_brewed_cup_from_machine: %w", err)
 	}
@@ -84,7 +84,7 @@ func (s *beanjaminCoffee) grabBrewedCupFromMachine(ctx, cancelCtx context.Contex
 	if err := s.reattachGeometry(pickupLabelCup); err != nil {
 		s.activeOrderLogger().Warnf("grab_brewed_cup_from_machine: reattach cup geometry failed, continuing untracked: %v", err)
 	}
-	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions)}
+	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions)}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("grab_brewed_cup_from_machine: %w", err)
 	}
@@ -98,7 +98,7 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 	if s.gripper == nil {
 		return fmt.Errorf("grab_staged_glass: no gripper configured")
 	}
-	approachStep := Step{PoseName: clawPoseStagingApproach, Component: componentClaws, Pause: shortPause}
+	approachStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
@@ -108,7 +108,7 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 	time.Sleep(gripperPause)
 	// Descend onto the glass; it stays a world obstacle, but allow the jaws to
 	// contact it for this step (the rest of the arm still routes around it).
-	grabStep := Step{PoseName: clawPoseStaging, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.stagedGlassGrabCollisions()}
+	grabStep := Step{PoseName: clawPoseStaging, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.stagedGlassGrabCollisions()}
 	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
 		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
@@ -121,7 +121,7 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 	if err := s.reattachGeometry(pickupLabelGlass); err != nil {
 		s.activeOrderLogger().Warnf("grab_staged_glass: reattach glass geometry failed, continuing untracked: %v", err)
 	}
-	retreatStep := Step{PoseName: clawPoseStagingApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	retreatStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
@@ -144,11 +144,11 @@ func (s *beanjaminCoffee) fetchGlass(ctx, cancelCtx context.Context) error {
 // always driven back LOW — including on cancel — so the ice machine can't be
 // left running.
 func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
-	approachStep := Step{PoseName: clawPoseIceMachineApproach, Component: componentClaws, Pause: shortPause}
+	approachStep := Step{PoseName: clawPoseIceMachineApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("dispense_ice: %w", err)
 	}
-	dispenseStep := Step{PoseName: clawPoseIceMachineDispense, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	dispenseStep := Step{PoseName: clawPoseIceMachineDispense, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, dispenseStep); err != nil {
 		return fmt.Errorf("dispense_ice: %w", err)
 	}
@@ -157,7 +157,7 @@ func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("dispense_ice: %w", err)
 	}
 
-	retreatStep := Step{PoseName: clawPoseIceMachineApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	retreatStep := Step{PoseName: clawPoseIceMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("dispense_ice: %w", err)
 	}
@@ -203,11 +203,11 @@ func (s *beanjaminCoffee) pulseIcePin(ctx, cancelCtx context.Context) error {
 // freeing the gripper to retrieve the espresso cup and pour; the glass is
 // re-grabbed afterward (grabStagedGlass) and placed in the serving area.
 func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
-	approachStep := Step{PoseName: clawPoseStagingApproach, Component: componentClaws, Pause: shortPause}
+	approachStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
-	placeStep := Step{PoseName: clawPoseStaging, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemStagingCollisions)}
+	placeStep := Step{PoseName: clawPoseStaging, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemStagingCollisions)}
 	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
@@ -220,7 +220,7 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 	if err := s.stageGlassAsObstacle(ctx); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
-	exitStep := Step{PoseName: clawPoseStagingApproach, Component: componentClaws, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	exitStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
@@ -235,7 +235,7 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 // to pour the espresso over the ice (the tilt geometry lives in the pour pose),
 // dwells so the cup drains, then returns it upright before moving away.
 func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
-	approachStep := Step{PoseName: clawPosePourApproach, Component: componentClaws, Pause: shortPause}
+	approachStep := Step{PoseName: clawPosePourApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
@@ -244,13 +244,13 @@ func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 	// orientations — a pure rotation about the world X axis, since both share
 	// OX=0) so the stream stays over the glass instead of spilling. The staged
 	// glass stays a hard obstacle here — the cup must clear it, never drive in.
-	pourStep := Step{PoseName: clawPosePour, Component: componentClaws, PivotFromPose: clawPosePourApproach, PivotDegreesPerStep: 5,
+	pourStep := Step{PoseName: clawPosePour, PoseSwitch: s.clawsSw, PivotFromPose: clawPosePourApproach, PivotDegreesPerStep: 5,
 		Pause: pourPause}
 	if err := s.executeStep(ctx, cancelCtx, pourStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
 	// Return upright along the same pivot so any residual drip stays over the glass.
-	uprightStep := Step{PoseName: clawPosePourApproach, Component: componentClaws, PivotFromPose: clawPosePour, PivotDegreesPerStep: 5,
+	uprightStep := Step{PoseName: clawPosePourApproach, PoseSwitch: s.clawsSw, PivotFromPose: clawPosePour, PivotDegreesPerStep: 5,
 		Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)

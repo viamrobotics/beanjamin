@@ -51,7 +51,7 @@ func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string
 		}
 	}
 
-	homeStep := Step{PoseName: "home", Component: "filter"}
+	homeStep := Step{PoseName: "home", PoseSwitch: s.filterSw}
 	if err := s.executeStep(ctx, cancelCtx, homeStep); err != nil {
 		return nil, fmt.Errorf("run_cup_flow: home: %w", err)
 	}

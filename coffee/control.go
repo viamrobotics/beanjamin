@@ -196,7 +196,7 @@ func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]any, error) {
 			return nil, fmt.Errorf("cancel: recovery clean_portafilter: %w", err)
 		}
 		s.setStep(stepFinishingUp)
-		homeStep := Step{PoseName: filterPoseHome, Component: componentFilter}
+		homeStep := Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw}
 		if err := s.executeStep(ctx, cancelCtx, homeStep); err != nil {
 			return nil, fmt.Errorf("cancel: recovery home: %w", err)
 		}
@@ -209,7 +209,7 @@ func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]any, error) {
 			return nil, fmt.Errorf("cancel: recovery clean_portafilter: %w", err)
 		}
 		s.setStep(stepFinishingUp)
-		homeStep := Step{PoseName: filterPoseHome, Component: componentFilter}
+		homeStep := Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw}
 		if err := s.executeStep(ctx, cancelCtx, homeStep); err != nil {
 			return nil, fmt.Errorf("cancel: recovery home: %w", err)
 		}

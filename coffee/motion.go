@@ -53,7 +53,7 @@ func (s *beanjaminCoffee) slowMovementMoveOptions() *arm.MoveOptions {
 
 // moveToPose fetches a named pose and moves to it.
 func (s *beanjaminCoffee) moveToPose(ctx context.Context, step Step) error {
-	pd, err := s.fetchPose(ctx, step.Component, step.PoseName)
+	pd, err := s.fetchPose(ctx, step.PoseSwitch, step.PoseName)
 	if err != nil {
 		return err
 	}
@@ -69,17 +69,18 @@ type poseData struct {
 	componentName string
 }
 
-// fetchPose retrieves a named pose from the switch determined by component.
-func (s *beanjaminCoffee) fetchPose(ctx context.Context, component, poseName string) (*poseData, error) {
-	sw, err := s.switchForComponent(component)
-	if err != nil {
-		return nil, err
+// fetchPose retrieves a named pose from the given switch. The returned
+// poseData.componentName is the frame the goal pose is commanded against — the
+// switch's configured component_name.
+func (s *beanjaminCoffee) fetchPose(ctx context.Context, sw toggleswitch.Switch, poseName string) (*poseData, error) {
+	if sw == nil {
+		return nil, fmt.Errorf("get pose %q: no pose switch configured", poseName)
 	}
 	resp, err := sw.DoCommand(ctx, map[string]any{
 		"get_pose_by_name": poseName,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("get pose %q: %w", poseName, err)
+		return nil, fmt.Errorf("get pose %q from %q: %w", poseName, sw.Name().ShortName(), err)
 	}
 
 	x, _ := resp["x"].(float64)
@@ -605,27 +606,6 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
 }
 
-func (s *beanjaminCoffee) switchForComponent(componentName string) (toggleswitch.Switch, error) {
-	switch componentName {
-	case componentFilter:
-		return s.filterSw, nil
-	case componentClaws:
-		return s.clawsSw, nil
-	case componentCam:
-		if s.cameraObserveSw == nil {
-			return nil, fmt.Errorf("camera observe switch not configured")
-		}
-		return s.cameraObserveSw, nil
-	case componentGlassCam:
-		if s.glassObserveSw == nil {
-			return nil, fmt.Errorf("glass observe switch not configured")
-		}
-		return s.glassObserveSw, nil
-	default:
-		return nil, fmt.Errorf("unknown reference frame %q", componentName)
-	}
-}
-
 // executePivot fetches start and end poses, computes interpolated waypoints,
 // plans a single multi-goal trajectory through all of them, and executes it
 // in one MoveThroughJointPositions call.
@@ -637,11 +617,11 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	defer stop()
 	defer cancel()
 
-	startPD, err := s.fetchPose(ctx, step.Component, step.PivotFromPose)
+	startPD, err := s.fetchPose(ctx, step.PoseSwitch, step.PivotFromPose)
 	if err != nil {
 		return fmt.Errorf("pivot start: %w", err)
 	}
-	endPD, err := s.fetchPose(ctx, step.Component, step.PoseName)
+	endPD, err := s.fetchPose(ctx, step.PoseSwitch, step.PoseName)
 	if err != nil {
 		return fmt.Errorf("pivot end: %w", err)
 	}
@@ -735,7 +715,7 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 	defer stop()
 	defer cancel()
 
-	centerPD, err := s.fetchPose(ctx, step.Component, step.PoseName)
+	centerPD, err := s.fetchPose(ctx, step.PoseSwitch, step.PoseName)
 	if err != nil {
 		return fmt.Errorf("circular center: %w", err)
 	}
