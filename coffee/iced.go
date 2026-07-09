@@ -203,7 +203,9 @@ func (s *beanjaminCoffee) pulseIcePin(ctx, cancelCtx context.Context) error {
 // freeing the gripper to retrieve the espresso cup and pour; the glass is
 // re-grabbed afterward (grabStagedGlass) and placed in the serving area.
 func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
-	approachStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
+	// The glass is full of ice here — carry it level to staging so nothing bounces
+	// out on the traverse from the ice machine (NoSpill honored only with no_spill_carry).
+	approachStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, Pause: shortPause, NoSpill: true}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
@@ -235,7 +237,9 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 // to pour the espresso over the ice (the tilt geometry lives in the pour pose),
 // dwells so the cup drains, then returns it upright before moving away.
 func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
-	approachStep := Step{PoseName: clawPosePourApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
+	// The cup is full of espresso here — carry it level to the pour position so it
+	// doesn't slosh before the pour tilt (NoSpill honored only with no_spill_carry).
+	approachStep := Step{PoseName: clawPosePourApproach, PoseSwitch: s.clawsSw, Pause: shortPause, NoSpill: true}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
