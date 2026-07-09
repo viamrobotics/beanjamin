@@ -244,14 +244,16 @@ func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 	// orientations — a pure rotation about the world X axis, since both share
 	// OX=0) so the stream stays over the glass instead of spilling. The staged
 	// glass stays a hard obstacle here — the cup must clear it, never drive in.
+	// Pivots default to the slow-movement velocity; override it so the pour
+	// isn't dragged out (tune via pour_vel_degs_per_sec).
 	pourStep := Step{PoseName: clawPosePour, PoseSwitch: s.clawsSw, PivotFromPose: clawPosePourApproach, PivotDegreesPerStep: 5,
-		Pause: pourPause}
+		MoveOptions: s.pourMoveOptions(), Pause: pourPause}
 	if err := s.executeStep(ctx, cancelCtx, pourStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
 	// Return upright along the same pivot so any residual drip stays over the glass.
 	uprightStep := Step{PoseName: clawPosePourApproach, PoseSwitch: s.clawsSw, PivotFromPose: clawPosePour, PivotDegreesPerStep: 5,
-		Pause: shortPause}
+		MoveOptions: s.pourMoveOptions(), Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
@@ -261,6 +263,20 @@ func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 // iceDispenseSec returns the configured or default ice-dispense duration in seconds.
 func (s *beanjaminCoffee) iceDispenseSec() float64 {
 	return orDefault(s.cfg.IceDispenseSec, defaultIceDispenseSec)
+}
+
+// defaultPourVelDegsPerSec is the max joint velocity for the pour tilt and
+// return-upright pivots when pour_vel_degs_per_sec is unset.
+const defaultPourVelDegsPerSec = 60.0
+
+// pourMoveOptions returns the per-step MoveOptions applied to the pour pivots,
+// using the configured pour velocity or the default. We want the speed and acceleration to be higher
+// so it tilts faster and reduces spills.
+func (s *beanjaminCoffee) pourMoveOptions() *StepMoveOptions {
+	return &StepMoveOptions{
+		MaxVelDegsPerSec:  orDefault(s.cfg.PourVelDegsPerSec, defaultPourVelDegsPerSec),
+		MaxAccDegsPerSec2: s.cfg.PourAccDegsPerSec2,
+	}
 }
 
 // icePinName returns the ice-machine board pin name. Validate requires it to be

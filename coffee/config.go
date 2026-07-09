@@ -85,6 +85,8 @@ type Config struct {
 	IceDispenseBoardName string  `json:"ice_board_name,omitempty"`
 	IceDispensePinName   string  `json:"ice_pin_name,omitempty"`
 	IceDispenseSec       float64 `json:"ice_dispense_sec,omitempty"`
+	PourVelDegsPerSec    float64 `json:"pour_vel_degs_per_sec,omitempty"`
+	PourAccDegsPerSec2   float64 `json:"pour_acc_degs_per_sec2,omitempty"`
 
 	// Optional Slack notifier (viam:notifications:slack generic service). When
 	// set, the coffee service sends a best-effort Slack message via DoCommand

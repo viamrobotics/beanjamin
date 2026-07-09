@@ -74,11 +74,24 @@ func TestGrindAndIceDurations(t *testing.T) {
 		t.Errorf("default iceDispenseSec = %v, want %v", got, defaultIceDispenseSec)
 	}
 
-	set := &beanjaminCoffee{cfg: &Config{GrindTimeSec: 3, IceDispenseSec: 9}}
+	if got := def.pourMoveOptions().MaxVelDegsPerSec; got != defaultPourVelDegsPerSec {
+		t.Errorf("default pour velocity = %v, want %v", got, defaultPourVelDegsPerSec)
+	}
+	if got := def.pourMoveOptions().MaxAccDegsPerSec2; got != 0 {
+		t.Errorf("default pour acceleration = %v, want 0 (arm default)", got)
+	}
+
+	set := &beanjaminCoffee{cfg: &Config{GrindTimeSec: 3, IceDispenseSec: 9, PourVelDegsPerSec: 42, PourAccDegsPerSec2: 300}}
 	if got := set.grindDurationSec(); got != 3 {
 		t.Errorf("configured grindDurationSec = %v, want 3", got)
 	}
 	if got := set.iceDispenseSec(); got != 9 {
 		t.Errorf("configured iceDispenseSec = %v, want 9", got)
+	}
+	if got := set.pourMoveOptions().MaxVelDegsPerSec; got != 42 {
+		t.Errorf("configured pour velocity = %v, want 42", got)
+	}
+	if got := set.pourMoveOptions().MaxAccDegsPerSec2; got != 300 {
+		t.Errorf("configured pour acceleration = %v, want 300", got)
 	}
 }
