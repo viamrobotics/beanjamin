@@ -118,11 +118,6 @@ type Config struct {
 	// walks the candidate list (closest first), falling through to the
 	// next candidate on planning failures. Defaults to 3.
 	CupPickupMaxAttempts int `json:"cup_pickup_max_attempts,omitempty"`
-	// CupCentroidMinZMm clamps each detection's world-frame Z up to this
-	// value when the detected Z falls below it. Use to recover from depth
-	// noise that puts the centroid slightly below the physical cup base
-	// and trips the planner. Zero (default) disables clamping.
-	CupCentroidMinZMm float64 `json:"cup_centroid_min_z_mm,omitempty"`
 	// CupDimensions optionally overrides the cup size derived from the
 	// detection point cloud with a known diameter/height (see
 	// ContainerDimensions). Unset keeps the point-cloud-derived size.
@@ -135,7 +130,6 @@ type Config struct {
 	GlassObservePoseSwitcherName string        `json:"glass_observe_pose_switcher_name,omitempty"`
 	GlassApproachRelativePose    *RelativePose `json:"glass_approach_relative_pose,omitempty"`
 	GlassGrabRelativePose        *RelativePose `json:"glass_grab_relative_pose,omitempty"`
-	GlassCentroidMinZMm          float64       `json:"glass_centroid_min_z_mm,omitempty"`
 	// GlassDimensions optionally overrides the glass size derived from the
 	// detection point cloud with a known diameter/height (see
 	// ContainerDimensions). Unset keeps the point-cloud-derived size.

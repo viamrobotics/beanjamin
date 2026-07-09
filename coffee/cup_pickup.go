@@ -13,6 +13,11 @@ package coffee
 // not switch-resident world-frame poses) are composed onto the chosen centroid
 // and fed to moveToRawPose.
 //
+// When container dimensions are configured, each detection's grasp Z is resolved
+// from the surface it rests on rather than the noisy detected Z: the base is
+// seated just above the top of the static surface directly beneath it (see
+// resting_surface.go).
+//
 // On a planning failure, pickCupDynamic falls through to the next
 // candidate cup and re-observes the workspace after each batch is
 // exhausted, bounded by CupPickupMaxAttempts.
@@ -261,7 +266,6 @@ type pickupTarget struct {
 	grabRel          *RelativePose        // gripper offset for the grab pose
 	photosPerVantage int                  // vision frames per observe pose
 	maxAttempts      int                  // full observe-and-grab attempts
-	centroidMinZMm   float64              // floor detection Z to this (0 = disabled)
 	dimsOverride     *ContainerDimensions // predefined box size; nil uses point-cloud extents
 	noItemSpeak      string               // spoken on "nothing detected" before a retry wait
 	unreachableSpeak string               // spoken when items were seen but none could be grabbed, before a retry wait
@@ -281,7 +285,6 @@ func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 		grabRel:          s.cfg.CupGrabRelativePose,
 		photosPerVantage: pickupPhotosPerVantage(s.cfg.CupPhotosPerVantage),
 		maxAttempts:      pickupMaxAttempts(s.cfg.CupPickupMaxAttempts),
-		centroidMinZMm:   s.cfg.CupCentroidMinZMm,
 		dimsOverride:     s.cfg.CupDimensions,
 		noItemSpeak:      "I don't see a cup yet — please place one on the shelf. Trying again in 15 seconds.",
 		unreachableSpeak: "I can see a cup but I'm having trouble grabbing it — could you nudge it a little? Trying again in 15 seconds.",
@@ -305,7 +308,6 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 		grabRel:          s.cfg.GlassGrabRelativePose,
 		photosPerVantage: pickupPhotosPerVantage(s.cfg.CupPhotosPerVantage),
 		maxAttempts:      pickupMaxAttempts(s.cfg.CupPickupMaxAttempts),
-		centroidMinZMm:   s.cfg.GlassCentroidMinZMm,
 		dimsOverride:     s.cfg.GlassDimensions,
 		noItemSpeak:      "I don't see a glass yet — please place one on the top shelf. Trying again in 15 seconds.",
 		unreachableSpeak: "I can see a glass but I'm having trouble grabbing it — could you nudge it a little? Trying again in 15 seconds.",
@@ -344,6 +346,14 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 		return nil, err
 	}
 
+	// The static surfaces (shelf/table) the detected items rest on, used to seat
+	// each container's base on the surface beneath it (see below). Enumerated once
+	// per observation since world-anchored geometry does not move between candidates.
+	surfaces, err := worldAnchoredSurfaceBoxes(fs, fsInputs)
+	if err != nil {
+		return nil, err
+	}
+
 	candidates := make([]pickupCandidate, 0, len(objects))
 	for _, obj := range objects {
 		if obj.Geometry == nil {
@@ -374,14 +384,24 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 		if geomWorld == nil {
 			continue
 		}
-		if floor := t.centroidMinZMm; floor != 0 && world.Z < floor {
-			delta := floor - world.Z
-			logger.Infof("dynamic %s pickup: flooring centroid Z from %.1f to %.1f (centroid_min_z_mm)",
-				t.label, world.Z, floor)
-			world.Z = floor
-			// Shift the geometry up by the same delta so it stays centered on the
-			// (floored) grasp centroid.
-			geomWorld = geomWorld.Transform(spatialmath.NewPoseFromPoint(r3.Vector{Z: delta}))
+		// Resolve the grasp Z from the surface the container rests on: with the
+		// container's known height, seat its base surfaceRestClearanceMm above the
+		// top of the highest static surface directly beneath the detection, keeping
+		// the detected X/Y (which depth noise pushes above or below the true base).
+		// The geometry is shifted with the centroid so it stays centered on the
+		// grasp point. When dimensions are unset or no surface is found underneath,
+		// the raw detected Z is used unchanged.
+		if t.dimsOverride != nil {
+			if topZ, ok := surfaceTopZUnder(surfaces, world.X, world.Y, world.Z); ok {
+				newZ := topZ + surfaceRestClearanceMm + t.dimsOverride.HeightMm/2
+				logger.Infof("dynamic %s pickup: seating base %.1fmm above surface top Z=%.1f -> grasp Z %.1f (detected %.1f)",
+					t.label, surfaceRestClearanceMm, topZ, newZ, world.Z)
+				geomWorld = geomWorld.Transform(spatialmath.NewPoseFromPoint(r3.Vector{Z: newZ - world.Z}))
+				world.Z = newZ
+			} else {
+				logger.Infof("dynamic %s pickup: no static surface beneath detection at (x=%.1f, y=%.1f) below Z=%.1f; keeping detected Z",
+					t.label, world.X, world.Y, world.Z)
+			}
 		}
 		logger.Debugf("dynamic %s pickup: detection at camera-local %v -> world %v", t.label, local, world)
 		candidates = append(candidates, pickupCandidate{centroid: world, geom: geomWorld})
