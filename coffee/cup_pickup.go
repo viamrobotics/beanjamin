@@ -4,23 +4,25 @@ package coffee
 //
 // pickCupDynamic is how setCupForCoffee acquires the empty cup. It sweeps the
 // poses on the dedicated camera-observe switch
-// (camera_observe_pose_switcher_name) one at a time,
-// calling a vision service for cup detections at each. As soon as a pose
-// yields at least one detection the sweep stops — the next observe pose is
-// only tried when the current one failed to find a cup. Detections are lifted
-// into world frame and ranked by proximity to the gripper (closest first), and
-// the configured approach/grab relative poses (from Config — they are offsets,
-// not switch-resident world-frame poses) are composed onto the chosen centroid
-// and fed to moveToRawPose.
+// (camera_observe_pose_switcher_name) one at a time, calling a vision service
+// for cup detections at each. At every pose that sees at least one cup the
+// detections are lifted into world frame, ranked by proximity to the gripper
+// (closest first), and grabbed in turn — the configured approach/grab relative
+// poses (from Config — they are offsets, not switch-resident world-frame poses)
+// are composed onto each centroid and fed to moveToRawPose. The sweep stops as
+// soon as a cup is in hand; when a pose's cups are all unreachable it continues
+// to the remaining poses, so a cup reachable only from a later vantage is still
+// found before we give up.
 //
 // When container dimensions are configured, each detection's grasp Z is resolved
 // from the surface it rests on rather than the noisy detected Z: the base is
 // seated just above the top of the static surface directly beneath it (see
 // resting_surface.go).
 //
-// On a planning failure, pickCupDynamic falls through to the next
-// candidate cup and re-observes the workspace after each batch is
-// exhausted, bounded by CupPickupMaxAttempts.
+// When a full sweep grabs nothing, pickCupDynamic re-observes and retries,
+// bounded by CupPickupMaxAttempts: if no pose saw a cup it asks the customer to
+// place one; if cups were seen but none could be reached it asks the customer to
+// nudge them, waiting noItemRetryDelay between attempts.
 
 import (
 	"context"
@@ -67,15 +69,16 @@ type pickupCandidate struct {
 	geom     spatialmath.Geometry
 }
 
-// errNoItemsDetected is returned by findCandidates when the vision frames at
-// every observe pose yielded zero detections. pickDynamic recognises this case
-// via errors.Is and recovers with a spoken "please place a cup/glass"
-// announcement + a wait before re-observing, instead of failing the order
-// outright. Shared by cup and glass pickup.
+// errNoItemsDetected marks the "vision saw nothing at any observe pose" outcome.
+// pickDynamic wraps it into the final failure when a full sweep detected zero
+// items on every attempt, and uses the same signal to choose the spoken "please
+// place a cup/glass" prompt (vs. the "nudge it" prompt used when items were seen
+// but none could be reached) — so an empty shelf is not reported as an
+// unreachable-item failure. Shared by cup and glass pickup.
 var errNoItemsDetected = errors.New("no items detected")
 
-// noItemRetryDelay is the wait between outer observation attempts when
-// findCandidates reports zero detections.
+// noItemRetryDelay is the wait between outer observation attempts when a sweep
+// grabs nothing (no item detected, or items seen but none reachable).
 const noItemRetryDelay = 15 * time.Second
 
 // observeDedupMm is the merge radius used to collapse near-duplicate detections
@@ -235,7 +238,7 @@ func worldBoundingBox(
 
 // gripperWorldPoint returns the world-frame position of the gripper — the
 // componentClaws frame the grab actually moves onto a cup/glass. Dynamic pickup
-// ranks detected items by proximity to this point (findCandidates), so the item
+// ranks detected items by proximity to this point (observeAtPose), so the item
 // nearest the gripper at the observe pose is attempted first.
 func (s *beanjaminCoffee) gripperWorldPoint(ctx context.Context) (r3.Vector, error) {
 	fs, fsInputs, err := s.currentInputs(ctx)
@@ -252,8 +255,8 @@ func (s *beanjaminCoffee) gripperWorldPoint(ctx context.Context) (r3.Vector, err
 
 // pickupTarget bundles everything the dynamic pickup pipeline needs to find and
 // grab one kind of item. Cups and glasses each build one (cupPickupTarget /
-// glassPickupTarget); the pipeline methods (observeVantage, findCandidates,
-// tryGrab, recoverToObserve, pickDynamic) are generic over it. This keeps glass
+// glassPickupTarget); the pipeline methods (observeVantage, observeAtPose,
+// sweepAndGrab, tryGrab, recoverToObserve, pickDynamic) are generic over it. This keeps glass
 // detection — its own vision service and observe poses, tuned for the taller
 // glass — fully independent of cup detection while sharing one implementation.
 type pickupTarget struct {
@@ -320,7 +323,7 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 // pose, accumulates every detection from all of them, and lifts each into world
 // coordinates. Returns the pickup candidates (world-frame centroid + geometry).
 // Returns a nil slice with no error when no frame produced a detection, so the
-// sweep in findCandidates can move on to the next observe pose.
+// sweep can move on to the next observe pose.
 func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) ([]pickupCandidate, error) {
 	logger := s.activeOrderLogger()
 	photosToTake := t.photosPerVantage
@@ -442,68 +445,57 @@ func (s *beanjaminCoffee) observationPoseNames(ctx context.Context, sw toggleswi
 	return names, nil
 }
 
-// findCandidates sweeps the target's observe poses one at a time and returns
-// the ranked pickup candidates from the first pose that sees an item.
+// observeAtPose moves the camera to a single observe pose, captures detections
+// there, and returns them ranked by proximity to the gripper (closest first) so
+// the item nearest the gripper is grabbed first. Near-duplicate detections
+// (across the several photos taken at the pose) are merged before ranking.
 //
-// At each pose it moves the camera there, observes (observeVantage), merges
-// near-duplicate detections, and ranks them by proximity to the gripper
-// (closest first). The first pose that yields at least one detection wins and
-// the remaining poses are not visited — the next observe pose is only tried when
-// the current one found nothing. An unreachable pose is logged and skipped.
-//
-// When no pose produces any detection, findCandidates returns errNoItemsDetected
-// so pickDynamic can recover (announce + wait + re-observe).
-func (s *beanjaminCoffee) findCandidates(ctx, cancelCtx context.Context, t *pickupTarget) ([]pickupCandidate, error) {
+// Returns an empty slice with no error when the pose is unreachable or sees
+// nothing, so the sweep in sweepAndGrab can move on to the next observe pose. A
+// non-nil error is fatal (a vision or transform failure).
+func (s *beanjaminCoffee) observeAtPose(ctx, cancelCtx context.Context, t *pickupTarget, poseName string, pass, passes int) ([]pickupCandidate, error) {
 	logger := s.activeOrderLogger()
-	poseNames, err := s.observationPoseNames(ctx, t.observeSw)
+	logger.Infof("dynamic %s pickup: pass %d/%d — moving to observe pose %q", t.label, pass, passes, poseName)
+	// Pause briefly after arriving so the camera frame is stable before
+	// detection. The pose is read from t.observeSw (the item's observe switch).
+	step := Step{PoseName: poseName, PoseSwitch: t.observeSw, Pause: shortPause}
+	if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+		logger.Warnf("dynamic %s pickup: pass %d/%d — observe pose %q unreachable, skipping pass: %v", t.label, pass, passes, poseName, err)
+		return nil, nil
+	}
+
+	detectCtx, detectSpan := trace.StartSpan(ctx, "beanjamin::dynamic_pickup::"+t.label+"::detect")
+	detected, err := s.observeVantage(detectCtx, t)
+	detectSpan.End()
 	if err != nil {
-		return nil, fmt.Errorf("dynamic_%s_pickup: %w", t.label, err)
+		return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, pass, err)
+	}
+	if len(detected) == 0 {
+		logger.Infof("dynamic %s pickup: pass %d/%d found nothing — trying next observe pose", t.label, pass, passes)
+		return nil, nil
 	}
 
-	passes := len(poseNames)
-	for i, poseName := range poseNames {
-		logger.Infof("dynamic %s pickup: pass %d/%d — moving to observe pose %q", t.label, i+1, passes, poseName)
-		// Pause briefly after arriving so the camera frame is stable before
-		// detection. The pose is read from t.observeSw (the item's observe switch).
-		step := Step{PoseName: poseName, PoseSwitch: t.observeSw, Pause: shortPause}
-		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-			logger.Warnf("dynamic %s pickup: pass %d/%d — observe pose %q unreachable, skipping pass: %v", t.label, i+1, passes, poseName, err)
-			continue
-		}
-
-		detected, err := s.observeVantage(ctx, t)
-		if err != nil {
-			return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, i+1, err)
-		}
-		if len(detected) == 0 {
-			logger.Infof("dynamic %s pickup: pass %d/%d found nothing — trying next observe pose", t.label, i+1, passes)
-			continue
-		}
-
-		// Rank by proximity to the gripperPosition so the item nearest the gripperPosition at
-		// this observe pose is attempted first.
-		gripperPosition, err := s.gripperWorldPoint(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, i+1, err)
-		}
-
-		// Merge/rank operate on centroids; the geometry is matched back to each
-		// ranked centroid afterward (mergeNearbyCentroids averages centroids, so
-		// geometry can't be threaded through the merge directly).
-		centroids := centroidsOf(detected)
-		merged := mergeNearbyCentroids(centroids, observeDedupMm)
-		ranked := rankCentroidsByProximity(merged, gripperPosition)
-		candidates := candidatesForCentroids(ranked, detected)
-		logger.Infof("dynamic %s pickup: pass %d/%d — gripper=(x=%.1f, y=%.1f, z=%.1f) — %d candidate(s) (%d before merge), closest first:",
-			t.label, i+1, passes, gripperPosition.X, gripperPosition.Y, gripperPosition.Z, len(candidates), len(detected))
-		for j, c := range candidates {
-			logger.Infof("  rank[%d] world=(x=%.1f, y=%.1f, z=%.1f) distance=%.1fmm",
-				j, c.centroid.X, c.centroid.Y, c.centroid.Z, c.centroid.Sub(gripperPosition).Norm())
-		}
-		return candidates, nil
+	// Rank by proximity to the gripperPosition so the item nearest the gripperPosition at
+	// this observe pose is attempted first.
+	gripperPosition, err := s.gripperWorldPoint(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, pass, err)
 	}
 
-	return nil, fmt.Errorf("dynamic_%s_pickup: %w across all %d observe pose(s)", t.label, errNoItemsDetected, passes)
+	// Merge/rank operate on centroids; the geometry is matched back to each
+	// ranked centroid afterward (mergeNearbyCentroids averages centroids, so
+	// geometry can't be threaded through the merge directly).
+	centroids := centroidsOf(detected)
+	merged := mergeNearbyCentroids(centroids, observeDedupMm)
+	ranked := rankCentroidsByProximity(merged, gripperPosition)
+	candidates := candidatesForCentroids(ranked, detected)
+	logger.Infof("dynamic %s pickup: pass %d/%d — gripper=(x=%.1f, y=%.1f, z=%.1f) — %d candidate(s) (%d before merge), closest first:",
+		t.label, pass, passes, gripperPosition.X, gripperPosition.Y, gripperPosition.Z, len(candidates), len(detected))
+	for j, c := range candidates {
+		logger.Infof("  rank[%d] world=(x=%.1f, y=%.1f, z=%.1f) distance=%.1fmm",
+			j, c.centroid.X, c.centroid.Y, c.centroid.Z, c.centroid.Sub(gripperPosition).Norm())
+	}
+	return candidates, nil
 }
 
 // centroidsOf extracts the world-frame centroids from a slice of candidates,
@@ -698,12 +690,73 @@ func (s *beanjaminCoffee) announceAndWaitForRetry(ctx, cancelCtx context.Context
 	}
 }
 
-// pickDynamic sweeps the target's observe poses (findCandidates, stopping at the
-// first pose that sees a reachable item) and walks the ranked candidate list
-// grabbing the first reachable one. Falls through to the next candidate on
-// planning failures and re-observes (up to t.maxAttempts attempts) when no
-// observe pose sees an item or all candidates in a batch fail planning. Shared
-// by cup and glass pickup.
+// sweepResult reports the outcome of one full observe-pose sweep (sweepAndGrab).
+type sweepResult struct {
+	grabbed  bool  // an item was grabbed and is in hand
+	sawItem  bool  // at least one observe pose detected an item (reachable or not)
+	lastGrab error // last recoverable grab failure (planning / grip-miss), for diagnostics
+}
+
+// sweepAndGrab visits every observe pose in order and, at each pose that sees
+// items, attempts to grab them closest-first. It returns as soon as one is in
+// hand. When a vantage's items are all unreachable — every candidate failed with
+// a recoverable planning or grip-miss error — it continues to the remaining
+// poses, so an item reachable only from a later vantage is still found before we
+// give up and ask the customer to nudge the items.
+//
+// A non-nil error is fatal (an execution failure, operator cancel, or transform
+// error): the caller must not retry it. Recoverable planning / grip-miss
+// failures are not returned as errors; they advance the sweep and the last one
+// is surfaced through sweepResult.lastGrab.
+func (s *beanjaminCoffee) sweepAndGrab(ctx, cancelCtx context.Context, t *pickupTarget, poseNames []string) (sweepResult, error) {
+	logger := s.activeOrderLogger()
+	passes := len(poseNames)
+	var res sweepResult
+	for i, poseName := range poseNames {
+		candidates, err := s.observeAtPose(ctx, cancelCtx, t, poseName, i+1, passes)
+		if err != nil {
+			return res, err
+		}
+		if len(candidates) == 0 {
+			continue
+		}
+		res.sawItem = true
+
+		logger.Infof("dynamic %s pickup: pass %d/%d — %d candidate(s) to try", t.label, i+1, passes, len(candidates))
+		for j, cand := range candidates {
+			grabErr := s.tryGrab(ctx, cancelCtx, t, cand)
+			if grabErr == nil {
+				res.grabbed = true
+				return res, nil
+			}
+
+			// Operator cancel always wins.
+			if ctx.Err() != nil {
+				return res, fmt.Errorf("dynamic_%s_pickup: cancelled: %w", t.label, grabErr)
+			}
+			// Only planning failures and grip misses are recoverable — fall
+			// through to the next candidate. Anything else (e.g. a mid-grab
+			// execution error, from which we can't safely continue) is fatal.
+			if !errors.Is(grabErr, errMotionPlanning) && !errors.Is(grabErr, errGripMissed) {
+				return res, grabErr
+			}
+			res.lastGrab = grabErr
+			logger.Warnf("dynamic %s pickup: pass %d/%d candidate %d/%d failed (planning or grab miss) — trying next: %v",
+				t.label, i+1, passes, j+1, len(candidates), grabErr)
+		}
+		logger.Infof("dynamic %s pickup: pass %d/%d — all %d candidate(s) at this vantage unreachable; continuing sweep to remaining pose(s)",
+			t.label, i+1, passes, len(candidates))
+	}
+	return res, nil
+}
+
+// pickDynamic acquires one item (cup or glass) via the vision pipeline. Each
+// attempt sweeps every observe pose and grabs the first reachable item across
+// all of them (sweepAndGrab), stopping as soon as one is in hand. When a sweep
+// grabs nothing it re-observes and retries up to t.maxAttempts, asking the
+// customer to place an item (nothing was seen anywhere) or to nudge the items
+// (some were seen but none reachable) and waiting noItemRetryDelay between
+// attempts. Shared by cup and glass pickup.
 func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupTarget) error {
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::dynamic_pickup::"+t.label)
@@ -720,60 +773,45 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 		return fmt.Errorf("dynamic_%s_pickup: no gripper configured", t.label)
 	}
 
+	// Observe poses don't change between attempts, so enumerate them once.
+	poseNames, err := s.observationPoseNames(ctx, t.observeSw)
+	if err != nil {
+		return fmt.Errorf("dynamic_%s_pickup: %w", t.label, err)
+	}
+
 	maxAttempts := t.maxAttempts
-	var lastErr error
+	lastErr := fmt.Errorf("dynamic_%s_pickup: %w", t.label, errNoItemsDetected)
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		// findCandidates sweeps the observe poses itself (stopping at the first
-		// that sees an item), so there is no separate pre-move here.
-		detectCtx, detectSpan := trace.StartSpan(ctx, "beanjamin::dynamic_pickup::"+t.label+"::detect")
-		candidates, err := s.findCandidates(detectCtx, cancelCtx, t)
-		detectSpan.End()
+		res, err := s.sweepAndGrab(ctx, cancelCtx, t, poseNames)
 		if err != nil {
-			// "Nothing detected" is recoverable: there may be no item, or the
-			// vision service is having a bad day. Announce + wait, then
-			// re-observe on the next outer iteration. Bail on any other failure
-			// (e.g. an unreachable observe pose or a transform error) —
-			// re-observing won't change those.
-			if errors.Is(err, errNoItemsDetected) && attempt < maxAttempts {
-				logger.Infof("dynamic %s pickup: nothing detected on attempt %d/%d — asking for a cup/glass and waiting %s before retry",
-					t.label, attempt, maxAttempts, noItemRetryDelay)
-				if waitErr := s.announceAndWaitForRetry(ctx, cancelCtx, t, t.noItemSpeak); waitErr != nil {
-					return waitErr
-				}
-				lastErr = err
-				continue
-			}
 			return err
 		}
-
-		logger.Infof("dynamic %s pickup: attempt %d/%d — %d candidate(s) to try", t.label, attempt, maxAttempts, len(candidates))
-		for i, cand := range candidates {
-			err := s.tryGrab(ctx, cancelCtx, t, cand)
-			if err == nil {
-				return nil
-			}
-			lastErr = err
-
-			// Operator cancel always wins.
-			if ctx.Err() != nil {
-				return fmt.Errorf("dynamic_%s_pickup: cancelled: %w", t.label, err)
-			}
-
-			if !errors.Is(err, errMotionPlanning) && !errors.Is(err, errGripMissed) {
-				return err
-			}
-			logger.Warnf("dynamic %s pickup: attempt %d, candidate %d/%d failed (planning or grab miss) — trying next: %v",
-				t.label, attempt, i+1, len(candidates), err)
+		if res.grabbed {
+			return nil
 		}
 
-		// Every candidate this batch failed with a recoverable error (fatal ones
-		// returned above): an item is there but the arm couldn't reach it. Ask the
-		// customer to nudge it before re-observing, so the next attempt sees it from
-		// a slightly different position.
+		// The sweep grabbed nothing. Choose the recovery prompt from what it saw:
+		//   sawItem == false → no observe pose detected an item: ask the customer
+		//     to place one (the shelf may be empty or vision is having a bad day).
+		//   sawItem == true  → item(s) were seen at some vantage but none could be
+		//     reached: ask the customer to nudge them so the next sweep sees them
+		//     from a slightly different position.
+		prompt, reason := t.noItemSpeak, "nothing detected at any observe pose"
+		if res.sawItem {
+			prompt, reason = t.unreachableSpeak, "all detected items unreachable"
+			if res.lastGrab != nil {
+				lastErr = res.lastGrab
+			} else {
+				lastErr = fmt.Errorf("dynamic_%s_pickup: items detected but none reachable", t.label)
+			}
+		} else {
+			lastErr = fmt.Errorf("dynamic_%s_pickup: %w", t.label, errNoItemsDetected)
+		}
+
 		if attempt < maxAttempts {
-			logger.Infof("dynamic %s pickup: all %d candidate(s) unreachable on attempt %d/%d — asking for a nudge and waiting %s before retry",
-				t.label, len(candidates), attempt, maxAttempts, noItemRetryDelay)
-			if waitErr := s.announceAndWaitForRetry(ctx, cancelCtx, t, t.unreachableSpeak); waitErr != nil {
+			logger.Infof("dynamic %s pickup: %s on attempt %d/%d — prompting the customer and waiting %s before retry",
+				t.label, reason, attempt, maxAttempts, noItemRetryDelay)
+			if waitErr := s.announceAndWaitForRetry(ctx, cancelCtx, t, prompt); waitErr != nil {
 				return waitErr
 			}
 		}
