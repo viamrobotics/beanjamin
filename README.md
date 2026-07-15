@@ -339,12 +339,13 @@ When `can_serve_iced` is enabled, the dedicated glass-observe switch must hold o
     "customer_email": "alice@example.com",
     "initial_greeting": "optional custom greeting",
     "completion_statement": "optional custom completion message",
-    "count": 3
+    "count": 3,
+    "fulfillment": "pickup"
   }
 }
 ```
 
-Only `drink` is required. If `initial_greeting` is omitted, a random greeting is generated. If `customer_name` is provided, it personalizes the greeting and completion messages. If `customer_email` is provided **and** `customer_detector_name` is configured, the completed drink is credited to that customer's order history (see "the usual"). Orders are added to a queue and processed sequentially.
+Only `drink` is required. If `initial_greeting` is omitted, a random greeting is generated. If `customer_name` is provided, it personalizes the greeting and completion messages. If `customer_email` is provided **and** `customer_detector_name` is configured, the completed drink is credited to that customer's order history (see "the usual"). `fulfillment` is either `"pickup"` (default) or `"delivery"`; it is carried on each order through `get_queue` and the drink-ready announcement at cup handoff tells the customer which one it is (e.g. "…ready for pickup!" vs "…it'll be delivered to you!"). Orders are added to a queue and processed sequentially.
 
 `count` is an optional positive integer (default 1) that enqueues N identical orders in one call — each gets its own UUID. The cap is `max_batch_size` (default 10). When `count > 1`, the response also includes `order_ids: [...]` (one per enqueued order) and `count`; existing `order_id` and `queue_position` keys still refer to the first order so existing callers keep working. To keep audio sane, the per-order "Order received…" line is replaced with a single consolidated batch announcement at submission time; the per-cup drink-ready announcement at cup handoff still fires once per order as each cup completes.
 

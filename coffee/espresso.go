@@ -298,7 +298,7 @@ func waterDelta(drink string) float64 {
 	return 1
 }
 
-func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName string, batchIndex, batchSize int) (err error) {
+func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName string, batchIndex, batchSize int, fulfillment string) (err error) {
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::prepareDrink["+drink+"]")
 	defer span.End()
@@ -431,7 +431,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		if err != nil {
 			return err
 		}
-		if err := s.sayAlways(ctx, pickDrinkReady(drink, customerName, batchIndex, batchSize)); err != nil {
+		if err := s.sayAlways(ctx, pickDrinkReady(drink, customerName, batchIndex, batchSize, fulfillment)); err != nil {
 			logger.Warnf("failed to say drink-ready: %v", err)
 		}
 	}

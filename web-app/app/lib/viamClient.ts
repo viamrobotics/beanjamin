@@ -214,10 +214,18 @@ export interface StepEntry {
   started_at: string;
 }
 
+export type Fulfillment = "pickup" | "delivery";
+
 export interface QueueOrder {
   id: string;
   drink: string;
   customer_name: string;
+  /**
+   * How the customer receives the drink. Optional so dashboards can still
+   * talk to machines running older module versions that don't send it;
+   * treat absent as "pickup" (the backend default).
+   */
+  fulfillment?: Fulfillment;
   enqueued_at: string;
   raw_step: string;
   step_history: StepEntry[];
@@ -280,6 +288,7 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
       id: r.id,
       drink: "espresso",
       customer_name: r.name,
+      fulfillment: "pickup" as const,
       enqueued_at: new Date(r.completedAt).toISOString(),
       raw_step: r.rawStep,
       step_history: [],
@@ -289,6 +298,7 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
       id: o.id,
       drink: "espresso",
       customer_name: o.name,
+      fulfillment: "pickup" as const,
       enqueued_at: new Date().toISOString(),
       raw_step: i === 0 ? devStep : "",
       step_history:
@@ -323,6 +333,8 @@ export async function prepareOrder(
     customerName: string;
     customerEmail?: string;
     pronunciation?: string;
+    /** Defaults to "pickup" on the backend when omitted. */
+    fulfillment?: Fulfillment;
   },
 ): Promise<{ status: string; queue_position?: number; order_id?: string }> {
   if (isDevMode()) {
@@ -362,6 +374,7 @@ export async function prepareOrder(
       customer_name: opts.customerName,
       ...(opts.customerEmail && { customer_email: opts.customerEmail }),
       ...(greeting && { initial_greeting: greeting }),
+      ...(opts.fulfillment && { fulfillment: opts.fulfillment }),
     },
   });
   console.log("[viamClient] prepareOrder result:", result);
