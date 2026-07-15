@@ -80,20 +80,6 @@ var drinkReadyBatchNamed = []string{
 	"%[1]s number %[3]d for %[2]s — %[4]d total.",
 }
 
-// fulfillmentReady lines are appended to the drink-ready handoff line so the
-// customer hears how their drink reaches them (Order.Fulfillment).
-var fulfillmentReadyPickup = []string{
-	"Ready for pickup!",
-	"Come grab it while it's hot!",
-	"It's waiting for you at the counter!",
-}
-
-var fulfillmentReadyDelivery = []string{
-	"It's headed out for delivery!",
-	"Sit tight — it'll be delivered to you!",
-	"Delivery is on its way!",
-}
-
 var unsupportedDrink = []string{
 	// polite
 	"I'm sorry, I cannot make a %s at the moment. May I offer you an espresso or a lungo instead?",
@@ -156,25 +142,19 @@ func pickAlmostReady() string {
 // pickDrinkReady picks a cup-handoff line. When batchSize > 1, the order is
 // part of a multi-drink batch and the spoken line names the position
 // (e.g. "2 of 3") so the customer can track progress; otherwise the original
-// single-drink templates are used. A fulfillment sentence (pickup/delivery)
-// is appended so the customer knows how the drink reaches them.
-func pickDrinkReady(drink, customerName string, batchIndex, batchSize int, fulfillment string) string {
+// single-drink templates are used.
+func pickDrinkReady(drink, customerName string, batchIndex, batchSize int) string {
 	drink = speakableDrink(drink)
-	var base string
-	switch {
-	case batchSize > 1 && customerName != "":
-		base = fmt.Sprintf(drinkReadyBatchNamed[rand.Intn(len(drinkReadyBatchNamed))], drink, customerName, batchIndex, batchSize)
-	case batchSize > 1:
-		base = fmt.Sprintf(drinkReadyBatchAnonymous[rand.Intn(len(drinkReadyBatchAnonymous))], drink, customerName, batchIndex, batchSize)
-	case customerName != "":
-		base = fmt.Sprintf(drinkReadyNamed[rand.Intn(len(drinkReadyNamed))], drink, customerName)
-	default:
-		base = fmt.Sprintf(drinkReadyAnonymous[rand.Intn(len(drinkReadyAnonymous))], drink)
+	if batchSize > 1 {
+		if customerName != "" {
+			return fmt.Sprintf(drinkReadyBatchNamed[rand.Intn(len(drinkReadyBatchNamed))], drink, customerName, batchIndex, batchSize)
+		}
+		return fmt.Sprintf(drinkReadyBatchAnonymous[rand.Intn(len(drinkReadyBatchAnonymous))], drink, customerName, batchIndex, batchSize)
 	}
-	if fulfillment == FulfillmentDelivery {
-		return base + " " + fulfillmentReadyDelivery[rand.Intn(len(fulfillmentReadyDelivery))]
+	if customerName != "" {
+		return fmt.Sprintf(drinkReadyNamed[rand.Intn(len(drinkReadyNamed))], drink, customerName)
 	}
-	return base + " " + fulfillmentReadyPickup[rand.Intn(len(fulfillmentReadyPickup))]
+	return fmt.Sprintf(drinkReadyAnonymous[rand.Intn(len(drinkReadyAnonymous))], drink)
 }
 
 func pickUnsupportedDrink(drink string) string {

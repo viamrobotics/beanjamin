@@ -194,6 +194,19 @@ func (s *beanjaminCoffee) sayAlways(ctx context.Context, text string) error {
 	return err
 }
 
+// readyForDelivery handles the cup-handoff moment for delivery-fulfillment
+// orders, replacing the pickup drink-ready announcement. For now it only
+// speaks the announcement; this is the hook to extend with the actual
+// delivery handoff (notify the delivery machine, Slack, etc.).
+func (s *beanjaminCoffee) readyForDelivery(ctx context.Context, drink, customerName string) error {
+	drink = speakableDrink(drink)
+	text := fmt.Sprintf("%s ready for delivery!", drink)
+	if customerName != "" {
+		text = fmt.Sprintf("%s for %s, ready for delivery!", drink, customerName)
+	}
+	return s.sayAlways(ctx, text)
+}
+
 // recordOrderHistory credits a completed drink to the customer's history; no-op
 // without an email or detector, best-effort otherwise.
 func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order Order) {
@@ -431,7 +444,11 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		if err != nil {
 			return err
 		}
-		if err := s.sayAlways(ctx, pickDrinkReady(drink, customerName, batchIndex, batchSize, fulfillment)); err != nil {
+		if fulfillment == FulfillmentDelivery {
+			if err := s.readyForDelivery(ctx, drink, customerName); err != nil {
+				logger.Warnf("failed to announce ready-for-delivery: %v", err)
+			}
+		} else if err := s.sayAlways(ctx, pickDrinkReady(drink, customerName, batchIndex, batchSize)); err != nil {
 			logger.Warnf("failed to say drink-ready: %v", err)
 		}
 	}
