@@ -16,6 +16,12 @@ import (
 // "Ready!" green cards, identical to the in-flight cleanup state.
 const RecentDisplayDuration = 15 * time.Second
 
+// Valid values for Order.Fulfillment.
+const (
+	FulfillmentPickup   = "pickup"
+	FulfillmentDelivery = "delivery"
+)
+
 // StepEntry records the start of a single processing step for an order.
 type StepEntry struct {
 	Step      string    `json:"step"`
@@ -34,10 +40,13 @@ type Order struct {
 	Drink        string `json:"drink"`
 	CustomerName string `json:"customer_name"`
 	// CustomerEmail identifies the recognized customer, to credit their history.
-	CustomerEmail string    `json:"customer_email,omitempty"`
-	Greeting      string    `json:"greeting"`
-	Completion    string    `json:"completion"`
-	EnqueuedAt    time.Time `json:"enqueued_at"`
+	CustomerEmail string `json:"customer_email,omitempty"`
+	Greeting      string `json:"greeting"`
+	Completion    string `json:"completion"`
+	// Fulfillment is how the customer receives the drink: FulfillmentPickup
+	// (default) or FulfillmentDelivery. Set at enqueue time; immutable afterward.
+	Fulfillment string    `json:"fulfillment"`
+	EnqueuedAt  time.Time `json:"enqueued_at"`
 
 	// BatchIndex / BatchSize identify this order's slot within a multi-drink
 	// batch (1-based, e.g. "2 of 3"). Both zero for single orders. Set at
@@ -208,6 +217,7 @@ func (q *OrderQueue) Clear() int {
 }
 
 // NewOrder creates an Order with a generated UUID and current timestamp.
+// Fulfillment defaults to pickup; callers override it before enqueueing.
 func NewOrder(drink, customerName, greeting, completion string) Order {
 	return Order{
 		ID:           uuid.New().String(),
@@ -215,6 +225,7 @@ func NewOrder(drink, customerName, greeting, completion string) Order {
 		CustomerName: customerName,
 		Greeting:     greeting,
 		Completion:   completion,
+		Fulfillment:  FulfillmentPickup,
 		EnqueuedAt:   time.Now(),
 	}
 }
@@ -371,7 +382,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) e
 		}
 	}
 
-	if err := s.prepareDrink(ctx, order.Drink, order.CustomerName, order.BatchIndex, order.BatchSize); err != nil {
+	if err := s.prepareDrink(ctx, order.Drink, order.CustomerName, order.BatchIndex, order.BatchSize, order.Fulfillment); err != nil {
 		logger.Errorf("order for %s failed: %v", order.CustomerName, err)
 		return err
 	}
@@ -421,7 +432,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 	order, ok := orderRaw.(map[string]any)
 	if !ok {
 		s.logger.Warnf("rejected order: invalid payload type %T", orderRaw)
-		return nil, fmt.Errorf("prepare_order value must be an object with keys: drink, customer_name, initial_greeting, completion_statement, count")
+		return nil, fmt.Errorf("prepare_order value must be an object with keys: drink, customer_name, initial_greeting, completion_statement, count, fulfillment")
 	}
 
 	drink, _ := order["drink"].(string)
@@ -461,6 +472,12 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 	initialGreeting, _ := order["initial_greeting"].(string)
 	completionStatement, _ := order["completion_statement"].(string)
 
+	fulfillment, err := parseFulfillment(order["fulfillment"])
+	if err != nil {
+		s.logger.Warnf("rejected order: %v", err)
+		return nil, err
+	}
+
 	count, err := s.parseOrderCount(order["count"])
 	if err != nil {
 		s.logger.Warnf("rejected order: %v", err)
@@ -482,6 +499,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		}
 		o := NewOrder(drink, customerName, greeting, completionStatement)
 		o.CustomerEmail = customerEmail
+		o.Fulfillment = fulfillment
 		if count > 1 {
 			o.BatchIndex = i + 1
 			o.BatchSize = count
@@ -518,6 +536,27 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		"order_ids":      ids,
 		"count":          count,
 	}, nil
+}
+
+// parseFulfillment validates the optional "fulfillment" field on a
+// prepare_order payload. Absent/nil/empty → pickup. Anything other than
+// "pickup" or "delivery" → error. Caller should reject before any enqueue.
+func parseFulfillment(v any) (string, error) {
+	if v == nil {
+		return FulfillmentPickup, nil
+	}
+	f, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("fulfillment must be a string, got %T", v)
+	}
+	switch f {
+	case "":
+		return FulfillmentPickup, nil
+	case FulfillmentPickup, FulfillmentDelivery:
+		return f, nil
+	default:
+		return "", fmt.Errorf("fulfillment must be %q or %q, got %q", FulfillmentPickup, FulfillmentDelivery, f)
+	}
 }
 
 // parseOrderCount validates and coerces the optional "count" field on a

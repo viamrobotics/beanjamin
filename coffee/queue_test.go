@@ -353,6 +353,66 @@ func TestEnqueueOrder_BatchEnqueuesN(t *testing.T) {
 	}
 }
 
+func TestEnqueueOrder_Fulfillment(t *testing.T) {
+	cases := []struct {
+		name string
+		v    any
+		want string
+	}{
+		{"absent defaults to pickup", nil, FulfillmentPickup},
+		{"empty defaults to pickup", "", FulfillmentPickup},
+		{"pickup", "pickup", FulfillmentPickup},
+		{"delivery", "delivery", FulfillmentDelivery},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := newTestCoffee(t, nil)
+			payload := map[string]any{
+				"drink":         "espresso",
+				"customer_name": "Alice",
+			}
+			if tc.v != nil {
+				payload["fulfillment"] = tc.v
+			}
+			if _, err := c.enqueueOrder(context.Background(), payload); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			o, ok := c.queue.Peek()
+			if !ok {
+				t.Fatal("queue is empty")
+			}
+			if o.Fulfillment != tc.want {
+				t.Errorf("Fulfillment = %q, want %q", o.Fulfillment, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnqueueOrder_RejectsBadFulfillment(t *testing.T) {
+	cases := []struct {
+		name string
+		v    any
+	}{
+		{"unknown value", "drone"},
+		{"non-string", float64(1)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := newTestCoffee(t, nil)
+			_, err := c.enqueueOrder(context.Background(), map[string]any{
+				"drink":       "espresso",
+				"fulfillment": tc.v,
+			})
+			if err == nil {
+				t.Fatalf("expected error for fulfillment=%v, got nil", tc.v)
+			}
+			if c.queue.Len() != 0 {
+				t.Errorf("queue should stay empty after rejection, got len=%d", c.queue.Len())
+			}
+		})
+	}
+}
+
 func TestEnqueueOrder_RejectsBadCount(t *testing.T) {
 	cases := []struct {
 		name string
