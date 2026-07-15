@@ -58,7 +58,7 @@ Build the bundled web-app Viam module from repo root: `make web-app-module` (run
 
 ### Motion layer
 
-`coffee/motion.go` wraps Viam's motion-planning APIs. Poses are resolved through `multi-poses-execution-switch` components (one for the filter, one for the claws, configured via `pose_switcher_name` / `claws_pose_switcher_name`). Each `Step` declares a pose name, optional linear constraint, optional circular motion (used for grinding/cleaning), and optional allowed collisions for contact phases. `save_motion_requests_dir`, if set, dumps motion-request JSON per plan for offline debugging. `viz_url` streams the frame system to a motion-tools viz server before each plan.
+`coffee/motion.go` wraps Viam's motion-planning APIs. Poses are resolved through `multi-poses-execution-switch` components (one for the filter, one for the claws, configured via `pose_switcher_name` / `claws_pose_switcher_name`). Each `Step` declares a pose name, optional linear constraint, optional circular motion (used for grinding/cleaning), and optional allowed collisions for contact phases. `save_motion_requests_dir`, if set, dumps motion-request JSON per plan for offline debugging. Motion planning also attempts to stream the frame system to a locally-running motion-tools viz server (v2, `localhost:3030`) before each plan; if none is running, viz self-disables after a few consecutive draw failures.
 
 ### Config pattern
 

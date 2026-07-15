@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	viz "github.com/viam-labs/motion-tools/client/client"
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/board"
 	"go.viam.com/rdk/components/gripper"
@@ -54,8 +53,8 @@ type beanjaminCoffee struct {
 	fsSvc                  framesystem.Service
 	cachedFS               *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
 	speech                 resource.Resource           // nil when speech_service_name is not configured
-	vizEnabled             bool                        // true when viz_url is configured
-	vizConsecutiveFailures int                         // auto-disables viz after repeated failures
+	vizEnabled             bool                        // starts true; auto-disables after repeated failures reaching a motion-tools viz server on localhost
+	vizConsecutiveFailures int                         // counts consecutive draw failures
 	gripper                gripper.Gripper
 	camStorage             generic.Service // optional; mux over video stores; nil if cam_storage_mux_name unset
 	iceBoard               board.Board     // optional; drives the ice-machine GPIO pin; nil if ice_board_name unset
@@ -309,13 +308,6 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger.Infof("cam storage: no data_dir configured — pending-clip records disabled (interrupted orders will not be recoverable)")
 	}
 
-	vizEnabled := false
-	if conf.VizURL != "" {
-		viz.SetURL(conf.VizURL)
-		vizEnabled = true
-		logger.Infof("viz client configured at %s", conf.VizURL)
-	}
-
 	var sink orderSensorSink
 	if conf.OrderSensorName != "" {
 		// Same component instance as elsewhere on the robot (not a copy).
@@ -365,7 +357,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		dataLocationID:       os.Getenv("VIAM_LOCATION_ID"),
 		pendingOrderClipsDir: pendingOrderClipsDir,
 		gripper:              gripperComp,
-		vizEnabled:           vizEnabled,
+		vizEnabled:           true,
 		cancelCtx:            cancelCtx,
 		cancelFunc:           cancelFunc,
 		queue:                NewOrderQueue(),

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	viz "github.com/viam-labs/motion-tools/client/client"
+	viz "github.com/viam-labs/motion-tools/client/api"
 	"go.viam.com/rdk/referenceframe"
 )
 
@@ -14,21 +14,20 @@ import (
 // file — e.g. a <timestamp>_<cup|glass>_framesystem.json snapshot written by the
 // coffee service to its save_motion_requests_dir — and draws it to a local
 // motion-tools visualizer. No machine connection is needed: it talks to the
-// visualizer directly over HTTP (default http://localhost:3000/).
+// visualizer directly over HTTP on localhost:3030 (v2 default).
 //
 // The snapshot is a pure frame system with no joint inputs, so it is drawn at
 // zero inputs: world-parented frames (including the cup/glass geometries) render
 // at their true positions; the arm renders at its home configuration.
 func runDrawFrameSystem(args []string) error {
 	flagSet := flag.NewFlagSet("draw-framesystem", flag.ExitOnError)
-	url := flagSet.String("viz-url", "", "motion-tools visualizer URL (default http://localhost:3000/)")
 	if err := flagSet.Parse(args); err != nil {
 		return err
 	}
 
 	path := flagSet.Arg(0)
 	if path == "" {
-		return fmt.Errorf("usage: beanjamin-cli draw-framesystem [--viz-url URL] <framesystem.json>")
+		return fmt.Errorf("usage: beanjamin-cli draw-framesystem <framesystem.json>")
 	}
 
 	data, err := os.ReadFile(path)
@@ -41,11 +40,10 @@ func runDrawFrameSystem(args []string) error {
 		return fmt.Errorf("parse frame system from %q: %w", path, err)
 	}
 
-	if *url != "" {
-		viz.SetURL(*url)
-	}
-
-	if err := viz.DrawFrameSystem(&fs, referenceframe.NewZeroInputs(&fs)); err != nil {
+	if _, err := viz.DrawFrameSystem(viz.DrawFrameSystemOptions{
+		FrameSystem: &fs,
+		Inputs:      referenceframe.NewZeroInputs(&fs),
+	}); err != nil {
 		return fmt.Errorf("draw frame system: %w", err)
 	}
 
