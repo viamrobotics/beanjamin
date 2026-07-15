@@ -61,7 +61,6 @@ type Config struct {
 	ArmName                   string  `json:"arm_name"`
 	GripperName               string  `json:"gripper_name"`
 	SpeechServiceName         string  `json:"speech_service_name,omitempty"`
-	VizURL                    string  `json:"viz_url,omitempty"`
 	BrewTimeSec               float64 `json:"brew_time_sec,omitempty"`
 	LungoBrewTimeSec          float64 `json:"lungo_brew_time_sec,omitempty"`
 	GrindTimeSec              float64 `json:"grind_time_sec,omitempty"`

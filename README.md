@@ -194,7 +194,6 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
   "arm_name": "my-arm",
   "gripper_name": "my-gripper",
   "speech_service_name": "speech",
-  "viz_url": "http://localhost:8080",
   "brew_time_sec": 25,
   "lungo_brew_time_sec": 40,
   "grind_time_sec": 7.5,
@@ -246,7 +245,6 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `arm_name`                 | string | Yes      | Name of the arm component used for motion planning and execution.                                             |
 | `gripper_name`             | string | Yes      | Name of the gripper component.                                                                                |
 | `speech_service_name`      | string | No       | Name of a text-to-speech generic service for spoken greetings.                                                |
-| `viz_url`                  | string | No       | URL of a [motion-tools](https://github.com/viam-labs/motion-tools) viz server. When set, the frame system is drawn before each motion plan, useful for debugging collisions and frame placement. |
 | `brew_time_sec`            | float  | No       | Espresso brew duration in seconds (default: 8).                                                               |
 | `lungo_brew_time_sec`      | float  | No       | Lungo brew duration in seconds (default: 15).                                                                 |
 | `grind_time_sec`           | float  | No       | Bean grinding duration in seconds, applied to both regular and decaf grinders (default: 7.5).                 |
