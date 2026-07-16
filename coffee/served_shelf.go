@@ -46,7 +46,7 @@ const (
 	// offset from the container's own height instead, so taller containers (e.g.
 	// the iced glass) are not driven into the shelf. The anchor plays the same
 	// role as the detected cup centroid at pickup: it is composed with
-	// CupGrabRelativePose to derive the world-frame claws pose used for the drop.
+	// CupGrabRelativePose to derive the world-frame grip-point pose for the drop.
 	shelfDropZOffsetMm = 30.0
 )
 

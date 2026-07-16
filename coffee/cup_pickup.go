@@ -237,18 +237,18 @@ func worldBoundingBox(
 }
 
 // gripperWorldPoint returns the world-frame position of the gripper — the
-// componentClaws frame the grab actually moves onto a cup/glass. Dynamic pickup
-// ranks detected items by proximity to this point (observeAtPose), so the item
-// nearest the gripper at the observe pose is attempted first.
+// gripPoint frame the grab actually moves onto a cup/glass. Dynamic
+// pickup ranks detected items by proximity to this point (observeAtPose), so
+// the item nearest the gripper at the observe pose is attempted first.
 func (s *beanjaminCoffee) gripperWorldPoint(ctx context.Context) (r3.Vector, error) {
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return r3.Vector{}, err
 	}
-	pif := referenceframe.NewPoseInFrame(componentClaws, spatialmath.NewZeroPose())
+	pif := referenceframe.NewPoseInFrame(gripPoint, spatialmath.NewZeroPose())
 	tf, err := fs.Transform(fsInputs.ToLinearInputs(), pif, referenceframe.World)
 	if err != nil {
-		return r3.Vector{}, fmt.Errorf("transform gripper frame %q to world: %w", componentClaws, err)
+		return r3.Vector{}, fmt.Errorf("transform gripper frame %q to world: %w", gripPoint, err)
 	}
 	return tf.(*referenceframe.PoseInFrame).Pose().Point(), nil
 }
@@ -584,12 +584,12 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	approachPD := &poseData{
 		pose:          composeCupPose(centroid, relativePoseToSpatial(t.approachRel)),
 		refFrame:      referenceframe.World,
-		componentName: componentClaws,
+		componentName: gripPoint,
 	}
 	grabPD := &poseData{
 		pose:          composeCupPose(centroid, relativePoseToSpatial(t.grabRel)),
 		refFrame:      referenceframe.World,
-		componentName: componentClaws,
+		componentName: gripPoint,
 	}
 
 	// 1. Approach (free planning). On failure the arm has not moved.

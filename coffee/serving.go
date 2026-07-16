@@ -142,7 +142,7 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context)
 // half-height, so its bottom rests on the shelf regardless of its height),
 // release, then retreat linearly and close the gripper.
 //
-// ServingGrabRelativePose is the claws-to-container offset used at release
+// ServingGrabRelativePose is the grip-point-to-container offset used at release
 // (composed onto the placement anchor here) — shared by the hot cup and the
 // iced glass so either lands centered on the slot.
 //
@@ -163,8 +163,8 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 	dropPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.ServingGrabRelativePose))
 	approachPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.ServingApproachRelativePose))
 
-	approachPD := &poseData{pose: approachPose, refFrame: referenceframe.World, componentName: componentClaws}
-	dropPD := &poseData{pose: dropPose, refFrame: referenceframe.World, componentName: componentClaws}
+	approachPD := &poseData{pose: approachPose, refFrame: referenceframe.World, componentName: gripPoint}
+	dropPD := &poseData{pose: dropPose, refFrame: referenceframe.World, componentName: gripPoint}
 	logger.Infof("shelf placement: slot (x=%.1f, y=%.1f) drop_pose=%v approach_pose=%v",
 		tileWorld.X, tileWorld.Y, dropPose, approachPose)
 
