@@ -22,6 +22,7 @@ import {
   prepareOrder,
   identifyCustomer,
   getQueue,
+  type Fulfillment,
 } from "./lib/viamClient";
 import { useViamConnection } from "./lib/useViamConnection";
 import { misspellName } from "./lib/misspell";
@@ -71,6 +72,9 @@ export function Kiosk() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [selectedDrink, setSelectedDrink] = useState<string | null>(null);
+  // Defaults to pickup everywhere; delivery requires an email (enforced here
+  // and again by the backend).
+  const [fulfillment, setFulfillment] = useState<Fulfillment>("pickup");
   const [misspelled, setMisspelled] = useState("");
   const [loading, setLoading] = useState(false);
   const [drinkRejection, setDrinkRejection] = useState<string | null>(null);
@@ -249,9 +253,11 @@ export function Kiosk() {
         drink: selectedDrink!,
         drinkLabel: drinkLabel(selectedDrink!),
         customerName: misspelledName,
-        // Credits the drink to this customer's history; empty = anonymous (ignored).
+        // Credits the drink to this customer's history; empty = anonymous
+        // (ignored). Required by the backend when fulfillment is delivery.
         customerEmail: email,
         pronunciation: undefined,
+        fulfillment,
       });
       setStep("confirmation");
       setTrackerMode("auto");
@@ -265,6 +271,13 @@ export function Kiosk() {
 
   async function handleSubmit() {
     if (!name.trim() || !selectedDrink) return;
+    // Delivery orders must be attributable — the delivery bot identifies the
+    // recipient by email. The backend rejects these too; catching it here
+    // keeps the error on the form instead of a failed order round-trip.
+    if (fulfillment === "delivery" && !email.trim()) {
+      setAppError("Delivery orders need an email so we know who to deliver to.");
+      return;
+    }
     setLoading(true);
 
     try {
@@ -304,6 +317,7 @@ export function Kiosk() {
     setName("");
     setEmail("");
     setSelectedDrink(null);
+    setFulfillment("pickup");
     setWelcomeBack(null);
     setAppError(null);
   }, []);
@@ -374,6 +388,7 @@ export function Kiosk() {
         <EnterName
           name={name}
           email={email}
+          emailRequired={fulfillment === "delivery"}
           loading={loading}
           connected={connected}
           error={appError}
@@ -381,7 +396,10 @@ export function Kiosk() {
             setName(n);
             if (appError) setAppError(null);
           }}
-          onEmailChange={setEmail}
+          onEmailChange={(e) => {
+            setEmail(e);
+            if (appError) setAppError(null);
+          }}
           onBack={() => setStep("drink")}
           onSubmit={handleSubmit}
         />
@@ -392,12 +410,14 @@ export function Kiosk() {
       return (
         <ChooseDrink
           selectedDrink={selectedDrink}
+          fulfillment={fulfillment}
           rejection={drinkRejection}
           connected={connected}
           onSelect={(id) => {
             setDrinkRejection(null);
             setSelectedDrink(id);
           }}
+          onFulfillmentChange={setFulfillment}
           onBack={() => setStep("welcome")}
           onNext={handleDrinkNext}
         />
@@ -477,6 +497,7 @@ export function Kiosk() {
             // (name -> drink) still preserves the selection; only entering from
             // welcome clears it.
             setSelectedDrink(null);
+            setFulfillment("pickup");
             setDrinkRejection(null);
             setStep("drink");
           }}

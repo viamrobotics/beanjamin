@@ -97,6 +97,14 @@ type Config struct {
 	// to, for "the usual". Unset disables recording.
 	CustomerDetectorName string `json:"customer_detector_name,omitempty"`
 
+	// DeliveryHandlerName names a generic service on a peer machine (via a
+	// remote, e.g. "delivery-bot:mission-control") that this service can send
+	// one-way notifications to with the send_delivery_message DoCommand. The
+	// payload is forwarded verbatim as the peer service's DoCommand, so it
+	// must be a command that service already understands. Unset disables
+	// outbound messaging.
+	DeliveryHandlerName string `json:"delivery_handler_name,omitempty"`
+
 	// Conversational, when true, makes the coffee service speak its own
 	// status-narrating lines through speech_service_name — initial
 	// greetings, almost-ready prompts, order confirmations, rejection
@@ -297,6 +305,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 	if cfg.CustomerDetectorName != "" {
 		optDeps = append(optDeps, generic.Named(cfg.CustomerDetectorName).String())
+	}
+	if cfg.DeliveryHandlerName != "" {
+		optDeps = append(optDeps, generic.Named(cfg.DeliveryHandlerName).String())
 	}
 
 	if cfg.CupVisionServiceName == "" {

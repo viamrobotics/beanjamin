@@ -115,6 +115,7 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context)
 		if err == nil {
 			// Next placement starts at the slot after the one just used.
 			s.servingAreaSlotCounter.Store(start + uint64(off) + 1)
+			s.lastServedSlot.Store(int64(idx) + 1)
 			logger.Infof("place_in_serving_area: placed item in slot %d/%d", idx+1, n)
 			return nil
 		}

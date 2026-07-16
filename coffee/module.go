@@ -60,6 +60,7 @@ type beanjaminCoffee struct {
 	iceBoard               board.Board     // optional; drives the ice-machine GPIO pin; nil if ice_board_name unset
 	slackNotifier          generic.Service // optional; viam:notifications:slack; nil if slack_notifier_name unset
 	customerDetector       generic.Service // optional; viam:beanjamin:customer-detector; nil if customer_detector_name unset
+	deliveryHandler        generic.Service // optional; peer-machine service reached via a remote; nil if delivery_handler_name unset
 	machineLogsURL         string          // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
 	dataLocationID         string          // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
 	pendingOrderClipsDir   string          // optional; directory for pending-clip records to survive restarts
@@ -106,6 +107,12 @@ type beanjaminCoffee struct {
 	// It increments once per placeFullCupOnShelf and selects the shelf slot
 	// modulo the number of tiles. Process-local; resets to 0 on rebuild.
 	servingAreaSlotCounter atomic.Uint64
+	// lastServedSlot is the 1-based serving-area slot of the most recent
+	// successful placement, reported to the delivery machine as the
+	// pickup_position of a finished delivery order. For iced drinks two
+	// placements happen (empty cup, then the glass); the glass — the actual
+	// drink — is placed last, so the value is correct for both paths.
+	lastServedSlot atomic.Int64
 
 	// Held-item geometry tracking (track_held_geometry, held_geometry.go).
 	// heldCupGeom / heldGlassGeom cache the gripper-local geometry of the cup /
@@ -296,6 +303,17 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger.Infof("customer detector %q connected — order history recording enabled", conf.CustomerDetectorName)
 	}
 
+	var deliveryHandler generic.Service
+	if conf.DeliveryHandlerName != "" {
+		handler, err := generic.FromProvider(deps, conf.DeliveryHandlerName)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("delivery_handler_name %q: %w", conf.DeliveryHandlerName, err)
+		}
+		deliveryHandler = handler
+		logger.Infof("delivery handler %q connected — peer messaging enabled", conf.DeliveryHandlerName)
+	}
+
 	var pendingOrderClipsDir string
 	if conf.DataDir != "" {
 		pendingOrderClipsDir = filepath.Join(conf.DataDir, "pending-clips")
@@ -353,6 +371,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		iceBoard:             iceBoard,
 		slackNotifier:        slackNotifier,
 		customerDetector:     customerDetector,
+		deliveryHandler:      deliveryHandler,
 		machineLogsURL:       buildMachineLogsURL(os.Getenv("VIAM_MACHINE_ID"), os.Getenv("VIAM_PRIMARY_ORG_ID")),
 		dataLocationID:       os.Getenv("VIAM_LOCATION_ID"),
 		pendingOrderClipsDir: pendingOrderClipsDir,

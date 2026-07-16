@@ -370,6 +370,8 @@ func TestEnqueueOrder_Fulfillment(t *testing.T) {
 			payload := map[string]any{
 				"drink":         "espresso",
 				"customer_name": "Alice",
+				// Required for the delivery case; harmless for the others.
+				"customer_email": "alice@example.com",
 			}
 			if tc.v != nil {
 				payload["fulfillment"] = tc.v
@@ -385,6 +387,38 @@ func TestEnqueueOrder_Fulfillment(t *testing.T) {
 				t.Errorf("Fulfillment = %q, want %q", o.Fulfillment, tc.want)
 			}
 		})
+	}
+}
+
+func TestEnqueueOrder_DeliveryRequiresEmail(t *testing.T) {
+	c, _ := newTestCoffee(t, nil)
+	_, err := c.enqueueOrder(context.Background(), map[string]any{
+		"drink":         "espresso",
+		"customer_name": "Alice",
+		"fulfillment":   "delivery",
+	})
+	if err == nil {
+		t.Fatal("expected error for delivery order without customer_email, got nil")
+	}
+	if c.queue.Len() != 0 {
+		t.Errorf("queue should stay empty after rejection, got len=%d", c.queue.Len())
+	}
+
+	resp, err := c.enqueueOrder(context.Background(), map[string]any{
+		"drink":          "espresso",
+		"customer_name":  "Alice",
+		"customer_email": "alice@example.com",
+		"fulfillment":    "delivery",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error with email present: %v", err)
+	}
+	if resp["status"] != "queued" {
+		t.Errorf("status = %v, want queued", resp["status"])
+	}
+	o, ok := c.queue.Peek()
+	if !ok || o.Fulfillment != FulfillmentDelivery || o.CustomerEmail != "alice@example.com" {
+		t.Errorf("queued order = %+v, want delivery with email", o)
 	}
 }
 

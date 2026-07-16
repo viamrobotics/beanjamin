@@ -1,6 +1,7 @@
 export function EnterName({
   name,
   email,
+  emailRequired = false,
   loading,
   connected,
   error,
@@ -11,6 +12,8 @@ export function EnterName({
 }: {
   name: string;
   email: string;
+  /** True for delivery orders — the delivery bot identifies the recipient by email. */
+  emailRequired?: boolean;
   loading: boolean;
   connected: boolean;
   error: string | null;
@@ -62,7 +65,11 @@ export function EnterName({
             value={email}
             onChange={(e) => onEmailChange(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && onSubmit()}
-            placeholder="Email (optional, for loyalty)"
+            placeholder={
+              emailRequired
+                ? "Email (required for delivery)"
+                : "Email (optional, for loyalty)"
+            }
             className="anim-in w-full px-5 py-3 bg-neutral-50 border-2 border-neutral-200 rounded-2xl text-neutral-900 text-base outline-none focus:border-neutral-400 transition-colors font-sans"
             style={{ animationDelay: "120ms" }}
           />
@@ -82,7 +89,12 @@ export function EnterName({
 
         <button
           onClick={onSubmit}
-          disabled={!name.trim() || loading || !connected}
+          disabled={
+            !name.trim() ||
+            (emailRequired && !email.trim()) ||
+            loading ||
+            !connected
+          }
           className="anim-in press w-full py-5 text-base font-medium bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
           style={{ animationDelay: "200ms" }}
         >
