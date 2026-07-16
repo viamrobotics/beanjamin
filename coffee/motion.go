@@ -57,6 +57,18 @@ func (s *beanjaminCoffee) moveToPose(ctx context.Context, step Step) error {
 	if err != nil {
 		return err
 	}
+	// A filled-container traverse (NoSpill) routes through the level carry so the
+	// drink doesn't slosh, but only when no_spill_carry is configured — it commands
+	// the held-item frame, so it needs track_held_geometry. The carry supplies its
+	// own straight-line waypoints in place of a LinearConstraint, but still honors
+	// the step's AllowedCollisions and MoveOptions. Otherwise, and for every ordinary
+	// step, plan straight to the pose.
+	if step.NoSpill && s.cfg.NoSpillCarry {
+		if err := s.carryHeldLevel(ctx, pd, step.AllowedCollisions, step.MoveOptions); err != nil {
+			return fmt.Errorf("no-spill carry to %q failed: %w", step.PoseName, err)
+		}
+		return nil
+	}
 	if err := s.moveToRawPose(ctx, pd, step.LinearConstraint, step.AllowedCollisions, step.MoveOptions); err != nil {
 		return fmt.Errorf("move to %q failed: %w", step.PoseName, err)
 	}
@@ -798,20 +810,25 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 // the held drink between them.
 const defaultCarryWaypointSpacingMm = 200.0
 
-// noSpillGoalCloud loosens the goal at each carry waypoint so IK has room to
-// solve while still keeping the held container close to level. A PoseCloud only
-// ever relaxes a goal — a candidate inside the cloud scores as a perfect match,
-// otherwise the standard weighted metric applies. X/Y/Z are small translational
-// leeways (mm) that give a little positional slack; the orientation leeways are
-// deviations from the goal orientation — OX/OY allow a small tilt of the
-// container's axis, Theta a wider twist about it.
+// noSpillGoalCloud loosens the goal at each intermediate carry waypoint so IK
+// has room to solve while still keeping the held container close to level. A
+// PoseCloud only ever relaxes a goal — a candidate inside the cloud scores as a
+// perfect match, otherwise the standard weighted metric applies.
 //
-// These are conservative defaults. Which axis is genuinely "safe" to open up
-// depends on how the cup sits in the gripper (its vertical axis relative to the
-// goal orientation vector); opening the wrong one can tip the drink (see the
-// referenceframe.PoseCloud docs). Tune on hardware before widening them.
+// Position and orientation are treated very differently on purpose. Translational
+// slack (X/Y/Z, mm) can't tip the drink, so it is opened up generously to give
+// the planner reach; only the orientation leeways guard against sloshing, so they
+// stay tight — OX/OY allow a small tilt of the container's axis, Theta a wider
+// twist about it. The final waypoint (the true destination) is pinned exactly with
+// no cloud (see carryHeldLevel), so this slack only ever applies to the
+// intermediate, in-transit goals.
+//
+// Which axis is genuinely "safe" to open up depends on how the cup sits in the
+// gripper (its vertical axis relative to the goal orientation vector); opening the
+// wrong orientation axis can tip the drink (see the referenceframe.PoseCloud
+// docs). Tune on hardware before changing the orientation leeways.
 var noSpillGoalCloud = &referenceframe.PoseCloud{
-	X: 2, Y: 2, Z: 2,
+	X: 75, Y: 75, Z: 75,
 	OX: 0.2, OY: 0.2, OZ: 0.1, Theta: 45,
 }
 
@@ -854,10 +871,12 @@ func computeLevelCarryWaypoints(startPose, endPose spatialmath.Pose, spacingMm f
 // no item is attached (tracking off, or a static pickup left nothing cached) it
 // falls back to the gripper frame, which is equivalent. Each goal carries
 // noSpillGoalCloud to loosen the orientation; held-item self-collisions are
-// injected so the tracked geometry still routes around obstacles. Planning
+// injected so the tracked geometry still routes around obstacles, and any
+// caller-supplied allowedCollisions are merged in alongside them. moveOpts, when
+// non-nil, sets the execution speed (otherwise the arm's default). Planning
 // failures are wrapped in errMotionPlanning so placeHeldInServingArea can fall
 // through to the next slot.
-func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData) error {
+func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
 	logger := s.activeOrderLogger()
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
@@ -894,14 +913,24 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData) er
 		moveFrame, len(waypoints), destPose.Point().Sub(startPose.Point()).Norm(), noSpillGoalCloud.OX, noSpillGoalCloud.Theta)
 
 	goals := make([]*armplanning.PlanState, 0, len(waypoints))
-	for _, pose := range waypoints {
-		pif := referenceframe.NewPoseInFrameWithGoalCloud(referenceframe.World, pose, noSpillGoalCloud)
+	for i, pose := range waypoints {
+		// Intermediate waypoints carry the goal cloud so IK has room while the
+		// container stays close to level; the final waypoint is the true target, so
+		// pin it exactly (no cloud). The step that follows the carry — a linear
+		// descent into the slot or the pour pivot — starts from this pose and assumes
+		// the arm actually reached it.
+		var pif *referenceframe.PoseInFrame
+		if i == len(waypoints)-1 {
+			pif = referenceframe.NewPoseInFrame(referenceframe.World, pose)
+		} else {
+			pif = referenceframe.NewPoseInFrameWithGoalCloud(referenceframe.World, pose, noSpillGoalCloud)
+		}
 		goals = append(goals, armplanning.NewPlanState(
 			referenceframe.FrameSystemPoses{moveFrame: pif}, nil,
 		))
 	}
 
-	constraints := buildConstraints(nil, s.filterFakeModeCollisions(s.appendHeldItemCollisions(nil)))
+	constraints := buildConstraints(nil, s.filterFakeModeCollisions(s.appendHeldItemCollisions(allowedCollisions)))
 
 	req := &armplanning.PlanRequest{
 		FrameSystem: fs,
@@ -919,7 +948,7 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData) er
 	if err != nil {
 		return fmt.Errorf("get frame inputs from carry plan: %w", err)
 	}
-	return s.arm.MoveThroughJointPositions(ctx, positions, nil, nil)
+	return s.arm.MoveThroughJointPositions(ctx, positions, buildMoveOptions(moveOpts), nil)
 }
 
 // computePivotPoses returns interpolated poses between startPose and endPose.
