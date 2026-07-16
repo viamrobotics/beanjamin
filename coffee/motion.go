@@ -884,9 +884,9 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, al
 	}
 	linearInputs := fsInputs.ToLinearInputs()
 
-	// Move the held-container frame when an item is attached; otherwise the
-	// coincident gripper frame (same world pose).
-	moveFrame := componentClaws
+	// dest targets the grip-point frame. When an item is held, move the
+	// held-item frame instead: it is the container that must stay level.
+	moveFrame := gripPoint
 	if s.heldItemAttached {
 		moveFrame = heldItemFrameName
 	}

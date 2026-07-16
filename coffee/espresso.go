@@ -63,6 +63,7 @@ const (
 	// Frame names
 	componentFilter = "filter"
 	componentClaws  = "coffee-claws-middle"
+	gripPoint       = "grip-point"
 )
 
 // glassPoseObserve is the home/recovery observe pose on the glass observe
