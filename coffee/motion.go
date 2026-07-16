@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/golang/geo/r3"
-	viz "github.com/viam-labs/motion-tools/client/client"
+	viz "github.com/viam-labs/motion-tools/client/api"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/motionplan"
 	"go.viam.com/rdk/motionplan/armplanning"
@@ -142,7 +142,11 @@ func (s *beanjaminCoffee) drawViz(fsInputs referenceframe.FrameSystemInputs) {
 	logger := s.activeOrderLogger()
 	done := make(chan error, 1)
 	go func() {
-		done <- viz.DrawFrameSystem(s.cachedFS, fsInputs)
+		_, err := viz.DrawFrameSystem(viz.DrawFrameSystemOptions{
+			FrameSystem: s.cachedFS,
+			Inputs:      fsInputs,
+		})
+		done <- err
 	}()
 
 	select {
