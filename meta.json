@@ -40,6 +40,12 @@
       "model": "viam:beanjamin:customer-detector",
       "short_description": "Identifies return customers via facial recognition using the face-identification vision service.",
       "markdown_link": "README.md#model-viambeanjamincustomer-detector"
+    },
+    {
+      "api": "rdk:service:generic",
+      "model": "viam:beanjamin:delivery-handler",
+      "short_description": "Receiving end of the coffee delivery messaging channel; accepts one-way messages over a remote part.",
+      "markdown_link": "README.md#model-viambeanjamindelivery-handler"
     }
   ],
   "entrypoint": "bin/beanjamin",

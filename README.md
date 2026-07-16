@@ -8,6 +8,7 @@ The `viam:beanjamin` module provides these models for arm-based automation workf
 4. **`viam:beanjamin:order-sensor`** - A sensor that yields one reading per completed order (start/end timestamps and outcome) when wired from the coffee service.
 5. **`viam:beanjamin:dial-control-motion`** - A generic service that translates Stream Deck dial inputs into relative arm motions.
 6. **`viam:beanjamin:customer-detector`** - A generic service that identifies return customers via facial recognition using the [`viam:vision:face-identification`](https://github.com/viam-modules/viam-face-identification) vision service.
+7. **`viam:beanjamin:delivery-handler`** - A hardware-free generic service for the receiving end of the coffee delivery messaging channel: it receives one-way messages from a coffee service over a remote part.
 
 ---
 
@@ -259,6 +260,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `data_dir`                 | string | No       | Directory for persistent module data. When set alongside `cam_storage_mux_name`, a pending-clip record is written under `<data_dir>/pending-clips` when each order starts and removed only once that order's clip has been saved successfully — a save that fails (or never runs because the process died first) leaves the record in place. Use with a Viam scheduled job calling `cleanup_pending_clips` to recover clips for any order whose save was interrupted or failed. |
 | `slack_notifier_name`      | string | No       | Name of a [`viam:notifications:slack`](https://github.com/viam-modules/notifications) generic service. When set, the coffee service sends a best-effort Slack message on every non-successful order attempt (faults and operator cancels). See "Slack notifications" above. |
 | `customer_detector_name`   | string | No       | Name of a `viam:beanjamin:customer-detector` service. When set, the coffee service credits each **successfully** completed order (when the `prepare_order` carried a `customer_email`) to that customer's order history via the detector's `record_order` DoCommand, powering "the usual". Setting the field automatically registers it as a dependency. Unset disables order-history recording. |
+| `delivery_handler_name`    | string | No       | Name of a generic service on a peer machine to send one-way messages to, reached through a remote part (e.g. `"delivery-bot:delivery-handler"` after adding the peer machine as a remote named `delivery-bot` in app.viam.com). Setting the field automatically registers it as an (optional) dependency. Messages are sent with the `send_delivery_message` DoCommand and arrive at the peer as a `receive_message` DoCommand. Unset disables outbound peer messaging. |
 | `input_range_override`     | object | No       | Narrows joint limits on named frames before motion planning. Outer key is the frame name (typically the arm); inner key is either the joint name or its stringified index (e.g. `"5"` for the last joint of a 6-DoF arm). Each value is `{ "min_degs": number, "max_degs": number }`. |
 | `conversational`           | bool   | No       | When true, the coffee service speaks its own greetings, almost-ready prompts, order-received lines, and rejection quips through `speech_service_name`. When false (default), the service stays silent except for the drink-ready announcement at cup handoff — leaving the rest of the talking to an external orchestrator (e.g. `viam:conversation-bundle:voice-command`). |
 | `cup_vision_service_name`             | string | Yes      | Name of a `rdk:service:vision` segmenter that returns cup detections via `GetObjectPointClouds`. Cup pickup is always vision-guided — the arm detects the empty cup rather than grabbing from a fixed pose. |
@@ -397,6 +399,14 @@ Returns `{"status": "cleared", "removed": 2}`.
 ```
 
 Returns `{"saved": 1, "skipped": 0}`.
+
+**`send_delivery_message`** - Send an arbitrary payload to the peer machine's service named by `delivery_handler_name` and return its response. The payload arrives at the peer as a `receive_message` DoCommand. Errors when `delivery_handler_name` is unset or the peer is unreachable (10s timeout). For now this is the transport test for coffee ↔ delivery-machine coordination; the real delivery vocabulary will build on it.
+
+```json
+{"send_delivery_message": {"text": "hello from the coffee machine"}}
+```
+
+Returns `{"sent": true, "peer_response": {...}}`.
 
 **`reset_world`** - Recover the service to a clean idle state from anywhere. In order: cancels any running sequence (waiting for it to actually stop), clears the queue (pending + recently completed), rebuilds the cached frame system from the framesystem service (discarding mid-cycle mutations like a portafilter frame reparented to world by `lock_portafilter`), and releases the cancel-induced queue pause. Safe to call from any state — each step is skipped when not applicable. Does not move the arm — if you want to re-home, run `execute_action` afterward.
 
@@ -795,6 +805,29 @@ Otherwise: `{"recognized": false}`.
 ### Storage
 
 Customer records (name, email, image directory, order history) are persisted to `<data_dir>/customers.json`. Order history is capped at the most recent 50 entries per customer. Face images are stored under `<data_dir>/known_faces/<email>/` — one subdirectory per customer, which is the directory structure the face-identification vision service expects. Registering the same customer multiple times adds additional face samples, improving recognition accuracy.
+
+---
+
+## Model: `viam:beanjamin:delivery-handler`
+
+**API:** `rdk:service:generic`
+
+The receiving end of the coffee service's one-way delivery messaging channel. Run this on a **separate machine** (e.g. a delivery robot) that has none of the coffee hardware — it requires no components and takes no configuration. It answers `receive_message` (what the coffee service's `send_delivery_message` invokes). Only the transport exists so far; delivery-specific behavior (reacting to `drink_ready`, …) will build on it. The channel is deliberately one-way: the coffee machine announces, and observes its own delivery slot with its camera rather than waiting for a report back.
+
+### Pairing two machines (app.viam.com)
+
+1. On the **peer machine**: deploy this module and add a `viam:beanjamin:delivery-handler` generic service named `delivery-handler`. No attributes.
+2. On the **coffee machine**: add the peer machine as a remote part (e.g. named `delivery-bot`), then set the coffee service's `"delivery_handler_name": "delivery-bot:delivery-handler"`.
+
+### DoCommand
+
+**`receive_message`** - Log and acknowledge an inbound message. This is what the coffee service's `send_delivery_message` invokes; call it directly to test.
+
+```json
+{"receive_message": {"text": "drink ready"}}
+```
+
+Returns `{"received": true, "message": {...}}`.
 
 ---
 

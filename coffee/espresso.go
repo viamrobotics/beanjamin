@@ -449,10 +449,10 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 				logger.Warnf("failed to announce ready-for-delivery: %v", err)
 			}
 		} else {
-		if err := s.sayAlways(ctx, pickDrinkReady(drink, customerName, batchIndex, batchSize)); err != nil {
-logger.Warnf("failed to say drink-ready: %v", err)
-}
-}
+			if err := s.sayAlways(ctx, pickDrinkReady(drink, customerName, batchIndex, batchSize)); err != nil {
+				logger.Warnf("failed to say drink-ready: %v", err)
+			}
+		}
 	}
 
 	s.setStep(stepGrabbingFilter)

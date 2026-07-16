@@ -3,6 +3,7 @@ package main
 import (
 	"beanjamin/coffee"
 	"beanjamin/customerdetector"
+	"beanjamin/deliveryhandler"
 	"beanjamin/dialcontrolmotion"
 	"beanjamin/maintenancesensor"
 	"beanjamin/multiposesexecutionswitch"
@@ -22,5 +23,6 @@ func main() {
 		resource.APIModel{API: sensor.API, Model: coffee.OrderSensor},
 		resource.APIModel{API: generic.API, Model: dialcontrolmotion.Model},
 		resource.APIModel{API: generic.API, Model: customerdetector.Model},
+		resource.APIModel{API: generic.API, Model: deliveryhandler.Model},
 	)
 }
