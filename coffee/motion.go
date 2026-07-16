@@ -828,7 +828,7 @@ const defaultCarryWaypointSpacingMm = 200.0
 // wrong orientation axis can tip the drink (see the referenceframe.PoseCloud
 // docs). Tune on hardware before changing the orientation leeways.
 var noSpillGoalCloud = &referenceframe.PoseCloud{
-	X: 50, Y: 50, Z: 50,
+	X: 75, Y: 75, Z: 75,
 	OX: 0.2, OY: 0.2, OZ: 0.1, Theta: 45,
 }
 
