@@ -107,12 +107,6 @@ type beanjaminCoffee struct {
 	// It increments once per placeFullCupOnShelf and selects the shelf slot
 	// modulo the number of tiles. Process-local; resets to 0 on rebuild.
 	servingAreaSlotCounter atomic.Uint64
-	// lastServedSlot is the 1-based serving-area slot of the most recent
-	// successful placement, reported to the delivery machine as the
-	// pickup_position of a finished delivery order. For iced drinks two
-	// placements happen (empty cup, then the glass); the glass — the actual
-	// drink — is placed last, so the value is correct for both paths.
-	lastServedSlot atomic.Int64
 
 	// Held-item geometry tracking (track_held_geometry, held_geometry.go).
 	// heldCupGeom / heldGlassGeom cache the gripper-local geometry of the cup /

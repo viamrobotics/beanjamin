@@ -19,10 +19,11 @@ import (
 const deliveryMessageTimeout = 10 * time.Second
 
 // buildDeliveryRequest assembles the delivery_request DoCommand the delivery
-// bot's service expects for a finished delivery order. pickupPosition is the
-// 1-based serving-area slot the drink was placed in. customer_email is always
-// non-empty here: enqueueOrder rejects delivery orders without one.
-func buildDeliveryRequest(order Order, pickupPosition int) map[string]any {
+// bot's service expects for a finished delivery order. pickup_position is the
+// 0-based serving-area slot the drink was placed in (Order.PickupPosition).
+// customer_email is always non-empty here: enqueueOrder rejects delivery
+// orders without one.
+func buildDeliveryRequest(order Order) map[string]any {
 	// Iced drinks are served in the tall glass; everything else in the
 	// standard espresso cup. Same container labels as the pickup pipeline.
 	container := pickupLabelCup
@@ -35,7 +36,7 @@ func buildDeliveryRequest(order Order, pickupPosition int) map[string]any {
 			"order_timestamp": order.EnqueuedAt.UTC().Format(time.RFC3339),
 			"cup_type":        container,
 			"customer_email":  order.CustomerEmail,
-			"pickup_position": pickupPosition,
+			"pickup_position": order.PickupPosition,
 		},
 	}
 }
@@ -48,15 +49,15 @@ func buildDeliveryRequest(order Order, pickupPosition int) map[string]any {
 // before this machine moves on. Best-effort beyond that: a no-op when no
 // delivery_handler_name is configured, and failures are logged rather than
 // failing the order (the drink is already sitting in the serving area).
-func (s *beanjaminCoffee) notifyDeliveryRequest(ctx context.Context, order Order, pickupPosition int) {
+func (s *beanjaminCoffee) notifyDeliveryRequest(ctx context.Context, order Order) {
 	if s.deliveryHandler == nil {
-		s.logger.Debugf("no delivery_handler_name configured — skipping delivery request for order %s", order.ID)
+		s.logger.Warnf("no delivery_handler_name configured — skipping delivery request for order %s", order.ID)
 		return
 	}
 	logger := s.logger.WithFields("order_id", order.ID)
 	ctx, cancel := context.WithTimeout(ctx, deliveryMessageTimeout)
 	defer cancel()
-	resp, err := s.deliveryHandler.DoCommand(ctx, buildDeliveryRequest(order, pickupPosition))
+	resp, err := s.deliveryHandler.DoCommand(ctx, buildDeliveryRequest(order))
 	if err != nil {
 		logger.Warnf("failed to send delivery request: %v", err)
 		return
@@ -65,7 +66,7 @@ func (s *beanjaminCoffee) notifyDeliveryRequest(ctx context.Context, order Order
 		logger.Warnf("delivery request not acknowledged by the delivery machine (response: %v)", resp)
 		return
 	}
-	logger.Infof("delivery request acknowledged, pickup position %d", pickupPosition)
+	logger.Infof("delivery request acknowledged, pickup position %d", order.PickupPosition)
 }
 
 // sendDeliveryMessage runs command verbatim as a DoCommand on the configured

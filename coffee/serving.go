@@ -115,7 +115,6 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context)
 		if err == nil {
 			// Next placement starts at the slot after the one just used.
 			s.servingAreaSlotCounter.Store(start + uint64(off) + 1)
-			s.lastServedSlot.Store(int64(idx) + 1)
 			logger.Infof("place_in_serving_area: placed item in slot %d/%d", idx+1, n)
 			return nil
 		}
@@ -135,6 +134,27 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context)
 		logger.Warnf("place_in_serving_area: slot %d/%d unreachable — trying next slot: %v", idx+1, n, err)
 	}
 	return fmt.Errorf("place_in_serving_area: all %d serving-area slot(s) unreachable; last error: %w", n, lastErr)
+}
+
+// deliveryPickupPosition returns the 0-based serving-area slot of the most
+// recent successful placement, derived from servingAreaSlotCounter (which
+// points at the slot to try next, so the last one used is counter-1 modulo the
+// tile count). For iced drinks two placements happen — empty cup then glass —
+// and the glass (the actual drink) is placed last, so the counter is correct
+// for both paths. Fills a delivery order's pickup_position. Best-effort:
+// returns 0 before any placement or when the serving-area geometry can't be
+// resolved.
+func (s *beanjaminCoffee) deliveryPickupPosition(ctx context.Context) int {
+	counter := s.servingAreaSlotCounter.Load()
+	if counter == 0 {
+		return 0
+	}
+	slots, _, err := s.servingAreaSlots(ctx)
+	if err != nil || len(slots) == 0 {
+		s.activeOrderLogger().Warnf("deliveryPickupPosition: cannot resolve serving-area slots — reporting pickup_position 0: %v", err)
+		return 0
+	}
+	return slotIndex(counter-1, len(slots))
 }
 
 // tryDropCupInSlot drops the held cup at one serving-area slot: free-plan to the

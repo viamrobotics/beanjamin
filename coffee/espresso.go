@@ -200,7 +200,8 @@ func (s *beanjaminCoffee) sayAlways(ctx context.Context, text string) error {
 // (bounded by deliveryMessageTimeout) before speaking, so the order isn't
 // announced as handed off on the strength of a request nobody confirmed.
 func (s *beanjaminCoffee) readyForDelivery(ctx context.Context, order Order) error {
-	s.notifyDeliveryRequest(ctx, order, int(s.lastServedSlot.Load()))
+	order.PickupPosition = s.deliveryPickupPosition(ctx)
+	s.notifyDeliveryRequest(ctx, order)
 	drink := speakableDrink(order.Drink)
 	text := fmt.Sprintf("%s ready for delivery!", drink)
 	if order.CustomerName != "" {

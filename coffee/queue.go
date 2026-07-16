@@ -47,6 +47,11 @@ type Order struct {
 	// (default) or FulfillmentDelivery. Set at enqueue time; immutable afterward.
 	Fulfillment string    `json:"fulfillment"`
 	EnqueuedAt  time.Time `json:"enqueued_at"`
+	// PickupPosition is the 0-based serving-area slot the finished drink was
+	// placed in. Set by readyForDelivery on its in-flight copy (derived from
+	// servingAreaSlotCounter) and carried into the delivery_request; the queue's
+	// copy never has it.
+	PickupPosition int `json:"pickup_position,omitempty"`
 
 	// BatchIndex / BatchSize identify this order's slot within a multi-drink
 	// batch (1-based, e.g. "2 of 3"). Both zero for single orders. Set at
