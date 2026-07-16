@@ -177,7 +177,7 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 	// try the next slot.
 	carry := func() error { return s.moveToRawPose(ctx, approachPD, nil, nil, nil) }
 	if s.cfg.NoSpillCarry {
-		carry = func() error { return s.carryHeldLevel(ctx, approachPD) }
+		carry = func() error { return s.carryHeldLevel(ctx, approachPD, nil, nil) }
 	}
 	if err := carry(); err != nil {
 		return fmt.Errorf("approach slot (x=%.1f, y=%.1f): %w", tileWorld.X, tileWorld.Y, err)

@@ -44,6 +44,10 @@ type Step struct {
 	PivotFromPose       string                `json:"pivot_from_pose,omitempty"`
 	PivotDegreesPerStep float64               `json:"pivot_degrees_per_step,omitempty"`
 
+	// NoSpill routes this step's move through the level carry (carryHeldLevel)
+	// rather than a direct plan
+	NoSpill bool `json:"no_spill,omitempty"`
+
 	// PoseSwitch is the switch this step's pose is read from (fetchPose).
 	PoseSwitch toggleswitch.Switch `json:"-"`
 
@@ -157,15 +161,17 @@ type Config struct {
 	// Off by default.
 	TrackHeldGeometry bool `json:"track_held_geometry,omitempty"`
 
-	// NoSpillCarry, when true, carries the brewed cup from under the machine to
-	// the serving-area shelf along a straight line broken into waypoints (one
-	// every defaultCarryWaypointSpacingMm). Each waypoint commands the held-item
-	// (container) frame, interpolating from the container's upright start pose to
-	// the approach pose, with a goal pose cloud keeping it close to level so the
-	// held drink doesn't slosh (see carryHeldLevel in motion.go). Only affects the
-	// carry move in placeFullCupOnShelf; it commands the held-item frame, so it
-	// requires TrackHeldGeometry=true. Off by default (the carry free-plans
-	// straight to the approach pose).
+	// NoSpillCarry, when true, carries a filled container along a straight line
+	// broken into waypoints (one every defaultCarryWaypointSpacingMm) instead of
+	// free-planning straight to the goal. Each intermediate waypoint commands the
+	// held-item (container) frame with a goal pose cloud that keeps it close to
+	// level so the drink doesn't slosh; the final waypoint is pinned exactly (see
+	// carryHeldLevel in motion.go). It applies to every free traverse of a filled
+	// container: the serving-area placement (placeFullCupOnShelf and the iced
+	// glass), carrying the ice-filled glass to staging, and carrying the espresso
+	// cup to the pour position. It commands the held-item frame, so it requires
+	// TrackHeldGeometry=true. Off by default (those moves free-plan straight to the
+	// goal pose).
 	NoSpillCarry bool `json:"no_spill_carry,omitempty"`
 
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
