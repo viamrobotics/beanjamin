@@ -156,6 +156,7 @@ func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 	if err := s.pulseIcePin(ctx, cancelCtx); err != nil {
 		return fmt.Errorf("dispense_ice: %w", err)
 	}
+	s.incrementSensorReading(ctx, s.usageSensor, "ice machine", "ice_dispenses", 1)
 
 	retreatStep := Step{PoseName: clawPoseIceMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
