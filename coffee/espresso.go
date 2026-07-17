@@ -227,40 +227,42 @@ func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order Order) {
 	}
 }
 
-// discardSlot adapts a placement function that reports its serving slot to the
-// plain action signature — a standalone action has no order to attach the slot
-// to, so it's dropped (only the brew cycle keeps it, for delivery pickup_position).
-func discardSlot(fn func(ctx, cancelCtx context.Context) (int, error)) func(ctx, cancelCtx context.Context) error {
-	return func(ctx, cancelCtx context.Context) error {
-		_, err := fn(ctx, cancelCtx)
-		return err
-	}
-}
-
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]any, error) {
+	// The three placement actions report a serving slot (for a delivery order's
+	// pickup_position), but a standalone execute_action has no order to attach it
+	// to, so their closures drop it and return only the error.
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
-		"grind_coffee":              s.grindCoffee,
-		"grind_decaf":               s.grindDecaf,
-		"tamp_ground":               s.tampGround,
-		"lock_portafilter":          s.lockPortaFilter,
-		"unlock_portafilter":        s.unlockPortaFilter,
-		"release_filter":            s.releaseFilter,
-		"grab_filter":               s.grabFilter,
-		"turn_coffee_button_on":     s.turnCoffeeButtonOn,
-		"turn_coffee_button_off":    s.turnCoffeeButtonOff,
-		"brew_coffee":               s.brewCoffee,
-		"set_cup_for_coffee":        s.setCupForCoffee,
-		"give_full_cup_to_customer": discardSlot(s.placeFullCupOnShelf),
-		"clean_portafilter":         s.cleanPortafilter,
-		"fetch_glass":               s.fetchGlass,                          // vision-grab a glass off the shelf
-		"pulse_ice_pin":             s.pulseIcePin,                         // hardware only, no arm motion
-		"dispense_ice":              s.dispenseIce,                         // arm to chute + pulse + retreat
-		"stage_glass":               s.stageGlass,                          // set held glass down, release
-		"grab_brewed_cup":           s.grabBrewedCupFromMachine,            // retrieve cup from under machine
-		"pour_espresso":             s.pourEspresso,                        // pour held cup over staged glass
-		"grab_staged_glass":         s.grabStagedGlass,                     // re-grab the staged glass
-		"place_held":                discardSlot(s.placeHeldInServingArea), // place held vessel in serving area
-		"serve_iced_coffee":         discardSlot(s.serveIcedCoffee),        // full sequence end-to-end
+		"grind_coffee":           s.grindCoffee,
+		"grind_decaf":            s.grindDecaf,
+		"tamp_ground":            s.tampGround,
+		"lock_portafilter":       s.lockPortaFilter,
+		"unlock_portafilter":     s.unlockPortaFilter,
+		"release_filter":         s.releaseFilter,
+		"grab_filter":            s.grabFilter,
+		"turn_coffee_button_on":  s.turnCoffeeButtonOn,
+		"turn_coffee_button_off": s.turnCoffeeButtonOff,
+		"brew_coffee":            s.brewCoffee,
+		"set_cup_for_coffee":     s.setCupForCoffee,
+		"clean_portafilter":      s.cleanPortafilter,
+		"fetch_glass":            s.fetchGlass,               // vision-grab a glass off the shelf
+		"pulse_ice_pin":          s.pulseIcePin,              // hardware only, no arm motion
+		"dispense_ice":           s.dispenseIce,              // arm to chute + pulse + retreat
+		"stage_glass":            s.stageGlass,               // set held glass down, release
+		"grab_brewed_cup":        s.grabBrewedCupFromMachine, // retrieve cup from under machine
+		"pour_espresso":          s.pourEspresso,             // pour held cup over staged glass
+		"grab_staged_glass":      s.grabStagedGlass,          // re-grab the staged glass
+		"give_full_cup_to_customer": func(ctx, cancelCtx context.Context) error {
+			_, err := s.placeFullCupOnShelf(ctx, cancelCtx)
+			return err
+		},
+		"place_held": func(ctx, cancelCtx context.Context) error { // place held vessel in serving area
+			_, err := s.placeHeldInServingArea(ctx, cancelCtx)
+			return err
+		},
+		"serve_iced_coffee": func(ctx, cancelCtx context.Context) error { // full sequence end-to-end
+			_, err := s.serveIcedCoffee(ctx, cancelCtx)
+			return err
+		},
 	}
 
 	action, ok := actions[name]

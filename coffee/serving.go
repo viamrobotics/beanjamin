@@ -82,7 +82,7 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 // the 0-based slot it was placed in.
 func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) (int, error) {
 	if err := s.grabBrewedCupFromMachine(ctx, cancelCtx); err != nil {
-		return 0, err
+		return -1, err
 	}
 	return s.placeHeldInServingArea(ctx, cancelCtx)
 }
@@ -98,12 +98,12 @@ func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) (i
 func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context) (int, error) {
 	logger := s.activeOrderLogger()
 	if s.gripper == nil {
-		return 0, fmt.Errorf("place_in_serving_area: no gripper configured")
+		return -1, fmt.Errorf("place_in_serving_area: no gripper configured")
 	}
 
 	slots, shelfTopZ, err := s.servingAreaSlots(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("place_in_serving_area: %w", err)
+		return -1, fmt.Errorf("place_in_serving_area: %w", err)
 	}
 
 	n := len(slots)
@@ -123,18 +123,18 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context)
 
 		// Operator cancel always wins.
 		if ctx.Err() != nil || cancelCtx.Err() != nil {
-			return 0, fmt.Errorf("place_in_serving_area: cancelled: %w", err)
+			return -1, fmt.Errorf("place_in_serving_area: cancelled: %w", err)
 		}
 
 		// Only planning failures (item still held, arm unmoved) are skippable.
 		// Anything else — execution error, or any failure after the item was
 		// released — bubbles up.
 		if !errors.Is(err, errMotionPlanning) {
-			return 0, fmt.Errorf("place_in_serving_area: %w", err)
+			return -1, fmt.Errorf("place_in_serving_area: %w", err)
 		}
 		logger.Warnf("place_in_serving_area: slot %d/%d unreachable — trying next slot: %v", idx+1, n, err)
 	}
-	return 0, fmt.Errorf("place_in_serving_area: all %d serving-area slot(s) unreachable; last error: %w", n, lastErr)
+	return -1, fmt.Errorf("place_in_serving_area: all %d serving-area slot(s) unreachable; last error: %w", n, lastErr)
 }
 
 // tryDropCupInSlot drops the held cup at one serving-area slot: free-plan to the

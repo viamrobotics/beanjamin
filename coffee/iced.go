@@ -20,39 +20,39 @@ import (
 // the delivery pickup_position
 func (s *beanjaminCoffee) serveIcedCoffee(ctx, cancelCtx context.Context) (int, error) {
 	if s.gripper == nil {
-		return 0, fmt.Errorf("serve_iced_coffee: no gripper configured")
+		return -1, fmt.Errorf("serve_iced_coffee: no gripper configured")
 	}
 	if s.iceBoard == nil {
-		return 0, fmt.Errorf("serve_iced_coffee: no ice board configured (set ice_board_name)")
+		return -1, fmt.Errorf("serve_iced_coffee: no ice board configured (set ice_board_name)")
 	}
 
 	// 1. Fetch the glass off the top shelf.
 	if err := s.fetchGlass(ctx, cancelCtx); err != nil {
-		return 0, err
+		return -1, err
 	}
 	// 2. Carry the glass to the ice machine and dispense ice.
 	if err := s.dispenseIce(ctx, cancelCtx); err != nil {
-		return 0, err
+		return -1, err
 	}
 	// 3. Set the glass down in the staging area to free the gripper.
 	if err := s.stageGlass(ctx, cancelCtx); err != nil {
-		return 0, err
+		return -1, err
 	}
 	// 4. Retrieve the brewed espresso cup from the machine.
 	if err := s.grabBrewedCupFromMachine(ctx, cancelCtx); err != nil {
-		return 0, err
+		return -1, err
 	}
 	// 5. Pour the espresso over the ice in the staged glass.
 	if err := s.pourEspresso(ctx, cancelCtx); err != nil {
-		return 0, err
+		return -1, err
 	}
 	// 6. Place the now-empty espresso cup in the serving area (round-robin).
 	if _, err := s.placeHeldInServingArea(ctx, cancelCtx); err != nil {
-		return 0, err
+		return -1, err
 	}
 	// 7. Re-grab the iced glass from the staging area.
 	if err := s.grabStagedGlass(ctx, cancelCtx); err != nil {
-		return 0, err
+		return -1, err
 	}
 	// 8. Place the iced glass in the serving area (next round-robin slot).
 	return s.placeHeldInServingArea(ctx, cancelCtx)
