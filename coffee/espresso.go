@@ -434,6 +434,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 			return err
 		}
 		s.incrementSensorReading(ctx, s.usageSensor, "water", "usage", waterDelta(drink))
+		s.incrementSensorReading(ctx, s.usageSensor, "drip tray", "drip_tray_brews", 1)
 	}
 
 	s.setStep(stepServing)
