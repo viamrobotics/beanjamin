@@ -8,6 +8,15 @@
 
 **Tech Stack:** Go, Viam RDK (`go.viam.com/rdk/referenceframe`, `spatialmath`, `armplanning`, `motionplan`), the `coffee` package.
 
+## Implementation status (2026-07-17)
+
+Tasks 1–5 implemented and committed on `worktree-fridge-door-open`; `go build ./...`, `go test ./coffee/...`, and `go vet` all green (9 door/dispatch tests). `armplanning` is at `go.viam.com/rdk/motionplan/armplanning`. `golangci-lint` could not run (env has v1 binary vs v2 config); `gofmt -s` is clean.
+
+**Remaining — physical, needs the live machine (Task 0 Step 3 + a run):**
+1. Author the `door-approach`, `door-grasp`, `door-retract` poses on the **claws** pose switch (`viam machines part motion set-pose`) and verify physically. Without them `open_door` errors at the first move.
+2. Confirm the **open direction** (sign of θ — the sweep currently goes 0→+`door_open_angle_degs` about the door frame's local Z; flip via a negative angle if the door opens the other way) and the physically-allowed angle.
+3. Live run `{"open_door": true}` and watch the sweep + the motion-viz door track in lockstep.
+
 ## Global Constraints
 
 - Frame rotation reuses the `lockFilterFrame` (`coffee/motion.go:189`) remove/re-add + `collectDescendants` mechanism — do NOT invent a new mutation path.
@@ -663,11 +672,11 @@ From `viam machines part motion print-config` (part `5be4df6e…`) on 2026-07-17
 2. ✅ **Handle is in the door subtree** (as a 3-level grandchild, not a direct child). `collectDescendants(fs, "fridge-door")` is BFS/recursive (`coffee/motion.go:350`), so `fridge-handle-top`, `-lower-bar`, and `-ball` all ride the rotation. No change needed.
 3. **Geometry is inline on `fridge-door`** (no `<door>_origin` companion frame — these are config frames, not RDK parts). `setDoorTheta` must preserve the door frame's own geometry (with its −235 offset) across the remove/re-add. Task 3's test asserts this.
 4. **Hinge axis = local Z** (all fridge frames are identity-oriented; the door is upright). Confirmed.
-5. ⚠️ **The handle ball has NO geometry** — nor do `-top`/`-lower-bar`. The only geometry in the whole subtree is the **door panel** (`fridge-door`). See the collision note below.
+5. **`fridge-handle-ball` carries a geometry** (confirmed by the config owner) — it is the grasp knob and the collision target. NOTE: the `motion print-config` table rendered the GEOMETRY column blank for that row (rows 19/40/67); if the sweep ever plans as though the ball isn't present, verify the geometry is actually deployed on the part this connects to.
 
 **Frame names are fixed machine obstacles** → used as **constants** in code (matching how `coffee/collisions.go` references `"coffee-machine-actuation-area"` etc.), not new Config fields. Constants: `frameFridgeDoor = "fridge-door"`, `frameFridgeHandleBall = "fridge-handle-ball"`.
 
-**⚠️ Collision-target correction (affects Task 4):** the spec's `{gripper, handle-ball}` allowance is a **no-op today** — `fridge-handle-ball` has no geometry to collide with. The geometry the gripper is actually pressed against while gripping the handle at the panel's outer edge is the **door panel** (`fridge-door`). So the working allowance is `{gripper:claws, fridge-door}` + `{coffee-claws-middle, fridge-door}`. Making a *ball*-vs-gripper allowance meaningful requires first adding a sphere geometry to `fridge-handle-ball` in the machine config (owned by whoever configures the fridge). **Decision pending from user** — recorded in Task 4.
+**Collision target (Task 4):** allow `{gripper:claws, fridge-handle-ball}` + `{coffee-claws-middle, fridge-handle-ball}` — the gripper grips the ball, so contact there must be permitted. If planning during the sweep also trips on the gripper approaching the door **panel** (`fridge-door`) at the handle edge, add `{claws, fridge-door}` pairs as well.
 
 **Still requires physical work before a live run (not code):**
 - Author the handle **approach / grasp / retract** poses on the claws switch via `viam machines part motion set-pose` and verify them physically (repo convention). Code references them as constants `doorPoseApproach`, `doorPoseGrasp`, `doorPoseRetract`.
