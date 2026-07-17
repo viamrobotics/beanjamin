@@ -47,6 +47,11 @@ type Order struct {
 	// (default) or FulfillmentDelivery. Set at enqueue time; immutable afterward.
 	Fulfillment string    `json:"fulfillment"`
 	EnqueuedAt  time.Time `json:"enqueued_at"`
+	// PickupPosition is the 0-based serving-area slot the finished drink was
+	// placed in. Set by readyForDelivery on its in-flight copy (derived from
+	// servingAreaSlotCounter) and carried into the delivery_request; the queue's
+	// copy never has it.
+	PickupPosition int `json:"pickup_position,omitempty"`
 
 	// BatchIndex / BatchSize identify this order's slot within a multi-drink
 	// batch (1-based, e.g. "2 of 3"). Both zero for single orders. Set at
@@ -382,7 +387,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) e
 		}
 	}
 
-	if err := s.prepareDrink(ctx, order.Drink, order.CustomerName, order.BatchIndex, order.BatchSize, order.Fulfillment); err != nil {
+	if err := s.prepareDrink(ctx, order); err != nil {
 		logger.Errorf("order for %s failed: %v", order.CustomerName, err)
 		return err
 	}
@@ -474,6 +479,14 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 
 	fulfillment, err := parseFulfillment(order["fulfillment"])
 	if err != nil {
+		s.logger.Warnf("rejected order: %v", err)
+		return nil, err
+	}
+	// Delivery orders must be attributable: the delivery bot identifies the
+	// recipient by email, so an anonymous delivery has nowhere to go. Pickup
+	// (the default) stays open to anonymous walk-ups.
+	if fulfillment == FulfillmentDelivery && customerEmail == "" {
+		err := fmt.Errorf("delivery orders require a customer_email")
 		s.logger.Warnf("rejected order: %v", err)
 		return nil, err
 	}

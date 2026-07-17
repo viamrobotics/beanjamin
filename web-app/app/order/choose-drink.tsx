@@ -3,19 +3,24 @@
 import Image from "next/image";
 import { useState } from "react";
 import { GRID_DRINKS, applyDecaf, baseDrinkId, isDecafId } from "./drinks";
+import type { Fulfillment } from "../lib/viamClient";
 
 export function ChooseDrink({
   selectedDrink,
+  fulfillment,
   rejection,
   connected,
   onSelect,
+  onFulfillmentChange,
   onBack,
   onNext,
 }: {
   selectedDrink: string | null;
+  fulfillment: Fulfillment;
   rejection: string | null;
   connected: boolean;
   onSelect: (id: string) => void;
+  onFulfillmentChange: (f: Fulfillment) => void;
   onBack: () => void;
   onNext: () => void;
 }) {
@@ -127,6 +132,39 @@ export function ChooseDrink({
 
         <div className="grid gap-3 grid-cols-2 sm:grid-cols-3">
           {GRID_DRINKS.map((drink, i) => renderDrinkCard(drink, i))}
+        </div>
+
+        <div
+          className="anim-in flex justify-center"
+          style={{ animationDelay: "500ms" }}
+        >
+          <div
+            role="radiogroup"
+            aria-label="How would you like to receive your drink?"
+            className="inline-flex rounded-full bg-neutral-100 p-1"
+          >
+            {(
+              [
+                { id: "pickup", label: "Pickup" },
+                { id: "delivery", label: "Delivery" },
+              ] as const
+            ).map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                role="radio"
+                aria-checked={fulfillment === mode.id}
+                onClick={() => onFulfillmentChange(mode.id)}
+                className={`px-8 py-2.5 rounded-full font-mono font-semibold text-sm uppercase tracking-wider transition-colors duration-150 ${
+                  fulfillment === mode.id
+                    ? "bg-black text-white"
+                    : "text-neutral-500 hover:text-neutral-900"
+                }`}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {rejection && (

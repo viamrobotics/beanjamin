@@ -196,14 +196,17 @@ func (s *beanjaminCoffee) sayAlways(ctx context.Context, text string) error {
 }
 
 // readyForDelivery handles the cup-handoff moment for delivery-fulfillment
-// orders, replacing the pickup drink-ready announcement. For now it only
-// speaks the announcement; this is the hook to extend with the actual
-// delivery handoff (notify the delivery machine, Slack, etc.).
-func (s *beanjaminCoffee) readyForDelivery(ctx context.Context, drink, customerName string) error {
-	drink = speakableDrink(drink)
+// orders, replacing the pickup drink-ready announcement: it sends the
+// delivery_request to the delivery machine and waits for its acknowledgment
+// (bounded by deliveryMessageTimeout) before speaking, so the order isn't
+// announced as handed off on the strength of a request nobody confirmed.
+func (s *beanjaminCoffee) readyForDelivery(ctx context.Context, order Order) error {
+	order.PickupPosition = s.deliveryPickupPosition(ctx)
+	s.notifyDeliveryRequest(ctx, order)
+	drink := speakableDrink(order.Drink)
 	text := fmt.Sprintf("%s ready for delivery!", drink)
-	if customerName != "" {
-		text = fmt.Sprintf("%s for %s, ready for delivery!", drink, customerName)
+	if order.CustomerName != "" {
+		text = fmt.Sprintf("%s for %s, ready for delivery!", drink, order.CustomerName)
 	}
 	return s.sayAlways(ctx, text)
 }
@@ -312,7 +315,9 @@ func waterDelta(drink string) float64 {
 	return 1
 }
 
-func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName string, batchIndex, batchSize int, fulfillment string) (err error) {
+func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err error) {
+	drink, customerName := order.Drink, order.CustomerName
+	batchIndex, batchSize := order.BatchIndex, order.BatchSize
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::prepareDrink["+drink+"]")
 	defer span.End()
@@ -445,8 +450,8 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, drink, customerName 
 		if err != nil {
 			return err
 		}
-		if fulfillment == FulfillmentDelivery {
-			if err := s.readyForDelivery(ctx, drink, customerName); err != nil {
+		if order.Fulfillment == FulfillmentDelivery {
+			if err := s.readyForDelivery(ctx, order); err != nil {
 				logger.Warnf("failed to announce ready-for-delivery: %v", err)
 			}
 		} else {
