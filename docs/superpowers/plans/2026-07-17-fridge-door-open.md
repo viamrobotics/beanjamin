@@ -73,15 +73,12 @@ git commit -m "docs: record fridge frame-system findings"
 
 **Interfaces:**
 - Produces:
-  - `Config.DoorFrameName string` (json `door_frame_name`)
-  - `Config.HandleBallFrameName string` (json `handle_ball_frame_name`)
-  - `Config.DoorApproachPoseName string` (json `door_approach_pose_name`)
-  - `Config.DoorGraspPoseName string` (json `door_grasp_pose_name`)
-  - `Config.DoorRetractPoseName string` (json `door_retract_pose_name`)
   - `Config.DoorOpenAngleDegs float64` (json `door_open_angle_degs,omitempty`)
   - `Config.DoorPivotDegreesPerStep float64` (json `door_pivot_degrees_per_step,omitempty`)
   - `func (s *beanjaminCoffee) doorOpenAngleDegs() float64` → configured or `defaultDoorOpenAngleDegs` (90)
   - `func (s *beanjaminCoffee) doorPivotDegreesPerStep() float64` → configured or `defaultDoorPivotDegreesPerStep` (10)
+
+Frame names (`fridge-door`, `fridge-handle-ball`) and pose names are **constants** (Task 0), not config — see Task 3/Task 4.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -116,18 +113,11 @@ Expected: FAIL — `s.doorOpenAngleDegs undefined`.
 
 - [ ] **Step 3: Add fields and getters**
 
-In `coffee/config.go`, add to the `Config` struct (near the other model-name fields):
+In `coffee/config.go`, add to the `Config` struct (near the other tunables):
 
 ```go
-	// Fridge-door open: the static door obstacle's root frame (origin on the
-	// hinge) and its handle-ball child frame, plus the switch pose names for the
-	// handle approach, grasp, and post-open retract. See coffee/door.go.
-	DoorFrameName        string `json:"door_frame_name,omitempty"`
-	HandleBallFrameName  string `json:"handle_ball_frame_name,omitempty"`
-	DoorApproachPoseName string `json:"door_approach_pose_name,omitempty"`
-	DoorGraspPoseName    string `json:"door_grasp_pose_name,omitempty"`
-	DoorRetractPoseName  string `json:"door_retract_pose_name,omitempty"`
-
+	// Fridge-door open (coffee/door.go): swing angle and per-step θ increment.
+	// Frame and pose names are fixed constants in door.go, not config.
 	DoorOpenAngleDegs       float64 `json:"door_open_angle_degs,omitempty"`
 	DoorPivotDegreesPerStep float64 `json:"door_pivot_degrees_per_step,omitempty"`
 ```
@@ -655,4 +645,30 @@ On a machine with the fridge configured, issue `DoCommand{"open_door": true}` an
 
 ## Task 0 Findings
 
-_(to be filled during Task 0)_
+From `viam machines part motion print-config` (part `5be4df6e…`) on 2026-07-17.
+
+**Fridge subtree (world → fridge → fridge-door → handle chain):**
+
+| Frame | Parent | Translation (mm) | Orientation | Geometry |
+|---|---|---|---|---|
+| `fridge` | world | (-1030, 440, 250) | identity | Box 470×470×500 |
+| `fridge-door` | `fridge` | (258, 235, 0) | identity | Box 45×470×500 @ **Position (0, -235, 0)** |
+| `fridge-handle-top` | `fridge-door` | (76, -459, 215) | identity | **none** |
+| `fridge-handle-lower-bar` | `fridge-handle-top` | (54, 0, -50) | identity | **none** |
+| `fridge-handle-ball` | `fridge-handle-lower-bar` | (0, 0, -40) | identity | **none** |
+
+**Verdicts on the load-bearing assumptions:**
+
+1. ✅ **Door origin == hinge.** The door panel's geometry is offset **Y −235** (half its 470mm width) from the `fridge-door` frame origin — so the origin sits on the **+Y vertical edge** of the panel. That edge is the hinge. Rotating about the frame's local **Z** pivots the panel about the hinge, exactly as designed.
+2. ✅ **Handle is in the door subtree** (as a 3-level grandchild, not a direct child). `collectDescendants(fs, "fridge-door")` is BFS/recursive (`coffee/motion.go:350`), so `fridge-handle-top`, `-lower-bar`, and `-ball` all ride the rotation. No change needed.
+3. **Geometry is inline on `fridge-door`** (no `<door>_origin` companion frame — these are config frames, not RDK parts). `setDoorTheta` must preserve the door frame's own geometry (with its −235 offset) across the remove/re-add. Task 3's test asserts this.
+4. **Hinge axis = local Z** (all fridge frames are identity-oriented; the door is upright). Confirmed.
+5. ⚠️ **The handle ball has NO geometry** — nor do `-top`/`-lower-bar`. The only geometry in the whole subtree is the **door panel** (`fridge-door`). See the collision note below.
+
+**Frame names are fixed machine obstacles** → used as **constants** in code (matching how `coffee/collisions.go` references `"coffee-machine-actuation-area"` etc.), not new Config fields. Constants: `frameFridgeDoor = "fridge-door"`, `frameFridgeHandleBall = "fridge-handle-ball"`.
+
+**⚠️ Collision-target correction (affects Task 4):** the spec's `{gripper, handle-ball}` allowance is a **no-op today** — `fridge-handle-ball` has no geometry to collide with. The geometry the gripper is actually pressed against while gripping the handle at the panel's outer edge is the **door panel** (`fridge-door`). So the working allowance is `{gripper:claws, fridge-door}` + `{coffee-claws-middle, fridge-door}`. Making a *ball*-vs-gripper allowance meaningful requires first adding a sphere geometry to `fridge-handle-ball` in the machine config (owned by whoever configures the fridge). **Decision pending from user** — recorded in Task 4.
+
+**Still requires physical work before a live run (not code):**
+- Author the handle **approach / grasp / retract** poses on the claws switch via `viam machines part motion set-pose` and verify them physically (repo convention). Code references them as constants `doorPoseApproach`, `doorPoseGrasp`, `doorPoseRetract`.
+- Verify the **open direction** (sign of θ) and the physically-allowed open angle by driving the handle and reading `get-pose` at 0° and the open extreme.

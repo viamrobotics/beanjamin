@@ -187,10 +187,34 @@ type Config struct {
 	// runaway voice command ("a hundred lattes") and from an LLM
 	// hallucinating a huge count. Defaults to 10 when unset or non-positive.
 	MaxBatchSize int `json:"max_batch_size,omitempty"`
+
+	// Fridge-door open (coffee/door.go): swing angle and per-step θ increment.
+	// The fridge frame and pose names are fixed constants in door.go, not config.
+	DoorOpenAngleDegs       float64 `json:"door_open_angle_degs,omitempty"`
+	DoorPivotDegreesPerStep float64 `json:"door_pivot_degrees_per_step,omitempty"`
 }
 
 // defaultMaxBatchSize is used when Config.MaxBatchSize is unset or zero.
 const defaultMaxBatchSize = 10
+
+// defaultDoorOpenAngleDegs is the fridge-door swing angle when unset.
+const defaultDoorOpenAngleDegs = 90
+
+// defaultDoorPivotDegreesPerStep is the per-step θ increment for the door
+// sweep when unset.
+const defaultDoorPivotDegreesPerStep = 10
+
+// doorOpenAngleDegs returns the configured fridge-door swing angle, defaulting
+// to defaultDoorOpenAngleDegs.
+func (s *beanjaminCoffee) doorOpenAngleDegs() float64 {
+	return orDefault(s.cfg.DoorOpenAngleDegs, defaultDoorOpenAngleDegs)
+}
+
+// doorPivotDegreesPerStep returns the configured per-step θ increment for the
+// door sweep, defaulting to defaultDoorPivotDegreesPerStep.
+func (s *beanjaminCoffee) doorPivotDegreesPerStep() float64 {
+	return orDefault(s.cfg.DoorPivotDegreesPerStep, defaultDoorPivotDegreesPerStep)
+}
 
 // orDefault returns v when it is positive, otherwise def. It backs the
 // "configured tunable or default constant" pattern used by the numeric getters.
