@@ -179,3 +179,12 @@ func TestDoorGetters_Configured(t *testing.T) {
 		t.Errorf("doorPivotDegreesPerStep = %v, want 5", got)
 	}
 }
+
+func TestDoorGraspFrameName(t *testing.T) {
+	if got := (&beanjaminCoffee{cfg: &Config{}}).doorGraspFrameName(); got != frameFridgeHandleBall {
+		t.Errorf("default grasp frame = %q, want %q", got, frameFridgeHandleBall)
+	}
+	if got := (&beanjaminCoffee{cfg: &Config{DoorGraspFrameName: "custom-knob"}}).doorGraspFrameName(); got != "custom-knob" {
+		t.Errorf("configured grasp frame = %q, want custom-knob", got)
+	}
+}

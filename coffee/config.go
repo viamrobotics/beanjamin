@@ -188,10 +188,13 @@ type Config struct {
 	// hallucinating a huge count. Defaults to 10 when unset or non-positive.
 	MaxBatchSize int `json:"max_batch_size,omitempty"`
 
-	// Fridge-door open (coffee/door.go): swing angle and per-step θ increment.
-	// The fridge frame and pose names are fixed constants in door.go, not config.
+	// Fridge-door open (coffee/door.go): swing angle, per-step θ increment, and
+	// the frame the gripper aims at / tracks / is allowed to touch (the handle
+	// ball; its center is the grasp target). The door obstacle frame itself is a
+	// fixed constant in door.go.
 	DoorOpenAngleDegs       float64 `json:"door_open_angle_degs,omitempty"`
 	DoorPivotDegreesPerStep float64 `json:"door_pivot_degrees_per_step,omitempty"`
+	DoorGraspFrameName      string  `json:"door_grasp_frame_name,omitempty"`
 }
 
 // defaultMaxBatchSize is used when Config.MaxBatchSize is unset or zero.
@@ -214,6 +217,16 @@ func (s *beanjaminCoffee) doorOpenAngleDegs() float64 {
 // door sweep, defaulting to defaultDoorPivotDegreesPerStep.
 func (s *beanjaminCoffee) doorPivotDegreesPerStep() float64 {
 	return orDefault(s.cfg.DoorPivotDegreesPerStep, defaultDoorPivotDegreesPerStep)
+}
+
+// doorGraspFrameName returns the frame the gripper aims at (its center is the
+// grasp target), tracks through the sweep, and is allowed to contact. Defaults
+// to frameFridgeHandleBall.
+func (s *beanjaminCoffee) doorGraspFrameName() string {
+	if s.cfg.DoorGraspFrameName != "" {
+		return s.cfg.DoorGraspFrameName
+	}
+	return frameFridgeHandleBall
 }
 
 // orDefault returns v when it is positive, otherwise def. It backs the
