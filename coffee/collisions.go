@@ -50,3 +50,11 @@ var heldItemStagingCollisions = []AllowedCollision{
 	{Frame1: heldItemFrameName, Frame2: "table"},
 	{Frame1: heldItemFrameName, Frame2: "table-right"},
 }
+
+// doorOpenCollisions permits the gripper to contact the fridge handle ball while
+// gripping and pulling the door open (openDoor, door.go). If the sweep also trips
+// on the gripper nearing the door panel at the handle edge, add {claws, fridge-door}.
+var doorOpenCollisions = []AllowedCollision{
+	{Frame1: "gripper:claws", Frame2: frameFridgeHandleBall},
+	{Frame1: componentClaws, Frame2: frameFridgeHandleBall},
+}

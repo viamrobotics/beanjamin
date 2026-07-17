@@ -139,6 +139,27 @@ func TestSetDoorTheta_PanelGeometrySweeps(t *testing.T) {
 	}
 }
 
+// TestRigidGraspOffset_RidesRotation pins the exact composition openDoor uses to
+// keep the grip rigid as the ball sweeps. A wrong Compose/PoseBetween arg order
+// would place the gripper somewhere else.
+func TestRigidGraspOffset_RidesRotation(t *testing.T) {
+	// Ball at origin (identity); gripper 30mm along the ball's +X.
+	ballBase := spatialmath.NewZeroPose()
+	gripperWorld := spatialmath.NewPoseFromPoint(r3.Vector{X: 30, Y: 0, Z: 0})
+	offset := spatialmath.PoseBetween(ballBase, gripperWorld) // == gripper in ball frame
+
+	// Ball sweeps to (100,0,0), rotated +90° about Z: its local +X now points +Y.
+	ballNow := spatialmath.Compose(
+		spatialmath.NewPoseFromPoint(r3.Vector{X: 100, Y: 0, Z: 0}),
+		spatialmath.NewPoseFromOrientation(&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: 90}))
+
+	got := spatialmath.Compose(ballNow, offset).Point()
+	want := r3.Vector{X: 100, Y: 30, Z: 0} // 30mm now along world +Y
+	if got.Sub(want).Norm() > 0.5 {
+		t.Errorf("rigid gripper = %v, want ~%v", got, want)
+	}
+}
+
 func TestDoorGetters_Defaults(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{}}
 	if got := s.doorOpenAngleDegs(); got != 90 {
