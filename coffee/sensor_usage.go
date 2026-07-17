@@ -9,8 +9,8 @@ import (
 
 // The usage sensor tracks physical consumables and service health by mirroring
 // several counters — one per key (regular_grinds, decaf_grinds, usage,
-// cleanings, successful_consecutive_orders) — into a single external sensor
-// resource. The sensor replaces its whole readings map on `set`, so every
+// cleanings, ice_dispenses, drip_tray_brews, successful_consecutive_orders) —
+// into a single external sensor resource. The sensor replaces its whole readings map on `set`, so every
 // update is a best-effort read-modify-write of the *entire* map: read all
 // current readings with Readings, change just the one key, then write them all
 // back with DoCommand({"set": <full readings map>}). Writing only the changed

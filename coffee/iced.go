@@ -84,6 +84,15 @@ func (s *beanjaminCoffee) grabBrewedCupFromMachine(ctx, cancelCtx context.Contex
 	if err := s.reattachGeometry(pickupLabelCup); err != nil {
 		s.activeOrderLogger().Warnf("grab_brewed_cup_from_machine: reattach cup geometry failed, continuing untracked: %v", err)
 	}
+	// Nothing was cached to reattach (e.g. a manually-stepped serving that never ran
+	// the vision cup pickup) — model the cup from cup_dimensions so the pour and the
+	// shelf placement still carry it as a tracked held-item instead of an untracked
+	// grip-point move.
+	if !s.heldItemAttached {
+		if err := s.attachConfiguredCupGeometry(ctx); err != nil {
+			s.activeOrderLogger().Warnf("grab_brewed_cup_from_machine: model cup from cup_dimensions failed, continuing untracked: %v", err)
+		}
+	}
 	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions)}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("grab_brewed_cup_from_machine: %w", err)
@@ -156,6 +165,7 @@ func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 	if err := s.pulseIcePin(ctx, cancelCtx); err != nil {
 		return fmt.Errorf("dispense_ice: %w", err)
 	}
+	s.incrementSensorReading(ctx, s.usageSensor, "ice machine", "ice_dispenses", 1)
 
 	retreatStep := Step{PoseName: clawPoseIceMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
