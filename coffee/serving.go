@@ -78,10 +78,11 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 }
 
 // placeFullCupOnShelf retrieves the brewed cup from cup_ready_for_coffee and
-// drops it on the serving-area shelf at the next round-robin slot.
-func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) error {
+// drops it on the serving-area shelf at the next round-robin slot, returning
+// the 0-based slot it was placed in.
+func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) (int, error) {
 	if err := s.grabBrewedCupFromMachine(ctx, cancelCtx); err != nil {
-		return err
+		return 0, err
 	}
 	return s.placeHeldInServingArea(ctx, cancelCtx)
 }
@@ -90,19 +91,19 @@ func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) er
 // serving area: it walks the serving-area slots in round-robin order starting
 // from servingAreaSlotCounter and drops the item in the first slot it can reach
 // (tryDropCupInSlot), skipping any whose approach or descent cannot be planned.
-// On success the counter advances to the slot after the one used, so the next
-// placement starts there. The caller must already be holding the item; shared
-// by placeFullCupOnShelf (cups) and serveIcedCoffee (the empty espresso cup and
-// the iced glass).
-func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context) error {
+// On success it returns the 0-based slot the item was placed in and advances the
+// counter to the slot after it, so the next placement starts there. The caller
+// must already be holding the item; shared by placeFullCupOnShelf (cups) and
+// serveIcedCoffee (the empty espresso cup and the iced glass).
+func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context) (int, error) {
 	logger := s.activeOrderLogger()
 	if s.gripper == nil {
-		return fmt.Errorf("place_in_serving_area: no gripper configured")
+		return 0, fmt.Errorf("place_in_serving_area: no gripper configured")
 	}
 
 	slots, shelfTopZ, err := s.servingAreaSlots(ctx)
 	if err != nil {
-		return fmt.Errorf("place_in_serving_area: %w", err)
+		return 0, fmt.Errorf("place_in_serving_area: %w", err)
 	}
 
 	n := len(slots)
@@ -116,45 +117,24 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context)
 			// Next placement starts at the slot after the one just used.
 			s.servingAreaSlotCounter.Store(start + uint64(off) + 1)
 			logger.Infof("place_in_serving_area: placed item in slot %d/%d", idx+1, n)
-			return nil
+			return idx, nil
 		}
 		lastErr = err
 
 		// Operator cancel always wins.
 		if ctx.Err() != nil || cancelCtx.Err() != nil {
-			return fmt.Errorf("place_in_serving_area: cancelled: %w", err)
+			return 0, fmt.Errorf("place_in_serving_area: cancelled: %w", err)
 		}
 
 		// Only planning failures (item still held, arm unmoved) are skippable.
 		// Anything else — execution error, or any failure after the item was
 		// released — bubbles up.
 		if !errors.Is(err, errMotionPlanning) {
-			return fmt.Errorf("place_in_serving_area: %w", err)
+			return 0, fmt.Errorf("place_in_serving_area: %w", err)
 		}
 		logger.Warnf("place_in_serving_area: slot %d/%d unreachable — trying next slot: %v", idx+1, n, err)
 	}
-	return fmt.Errorf("place_in_serving_area: all %d serving-area slot(s) unreachable; last error: %w", n, lastErr)
-}
-
-// deliveryPickupPosition returns the 0-based serving-area slot of the most
-// recent successful placement, derived from servingAreaSlotCounter (which
-// points at the slot to try next, so the last one used is counter-1 modulo the
-// tile count). For iced drinks two placements happen — empty cup then glass —
-// and the glass (the actual drink) is placed last, so the counter is correct
-// for both paths. Fills a delivery order's pickup_position. Best-effort:
-// returns 0 before any placement or when the serving-area geometry can't be
-// resolved.
-func (s *beanjaminCoffee) deliveryPickupPosition(ctx context.Context) int {
-	counter := s.servingAreaSlotCounter.Load()
-	if counter == 0 {
-		return 0
-	}
-	slots, _, err := s.servingAreaSlots(ctx)
-	if err != nil || len(slots) == 0 {
-		s.activeOrderLogger().Warnf("deliveryPickupPosition: cannot resolve serving-area slots — reporting pickup_position 0: %v", err)
-		return 0
-	}
-	return slotIndex(counter-1, len(slots))
+	return 0, fmt.Errorf("place_in_serving_area: all %d serving-area slot(s) unreachable; last error: %w", n, lastErr)
 }
 
 // tryDropCupInSlot drops the held cup at one serving-area slot: free-plan to the

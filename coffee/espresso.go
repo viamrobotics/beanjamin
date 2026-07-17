@@ -200,8 +200,8 @@ func (s *beanjaminCoffee) sayAlways(ctx context.Context, text string) error {
 // delivery_request to the delivery machine and waits for its acknowledgment
 // (bounded by deliveryMessageTimeout) before speaking, so the order isn't
 // announced as handed off on the strength of a request nobody confirmed.
+// The caller sets order.PickupPosition from the serving step.
 func (s *beanjaminCoffee) readyForDelivery(ctx context.Context, order Order) error {
-	order.PickupPosition = s.deliveryPickupPosition(ctx)
 	s.notifyDeliveryRequest(ctx, order)
 	drink := speakableDrink(order.Drink)
 	text := fmt.Sprintf("%s ready for delivery!", drink)
@@ -227,6 +227,16 @@ func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order Order) {
 	}
 }
 
+// discardSlot adapts a placement function that reports its serving slot to the
+// plain action signature — a standalone action has no order to attach the slot
+// to, so it's dropped (only the brew cycle keeps it, for delivery pickup_position).
+func discardSlot(fn func(ctx, cancelCtx context.Context) (int, error)) func(ctx, cancelCtx context.Context) error {
+	return func(ctx, cancelCtx context.Context) error {
+		_, err := fn(ctx, cancelCtx)
+		return err
+	}
+}
+
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]any, error) {
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
 		"grind_coffee":              s.grindCoffee,
@@ -240,17 +250,17 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 		"turn_coffee_button_off":    s.turnCoffeeButtonOff,
 		"brew_coffee":               s.brewCoffee,
 		"set_cup_for_coffee":        s.setCupForCoffee,
-		"give_full_cup_to_customer": s.placeFullCupOnShelf,
+		"give_full_cup_to_customer": discardSlot(s.placeFullCupOnShelf),
 		"clean_portafilter":         s.cleanPortafilter,
-		"fetch_glass":               s.fetchGlass,               // vision-grab a glass off the shelf
-		"pulse_ice_pin":             s.pulseIcePin,              // hardware only, no arm motion
-		"dispense_ice":              s.dispenseIce,              // arm to chute + pulse + retreat
-		"stage_glass":               s.stageGlass,               // set held glass down, release
-		"grab_brewed_cup":           s.grabBrewedCupFromMachine, // retrieve cup from under machine
-		"pour_espresso":             s.pourEspresso,             // pour held cup over staged glass
-		"grab_staged_glass":         s.grabStagedGlass,          // re-grab the staged glass
-		"place_held":                s.placeHeldInServingArea,   // place held vessel in serving area
-		"serve_iced_coffee":         s.serveIcedCoffee,          // full sequence end-to-end
+		"fetch_glass":               s.fetchGlass,                          // vision-grab a glass off the shelf
+		"pulse_ice_pin":             s.pulseIcePin,                         // hardware only, no arm motion
+		"dispense_ice":              s.dispenseIce,                         // arm to chute + pulse + retreat
+		"stage_glass":               s.stageGlass,                          // set held glass down, release
+		"grab_brewed_cup":           s.grabBrewedCupFromMachine,            // retrieve cup from under machine
+		"pour_espresso":             s.pourEspresso,                        // pour held cup over staged glass
+		"grab_staged_glass":         s.grabStagedGlass,                     // re-grab the staged glass
+		"place_held":                discardSlot(s.placeHeldInServingArea), // place held vessel in serving area
+		"serve_iced_coffee":         discardSlot(s.serveIcedCoffee),        // full sequence end-to-end
 	}
 
 	action, ok := actions[name]
@@ -441,16 +451,20 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 	logger.Infof("step 6b/9: serving cup")
 	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::serving")
+		var servedSlot int
 		var err error
 		if isIcedDrink(drink) {
-			err = s.serveIcedCoffee(ctx, cancelCtx)
+			servedSlot, err = s.serveIcedCoffee(ctx, cancelCtx)
 		} else {
-			err = s.placeFullCupOnShelf(ctx, cancelCtx)
+			servedSlot, err = s.placeFullCupOnShelf(ctx, cancelCtx)
 		}
 		stepSpan.End()
 		if err != nil {
 			return err
 		}
+		// Record where the drink physically landed so a delivery order can
+		// report it as the pickup_position.
+		order.PickupPosition = servedSlot
 		if order.Fulfillment == FulfillmentDelivery {
 			if err := s.readyForDelivery(ctx, order); err != nil {
 				logger.Warnf("failed to announce ready-for-delivery: %v", err)
