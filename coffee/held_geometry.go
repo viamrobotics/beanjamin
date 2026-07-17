@@ -99,6 +99,58 @@ func (s *beanjaminCoffee) reattachGeometry(label string) error {
 	return nil
 }
 
+// attachConfiguredCupGeometry models the held cup from cup_dimensions and
+// attaches it, for the case where reattachGeometry found nothing cached to
+// restore — e.g. a manually-stepped serving that skipped the vision cup pickup,
+// or a frame-system reset that dropped the cached grasp. Without it the pour (and
+// the hot-drink shelf placement) would carry the full cup as an untracked
+// grip-point move, so motion plans wouldn't route the cup around the staged glass
+// or the machine.
+//
+// The cup is modeled exactly as overriddenBox models it at pickup: an upright box
+// of the configured size centered on the grasp centroid. The centroid is
+// recovered by inverting the composeCupPose the grab used — the grab sends the
+// grip point to centroid + cup_grab_relative_pose, so the centroid is the current
+// grip-point world position minus that offset. No-op when tracking is off or
+// cup_dimensions is unset (the caller then keeps the untracked grip-point carry).
+func (s *beanjaminCoffee) attachConfiguredCupGeometry(ctx context.Context) error {
+	if !s.cfg.TrackHeldGeometry || s.cfg.CupDimensions == nil {
+		return nil
+	}
+	fs, fsInputs, err := s.currentInputs(ctx)
+	if err != nil {
+		return err
+	}
+	box, err := s.configuredCupBox(fs, fsInputs)
+	if err != nil {
+		return err
+	}
+	s.activeOrderLogger().Infof("cup geometry not cached — modeling it from cup_dimensions (%.0f×%.0f mm) for held-item tracking",
+		s.cfg.CupDimensions.DiameterMm, s.cfg.CupDimensions.HeightMm)
+	return s.attachDetectedGeometry(ctx, pickupLabelCup, box)
+}
+
+// configuredCupBox builds the world-frame cup box from cup_dimensions, centered
+// on the grasp centroid recovered from the current grip-point world pose. It
+// inverts composeCupPose: the grab sends the grip point to
+// centroid + cup_grab_relative_pose, so the centroid is the grip-point world
+// position minus that offset. Split from attachConfiguredCupGeometry (which reads
+// the arm's joint inputs) so the centroid math is unit-testable against a static
+// frame system.
+func (s *beanjaminCoffee) configuredCupBox(fs *referenceframe.FrameSystem, fsInputs referenceframe.FrameSystemInputs) (spatialmath.Geometry, error) {
+	gripPointPIF := referenceframe.NewPoseInFrame(gripPoint, spatialmath.NewZeroPose())
+	tf, err := fs.Transform(fsInputs.ToLinearInputs(), gripPointPIF, referenceframe.World)
+	if err != nil {
+		return nil, fmt.Errorf("transform grip point to world: %w", err)
+	}
+	gripPointWorld := tf.(*referenceframe.PoseInFrame).Pose().Point()
+
+	// cup_grab_relative_pose is required by Validate whenever pickup is configured,
+	// so it is non-nil on any machine that reaches a serving flow.
+	grabOffset := relativePoseToSpatial(s.cfg.CupGrabRelativePose).Point()
+	return overriddenBox(gripPointWorld.Sub(grabOffset), s.cfg.CupDimensions, pickupLabelCup)
+}
+
 // addHeldItemFrame adds the held-item static frame under the gripper frame,
 // carrying gripperLocal (geometry already expressed in gripper-local
 // coordinates). Any existing held-item frame is removed first so attach is
