@@ -29,14 +29,10 @@ const (
 	frameFridgeHandleBall = "fridge-handle-ball"
 
 	// frameGripPoint is the gripper's tool-center frame — the frame commanded to
-	// the grasp frame's center and tracked through the swing.
+	// the grasp frame's center and tracked through the swing. Approach, grasp,
+	// and retract all derive from the ball frame (door_approach_relative_pose);
+	// no poses are authored on the switch for open_door.
 	frameGripPoint = "grip-point"
-
-	// doorPoseRetract is the post-open safe pose, authored on the claws switch
-	// via `viam machines part motion set-pose` (repo convention). Approach and
-	// grasp are derived from the ball frame (door_approach_relative_pose), not
-	// authored.
-	doorPoseRetract = "door-retract"
 )
 
 // computeDoorSweep returns inclusive absolute-angle waypoints (degrees) from
@@ -251,13 +247,27 @@ func (s *beanjaminCoffee) openDoor(ctx context.Context) (map[string]any, error) 
 		}
 	}
 
-	// 4. Release and retract, leaving the door open.
+	// 4. Release, then retract to a standoff from the open handle: the same
+	//    approach offset resolved against the ball's OPEN pose (fs still holds the
+	//    door at the final θ), so the exit backs off exactly as the approach came
+	//    in. Leaves the door open.
 	if s.gripper != nil {
 		if err := s.gripper.Open(ctx, nil); err != nil {
 			return nil, fmt.Errorf("release handle: %w", err)
 		}
 	}
-	if err := s.moveToPose(ctx, Step{PoseName: doorPoseRetract, PoseSwitch: s.clawsSw}); err != nil {
+	_, retractInputs, err := s.currentInputs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ballOpen, err := s.ballWorldPose(fs, retractInputs.ToLinearInputs())
+	if err != nil {
+		return nil, err
+	}
+	retractWorld := composeCupPose(ballOpen.Point(), approachRel)
+	if err := s.moveToRawPose(ctx,
+		&poseData{pose: retractWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
+		nil, collisions, nil); err != nil {
 		return nil, fmt.Errorf("retract: %w", err)
 	}
 	return map[string]any{"status": "door_open"}, nil
