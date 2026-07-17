@@ -88,6 +88,15 @@ func TestDoCommandDispatch(t *testing.T) {
 		t.Error("run_cup_flow with count 0 should error")
 	}
 
+	// open_door routes to openDoor, whose running-gate is the first thing it
+	// checks — so with a sequence already "running" it rejects without touching
+	// the arm. This confirms the command is wired without needing hardware.
+	s.running.Store(true)
+	if _, err := s.DoCommand(ctx, map[string]any{"open_door": true}); err == nil {
+		t.Error("open_door should error when a sequence is already running")
+	}
+	s.running.Store(false)
+
 	if _, err := s.DoCommand(ctx, map[string]any{"action": "teleport"}); err == nil {
 		t.Error("unknown action should error")
 	}

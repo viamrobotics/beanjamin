@@ -271,6 +271,8 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `cup_pickup_max_attempts`             | int    | No       | Cap on full observe-and-grab attempts per order. Each attempt sweeps **every** observe pose, grabbing the first reachable cup across all of them (closest-first within each pose, continuing to later poses when a pose's cups are all unreachable). When a whole sweep grabs nothing the machine re-observes and retries — asking the customer to place a cup (none seen anywhere) or to nudge the cups (some seen but none reachable) between attempts. Default 3. |
 | `cup_dimensions`                      | object | No       | Predefined cup size, overriding the dimensions derived from the detection point cloud. Shape `{ "diameter_mm", "height_mm" }` (both must be > 0). When set, the held-item bounding box is built with width = depth = `diameter_mm` and height = `height_mm` (a square-footprint box approximating the round cup), centered on the **grasp centroid** (the point the gripper is sent to) rather than the point-cloud midpoint. The known `height_mm` also drives **resting-surface seating** (below): the grasp Z is derived from the surface the cup stands on instead of the noisy detected Z. Use when the point cloud under-reads or skews the box for a partially-observed cup. Unset (default) uses the point-cloud extents and the raw detected Z. |
 | `max_batch_size`           | int    | No       | Cap on `prepare_order.count` — how many identical drinks one DoCommand may enqueue at once. Defaults to 10 when unset. Protects the queue against runaway voice commands or LLM hallucinations. |
+| `door_open_angle_degs`     | float  | No       | Swing angle for the `open_door` command, in degrees. Defaults to 90. |
+| `door_pivot_degrees_per_step` | float | No     | Per-step θ increment for the `open_door` sweep, in degrees. Smaller values re-plan the door pose more finely (smoother tracking, more planning calls). Defaults to 10. |
 | `can_serve_decaf`          | bool   | No       | Enables the `decaf` and `decaf_lungo` drinks, which grind from the decaf grinder instead of the regular one. Orders for those drinks are rejected when this is `false`. Default `false`. |
 | `can_serve_iced`           | bool   | No       | Enables the `iced_coffee` drink. When `true`, after brewing the espresso the arm vision-detects a glass off the top shelf, dispenses ice into it via `ice_board_name`/`ice_pin_name`, sets the glass in a staging area, then pours the espresso over the ice. Both finished items — the empty espresso cup and the iced glass — are then placed in the serving area at the next round-robin slots (two slots are consumed per order). The glass is always vision-detected, so iced coffee requires `ice_board_name`, `ice_pin_name`, the `glass_*` vision fields below, and the iced claws poses below. A `serving-area` (or `serving-area_origin`) Box geometry must exist in the framesystem; this is checked at runtime, not at config time. Default `false`. |
 | `ice_board_name`           | string | When `can_serve_iced` is enabled | Name of a `rdk:component:board` whose GPIO pin triggers the ice machine. |
@@ -426,6 +428,14 @@ Assumes the portafilter has been **physically removed** from the claws — the f
 ```
 
 Returns `{"status": "complete", "iterations": 5}`.
+
+**`open_door`** - Grip the fridge handle and pull the door open along its hinge arc, then release and retract, leaving the door open. The door is a static obstacle (`fridge-door`) whose root frame origin sits on the hinge; `open_door` sweeps the door angle in software (`door_open_angle_degs`, default 90°, in `door_pivot_degrees_per_step` increments, default 10°), re-placing the door obstacle at each step so the handle-ball child (`fridge-handle-ball`) and the door panel track the real swing and collision-checking stays honest. Contact between the gripper and the handle ball is allowed during the pull. Requires the `door-approach`, `door-grasp`, and `door-retract` poses to be authored on the claws pose switch. Gated like `run_cup_flow` (one sequence at a time) and honors `cancel`; the frame system is rebuilt on exit so the door mutation never leaks.
+
+```json
+{"open_door": true}
+```
+
+Returns `{"status": "door_open"}`.
 
 **`action`** - Control the gripper. Supported values: `"open_gripper"`, `"close_gripper"`.
 
