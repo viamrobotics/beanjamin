@@ -195,6 +195,14 @@ type Config struct {
 	DoorOpenAngleDegs       float64 `json:"door_open_angle_degs,omitempty"`
 	DoorPivotDegreesPerStep float64 `json:"door_pivot_degrees_per_step,omitempty"`
 	DoorGraspFrameName      string  `json:"door_grasp_frame_name,omitempty"`
+
+	// DoorApproachRelativePose is a RelativePose offset composed onto the grasp
+	// frame's center to produce the pre-grasp standoff (like
+	// cup_approach_relative_pose onto a detected cup centroid — see
+	// composeCupPose), but resolved against the live grasp frame. Its
+	// orientation is also the grasp orientation the gripper holds through the
+	// swing. Required to run open_door.
+	DoorApproachRelativePose *RelativePose `json:"door_approach_relative_pose,omitempty"`
 }
 
 // defaultMaxBatchSize is used when Config.MaxBatchSize is unset or zero.

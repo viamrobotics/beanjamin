@@ -28,12 +28,15 @@ const (
 	// Config.DoorGraspFrameName.
 	frameFridgeHandleBall = "fridge-handle-ball"
 
-	// Claws-switch poses for the door open, authored physically via
-	// `viam machines part motion set-pose` (repo convention). The grasp itself
-	// is not authored — the gripper aims at the grasp frame's center with the
-	// approach pose's orientation.
-	doorPoseApproach = "door-approach"
-	doorPoseRetract  = "door-retract"
+	// frameGripPoint is the gripper's tool-center frame — the frame commanded to
+	// the grasp frame's center and tracked through the swing.
+	frameGripPoint = "grip-point"
+
+	// doorPoseRetract is the post-open safe pose, authored on the claws switch
+	// via `viam machines part motion set-pose` (repo convention). Approach and
+	// grasp are derived from the ball frame (door_approach_relative_pose), not
+	// authored.
+	doorPoseRetract = "door-retract"
 )
 
 // computeDoorSweep returns inclusive absolute-angle waypoints (degrees) from
@@ -152,25 +155,49 @@ func (s *beanjaminCoffee) openDoor(ctx context.Context) (map[string]any, error) 
 		}
 	}()
 
+	if s.cfg.DoorApproachRelativePose == nil {
+		return nil, errors.New("open_door requires door_approach_relative_pose")
+	}
 	s.setStep("Opening fridge")
 
-	// 1. Approach the handle. The approach pose supplies the grasp orientation;
-	//    its component_name is the frame we aim (and later command through the
-	//    sweep), so it should be the gripper's grasp point.
-	approachPD, err := s.fetchPose(ctx, s.clawsSw, doorPoseApproach)
-	if err != nil {
-		return nil, fmt.Errorf("approach pose: %w", err)
-	}
-	if err := s.moveToRawPose(ctx, approachPD, nil, nil, nil); err != nil {
-		return nil, fmt.Errorf("approach handle: %w", err)
-	}
-
-	// 2. Capture the door's base transform and the grasp geometry.
+	// 1. Resolve the grasp frame's (closed) pose, then derive approach + grasp
+	//    from it. door_approach_relative_pose is a RelativePose offset composed
+	//    onto the grasp frame's center (the door analog of
+	//    cup_approach_relative_pose onto a detected cup, via composeCupPose, but
+	//    resolved against a live frame). Its orientation is the grasp orientation.
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return nil, err
 	}
-	linInputs := fsInputs.ToLinearInputs()
+	ballBase, err := s.ballWorldPose(fs, fsInputs.ToLinearInputs())
+	if err != nil {
+		return nil, err
+	}
+	approachRel := relativePoseToSpatial(s.cfg.DoorApproachRelativePose)
+	approachWorld := composeCupPose(ballBase.Point(), approachRel)
+	graspWorld := spatialmath.NewPose(ballBase.Point(), approachRel.Orientation())
+	collisions := s.filterFakeModeCollisions(doorOpenCollisions(s.doorGraspFrameName()))
+
+	// Move to the standoff, then straight to the ball center, then close.
+	if err := s.moveToRawPose(ctx,
+		&poseData{pose: approachWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
+		nil, nil, nil); err != nil {
+		return nil, fmt.Errorf("approach handle: %w", err)
+	}
+	if err := s.moveToRawPose(ctx,
+		&poseData{pose: graspWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
+		nil, collisions, nil); err != nil {
+		return nil, fmt.Errorf("move to grasp (ball center): %w", err)
+	}
+	if s.gripper != nil {
+		if _, err := s.gripper.Grab(ctx, nil); err != nil {
+			return nil, fmt.Errorf("grab handle: %w", err)
+		}
+	}
+
+	// 2. Door base transform + rigid grasp offset. gripperInBall: grip-point's
+	//    pose in the grasp frame; Compose(ballWorld, gripperInBall) == graspWorld,
+	//    held constant as the ball sweeps.
 	doorFrame := fs.Frame(frameFridgeDoor)
 	if doorFrame == nil {
 		return nil, fmt.Errorf("door frame %q not found", frameFridgeDoor)
@@ -179,30 +206,6 @@ func (s *beanjaminCoffee) openDoor(ctx context.Context) (map[string]any, error) 
 	if err != nil {
 		return nil, fmt.Errorf("door base transform: %w", err)
 	}
-	ballBase, err := s.ballWorldPose(fs, linInputs)
-	if err != nil {
-		return nil, err
-	}
-	// Grasp target: the grasp frame's center, with the approach pose's world
-	// orientation. Aim the approach component there and close on it.
-	approachWorldTF, err := fs.Transform(linInputs,
-		referenceframe.NewPoseInFrame(approachPD.refFrame, approachPD.pose), referenceframe.World)
-	if err != nil {
-		return nil, fmt.Errorf("approach pose to world: %w", err)
-	}
-	graspWorld := spatialmath.NewPose(ballBase.Point(), approachWorldTF.(*referenceframe.PoseInFrame).Pose().Orientation())
-	collisions := s.filterFakeModeCollisions(doorOpenCollisions(s.doorGraspFrameName()))
-	graspPD := &poseData{pose: graspWorld, refFrame: referenceframe.World, componentName: approachPD.componentName}
-	if err := s.moveToRawPose(ctx, graspPD, nil, collisions, nil); err != nil {
-		return nil, fmt.Errorf("move to grasp (ball center): %w", err)
-	}
-	if s.gripper != nil {
-		if _, err := s.gripper.Grab(ctx, nil); err != nil {
-			return nil, fmt.Errorf("grab handle: %w", err)
-		}
-	}
-	// gripperInBall: the commanded component's pose expressed in the grasp frame.
-	// Compose(ballWorld, gripperInBall) == gripperWorld, held constant as it sweeps.
 	gripperInBall := spatialmath.PoseBetween(ballBase, graspWorld)
 
 	// 3. Sweep θ closed→open, re-planning each step with the door repositioned.
@@ -225,7 +228,7 @@ func (s *beanjaminCoffee) openDoor(ctx context.Context) (map[string]any, error) 
 		}
 		goalPose := spatialmath.Compose(ballNow, gripperInBall)
 		goal := armplanning.NewPlanState(referenceframe.FrameSystemPoses{
-			graspPD.componentName: referenceframe.NewPoseInFrame(referenceframe.World, goalPose),
+			frameGripPoint: referenceframe.NewPoseInFrame(referenceframe.World, goalPose),
 		}, nil)
 
 		req := &armplanning.PlanRequest{

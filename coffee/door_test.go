@@ -180,6 +180,26 @@ func TestDoorGetters_Configured(t *testing.T) {
 	}
 }
 
+// TestDoorApproachFromBall pins how approach/grasp derive from the ball frame:
+// grasp sits at the ball center with the relative pose's orientation; approach
+// is offset from the ball center by the relative pose's translation.
+func TestDoorApproachFromBall(t *testing.T) {
+	ballPoint := r3.Vector{X: 200, Y: 50, Z: 400}
+	rel := &RelativePose{X: 0, Y: -120, Z: 0, OX: 0, OY: 0, OZ: 1, Theta: 30}
+	relSpatial := relativePoseToSpatial(rel)
+
+	grasp := spatialmath.NewPose(ballPoint, relSpatial.Orientation())
+	if grasp.Point().Sub(ballPoint).Norm() > 0.01 {
+		t.Errorf("grasp point = %v, want ball center %v", grasp.Point(), ballPoint)
+	}
+
+	approach := composeCupPose(ballPoint, relSpatial)
+	wantApproach := r3.Vector{X: 200, Y: -70, Z: 400} // ball + (0,-120,0)
+	if approach.Point().Sub(wantApproach).Norm() > 0.01 {
+		t.Errorf("approach point = %v, want %v", approach.Point(), wantApproach)
+	}
+}
+
 func TestDoorGraspFrameName(t *testing.T) {
 	if got := (&beanjaminCoffee{cfg: &Config{}}).doorGraspFrameName(); got != frameFridgeHandleBall {
 		t.Errorf("default grasp frame = %q, want %q", got, frameFridgeHandleBall)
