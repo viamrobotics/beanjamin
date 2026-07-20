@@ -139,24 +139,36 @@ func TestSetDoorTheta_PanelGeometrySweeps(t *testing.T) {
 	}
 }
 
-// TestRigidGraspOffset_RidesRotation pins the exact composition openDoor uses to
-// keep the grip rigid as the ball sweeps. A wrong Compose/PoseBetween arg order
-// would place the gripper somewhere else.
-func TestRigidGraspOffset_RidesRotation(t *testing.T) {
-	// Ball at origin (identity); gripper 30mm along the ball's +X.
-	ballBase := spatialmath.NewZeroPose()
-	gripperWorld := spatialmath.NewPoseFromPoint(r3.Vector{X: 30, Y: 0, Z: 0})
-	offset := spatialmath.PoseBetween(ballBase, gripperWorld) // == gripper in ball frame
+// TestGraspTracksBallPointFixedOrientation pins the contract openDoor uses
+// through the swing: the grip-point goal tracks the ball's *point* but keeps the
+// grasp orientation fixed. The handle knob is spherical, so the grasp doesn't
+// constrain wrist roll; letting the gripper ride the ball's rotation twisted the
+// wrist off the handle, so the goal orientation must stay the grasp orientation
+// regardless of how far the ball's own frame has rotated.
+func TestGraspTracksBallPointFixedOrientation(t *testing.T) {
+	// The fixed grasp orientation (what approachRel.Orientation() supplies).
+	graspOrient := &spatialmath.OrientationVectorDegrees{OZ: 1, Theta: 45}
 
-	// Ball sweeps to (100,0,0), rotated +90° about Z: its local +X now points +Y.
-	ballNow := spatialmath.Compose(
-		spatialmath.NewPoseFromPoint(r3.Vector{X: 100, Y: 0, Z: 0}),
-		spatialmath.NewPoseFromOrientation(&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: 90}))
+	// The ball sweeps: its point moves to (100,0,0) and its own frame rotates
+	// +90° about Z as the door panel turns.
+	ballNow := spatialmath.NewPose(
+		r3.Vector{X: 100, Y: 0, Z: 0},
+		&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: 90})
 
-	got := spatialmath.Compose(ballNow, offset).Point()
-	want := r3.Vector{X: 100, Y: 30, Z: 0} // 30mm now along world +Y
-	if got.Sub(want).Norm() > 0.5 {
-		t.Errorf("rigid gripper = %v, want ~%v", got, want)
+	goalPose := spatialmath.NewPose(ballNow.Point(), graspOrient)
+
+	// 1. The goal tracks the ball's point exactly.
+	if goalPose.Point().Sub(ballNow.Point()).Norm() > 0.5 {
+		t.Errorf("goal point = %v, want ball point %v", goalPose.Point(), ballNow.Point())
+	}
+	// 2. The goal orientation is the fixed grasp orientation...
+	if !spatialmath.OrientationAlmostEqual(goalPose.Orientation(), graspOrient) {
+		t.Errorf("goal orientation = %v, want fixed grasp orientation %v",
+			goalPose.Orientation(), graspOrient)
+	}
+	// 3. ...and did NOT follow the ball's rotation — the whole point of the fix.
+	if spatialmath.OrientationAlmostEqual(goalPose.Orientation(), ballNow.Orientation()) {
+		t.Error("goal orientation followed the ball's rotation; it must stay fixed to the grasp")
 	}
 }
 

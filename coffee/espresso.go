@@ -251,6 +251,7 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 		"grab_staged_glass":         s.grabStagedGlass,          // re-grab the staged glass
 		"place_held":                s.placeHeldInServingArea,   // place held vessel in serving area
 		"serve_iced_coffee":         s.serveIcedCoffee,          // full sequence end-to-end
+		"open_door":                 s.openDoor,                 // grip the fridge handle and swing it open
 	}
 
 	action, ok := actions[name]

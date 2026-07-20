@@ -358,6 +358,7 @@ Only `drink` is required. If `initial_greeting` is omitted, a random greeting is
 
 - Brew cycle: `grind_coffee`, `grind_decaf`, `tamp_ground`, `lock_portafilter`, `unlock_portafilter`, `release_filter`, `grab_filter`, `turn_coffee_button_on`, `turn_coffee_button_off`, `brew_coffee`, `set_cup_for_coffee`, `give_full_cup_to_customer` (place the finished cup in the serving area), `clean_portafilter`, `place_held` (place the currently held vessel in the serving area).
 - Iced coffee (require `can_serve_iced`): `fetch_glass`, `pulse_ice_pin`, `dispense_ice`, `stage_glass`, `grab_brewed_cup`, `pour_espresso`, `grab_staged_glass`, `serve_iced_coffee` (the full iced sequence end-to-end).
+- Fridge door (requires `door_approach_relative_pose`): `open_door` (grip the handle and swing the door open — see below).
 
 ```json
 {"execute_action": "grind_coffee"}
@@ -433,13 +434,13 @@ Assumes the portafilter has been **physically removed** from the claws — the f
 
 Returns `{"status": "complete", "iterations": 5}`.
 
-**`open_door`** - Grip the fridge handle and pull the door open along its hinge arc, then release and retract, leaving the door open. The door is a static obstacle (`fridge-door`) whose root frame origin sits on the hinge; `open_door` sweeps the door angle in software (`door_open_angle_degs`, default 90°, in `door_pivot_degrees_per_step` increments, default 10°), re-placing the door obstacle at each step so the grasp frame (`door_grasp_frame_name`, default `fridge-handle-ball`) and the door panel track the real swing and collision-checking stays honest. The gripper aims its `grip-point` frame at the grasp frame's **center**, with the orientation from `door_approach_relative_pose`; the pre-grasp standoff is that same relative pose's translation offset from the ball center (resolved against the live ball frame, like `cup_approach_relative_pose` against a detected cup). Neither approach nor grasp is a separately-authored switch pose. Contact between the gripper and the grasp frame is allowed during the pull. After the swing it releases and retracts to the same relative-pose standoff resolved against the ball's open position, leaving the door open. Requires only `door_approach_relative_pose` to be set — no poses are authored on the switch for this command. Gated like `run_cup_flow` (one sequence at a time) and honors `cancel`; the frame system is rebuilt on exit so the door mutation never leaks.
+**`execute_action: open_door`** - Grip the fridge handle and pull the door open along its hinge arc, then release and retract, leaving the door open. The door is a static obstacle (`fridge-door`) whose root frame origin sits on the hinge; `open_door` sweeps the door angle in software (`door_open_angle_degs`, default 90°, in `door_pivot_degrees_per_step` increments, default 10°), re-placing the door obstacle at each step so the grasp frame (`door_grasp_frame_name`, default `fridge-handle-ball`) and the door panel track the real swing and collision-checking stays honest. The gripper aims its `grip-point` frame at the grasp frame's **center**, with the orientation from `door_approach_relative_pose`; the pre-grasp standoff is that same relative pose's translation offset from the ball center (resolved against the live ball frame, like `cup_approach_relative_pose` against a detected cup). Neither approach nor grasp is a separately-authored switch pose. Through the swing the gripper tracks only the ball's **point** while holding that grasp orientation **fixed** — the handle knob is spherical, so the grasp doesn't constrain wrist roll, and letting the tool ride the door panel's rotation would twist the wrist off the handle. Contact between the gripper and the grasp frame is allowed during the pull. After the swing it releases and retracts to the same relative-pose standoff resolved against the ball's open position, leaving the door open. Requires only `door_approach_relative_pose` to be set — no poses are authored on the switch for this action. Gated like every action (one sequence at a time) and honors `cancel`; the frame system is rebuilt on exit so the door mutation never leaks.
 
 ```json
-{"open_door": true}
+{"execute_action": "open_door"}
 ```
 
-Returns `{"status": "door_open"}`.
+Returns `{"status": "complete", "action": "open_door"}`.
 
 **`action`** - Control the gripper. Supported values: `"open_gripper"`, `"close_gripper"`.
 

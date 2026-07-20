@@ -170,9 +170,6 @@ var coffeeCommands = []commandDef{
 		}
 		return s.runCupFlow(ctx, count)
 	}},
-	{key: "open_door", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
-		return s.openDoor(ctx)
-	}},
 	// Stream deck key commands.
 	{key: "action", needsStr: true,
 		spanName: func(cmd map[string]any) string { return "action[" + cmd["action"].(string) + "]" },
@@ -198,7 +195,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]any) (ma
 		}
 	}
 
-	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, open_door, action, send_delivery_message")
+	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action, send_delivery_message")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }

@@ -121,17 +121,11 @@ func (s *beanjaminCoffee) ballWorldPose(fs *referenceframe.FrameSystem, inputs *
 // openDoor grips the passive fridge handle and pulls the door open along its
 // hinge arc, re-placing the static door obstacle at each swept angle so
 // collision-checking stays honest. It then releases and retracts, leaving the
-// door open. The frame system is rebuilt on exit (normal or cancel) so the
-// in-place door mutation cannot leak.
-func (s *beanjaminCoffee) openDoor(ctx context.Context) (map[string]any, error) {
-	if !s.running.CompareAndSwap(false, true) {
-		return nil, errors.New("a sequence is already running")
-	}
-	defer s.running.Store(false)
-
-	s.mu.Lock()
-	cancelCtx := s.cancelCtx
-	s.mu.Unlock()
+// door open. Registered as an execute_action action, so the executeAction
+// wrapper takes the running gate, captures cancelCtx, and refreshes the frame
+// system before this runs. The frame system is rebuilt on exit (normal or
+// cancel) so the in-place door mutation cannot leak.
+func (s *beanjaminCoffee) openDoor(ctx, cancelCtx context.Context) error {
 	logger := s.logger
 
 	// Merge both contexts so cancellation from either stops planning/execution.
@@ -140,11 +134,7 @@ func (s *beanjaminCoffee) openDoor(ctx context.Context) (map[string]any, error) 
 	defer stop()
 	defer cancel()
 
-	// Start from clean, and always rebuild afterward to discard the door mutation
-	// (defers are LIFO: reset runs before running clears).
-	if err := s.refreshFrameSystemIfClean(ctx); err != nil {
-		return nil, fmt.Errorf("open_door: refresh frame system: %w", err)
-	}
+	// Always rebuild the frame system afterward to discard the door mutation.
 	defer func() {
 		if err := s.resetFrameSystem(ctx); err != nil {
 			logger.Warnf("open_door: resetFrameSystem failed: %v", err)
@@ -152,7 +142,7 @@ func (s *beanjaminCoffee) openDoor(ctx context.Context) (map[string]any, error) 
 	}()
 
 	if s.cfg.DoorApproachRelativePose == nil {
-		return nil, errors.New("open_door requires door_approach_relative_pose")
+		return errors.New("open_door requires door_approach_relative_pose")
 	}
 	s.setStep("Opening fridge")
 
@@ -160,49 +150,48 @@ func (s *beanjaminCoffee) openDoor(ctx context.Context) (map[string]any, error) 
 	//    from it. door_approach_relative_pose is a RelativePose offset composed
 	//    onto the grasp frame's center (the door analog of
 	//    cup_approach_relative_pose onto a detected cup, via composeCupPose, but
-	//    resolved against a live frame). Its orientation is the grasp orientation.
+	//    resolved against a live frame). Its orientation is the grasp orientation,
+	//    held fixed for the whole open so the gripper never twists off the handle.
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	ballBase, err := s.ballWorldPose(fs, fsInputs.ToLinearInputs())
 	if err != nil {
-		return nil, err
+		return err
 	}
 	approachRel := relativePoseToSpatial(s.cfg.DoorApproachRelativePose)
 	approachWorld := composeCupPose(ballBase.Point(), approachRel)
-	graspWorld := spatialmath.NewPose(ballBase.Point(), approachRel.Orientation())
+	graspOrient := approachRel.Orientation()
+	graspWorld := spatialmath.NewPose(ballBase.Point(), graspOrient)
 	collisions := s.filterFakeModeCollisions(doorOpenCollisions(s.doorGraspFrameName()))
 
 	// Move to the standoff, then straight to the ball center, then close.
 	if err := s.moveToRawPose(ctx,
 		&poseData{pose: approachWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
 		nil, nil, nil); err != nil {
-		return nil, fmt.Errorf("approach handle: %w", err)
+		return fmt.Errorf("approach handle: %w", err)
 	}
 	if err := s.moveToRawPose(ctx,
 		&poseData{pose: graspWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
 		nil, collisions, nil); err != nil {
-		return nil, fmt.Errorf("move to grasp (ball center): %w", err)
+		return fmt.Errorf("move to grasp (ball center): %w", err)
 	}
 	if s.gripper != nil {
 		if _, err := s.gripper.Grab(ctx, nil); err != nil {
-			return nil, fmt.Errorf("grab handle: %w", err)
+			return fmt.Errorf("grab handle: %w", err)
 		}
 	}
 
-	// 2. Door base transform + rigid grasp offset. gripperInBall: grip-point's
-	//    pose in the grasp frame; Compose(ballWorld, gripperInBall) == graspWorld,
-	//    held constant as the ball sweeps.
+	// 2. Door base transform, captured once so each setDoorTheta stays absolute.
 	doorFrame := fs.Frame(frameFridgeDoor)
 	if doorFrame == nil {
-		return nil, fmt.Errorf("door frame %q not found", frameFridgeDoor)
+		return fmt.Errorf("door frame %q not found", frameFridgeDoor)
 	}
 	baseDoorPose, err := doorFrame.Transform([]referenceframe.Input{})
 	if err != nil {
-		return nil, fmt.Errorf("door base transform: %w", err)
+		return fmt.Errorf("door base transform: %w", err)
 	}
-	gripperInBall := spatialmath.PoseBetween(ballBase, graspWorld)
 
 	// 3. Sweep θ closed→open, re-planning each step with the door repositioned.
 	sweep := computeDoorSweep(0, s.doorOpenAngleDegs(), s.doorPivotDegreesPerStep())
@@ -210,19 +199,25 @@ func (s *beanjaminCoffee) openDoor(ctx context.Context) (map[string]any, error) 
 
 	for _, theta := range sweep[1:] { // skip 0° — already there
 		if err := setDoorTheta(fs, frameFridgeDoor, baseDoorPose, theta); err != nil {
-			return nil, err
+			return err
 		}
 		// Fresh joint inputs (the arm moved last step); fs is the mutated cachedFS.
 		_, inNow, err := s.currentInputs(ctx)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		linNow := inNow.ToLinearInputs()
 		ballNow, err := s.ballWorldPose(fs, linNow)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		goalPose := spatialmath.Compose(ballNow, gripperInBall)
+		// Track only the ball's point through the swing while holding the grasp
+		// orientation fixed. The handle knob is spherical, so the grasp doesn't
+		// constrain wrist roll; letting grip-point ride the door panel's rotation
+		// (Compose with the rigid grasp offset) twisted the wrist off the handle.
+		// Commanding a constant tool orientation and following only the point
+		// keeps the gripper square to the handle the whole way.
+		goalPose := spatialmath.NewPose(ballNow.Point(), graspOrient)
 		goal := armplanning.NewPlanState(referenceframe.FrameSystemPoses{
 			frameGripPoint: referenceframe.NewPoseInFrame(referenceframe.World, goalPose),
 		}, nil)
@@ -236,14 +231,14 @@ func (s *beanjaminCoffee) openDoor(ctx context.Context) (map[string]any, error) 
 		plan, _, err := armplanning.PlanMotion(ctx, logger, req)
 		s.savePlanRequestAndResponse(req, plan, "open_door", err)
 		if err != nil {
-			return nil, fmt.Errorf("plan open_door step θ=%.0f: %w", theta, err)
+			return fmt.Errorf("plan open_door step θ=%.0f: %w", theta, err)
 		}
 		positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
 		if err != nil {
-			return nil, fmt.Errorf("frame inputs θ=%.0f: %w", theta, err)
+			return fmt.Errorf("frame inputs θ=%.0f: %w", theta, err)
 		}
 		if err := s.arm.MoveThroughJointPositions(ctx, positions, s.slowMovementMoveOptions(), nil); err != nil {
-			return nil, fmt.Errorf("execute open_door step θ=%.0f: %w", theta, err)
+			return fmt.Errorf("execute open_door step θ=%.0f: %w", theta, err)
 		}
 	}
 
@@ -253,22 +248,22 @@ func (s *beanjaminCoffee) openDoor(ctx context.Context) (map[string]any, error) 
 	//    in. Leaves the door open.
 	if s.gripper != nil {
 		if err := s.gripper.Open(ctx, nil); err != nil {
-			return nil, fmt.Errorf("release handle: %w", err)
+			return fmt.Errorf("release handle: %w", err)
 		}
 	}
 	_, retractInputs, err := s.currentInputs(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	ballOpen, err := s.ballWorldPose(fs, retractInputs.ToLinearInputs())
 	if err != nil {
-		return nil, err
+		return err
 	}
 	retractWorld := composeCupPose(ballOpen.Point(), approachRel)
 	if err := s.moveToRawPose(ctx,
 		&poseData{pose: retractWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
 		nil, collisions, nil); err != nil {
-		return nil, fmt.Errorf("retract: %w", err)
+		return fmt.Errorf("retract: %w", err)
 	}
-	return map[string]any{"status": "door_open"}, nil
+	return nil
 }
