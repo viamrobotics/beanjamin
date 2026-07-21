@@ -46,7 +46,7 @@ func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string
 			return nil, fmt.Errorf("run_cup_flow: iteration %d/%d: pickup: %w", i, count, err)
 		}
 		logger.Infof("run_cup_flow: iteration %d/%d — retrieve from machine + place on shelf", i, count)
-		if err := s.placeFullCupOnShelf(ctx, cancelCtx); err != nil {
+		if _, err := s.placeFullCupOnShelf(ctx, cancelCtx); err != nil {
 			return nil, fmt.Errorf("run_cup_flow: iteration %d/%d: place-on-shelf: %w", i, count, err)
 		}
 	}

@@ -200,8 +200,8 @@ func (s *beanjaminCoffee) sayAlways(ctx context.Context, text string) error {
 // delivery_request to the delivery machine and waits for its acknowledgment
 // (bounded by deliveryMessageTimeout) before speaking, so the order isn't
 // announced as handed off on the strength of a request nobody confirmed.
+// The caller sets order.PickupPosition from the serving step.
 func (s *beanjaminCoffee) readyForDelivery(ctx context.Context, order Order) error {
-	order.PickupPosition = s.deliveryPickupPosition(ctx)
 	s.notifyDeliveryRequest(ctx, order)
 	drink := speakableDrink(order.Drink)
 	text := fmt.Sprintf("%s ready for delivery!", drink)
@@ -228,29 +228,41 @@ func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order Order) {
 }
 
 func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]any, error) {
+	// The three placement actions report a serving slot (for a delivery order's
+	// pickup_position), but a standalone execute_action has no order to attach it
+	// to, so their closures drop it and return only the error.
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
-		"grind_coffee":              s.grindCoffee,
-		"grind_decaf":               s.grindDecaf,
-		"tamp_ground":               s.tampGround,
-		"lock_portafilter":          s.lockPortaFilter,
-		"unlock_portafilter":        s.unlockPortaFilter,
-		"release_filter":            s.releaseFilter,
-		"grab_filter":               s.grabFilter,
-		"turn_coffee_button_on":     s.turnCoffeeButtonOn,
-		"turn_coffee_button_off":    s.turnCoffeeButtonOff,
-		"brew_coffee":               s.brewCoffee,
-		"set_cup_for_coffee":        s.setCupForCoffee,
-		"give_full_cup_to_customer": s.placeFullCupOnShelf,
-		"clean_portafilter":         s.cleanPortafilter,
-		"fetch_glass":               s.fetchGlass,               // vision-grab a glass off the shelf
-		"pulse_ice_pin":             s.pulseIcePin,              // hardware only, no arm motion
-		"dispense_ice":              s.dispenseIce,              // arm to chute + pulse + retreat
-		"stage_glass":               s.stageGlass,               // set held glass down, release
-		"grab_brewed_cup":           s.grabBrewedCupFromMachine, // retrieve cup from under machine
-		"pour_espresso":             s.pourEspresso,             // pour held cup over staged glass
-		"grab_staged_glass":         s.grabStagedGlass,          // re-grab the staged glass
-		"place_held":                s.placeHeldInServingArea,   // place held vessel in serving area
-		"serve_iced_coffee":         s.serveIcedCoffee,          // full sequence end-to-end
+		"grind_coffee":           s.grindCoffee,
+		"grind_decaf":            s.grindDecaf,
+		"tamp_ground":            s.tampGround,
+		"lock_portafilter":       s.lockPortaFilter,
+		"unlock_portafilter":     s.unlockPortaFilter,
+		"release_filter":         s.releaseFilter,
+		"grab_filter":            s.grabFilter,
+		"turn_coffee_button_on":  s.turnCoffeeButtonOn,
+		"turn_coffee_button_off": s.turnCoffeeButtonOff,
+		"brew_coffee":            s.brewCoffee,
+		"set_cup_for_coffee":     s.setCupForCoffee,
+		"clean_portafilter":      s.cleanPortafilter,
+		"fetch_glass":            s.fetchGlass,               // vision-grab a glass off the shelf
+		"pulse_ice_pin":          s.pulseIcePin,              // hardware only, no arm motion
+		"dispense_ice":           s.dispenseIce,              // arm to chute + pulse + retreat
+		"stage_glass":            s.stageGlass,               // set held glass down, release
+		"grab_brewed_cup":        s.grabBrewedCupFromMachine, // retrieve cup from under machine
+		"pour_espresso":          s.pourEspresso,             // pour held cup over staged glass
+		"grab_staged_glass":      s.grabStagedGlass,          // re-grab the staged glass
+		"give_full_cup_to_customer": func(ctx, cancelCtx context.Context) error {
+			_, err := s.placeFullCupOnShelf(ctx, cancelCtx)
+			return err
+		},
+		"place_held": func(ctx, cancelCtx context.Context) error { // place held vessel in serving area
+			_, err := s.placeHeldInServingArea(ctx, cancelCtx)
+			return err
+		},
+		"serve_iced_coffee": func(ctx, cancelCtx context.Context) error { // full sequence end-to-end
+			_, err := s.serveIcedCoffee(ctx, cancelCtx)
+			return err
+		},
 		"open_door":                 s.openDoor,                 // grip the fridge handle and swing it open
 	}
 
@@ -442,16 +454,20 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 	logger.Infof("step 6b/9: serving cup")
 	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::serving")
+		var servedSlot int
 		var err error
 		if isIcedDrink(drink) {
-			err = s.serveIcedCoffee(ctx, cancelCtx)
+			servedSlot, err = s.serveIcedCoffee(ctx, cancelCtx)
 		} else {
-			err = s.placeFullCupOnShelf(ctx, cancelCtx)
+			servedSlot, err = s.placeFullCupOnShelf(ctx, cancelCtx)
 		}
 		stepSpan.End()
 		if err != nil {
 			return err
 		}
+		// Record where the drink physically landed so a delivery order can
+		// report it as the pickup_position.
+		order.PickupPosition = servedSlot
 		if order.Fulfillment == FulfillmentDelivery {
 			if err := s.readyForDelivery(ctx, order); err != nil {
 				logger.Warnf("failed to announce ready-for-delivery: %v", err)
