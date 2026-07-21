@@ -187,10 +187,55 @@ type Config struct {
 	// runaway voice command ("a hundred lattes") and from an LLM
 	// hallucinating a huge count. Defaults to 10 when unset or non-positive.
 	MaxBatchSize int `json:"max_batch_size,omitempty"`
+
+	// Fridge-door open (coffee/door.go): swing angle, per-step θ increment, and
+	// the frame the gripper aims at / tracks / is allowed to touch (the handle
+	// ball; its center is the grasp target). The door obstacle frame itself is a
+	// fixed constant in door.go.
+	DoorOpenAngleDegs       float64 `json:"door_open_angle_degs,omitempty"`
+	DoorPivotDegreesPerStep float64 `json:"door_pivot_degrees_per_step,omitempty"`
+	DoorGraspFrameName      string  `json:"door_grasp_frame_name,omitempty"`
+
+	// DoorApproachRelativePose is a RelativePose offset composed onto the grasp
+	// frame's center to produce the pre-grasp standoff (like
+	// cup_approach_relative_pose onto a detected cup centroid — see
+	// composeCupPose), but resolved against the live grasp frame. Its
+	// orientation is also the grasp orientation the gripper holds through the
+	// swing. Required to run open_door.
+	DoorApproachRelativePose *RelativePose `json:"door_approach_relative_pose,omitempty"`
 }
 
 // defaultMaxBatchSize is used when Config.MaxBatchSize is unset or zero.
 const defaultMaxBatchSize = 10
+
+// defaultDoorOpenAngleDegs is the fridge-door swing angle when unset.
+const defaultDoorOpenAngleDegs = 90
+
+// defaultDoorPivotDegreesPerStep is the per-step θ increment for the door
+// sweep when unset.
+const defaultDoorPivotDegreesPerStep = 10
+
+// doorOpenAngleDegs returns the configured fridge-door swing angle, defaulting
+// to defaultDoorOpenAngleDegs.
+func (s *beanjaminCoffee) doorOpenAngleDegs() float64 {
+	return orDefault(s.cfg.DoorOpenAngleDegs, defaultDoorOpenAngleDegs)
+}
+
+// doorPivotDegreesPerStep returns the configured per-step θ increment for the
+// door sweep, defaulting to defaultDoorPivotDegreesPerStep.
+func (s *beanjaminCoffee) doorPivotDegreesPerStep() float64 {
+	return orDefault(s.cfg.DoorPivotDegreesPerStep, defaultDoorPivotDegreesPerStep)
+}
+
+// doorGraspFrameName returns the frame the gripper aims at (its center is the
+// grasp target), tracks through the sweep, and is allowed to contact. Defaults
+// to frameFridgeHandleBall.
+func (s *beanjaminCoffee) doorGraspFrameName() string {
+	if s.cfg.DoorGraspFrameName != "" {
+		return s.cfg.DoorGraspFrameName
+	}
+	return frameFridgeHandleBall
+}
 
 // orDefault returns v when it is positive, otherwise def. It backs the
 // "configured tunable or default constant" pattern used by the numeric getters.

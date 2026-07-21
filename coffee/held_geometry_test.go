@@ -202,6 +202,46 @@ func TestReattachUsesCache(t *testing.T) {
 	}
 }
 
+// gripPointStaticFS returns world -> grip-point (static at gpPose).
+func gripPointStaticFS(t *testing.T, gpPose spatialmath.Pose) *referenceframe.FrameSystem {
+	t.Helper()
+	fs := referenceframe.NewEmptyFrameSystem("test")
+	gp, err := referenceframe.NewStaticFrame(gripPoint, gpPose)
+	if err != nil {
+		t.Fatalf("new grip-point frame: %v", err)
+	}
+	if err := fs.AddFrame(gp, fs.World()); err != nil {
+		t.Fatalf("add grip-point frame: %v", err)
+	}
+	return fs
+}
+
+// TestConfiguredCupBox verifies the cup_dimensions fallback centers the modeled
+// box on the grasp centroid — the grip-point world position minus the grab
+// offset (inverting composeCupPose) — and sizes it from cup_dimensions.
+func TestConfiguredCupBox(t *testing.T) {
+	gripPointWorld := r3.Vector{X: 170, Y: -300, Z: 250}
+	fs := gripPointStaticFS(t, spatialmath.NewPoseFromPoint(gripPointWorld))
+	s := heldGeomService(t, fs)
+	s.cfg.CupDimensions = &ContainerDimensions{DiameterMm: 60, HeightMm: 90}
+	// The grab sends the grip point 5mm +X and 30mm -Z off the cup centroid, so the
+	// centroid sits at grip-point minus that offset.
+	s.cfg.CupGrabRelativePose = &RelativePose{X: 5, Z: -30}
+
+	box, err := s.configuredCupBox(fs, referenceframe.NewZeroInputs(fs))
+	if err != nil {
+		t.Fatalf("configuredCupBox: %v", err)
+	}
+
+	requireVecEqual(t, box.Pose().Point(), r3.Vector{X: 165, Y: -300, Z: 280}, 1e-6)
+
+	dims := box.ToProtobuf().GetBox().GetDimsMm()
+	if dims == nil {
+		t.Fatalf("expected a box geometry, got %v", box)
+	}
+	requireVecEqual(t, r3.Vector{X: dims.X, Y: dims.Y, Z: dims.Z}, r3.Vector{X: 60, Y: 60, Z: 90}, 1e-6)
+}
+
 func TestReattachNoopWhenTrackingOff(t *testing.T) {
 	fs := clawsStaticFS(t, spatialmath.NewZeroPose())
 	s := heldGeomService(t, fs)
