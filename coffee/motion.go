@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -570,17 +571,40 @@ func (s *beanjaminCoffee) saveObservedItemsFrameSystem(label string, geoms []spa
 
 // moveToRawPose plans a motion using armplanning and executes it on the arm.
 func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
-	logger := s.activeOrderLogger()
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return err
 	}
+	plan, err := s.planToRawPose(ctx, fs, fsInputs, pd, lc, allowedCollisions)
+	if err != nil {
+		return err
+	}
+	return s.executePlan(ctx, plan, lc, moveOpts)
+}
+
+// planToRawPose plans a motion to pd starting from startInputs, without touching
+// the arm. Planning failures are wrapped in errMotionPlanning so callers with a
+// recovery path (e.g. dynamic pickup falling back to another candidate) can
+// distinguish them from execution errors. Both the destination transform and the
+// plan begin from startInputs, so passing a prior plan's end configuration
+// (planEndArmInputs) chains a second plan onto the first — letting a caller
+// prepare two moves and commit to executing them only if both plan successfully
+// (see tryGrab).
+func (s *beanjaminCoffee) planToRawPose(
+	ctx context.Context,
+	fs *referenceframe.FrameSystem,
+	startInputs referenceframe.FrameSystemInputs,
+	pd *poseData,
+	lc *StepLinearConstraint,
+	allowedCollisions []AllowedCollision,
+) (motionplan.Plan, error) {
+	logger := s.activeOrderLogger()
 
 	// Transform destination to world frame.
 	destination := referenceframe.NewPoseInFrame(pd.refFrame, pd.pose)
-	tf, err := fs.Transform(fsInputs.ToLinearInputs(), destination, referenceframe.World)
+	tf, err := fs.Transform(startInputs.ToLinearInputs(), destination, referenceframe.World)
 	if err != nil {
-		return fmt.Errorf("transform destination to world: %w", err)
+		return nil, fmt.Errorf("transform destination to world: %w", err)
 	}
 	goalPose := tf.(*referenceframe.PoseInFrame)
 
@@ -594,23 +618,26 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 		logger.Infof("allowing %d collision pair(s)", len(allowedCollisions))
 	}
 
-	// Plan.
 	req := &armplanning.PlanRequest{
 		FrameSystem: fs,
 		Goals: []*armplanning.PlanState{
 			armplanning.NewPlanState(referenceframe.FrameSystemPoses{pd.componentName: goalPose}, nil),
 		},
-		StartState:  armplanning.NewPlanState(nil, fsInputs),
+		StartState:  armplanning.NewPlanState(nil, startInputs),
 		Constraints: constraints,
 	}
 	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
 	s.savePlanRequestAndResponse(req, plan, "move", err)
 	if err != nil {
-		return fmt.Errorf("%w: %w", errMotionPlanning, err)
+		return nil, fmt.Errorf("%w: %w", errMotionPlanning, err)
 	}
+	return plan, nil
+}
 
-	// Execute — extract joint positions for the arm frame (not the end-effector
-	// component name used for the goal pose) and send to arm.
+// executePlan sends a planned trajectory to the arm. 
+func (s *beanjaminCoffee) executePlan(ctx context.Context, plan motionplan.Plan, lc *StepLinearConstraint, moveOpts *StepMoveOptions) error {
+	// Extract joint positions for the arm frame (not the end-effector component
+	// name used for the goal pose) and send to arm.
 	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
 	if err != nil {
 		return fmt.Errorf("get frame inputs from plan: %w", err)
@@ -620,6 +647,30 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 		opts = s.slowMovementMoveOptions()
 	}
 	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
+}
+
+// planEndArmInputs returns the arm's joint configuration at the end of a plan's
+// trajectory. Errors on an empty trajectory.
+func (s *beanjaminCoffee) planEndArmInputs(plan motionplan.Plan) ([]referenceframe.Input, error) {
+	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
+	if err != nil {
+		return nil, err
+	}
+	if len(positions) == 0 {
+		return nil, fmt.Errorf("plan has an empty trajectory")
+	}
+	return positions[len(positions)-1], nil
+}
+
+// withArmInputs returns a copy of base with the arm frame's inputs replaced by
+// armInputs, leaving base unmutated. Used to build a chained plan's start state:
+// the same frame-system configuration currentInputs produces (all frames zeroed,
+// arm set), but with the arm advanced to a prior plan's end.
+func (s *beanjaminCoffee) withArmInputs(base referenceframe.FrameSystemInputs, armInputs []referenceframe.Input) referenceframe.FrameSystemInputs {
+	out := make(referenceframe.FrameSystemInputs, len(base))
+	maps.Copy(out, base)
+	out[s.cfg.ArmName] = armInputs
+	return out
 }
 
 // executePivot fetches start and end poses, computes interpolated waypoints,
