@@ -805,10 +805,11 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 }
 
 // defaultCarryWaypointSpacingMm is the straight-line spacing between the
-// waypoints inserted along a no-spill carry move (see carryHeldLevel). 200 mm
-// keeps consecutive goals close enough that the planner has little room to tilt
-// the held drink between them.
-const defaultCarryWaypointSpacingMm = 200.0
+// waypoints inserted along a no-spill carry move (see carryHeldLevel). The
+// level goal cloud is only enforced at the waypoints, so between two goals the
+// trajectory can bow past the leeway; 150 mm keeps consecutive goals close
+// enough that the planner has little room to tilt the held drink between them.
+const defaultCarryWaypointSpacingMm = 150.0
 
 // noSpillGoalCloud loosens the goal at each intermediate carry waypoint so IK
 // has room to solve while still keeping the held container close to level. A
@@ -829,7 +830,12 @@ const defaultCarryWaypointSpacingMm = 200.0
 // docs). Tune on hardware before changing the orientation leeways.
 var noSpillGoalCloud = &referenceframe.PoseCloud{
 	X: 75, Y: 75, Z: 75,
-	OX: 0.2, OY: 0.2, OZ: 0.1, Theta: 45,
+	// OX/OY of 0.1 cap the container axis's off-vertical tilt at arcsin(0.1)≈5.7°
+	// per axis (≈8.1° along the OX+OY diagonal, since the leeways apply
+	// independently), which sits well below a full cup's static spill angle. Theta
+	// stays wide because a twist about a symmetric cup's own axis can't spill it,
+	// and narrowing it only starves IK.
+	OX: 0.1, OY: 0.1, OZ: 0.05, Theta: 45,
 }
 
 // computeLevelCarryWaypoints returns the ordered goal poses for a straight-line
