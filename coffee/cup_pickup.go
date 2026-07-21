@@ -560,10 +560,15 @@ func (s *beanjaminCoffee) pickupAreaShieldCollisions(shieldFrame string) []Allow
 	})...)
 }
 
-// tryGrab attempts a full approach-grab-retreat cycle on one candidate
-// centroid. On failure after the approach step, it best-effort restores the
-// arm to the target's observe home pose so the caller can attempt a different
-// candidate from a known good state.
+// tryGrab attempts a full approach-grab-retreat cycle on one candidate centroid.
+//
+// The approach and the grab descent are planned together up front — the grab is
+// planned from the approach plan's end configuration — and the arm only starts
+// moving once both plans succeed. So a planning failure of either leaves the arm
+// where it was and the caller can go straight to the next candidate, with no
+// wasted move-out and recover-back. Once motion has started, a failure after the
+// grab descent best-effort restores the arm to the observe home pose so the next
+// candidate starts from a known state.
 //
 // Returned errors fall into two categories the caller distinguishes via
 // errors.Is:
@@ -592,8 +597,33 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 		componentName: gripPoint,
 	}
 
-	// 1. Approach (free planning). On failure the arm has not moved.
-	if err := s.moveToRawPose(ctx, approachPD, nil, nil, nil); err != nil {
+	// Plan the approach and the grab descent before moving. The grab is planned
+	// from the approach plan's end configuration so the two trajectories join, and
+	// neither is executed unless both plan successfully — a planning failure of
+	// either wraps errMotionPlanning and returns with the arm unmoved, so the
+	// caller drops to the next candidate without a wasted approach-and-recover.
+	// (Opening the gripper and grabbing don't change the planning geometry, so the
+	// grab plans the same before the descent as it would at descent time.)
+	fs, fsInputs, err := s.currentInputs(ctx)
+	if err != nil {
+		return err
+	}
+	approachPlan, err := s.planToRawPose(ctx, fs, fsInputs, approachPD, nil, nil)
+	if err != nil {
+		return fmt.Errorf("plan approach to centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
+	}
+	approachEnd, err := s.planEndArmInputs(approachPlan)
+	if err != nil {
+		return fmt.Errorf("approach plan to centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
+	}
+	grabPlan, err := s.planToRawPose(ctx, fs, s.withArmInputs(fsInputs, approachEnd), grabPD, defaultApproachConstraint, s.pickupAreaShieldCollisions(t.shieldFrame))
+	if err != nil {
+		return fmt.Errorf("plan grab of centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
+	}
+
+	// Both plans succeeded — commit to the motion.
+	// 1. Approach (free planning).
+	if err := s.executePlan(ctx, approachPlan, nil, nil); err != nil {
 		return fmt.Errorf("approach centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
 
@@ -605,7 +635,7 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	time.Sleep(gripperPause)
 
 	// 3. Linear descent to grab pose.
-	if err := s.moveToRawPose(ctx, grabPD, defaultApproachConstraint, s.pickupAreaShieldCollisions(t.shieldFrame), nil); err != nil {
+	if err := s.executePlan(ctx, grabPlan, defaultApproachConstraint, nil); err != nil {
 		s.recoverToObserve(ctx, cancelCtx, t)
 		return fmt.Errorf("grab centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
