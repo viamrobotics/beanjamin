@@ -634,7 +634,7 @@ func (s *beanjaminCoffee) planToRawPose(
 	return plan, nil
 }
 
-// executePlan sends a planned trajectory to the arm. 
+// executePlan sends a planned trajectory to the arm.
 func (s *beanjaminCoffee) executePlan(ctx context.Context, plan motionplan.Plan, lc *StepLinearConstraint, moveOpts *StepMoveOptions) error {
 	// Extract joint positions for the arm frame (not the end-effector component
 	// name used for the goal pose) and send to arm.
