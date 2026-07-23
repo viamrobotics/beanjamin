@@ -414,6 +414,8 @@ func (s *beanjaminCoffee) notifyOrderReading(r orderReading) {
 	// Best-effort Slack alert on any non-successful attempt (faults + operator
 	// cancels). No-op when no slack_notifier_name is configured.
 	s.notifyOrderFailureSlack(r)
+	// Red LED flash + snarky spoken line on genuine faults only.
+	s.reactToOrderFailure(r)
 }
 
 // traceIDFromContext returns the OTel trace ID for ctx, or "" if there is no

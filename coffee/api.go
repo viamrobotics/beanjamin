@@ -85,6 +85,7 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		"is_busy":         s.running.Load(),
 		"current_step":    step,
 		"can_serve_decaf": s.cfg.CanServeDecaf,
+		"fault_active":    s.faultActive.Load(),
 	}
 	s.logger.Debugw("Status", "response", resp)
 	return resp, nil

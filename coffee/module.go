@@ -75,6 +75,9 @@ type beanjaminCoffee struct {
 	// the order sensor; reset at the start of each order.
 	failedStep     atomic.Value
 	currentOrderID atomic.Value // string: ID of the order currently being processed; "" when idle
+	// faultActive is raised for faultWindow after a genuine fault and surfaced
+	// in Status() as fault_active (fault_alert.go).
+	faultActive atomic.Bool
 	// activeLogger holds the order-scoped logger (tagged with order_id) for the
 	// order currently being processed; set by processQueue and cleared when it
 	// finishes. Entry points that run outside the queue goroutine — notably
