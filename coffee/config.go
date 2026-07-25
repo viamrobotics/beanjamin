@@ -131,9 +131,8 @@ type Config struct {
 	// walks the candidate list (closest first), falling through to the
 	// next candidate on planning failures. Defaults to 3.
 	CupPickupMaxAttempts int `json:"cup_pickup_max_attempts,omitempty"`
-	// CupDimensions optionally overrides the cup size derived from the
-	// detection point cloud with a known diameter/height (see
-	// ContainerDimensions). Unset keeps the point-cloud-derived size.
+	// CupDimensions is the known cup diameter/height the held cup is modeled
+	// from (see ContainerDimensions). Required.
 	CupDimensions *ContainerDimensions `json:"cup_dimensions,omitempty"`
 
 	// Glass pickup (iced coffee) mirrors cup pickup but with its own vision
@@ -143,9 +142,8 @@ type Config struct {
 	GlassObservePoseSwitcherName string        `json:"glass_observe_pose_switcher_name,omitempty"`
 	GlassApproachRelativePose    *RelativePose `json:"glass_approach_relative_pose,omitempty"`
 	GlassGrabRelativePose        *RelativePose `json:"glass_grab_relative_pose,omitempty"`
-	// GlassDimensions optionally overrides the glass size derived from the
-	// detection point cloud with a known diameter/height (see
-	// ContainerDimensions). Unset keeps the point-cloud-derived size.
+	// GlassDimensions is the known glass diameter/height the held glass is
+	// modeled from (see ContainerDimensions). Required when can_serve_iced is set.
 	GlassDimensions *ContainerDimensions `json:"glass_dimensions,omitempty"`
 
 	// Serving placement offsets are composed onto the serving-area slot anchor
@@ -153,13 +151,6 @@ type Config struct {
 	// used for both the hot cup and the iced glass. Both are required.
 	ServingApproachRelativePose *RelativePose `json:"serving_approach_relative_pose,omitempty"`
 	ServingGrabRelativePose     *RelativePose `json:"serving_grab_relative_pose,omitempty"`
-
-	// TrackHeldGeometry, when true, attaches the vision-detected geometry of a
-	// picked-up cup/glass to the gripper frame in the cached frame system, so
-	// motion planning routes around the held item until it is set down (see
-	// held_geometry.go). The geometry comes from the pickup vision detection.
-	// Off by default.
-	TrackHeldGeometry bool `json:"track_held_geometry,omitempty"`
 
 	// NoSpillCarry, when true, carries a filled container along a straight line
 	// broken into waypoints (one every defaultCarryWaypointSpacingMm) instead of
@@ -169,9 +160,8 @@ type Config struct {
 	// carryHeldLevel in motion.go). It applies to every free traverse of a filled
 	// container: the serving-area placement (placeFullCupOnShelf and the iced
 	// glass), carrying the ice-filled glass to staging, and carrying the espresso
-	// cup to the pour position. It commands the held-item frame, so it requires
-	// TrackHeldGeometry=true. Off by default (those moves free-plan straight to the
-	// goal pose).
+	// cup to the pour position. Off by default (those moves free-plan straight to
+	// the goal pose).
 	NoSpillCarry bool `json:"no_spill_carry,omitempty"`
 
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
@@ -290,29 +280,26 @@ type RelativePose struct {
 	Theta float64 `json:"theta"`
 }
 
-// ContainerDimensions is an optional, operator-supplied size for a picked-up
-// container (cup or glass). When set on the coffee service config
-// (cup_dimensions / glass_dimensions), it replaces the size derived from the
-// detection point cloud: the held-item bounding box is built with
-// width = depth = DiameterMm and height = HeightMm, centered on the grasp
-// centroid (the point the gripper is sent to) rather than on the point-cloud
-// midpoint. The grasp centroid itself is unaffected — only the
-// collision/visualization geometry changes. Round containers (cups/glasses)
-// are well approximated by a square-footprint box of the rim diameter, and a
-// known size centered on the grasp point avoids the point cloud under-reading or
-// skewing the box for a partially-observed container. Unset (the default) keeps
-// the point-cloud-derived dimensions.
+// ContainerDimensions is the operator-supplied size of a picked-up container
+// (cup or glass), configured as cup_dimensions / glass_dimensions. It defines
+// the held-item bounding box: width = depth = DiameterMm and height = HeightMm,
+// centered on the grasp centroid (the point the gripper is sent to). The grasp
+// centroid itself is unaffected — only the collision/visualization geometry
+// comes from here. Round containers (cups/glasses) are well approximated by a
+// square-footprint box of the rim diameter, and a known size centered on the
+// grasp point avoids a partially-observed point cloud under-reading or skewing
+// the box. Every container the arm carries is tracked as a held item
+// (held_geometry.go), so these dimensions are required.
 type ContainerDimensions struct {
 	DiameterMm float64 `json:"diameter_mm"`
 	HeightMm   float64 `json:"height_mm"`
 }
 
-// validate checks an optional ContainerDimensions override: a nil override is
-// allowed (point-cloud dimensions are used), but when present both diameter and
-// height must be positive. field is the JSON config key for error messages.
+// validate checks a required ContainerDimensions: it must be present, with a
+// positive diameter and height. field is the JSON config key for error messages.
 func (d *ContainerDimensions) validate(path, field string) error {
 	if d == nil {
-		return nil
+		return resource.NewConfigValidationFieldRequiredError(path, field)
 	}
 	if d.DiameterMm <= 0 {
 		return fmt.Errorf("%s: %s.diameter_mm must be > 0", path, field)
@@ -388,10 +375,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.CupPickupMaxAttempts < 0 {
 		return nil, nil, fmt.Errorf("%s: cup_pickup_max_attempts must be >= 0", path)
 	}
+	// The picked-up cup is always tracked as a held item, and its geometry is
+	// modeled from these dimensions, so they must be configured.
 	if err := cfg.CupDimensions.validate(path, "cup_dimensions"); err != nil {
-		return nil, nil, err
-	}
-	if err := cfg.GlassDimensions.validate(path, "glass_dimensions"); err != nil {
 		return nil, nil, err
 	}
 	reqDeps = append(reqDeps,
@@ -399,10 +385,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		camera.Named(cfg.SrcCameraName).String(),
 		cfg.CameraObservePoseSwitcherName,
 	)
-
-	if cfg.NoSpillCarry && !cfg.TrackHeldGeometry {
-		return nil, nil, fmt.Errorf("%s: no_spill_carry commands the held-item (container) frame, so it requires track_held_geometry=true", path)
-	}
 
 	if cfg.CanServeIced {
 		if cfg.IceDispenseBoardName == "" {
@@ -424,6 +406,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 		if cfg.GlassGrabRelativePose == nil {
 			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "glass_grab_relative_pose")
+		}
+		if err := cfg.GlassDimensions.validate(path, "glass_dimensions"); err != nil {
+			return nil, nil, err
 		}
 		reqDeps = append(reqDeps,
 			vision.Named(cfg.GlassVisionServiceName).String(),

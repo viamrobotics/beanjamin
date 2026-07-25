@@ -28,8 +28,8 @@ var clawCoffeeButtonCollisions = []AllowedCollision{
 	{Frame1: "gripper:claws", Frame2: "coffee-machine-buffer-front"},
 }
 
-// Held-item surface collisions (track_held_geometry). When a cup/glass geometry
-// is attached to the gripper, the held item must be allowed to approach the
+// Held-item surface collisions. When a cup/glass geometry is
+// attached to the gripper, the held item must be allowed to approach the
 // modeled surfaces it legitimately gets close to during a contact phase — the
 // same allowances the bare claws already carry. The gripper-overlap pairs
 // (heldItemSelfCollisions) are auto-injected for every held move; these cover

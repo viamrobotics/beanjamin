@@ -2,12 +2,11 @@ package coffee
 
 // Held-item geometry tracking.
 //
-// When track_held_geometry is enabled, the cup or glass the gripper picks up is
-// added to the cached frame system as a static "held-item" frame parented to the
-// gripper frame (componentClaws), carrying the vision-detected geometry expressed
-// relative to the gripper. While it is present, every motion plan routes around
-// the held item — so the arm doesn't drive the cup into the machine, the shelf,
-// or itself while carrying it.
+// The cup or glass the gripper picks up is added to the cached frame system as a
+// static "held-item" frame parented to the gripper frame (componentClaws),
+// carrying the detection geometry expressed relative to the gripper. While it is
+// present, every motion plan routes around the held item — so the arm doesn't
+// drive the cup into the machine, the shelf, or itself while carrying it.
 //
 // The geometry is attached on grab (attachDetectedGeometry for a fresh vision
 // detection, reattachGeometry when re-grabbing an item whose geometry was already
@@ -42,10 +41,9 @@ const stagedGlassFrameName = "staged-glass"
 // (as lifted in observeVantage). It is expressed relative to the gripper frame
 // at the current (grab) pose and cached by label so a later re-grab of the same
 // item (reattachGeometry) can restore it without re-detecting. No-op when
-// track_held_geometry is off or geomWorld is nil (no detection geometry
-// available).
+// geomWorld is nil (no detection geometry available).
 func (s *beanjaminCoffee) attachDetectedGeometry(ctx context.Context, label string, geomWorld spatialmath.Geometry) error {
-	if !s.cfg.TrackHeldGeometry || geomWorld == nil {
+	if geomWorld == nil {
 		return nil
 	}
 	fs, fsInputs, err := s.currentInputs(ctx)
@@ -80,13 +78,10 @@ func (s *beanjaminCoffee) attachDetectedGeometry(ctx context.Context, label stri
 
 // reattachGeometry restores the held-item frame for an item being re-grabbed
 // (the brewed cup from under the machine, or the staged glass) using the geometry
-// cached at its initial pickup. No-op when tracking is off or nothing was cached
-// for this label (the item was first grabbed before tracking, or via the static
-// pickup path).
+// cached at its initial pickup. No-op when nothing was cached for this label
+// (e.g. a manually-stepped serving that never ran the vision pickup, or a frame
+// system reset that dropped the cached grasp).
 func (s *beanjaminCoffee) reattachGeometry(label string) error {
-	if !s.cfg.TrackHeldGeometry {
-		return nil
-	}
 	gripperLocal := s.cachedHeldGeometry(label)
 	if gripperLocal == nil {
 		s.activeOrderLogger().Debugf("reattach %s geometry: nothing cached, skipping", label)
@@ -107,16 +102,12 @@ func (s *beanjaminCoffee) reattachGeometry(label string) error {
 // grip-point move, so motion plans wouldn't route the cup around the staged glass
 // or the machine.
 //
-// The cup is modeled exactly as overriddenBox models it at pickup: an upright box
+// The cup is modeled exactly as containerBox models it at pickup: an upright box
 // of the configured size centered on the grasp centroid. The centroid is
 // recovered by inverting the composeCupPose the grab used — the grab sends the
 // grip point to centroid + cup_grab_relative_pose, so the centroid is the current
-// grip-point world position minus that offset. No-op when tracking is off or
-// cup_dimensions is unset (the caller then keeps the untracked grip-point carry).
+// grip-point world position minus that offset.
 func (s *beanjaminCoffee) attachConfiguredCupGeometry(ctx context.Context) error {
-	if !s.cfg.TrackHeldGeometry || s.cfg.CupDimensions == nil {
-		return nil
-	}
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return err
@@ -148,7 +139,7 @@ func (s *beanjaminCoffee) configuredCupBox(fs *referenceframe.FrameSystem, fsInp
 	// cup_grab_relative_pose is required by Validate whenever pickup is configured,
 	// so it is non-nil on any machine that reaches a serving flow.
 	grabOffset := relativePoseToSpatial(s.cfg.CupGrabRelativePose).Point()
-	return overriddenBox(gripPointWorld.Sub(grabOffset), s.cfg.CupDimensions, pickupLabelCup)
+	return containerBox(gripPointWorld.Sub(grabOffset), s.cfg.CupDimensions, pickupLabelCup)
 }
 
 // addHeldItemFrame adds the held-item static frame under the gripper frame,
@@ -192,8 +183,8 @@ func (s *beanjaminCoffee) detachHeldGeometry() {
 
 // stageGlassAsObstacle is stageGlass's release path: it lifts the held glass
 // geometry into world coordinates and re-parents it from the gripper to a static
-// World frame, so the released glass stays a collision obstacle. No-op when nothing
-// is attached (e.g. track_held_geometry is off), like detachHeldGeometry.
+// World frame, so the released glass stays a collision obstacle. No-op when
+// nothing is attached, like detachHeldGeometry.
 func (s *beanjaminCoffee) stageGlassAsObstacle(ctx context.Context) error {
 	if !s.heldItemAttached {
 		return nil
@@ -354,8 +345,8 @@ func (s *beanjaminCoffee) heldItemSurfaceCollisions(pairs []AllowedCollision) []
 
 // heldItemHalfHeightMm returns half the vertical (Z) extent, in mm, of the
 // currently tracked held-item geometry, and true when an item is attached and
-// its geometry is a Box. The held-item box is modeled upright (overriddenBox /
-// worldBoundingBox build it with OZ=1 and Z = container height) and a Box keeps
+// its geometry is a Box. The held-item box is modeled upright (containerBox
+// builds it with OZ=1 and Z = container height) and a Box keeps
 // its dims under the transform into the gripper frame, so its Z dimension is the
 // container's vertical extent once placed upright at the drop pose. Returns false
 // when nothing is attached or the geometry is not a Box, so callers fall back to

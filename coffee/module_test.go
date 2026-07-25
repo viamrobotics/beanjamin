@@ -25,6 +25,7 @@ func validBaseConfig() *Config {
 		CupGrabRelativePose:           &RelativePose{},
 		ServingApproachRelativePose:   &RelativePose{},
 		ServingGrabRelativePose:       &RelativePose{},
+		CupDimensions:                 &ContainerDimensions{DiameterMm: 80, HeightMm: 95},
 	}
 }
 
@@ -41,6 +42,7 @@ func validCanServeIcedConfig() *Config {
 	cfg.GlassObservePoseSwitcherName = "glass-observe-switch"
 	cfg.GlassApproachRelativePose = &RelativePose{}
 	cfg.GlassGrabRelativePose = &RelativePose{}
+	cfg.GlassDimensions = &ContainerDimensions{DiameterMm: 70, HeightMm: 140}
 	return cfg
 }
 
@@ -132,12 +134,12 @@ func TestValidate_RejectsNegativeMaxAttempts(t *testing.T) {
 	}
 }
 
-func TestValidate_AcceptsCupAndGlassDimensions(t *testing.T) {
+func TestValidate_RequiresCupDimensions(t *testing.T) {
 	cfg := validBaseConfig()
-	cfg.CupDimensions = &ContainerDimensions{DiameterMm: 80, HeightMm: 95}
-	cfg.GlassDimensions = &ContainerDimensions{DiameterMm: 70, HeightMm: 140}
-	if _, _, err := cfg.Validate(""); err != nil {
-		t.Fatalf("expected no error, got %v", err)
+	cfg.CupDimensions = nil
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "cup_dimensions") {
+		t.Fatalf("expected cup_dimensions required error, got %v", err)
 	}
 }
 
@@ -159,8 +161,27 @@ func TestValidate_RejectsNonPositiveCupHeight(t *testing.T) {
 	}
 }
 
-func TestValidate_RejectsNonPositiveGlassDimensions(t *testing.T) {
+// Glass dimensions are only required — and only checked — when the machine can
+// serve iced drinks, since that is the only flow that picks up a glass.
+func TestValidate_IgnoresGlassDimensionsWhenNotServingIced(t *testing.T) {
 	cfg := validBaseConfig()
+	cfg.GlassDimensions = nil
+	if _, _, err := cfg.Validate(""); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidate_CanServeIced_RequiresGlassDimensions(t *testing.T) {
+	cfg := validCanServeIcedConfig()
+	cfg.GlassDimensions = nil
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "glass_dimensions") {
+		t.Fatalf("expected glass_dimensions required error, got %v", err)
+	}
+}
+
+func TestValidate_CanServeIced_RejectsNonPositiveGlassDimensions(t *testing.T) {
+	cfg := validCanServeIcedConfig()
 	cfg.GlassDimensions = &ContainerDimensions{DiameterMm: 70, HeightMm: 0}
 	_, _, err := cfg.Validate("")
 	if err == nil || !strings.Contains(err.Error(), "glass_dimensions.height_mm") {
