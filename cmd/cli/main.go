@@ -29,8 +29,6 @@ func realMain() error {
 	switch os.Args[1] {
 	case "say":
 		return runSay(os.Args[2:])
-	case "draw-framesystem":
-		return runDrawFrameSystem(os.Args[2:])
 	default:
 		printUsage()
 		return fmt.Errorf("unknown command: %s", os.Args[1])
@@ -41,8 +39,7 @@ func printUsage() {
 	fmt.Println("Usage: beanjamin-cli <command> [flags]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  say               Say text aloud via the speech service")
-	fmt.Println("  draw-framesystem  Draw a saved frame-system JSON file to the local motion-tools visualizer")
+	fmt.Println("  say  Say text aloud via the speech service")
 }
 
 // connFlags holds the shared connection flags used by all commands.

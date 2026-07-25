@@ -153,22 +153,21 @@ func relativePoseToSpatial(r *RelativePose) spatialmath.Pose {
 	)
 }
 
-// cameraToWorld lifts a point given in the camera's local frame into the
-// world frame. The vision service returns object geometry in the camera
-// frame; this function uses the frame system Transform to convert.
-func cameraToWorld(
+// cameraToWorldPose resolves the camera frame's pose in the world frame at the
+// given inputs. Composing it onto a camera-frame pose lifts that pose into world
+// coordinates — the vision service reports object geometry and point clouds in
+// the camera frame, so everything an observation produces goes through it.
+func cameraToWorldPose(
 	fs *referenceframe.FrameSystem,
 	fsInputs referenceframe.FrameSystemInputs,
 	cameraFrame string,
-	point r3.Vector,
-) (r3.Vector, error) {
-	pif := referenceframe.NewPoseInFrame(cameraFrame, spatialmath.NewPoseFromPoint(point))
+) (spatialmath.Pose, error) {
+	pif := referenceframe.NewPoseInFrame(cameraFrame, spatialmath.NewZeroPose())
 	tf, err := fs.Transform(fsInputs.ToLinearInputs(), pif, referenceframe.World)
 	if err != nil {
-		return r3.Vector{}, fmt.Errorf("transform %q to world: %w", cameraFrame, err)
+		return nil, fmt.Errorf("transform %q to world: %w", cameraFrame, err)
 	}
-	worldPose := tf.(*referenceframe.PoseInFrame)
-	return worldPose.Pose().Point(), nil
+	return tf.(*referenceframe.PoseInFrame).Pose(), nil
 }
 
 // boxDims converts a diameter/height override into axis-aligned box extents:
@@ -305,6 +304,13 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 		return nil, err
 	}
 
+	// The camera's world pose at these inputs — everything the vision service
+	// reports is in the camera frame
+	camToWorld, err := cameraToWorldPose(fs, fsInputs, t.cameraName)
+	if err != nil {
+		return nil, err
+	}
+
 	// The static surfaces (shelf/table) the detected items rest on, used to seat
 	// each container's base on the surface beneath it (see below). Enumerated once
 	// per observation since world-anchored geometry does not move between candidates.
@@ -314,15 +320,18 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 	}
 
 	candidates := make([]pickupCandidate, 0, len(objects))
+	// What goes into the debug snapshot below. Every detection contributes its raw
+	// point cloud, including the ones dropped here for lacking a usable geometry —
+	// a detection the pickup threw away is exactly what one wants to look at.
+	detections := make([]detectionSnapshotItem, 0, len(objects))
 	for _, obj := range objects {
+		detections = append(detections, detectionSnapshotItem{cloud: obj.PointCloud})
+		detectionIdx := len(detections) - 1
 		if obj.Geometry == nil {
 			continue
 		}
 		local := obj.Geometry.Pose().Point()
-		world, err := cameraToWorld(fs, fsInputs, t.cameraName, local)
-		if err != nil {
-			return nil, err
-		}
+		world := spatialmath.Compose(camToWorld, spatialmath.NewPoseFromPoint(local)).Point()
 		// Build the detection geometry as a world-frame, axis-aligned (orientation
 		// OZ=1) box of the configured container size, centered on the grasp
 		// centroid — a known-size container modeled around where it is actually
@@ -351,26 +360,15 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 				t.label, world.X, world.Y, world.Z)
 		}
 		logger.Debugf("dynamic %s pickup: detection at camera-local %v -> world %v", t.label, local, world)
+		detections[detectionIdx].box = geomWorld
 		candidates = append(candidates, pickupCandidate{centroid: world, geom: geomWorld})
 	}
 
-	// Persist a frame-system snapshot augmented with the world-frame detection
-	// geometries to the motion-requests dir, so the observed cups/glasses can be
-	// loaded back into a FrameSystem and drawn in a local motion-tools visualizer.
-	s.saveObservedItemsFrameSystem(t.label, geometriesOf(candidates))
+	// Persist a motion-tools snapshot of this observation to the motion-requests
+	// dir: the frame system at these inputs plus every detection's point cloud and
+	// bounding box, replayable in a local motion-tools visualizer.
+	s.saveDetectionSnapshot(t.label, fs, fsInputs, camToWorld, detections)
 	return candidates, nil
-}
-
-// geometriesOf extracts the world-frame geometries from a slice of candidates,
-// skipping any without a geometry. Used to feed the visualizer.
-func geometriesOf(candidates []pickupCandidate) []spatialmath.Geometry {
-	out := make([]spatialmath.Geometry, 0, len(candidates))
-	for _, c := range candidates {
-		if c.geom != nil {
-			out = append(out, c.geom)
-		}
-	}
-	return out
 }
 
 // observationPoseNames returns the names of every pose on the given observe
