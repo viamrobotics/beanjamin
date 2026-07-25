@@ -108,7 +108,7 @@ type beanjaminCoffee struct {
 	// modulo the number of tiles. Process-local; resets to 0 on rebuild.
 	servingAreaSlotCounter atomic.Uint64
 
-	// Held-item geometry tracking (track_held_geometry, held_geometry.go).
+	// Held-item geometry tracking (held_geometry.go).
 	// heldCupGeom / heldGlassGeom cache the gripper-local geometry of the cup /
 	// glass detected at pickup so a re-grab can restore it; heldItemAttached
 	// tracks whether the held-item frame is currently present in cachedFS. These

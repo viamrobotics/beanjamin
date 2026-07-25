@@ -19,12 +19,11 @@ func requireVecEqual(t *testing.T, got, want r3.Vector, tol float64) {
 	}
 }
 
-// heldGeomService builds a tracking-enabled service around the given frame
-// system.
+// heldGeomService builds a service around the given frame system.
 func heldGeomService(t *testing.T, fs *referenceframe.FrameSystem) *beanjaminCoffee {
 	t.Helper()
 	return &beanjaminCoffee{
-		cfg:      &Config{TrackHeldGeometry: true},
+		cfg:      &Config{},
 		logger:   logging.NewTestLogger(t),
 		cachedFS: fs,
 	}
@@ -216,7 +215,7 @@ func gripPointStaticFS(t *testing.T, gpPose spatialmath.Pose) *referenceframe.Fr
 	return fs
 }
 
-// TestConfiguredCupBox verifies the cup_dimensions fallback centers the modeled
+// TestConfiguredCupBox verifies the cup_dimensions modeling centers the modeled
 // box on the grasp centroid — the grip-point world position minus the grab
 // offset (inverting composeCupPose) — and sizes it from cup_dimensions.
 func TestConfiguredCupBox(t *testing.T) {
@@ -240,19 +239,6 @@ func TestConfiguredCupBox(t *testing.T) {
 		t.Fatalf("expected a box geometry, got %v", box)
 	}
 	requireVecEqual(t, r3.Vector{X: dims.X, Y: dims.Y, Z: dims.Z}, r3.Vector{X: 60, Y: 60, Z: 90}, 1e-6)
-}
-
-func TestReattachNoopWhenTrackingOff(t *testing.T) {
-	fs := clawsStaticFS(t, spatialmath.NewZeroPose())
-	s := heldGeomService(t, fs)
-	s.cfg.TrackHeldGeometry = false
-	s.cacheHeldGeometry(pickupLabelCup, testBox(t, spatialmath.NewZeroPose()))
-	if err := s.reattachGeometry(pickupLabelCup); err != nil {
-		t.Fatalf("reattach: %v", err)
-	}
-	if s.heldItemAttached {
-		t.Fatalf("reattach must be a no-op when tracking is off")
-	}
 }
 
 func TestClearHeldGeometry(t *testing.T) {

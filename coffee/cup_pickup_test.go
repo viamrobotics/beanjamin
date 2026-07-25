@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/golang/geo/r3"
-	"go.viam.com/rdk/pointcloud"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
 )
@@ -293,62 +292,16 @@ func TestCameraToWorld_MissingFrame(t *testing.T) {
 	}
 }
 
-// TestWorldBoundingBox verifies that worldBoundingBox builds an axis-aligned
-// (orientation OZ=1) box in the world frame spanning the point cloud's world
-// min/max extents, centered at their midpoint, with the camera→world transform
-// applied to the camera-frame points.
-func TestWorldBoundingBox(t *testing.T) {
-	// Camera translated +100 in X from world (identity orientation), so world
-	// coords are the camera coords shifted by +100 in X.
-	fs := referenceframe.NewEmptyFrameSystem("test")
-	cam, err := referenceframe.NewStaticFrame("camera", spatialmath.NewPoseFromPoint(r3.Vector{X: 100}))
-	if err != nil {
-		t.Fatalf("new camera frame: %v", err)
-	}
-	if err := fs.AddFrame(cam, fs.World()); err != nil {
-		t.Fatalf("add camera frame: %v", err)
-	}
-
-	// Camera-frame points spanning min (0,0,0) .. max (20,40,80).
-	cloud := pointcloud.NewBasicEmpty()
-	for _, p := range []r3.Vector{{X: 0, Y: 0, Z: 0}, {X: 20, Y: 40, Z: 80}, {X: 10, Y: 5, Z: 30}} {
-		if err := cloud.Set(p, pointcloud.NewBasicData()); err != nil {
-			t.Fatalf("set point: %v", err)
-		}
-	}
-
-	box, err := worldBoundingBox(fs, referenceframe.NewZeroInputs(fs), "camera", cloud, "cup")
-	if err != nil {
-		t.Fatalf("worldBoundingBox: %v", err)
-	}
-	if box == nil {
-		t.Fatal("expected a box, got nil")
-	}
-
-	// World center: camera midpoint (10,20,40) shifted +100 in X => (110,20,40).
-	want, err := spatialmath.NewBox(
-		spatialmath.NewPose(r3.Vector{X: 110, Y: 20, Z: 40}, &spatialmath.OrientationVectorDegrees{OZ: 1}),
-		r3.Vector{X: 20, Y: 40, Z: 80},
-		"cup",
-	)
-	if err != nil {
-		t.Fatalf("new want box: %v", err)
-	}
-	if !spatialmath.GeometriesAlmostEqual(box, want) {
-		t.Errorf("bounding box mismatch:\n got %v\nwant %v", box, want)
-	}
-}
-
-// TestOverriddenBox verifies that overriddenBox builds an axis-aligned box of the
-// operator-supplied size (width = depth = diameter, height = height) centered on
-// the grasp centroid — not on any point-cloud-derived midpoint.
-func TestOverriddenBox(t *testing.T) {
+// TestContainerBox verifies that containerBox builds an axis-aligned box of the
+// configured size (width = depth = diameter, height = height) centered on the
+// grasp centroid — not on any point-cloud-derived midpoint.
+func TestContainerBox(t *testing.T) {
 	centroid := r3.Vector{X: 110, Y: 20, Z: 40}
 	dims := &ContainerDimensions{DiameterMm: 70, HeightMm: 140}
 
-	box, err := overriddenBox(centroid, dims, "glass")
+	box, err := containerBox(centroid, dims, "glass")
 	if err != nil {
-		t.Fatalf("overriddenBox: %v", err)
+		t.Fatalf("containerBox: %v", err)
 	}
 	if box == nil {
 		t.Fatal("expected a box, got nil")
@@ -365,18 +318,5 @@ func TestOverriddenBox(t *testing.T) {
 	}
 	if !spatialmath.GeometriesAlmostEqual(box, want) {
 		t.Errorf("box mismatch:\n got %v\nwant %v", box, want)
-	}
-}
-
-// TestWorldBoundingBox_EmptyCloud verifies an empty cloud yields a nil geometry
-// (the caller skips it) rather than an error.
-func TestWorldBoundingBox_EmptyCloud(t *testing.T) {
-	fs := referenceframe.NewEmptyFrameSystem("test")
-	box, err := worldBoundingBox(fs, referenceframe.NewZeroInputs(fs), "world", pointcloud.NewBasicEmpty(), "cup")
-	if err != nil {
-		t.Fatalf("worldBoundingBox: %v", err)
-	}
-	if box != nil {
-		t.Errorf("expected nil box for empty cloud, got %v", box)
 	}
 }

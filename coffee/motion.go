@@ -59,9 +59,8 @@ func (s *beanjaminCoffee) moveToPose(ctx context.Context, step Step) error {
 		return err
 	}
 	// A filled-container traverse (NoSpill) routes through the level carry so the
-	// drink doesn't slosh, but only when no_spill_carry is configured — it commands
-	// the held-item frame, so it needs track_held_geometry. The carry supplies its
-	// own straight-line waypoints in place of a LinearConstraint, but still honors
+	// drink doesn't slosh, but only when no_spill_carry is configured. The carry
+	// supplies its own straight-line waypoints in place of a LinearConstraint, but still honors
 	// the step's AllowedCollisions and MoveOptions. Otherwise, and for every ordinary
 	// step, plan straight to the pose.
 	if step.NoSpill && s.cfg.NoSpillCarry {

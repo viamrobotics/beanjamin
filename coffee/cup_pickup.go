@@ -14,8 +14,8 @@ package coffee
 // to the remaining poses, so a cup reachable only from a later vantage is still
 // found before we give up.
 //
-// When container dimensions are configured, each detection's grasp Z is resolved
-// from the surface it rests on rather than the noisy detected Z: the base is
+// Each detection's grasp Z is resolved from the surface it rests on rather than
+// the noisy detected Z: with the container's configured height, the base is
 // seated just above the top of the static surface directly beneath it (see
 // resting_surface.go).
 //
@@ -35,7 +35,6 @@ import (
 	"github.com/golang/geo/r3"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/module/trace"
-	"go.viam.com/rdk/pointcloud"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/services/vision"
 	"go.viam.com/rdk/spatialmath"
@@ -179,59 +178,16 @@ func (d *ContainerDimensions) boxDims() r3.Vector {
 	return r3.Vector{X: d.DiameterMm, Y: d.DiameterMm, Z: d.HeightMm}
 }
 
-// overriddenBox builds the held-item geometry from operator-supplied container
+// containerBox builds the held-item geometry from the configured container
 // dimensions (cup_dimensions / glass_dimensions): an axis-aligned box
-// (orientation OZ=1) of the configured size, centered on the grasp centroid —
-// the point the gripper is sent to — rather than on a point-cloud midpoint.
-// Modeling a known-size container around its grasp point avoids a center skewed
-// by a point cloud that only captured part of the container. label is set on the
-// box.
-func overriddenBox(centroid r3.Vector, dims *ContainerDimensions, label string) (spatialmath.Geometry, error) {
+// (orientation OZ=1) of that size, centered on the grasp centroid — the point
+// the gripper is sent to. Modeling a known-size container around its grasp point
+// avoids a center skewed by a point cloud that only captured part of the
+// container. label is set on the box.
+func containerBox(centroid r3.Vector, dims *ContainerDimensions, label string) (spatialmath.Geometry, error) {
 	box, err := spatialmath.NewBox(spatialmath.NewPoseFromPoint(centroid), dims.boxDims(), label)
 	if err != nil {
 		return nil, fmt.Errorf("new %s bounding box: %w", label, err)
-	}
-	return box, nil
-}
-
-// worldBoundingBox builds an axis-aligned bounding box (orientation OZ=1) in the
-// world frame around the given camera-frame point cloud. The cloud is
-// transformed into world coordinates and the box spans its world min/max
-// extents, centered at their midpoint. Returns a nil geometry for an empty
-// cloud. label is set on the returned box.
-func worldBoundingBox(
-	fs *referenceframe.FrameSystem,
-	fsInputs referenceframe.FrameSystemInputs,
-	cameraFrame string,
-	cloud pointcloud.PointCloud,
-	label string,
-) (spatialmath.Geometry, error) {
-	if cloud == nil || cloud.Size() == 0 {
-		return nil, nil
-	}
-
-	// Resolve the camera→world pose once and transform the whole cloud into world.
-	camPIF := referenceframe.NewPoseInFrame(cameraFrame, spatialmath.NewZeroPose())
-	tf, err := fs.Transform(fsInputs.ToLinearInputs(), camPIF, referenceframe.World)
-	if err != nil {
-		return nil, fmt.Errorf("transform %q to world: %w", cameraFrame, err)
-	}
-	camToWorld := tf.(*referenceframe.PoseInFrame).Pose()
-
-	worldCloud := pointcloud.NewBasicEmpty()
-	if err := pointcloud.ApplyOffset(cloud, camToWorld, worldCloud); err != nil {
-		return nil, fmt.Errorf("transform point cloud to world: %w", err)
-	}
-
-	meta := worldCloud.MetaData()
-	min := r3.Vector{X: meta.MinX, Y: meta.MinY, Z: meta.MinZ}
-	max := r3.Vector{X: meta.MaxX, Y: meta.MaxY, Z: meta.MaxZ}
-	center := min.Add(max).Mul(0.5)
-	dims := max.Sub(min)
-	pose := spatialmath.NewPoseFromPoint(center)
-	box, err := spatialmath.NewBox(pose, dims, label)
-	if err != nil {
-		return nil, fmt.Errorf("new bounding box: %w", err)
 	}
 	return box, nil
 }
@@ -269,7 +225,7 @@ type pickupTarget struct {
 	grabRel          *RelativePose        // gripper offset for the grab pose
 	photosPerVantage int                  // vision frames per observe pose
 	maxAttempts      int                  // full observe-and-grab attempts
-	dimsOverride     *ContainerDimensions // predefined box size; nil uses point-cloud extents
+	dims             *ContainerDimensions // known container size the held-item box is built from
 	noItemSpeak      string               // spoken on "nothing detected" before a retry wait
 	unreachableSpeak string               // spoken when items were seen but none could be grabbed, before a retry wait
 	graspZFromGeom   bool                 // grab at the geometry centroid's Z (keep detected X/Y); for the tall glass whose detected Z can sit high on the rim
@@ -288,7 +244,7 @@ func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 		grabRel:          s.cfg.CupGrabRelativePose,
 		photosPerVantage: pickupPhotosPerVantage(s.cfg.CupPhotosPerVantage),
 		maxAttempts:      pickupMaxAttempts(s.cfg.CupPickupMaxAttempts),
-		dimsOverride:     s.cfg.CupDimensions,
+		dims:             s.cfg.CupDimensions,
 		noItemSpeak:      "I don't see a cup yet — please place one on the shelf. Trying again in 15 seconds.",
 		unreachableSpeak: "I can see a cup but I'm having trouble grabbing it — could you nudge it a little? Trying again in 15 seconds.",
 		shieldFrame:      cleanCupAreaShieldFrameName,
@@ -311,7 +267,7 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 		grabRel:          s.cfg.GlassGrabRelativePose,
 		photosPerVantage: pickupPhotosPerVantage(s.cfg.CupPhotosPerVantage),
 		maxAttempts:      pickupMaxAttempts(s.cfg.CupPickupMaxAttempts),
-		dimsOverride:     s.cfg.GlassDimensions,
+		dims:             s.cfg.GlassDimensions,
 		noItemSpeak:      "I don't see a glass yet — please place one on the top shelf. Trying again in 15 seconds.",
 		unreachableSpeak: "I can see a glass but I'm having trouble grabbing it — could you nudge it a little? Trying again in 15 seconds.",
 		graspZFromGeom:   true,
@@ -368,43 +324,31 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 			return nil, err
 		}
 		// Build the detection geometry as a world-frame, axis-aligned (orientation
-		// OZ=1) box. By default this is the bounding box of the detection's point
-		// cloud (not the vision service's own geometry). When dimsOverride is
-		// configured, use the operator-supplied size centered on the grasp centroid
-		// instead — a known-size container is modeled around where it is actually
-		// grasped, sidestepping a skewed point-cloud midpoint. The held-item tracker
-		// attaches this shape to the gripper after the grab, and it is drawn in the
-		// saved snapshot.
-		var geomWorld spatialmath.Geometry
-		if t.dimsOverride != nil {
-			geomWorld, err = overriddenBox(world, t.dimsOverride, t.label)
-		} else {
-			geomWorld, err = worldBoundingBox(fs, fsInputs, t.cameraName, obj.PointCloud, t.label)
-		}
+		// OZ=1) box of the configured container size, centered on the grasp
+		// centroid — a known-size container modeled around where it is actually
+		// grasped, sidestepping a point-cloud midpoint skewed by a partial view. The
+		// held-item tracker attaches this shape to the gripper after the grab, and it
+		// is drawn in the saved snapshot.
+		geomWorld, err := containerBox(world, t.dims, t.label)
 		if err != nil {
 			return nil, err
-		}
-		if geomWorld == nil {
-			continue
 		}
 		// Resolve the grasp Z from the surface the container rests on: with the
 		// container's known height, seat its base surfaceRestClearanceMm above the
 		// top of the highest static surface directly beneath the detection, keeping
 		// the detected X/Y (which depth noise pushes above or below the true base).
 		// The geometry is shifted with the centroid so it stays centered on the
-		// grasp point. When dimensions are unset or no surface is found underneath,
-		// the raw detected Z is used unchanged.
-		if t.dimsOverride != nil {
-			if topZ, ok := surfaceTopZUnder(surfaces, world.X, world.Y, world.Z); ok {
-				newZ := topZ + surfaceRestClearanceMm + t.dimsOverride.HeightMm/2
-				logger.Infof("dynamic %s pickup: seating base %.1fmm above surface top Z=%.1f -> grasp Z %.1f (detected %.1f)",
-					t.label, surfaceRestClearanceMm, topZ, newZ, world.Z)
-				geomWorld = geomWorld.Transform(spatialmath.NewPoseFromPoint(r3.Vector{Z: newZ - world.Z}))
-				world.Z = newZ
-			} else {
-				logger.Infof("dynamic %s pickup: no static surface beneath detection at (x=%.1f, y=%.1f) below Z=%.1f; keeping detected Z",
-					t.label, world.X, world.Y, world.Z)
-			}
+		// grasp point. When no surface is found underneath, the raw detected Z is
+		// used unchanged.
+		if topZ, ok := surfaceTopZUnder(surfaces, world.X, world.Y, world.Z); ok {
+			newZ := topZ + surfaceRestClearanceMm + t.dims.HeightMm/2
+			logger.Infof("dynamic %s pickup: seating base %.1fmm above surface top Z=%.1f -> grasp Z %.1f (detected %.1f)",
+				t.label, surfaceRestClearanceMm, topZ, newZ, world.Z)
+			geomWorld = geomWorld.Transform(spatialmath.NewPoseFromPoint(r3.Vector{Z: newZ - world.Z}))
+			world.Z = newZ
+		} else {
+			logger.Infof("dynamic %s pickup: no static surface beneath detection at (x=%.1f, y=%.1f) below Z=%.1f; keeping detected Z",
+				t.label, world.X, world.Y, world.Z)
 		}
 		logger.Debugf("dynamic %s pickup: detection at camera-local %v -> world %v", t.label, local, world)
 		candidates = append(candidates, pickupCandidate{centroid: world, geom: geomWorld})
