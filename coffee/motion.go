@@ -286,6 +286,11 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 // any in-flight mutations (e.g. a filter frame that was reparented to world by
 // lockFilterFrame). Shared by unlockFilterFrame during the normal brew cycle and
 // by the reset_world operator command to recover from a mid-cycle cancel.
+//
+// The fridge door is the exception: a rebuild puts the panel back at its authored
+// shut transform, but rebuilding a model does not close a real door, so the
+// recorded doorOpenDegs is re-applied afterward. Only reset_world clears that
+// record, because only an operator can assert the door is actually shut.
 func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 	logger := s.activeOrderLogger()
 	fs, err := framesystem.NewFromService(ctx, s.fsSvc, nil)
@@ -304,6 +309,16 @@ func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 	s.clearHeldGeometry()
 	s.filterFrameLocked = false
 	s.stagedGlassPlaced = false
+	if s.doorOpenDegs != 0 {
+		base, berr := doorBasePose(fs)
+		if berr != nil {
+			return fmt.Errorf("re-apply fridge door angle: %w", berr)
+		}
+		if derr := setDoorTheta(fs, frameFridgeDoor, base, s.doorOpenDegs); derr != nil {
+			return fmt.Errorf("re-apply fridge door angle: %w", derr)
+		}
+		logger.Infof("frame system rebuilt with fridge door held open at %.1f°", s.doorOpenDegs)
+	}
 	return nil
 }
 

@@ -51,50 +51,77 @@ func computeDoorSweep(closedDeg, openDeg, degPerStep float64) []float64 {
 	return out
 }
 
-// setDoorTheta re-places the static door obstacle at thetaDeg about its own
-// origin (the hinge). It composes Rz(θ) onto the door's original closed
-// transform, then reuses the lockFilterFrame maneuver (motion.go): capture the
-// door's descendants, remove the door, re-add it rotated, and re-attach the
-// descendants (the handle chain) with their local transforms unchanged so they
-// ride the swing. The door frame's own geometry (the panel, offset from the
-// hinge) is preserved across the swap.
+// doorOriginFrameName is the frame setDoorTheta actually rotates. The RDK splits
+// every frame-system part in two: "<name>_origin" carries the part's offset from
+// its parent AND its collision geometry (a tailGeometryStaticFrame), while
+// "<name>" is a child model frame that, for a geometry-only part like the door,
+// is a zero static frame holding nothing. Rotating "<name>" therefore swings the
+// handle subtree hanging off it but leaves the door panel obstacle frozen at its
+// closed pose — the world model claims the fridge is shut while the arm pulls it
+// open. Rotating "<name>_origin" moves the panel and the handle chain together.
+// Same convention lockFilterFrame relies on (motion.go).
+func doorOriginFrameName(doorFrameName string) string { return doorFrameName + "_origin" }
+
+// setDoorTheta re-places the door at thetaDeg about the hinge. It composes Rz(θ)
+// onto the door origin frame's original closed transform, then reuses the
+// lockFilterFrame maneuver (motion.go): capture descendants, remove the frame,
+// re-add it rotated, and re-attach the descendants (the model frame and the
+// handle chain below it) with their local transforms unchanged so they ride the
+// swing. Because Rz is composed onto the END of the origin transform, the pivot
+// is the origin frame's endpoint — the hinge.
 //
-// baseDoorPose MUST be the door's original closed parent-relative transform,
-// captured once by the caller and passed on every call, so repeated calls stay
-// absolute rather than accumulating rotation.
-func setDoorTheta(fs *referenceframe.FrameSystem, doorFrameName string, baseDoorPose spatialmath.Pose, thetaDeg float64) error {
-	door := fs.Frame(doorFrameName)
-	if door == nil {
-		return fmt.Errorf("door frame %q not found", doorFrameName)
+// baseOriginPose MUST be the door origin frame's original closed parent-relative
+// transform, captured once by the caller and passed on every call, so repeated
+// calls stay absolute rather than accumulating rotation.
+func setDoorTheta(fs *referenceframe.FrameSystem, doorFrameName string, baseOriginPose spatialmath.Pose, thetaDeg float64) error {
+	originName := doorOriginFrameName(doorFrameName)
+	origin := fs.Frame(originName)
+	if origin == nil {
+		return fmt.Errorf("door origin frame %q not found", originName)
 	}
-	parent, err := fs.Parent(door)
+	parent, err := fs.Parent(origin)
 	if err != nil {
-		return fmt.Errorf("door parent: %w", err)
+		return fmt.Errorf("door origin parent: %w", err)
 	}
 
-	// Rotation about the door frame's local Z, applied at the origin (the hinge).
 	rz := spatialmath.NewPoseFromOrientation(&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: thetaDeg})
-	rotated := spatialmath.Compose(baseDoorPose, rz)
+	rotated := spatialmath.Compose(baseOriginPose, rz)
 
-	// Preserve the door frame's own geometry (the panel), if any.
+	// Re-express the panel geometry for the rotated transform. Both frame types
+	// this sees report their geometry already composed with their own transform,
+	// i.e. in parent coordinates: a tailGeometryStaticFrame by definition, and the
+	// plain static replacement built below because it deliberately stores geometry
+	// that way (the frame system skips a frame's own transform when resolving
+	// GeometriesInFrame, so parent coordinates are what land it in the right
+	// world position — the pattern lockFilterFrame uses).
+	//
+	// Undo the frame's CURRENT transform, not baseOriginPose, to recover the
+	// hinge-local panel. Using the base would be correct only on the first call;
+	// from the second onward the frame already carries the previous θ and the
+	// rotation would compound, walking the panel away from the handle over a sweep.
 	var geom spatialmath.Geometry
-	if geos, gerr := door.Geometries([]referenceframe.Input{}); gerr == nil && geos != nil && len(geos.Geometries()) > 0 {
-		geom = geos.Geometries()[0]
+	current, err := origin.Transform([]referenceframe.Input{})
+	if err != nil {
+		return fmt.Errorf("door origin current transform: %w", err)
+	}
+	if geos, gerr := origin.Geometries([]referenceframe.Input{}); gerr == nil && geos != nil && len(geos.Geometries()) > 0 {
+		local := geos.Geometries()[0].Transform(spatialmath.PoseInverse(current))
+		geom = local.Transform(rotated)
 	}
 
-	descendants := collectDescendants(fs, doorFrameName)
-	fs.RemoveFrame(door)
+	descendants := collectDescendants(fs, originName)
+	fs.RemoveFrame(origin)
 
-	var newDoor referenceframe.Frame
+	var newOrigin referenceframe.Frame
 	if geom != nil {
-		newDoor, err = referenceframe.NewStaticFrameWithGeometry(doorFrameName, rotated, geom)
+		newOrigin, err = referenceframe.NewStaticFrameWithGeometry(originName, rotated, geom)
 	} else {
-		newDoor, err = referenceframe.NewStaticFrame(doorFrameName, rotated)
+		newOrigin, err = referenceframe.NewStaticFrame(originName, rotated)
 	}
 	if err != nil {
 		return fmt.Errorf("build rotated door frame: %w", err)
 	}
-	if err := fs.AddFrame(newDoor, parent); err != nil {
+	if err := fs.AddFrame(newOrigin, parent); err != nil {
 		return fmt.Errorf("re-add door frame: %w", err)
 	}
 	for _, d := range descendants {
@@ -118,35 +145,48 @@ func (s *beanjaminCoffee) ballWorldPose(fs *referenceframe.FrameSystem, inputs *
 	return tf.(*referenceframe.PoseInFrame).Pose(), nil
 }
 
+// doorBasePose returns the fridge door's authored shut transform — the absolute
+// reference every setDoorTheta composes against. Valid only on a frame system
+// that has not been swung yet (a fresh rebuild); sweepDoor recovers it from the
+// live frame instead, which may already carry an angle.
+func doorBasePose(fs *referenceframe.FrameSystem) (spatialmath.Pose, error) {
+	name := doorOriginFrameName(frameFridgeDoor)
+	f := fs.Frame(name)
+	if f == nil {
+		return nil, fmt.Errorf("door origin frame %q not found", name)
+	}
+	return f.Transform([]referenceframe.Input{})
+}
+
 // openDoor grips the passive fridge handle and pulls the door open along its
 // hinge arc, leaving it open. Registered as the open_door execute_action.
 func (s *beanjaminCoffee) openDoor(ctx, cancelCtx context.Context) error {
-	return s.sweepDoor(ctx, cancelCtx, "open_door", "Opening fridge", 0, s.doorOpenAngleDegs())
+	return s.sweepDoor(ctx, cancelCtx, "open_door", "Opening fridge", s.doorOpenAngleDegs())
 }
 
-// closeDoor is openDoor in reverse: it grips the handle where the open door
-// leaves it and pushes the panel back to the hinge's closed angle. Registered
-// as the close_door execute_action.
-//
-// The frame system always rebuilds with the door at its authored closed
-// transform, so a close starts by placing the door obstacle at the open angle —
-// otherwise the grasp would be resolved against a panel the world model thinks
-// is shut while the real one stands open. This assumes the door is actually at
-// door_open_angle_degs, which holds when close_door follows open_door.
+// closeDoor is openDoor in reverse: it grips the handle where the open door left
+// it and pushes the panel back shut. Registered as the close_door execute_action.
 func (s *beanjaminCoffee) closeDoor(ctx, cancelCtx context.Context) error {
-	return s.sweepDoor(ctx, cancelCtx, "close_door", "Closing fridge", s.doorOpenAngleDegs(), 0)
+	return s.sweepDoor(ctx, cancelCtx, "close_door", "Closing fridge", 0)
 }
 
-// sweepDoor grips the passive fridge handle and drives the door from fromDeg to
-// toDeg along its hinge arc, re-placing the static door obstacle at each swept
-// angle so collision-checking stays honest. It then releases and retracts,
-// leaving the door at toDeg. Both directions share this body — only the
-// endpoints differ, so an open is (0 → open angle) and a close is the reverse.
+// sweepDoor grips the passive fridge handle and drives the door from wherever it
+// currently stands (s.doorOpenDegs) to toDeg along its hinge arc, re-placing the
+// door obstacle at each swept angle so collision-checking stays honest. Both
+// directions share this body — only the target differs, so an open is
+// (current → open angle) and a close is (current → 0).
+//
+// The modeled door is left where the sweep left it, and s.doorOpenDegs records
+// it. Snapping the model shut on the way out would be a lie: opening a door does
+// not close it, and every later plan would route the arm through a panel that is
+// really standing open. Only reset_world clears that record. The cost is that a
+// half-finished sweep leaves the model at the last angle actually reached, which
+// is the honest answer — the operator, not this function, knows where the door
+// ended up.
 //
 // Runs behind executeAction, which takes the running gate, captures cancelCtx,
-// and refreshes the frame system before this runs. The frame system is rebuilt
-// on exit (normal or cancel) so the in-place door mutation cannot leak.
-func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, stepLabel string, fromDeg, toDeg float64) error {
+// and refreshes the frame system before this runs.
+func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, stepLabel string, toDeg float64) error {
 	logger := s.logger
 
 	// Merge both contexts so cancellation from either stops planning/execution.
@@ -155,19 +195,12 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	defer stop()
 	defer cancel()
 
-	// Always rebuild the frame system afterward to discard the door mutation.
-	defer func() {
-		if err := s.resetFrameSystem(ctx); err != nil {
-			logger.Warnf("%s: resetFrameSystem failed: %v", action, err)
-		}
-	}()
-
 	if s.cfg.DoorApproachRelativePose == nil {
 		return fmt.Errorf("%s requires door_approach_relative_pose", action)
 	}
 	s.setStep(stepLabel)
 
-	// 1. Place the door at fromDeg, then resolve the grasp frame's pose there and
+	// 1. Resolve the grasp frame's pose where the door currently stands, then
 	//    derive approach + grasp from it. door_approach_relative_pose is a
 	//    RelativePose offset composed onto the grasp frame's center (the door
 	//    analog of cup_approach_relative_pose onto a detected cup, via
@@ -178,19 +211,23 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	if err != nil {
 		return err
 	}
-	// Captured before any mutation, so every setDoorTheta stays absolute against
-	// the authored closed transform rather than accumulating rotation.
-	doorFrame := fs.Frame(frameFridgeDoor)
-	if doorFrame == nil {
-		return fmt.Errorf("door frame %q not found", frameFridgeDoor)
+	// The frame already carries doorOpenDegs, so back that rotation out to recover
+	// the authored shut transform. Every setDoorTheta composes against that
+	// absolute reference, so a sweep cannot accumulate rotation.
+	fromDeg := s.doorOpenDegs
+	originName := doorOriginFrameName(frameFridgeDoor)
+	originFrame := fs.Frame(originName)
+	if originFrame == nil {
+		return fmt.Errorf("door origin frame %q not found", originName)
 	}
-	baseDoorPose, err := doorFrame.Transform([]referenceframe.Input{})
+	currentOriginPose, err := originFrame.Transform([]referenceframe.Input{})
 	if err != nil {
 		return fmt.Errorf("door base transform: %w", err)
 	}
-	if err := setDoorTheta(fs, frameFridgeDoor, baseDoorPose, fromDeg); err != nil {
-		return err
-	}
+	baseOriginPose := spatialmath.Compose(currentOriginPose,
+		spatialmath.PoseInverse(spatialmath.NewPoseFromOrientation(
+			&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: fromDeg})))
+
 	ballBase, err := s.ballWorldPose(fs, fsInputs.ToLinearInputs())
 	if err != nil {
 		return err
@@ -231,7 +268,7 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	logger.Infof("%s: sweeping %.0f°→%.0f° in %d steps", action, fromDeg, toDeg, len(sweep)-1)
 
 	for _, theta := range sweep[1:] { // skip fromDeg — the door is already there
-		if err := setDoorTheta(fs, frameFridgeDoor, baseDoorPose, theta); err != nil {
+		if err := setDoorTheta(fs, frameFridgeDoor, baseOriginPose, theta); err != nil {
 			return err
 		}
 		// Fresh joint inputs (the arm moved last step); fs is the mutated cachedFS.
@@ -273,6 +310,9 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 		if err := s.arm.MoveThroughJointPositions(ctx, positions, s.slowMovementMoveOptions(), nil); err != nil {
 			return fmt.Errorf("execute %s step θ=%.0f: %w", action, theta, err)
 		}
+		// Record only angles the arm actually reached, so an abort mid-sweep leaves
+		// the model at the door's real position rather than the intended one.
+		s.doorOpenDegs = theta
 	}
 
 	// 3. Release, then retract to a standoff from the handle where the sweep
