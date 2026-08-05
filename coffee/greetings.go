@@ -160,3 +160,31 @@ func pickDrinkReady(drink, customerName string, batchIndex, batchSize int) strin
 func pickUnsupportedDrink(drink string) string {
 	return fmt.Sprintf(unsupportedDrink[rand.Intn(len(unsupportedDrink))], speakableDrink(drink))
 }
+
+// orderFailed lines are Cappuccina owning up to a brew that genuinely faulted.
+// Spoken via sayAlways alongside the red LED flash (fault_alert.go); operator
+// cancels get the calmer cancelAnnouncement instead. Format verbs:
+// %[1]s = drink name, %[2]s = customer name.
+var orderFailedAnonymous = []string{
+	"Ugh. That %[1]s did not make it. I'd blame the beans, but we all saw whose arm it was.",
+	"Well. The %[1]s is officially a crime scene. A human will be along shortly.",
+	"Bad news: no %[1]s. Good news: I remain delightful. Someone's coming to check on me.",
+	"That %[1]s fought back and won. Rematch as soon as a human sorts me out.",
+	"I have one arm and today it chose chaos. Your %[1]s is a casualty — help is on the way.",
+}
+
+var orderFailedNamed = []string{
+	"%[2]s, look away. Your %[1]s did not survive. A human will be along to avenge it.",
+	"%[2]s, I fumbled your %[1]s. In my defense, I've been awake since I was plugged in.",
+	"Sorry %[2]s — the %[1]s is a no-go. I blame the humidity. And, frankly, the humans.",
+	"%[2]s, your %[1]s and I had creative differences. A human is coming to mediate.",
+	"Not my finest work, %[2]s. The %[1]s is gone. Tell no one — someone's on the way to fix me.",
+}
+
+func pickOrderFailed(drink, customerName string) string {
+	drink = speakableDrink(drink)
+	if customerName != "" {
+		return fmt.Sprintf(orderFailedNamed[rand.Intn(len(orderFailedNamed))], drink, customerName)
+	}
+	return fmt.Sprintf(orderFailedAnonymous[rand.Intn(len(orderFailedAnonymous))], drink)
+}
