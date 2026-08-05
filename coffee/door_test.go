@@ -38,15 +38,19 @@ func TestComputeDoorSweep_Reverse(t *testing.T) {
 	}
 }
 
-// buildTestDoorFS constructs a minimal frame system with a door whose origin is
-// the hinge, a geometry panel offset from the hinge, and a handle-ball child
-// hanging off the panel edge — mirroring the real fridge subtree.
+// buildTestDoorFS constructs the fridge subtree through the RDK's real
+// frame-system construction path, so the two-frame split every part gets is
+// reproduced exactly as it is on the machine: "<name>_origin" carries the offset
+// from the parent AND the collision geometry, and "<name>" is a child model
+// frame that, for a geometry-only part, holds nothing. Hand-attaching geometry
+// to a single frame instead does NOT match the machine, and is what hid the bug
+// where the handle swept but the panel obstacle stayed frozen shut.
+//
+// Returns the frame system and the door origin frame's base transform, which is
+// what setDoorTheta expects as its absolute reference.
 func buildTestDoorFS(t *testing.T) (*referenceframe.FrameSystem, spatialmath.Pose) {
 	t.Helper()
-	fs := referenceframe.NewEmptyFrameSystem("test")
 
-	// Door root at (500,0,0), identity orientation: origin == hinge.
-	doorPose := spatialmath.NewPoseFromPoint(r3.Vector{X: 500, Y: 0, Z: 0})
 	// Panel geometry offset -300 in Y from the hinge (like the real -235 offset).
 	box, err := spatialmath.NewBox(
 		spatialmath.NewPoseFromPoint(r3.Vector{X: 0, Y: -300, Z: 0}),
@@ -54,24 +58,48 @@ func buildTestDoorFS(t *testing.T) (*referenceframe.FrameSystem, spatialmath.Pos
 	if err != nil {
 		t.Fatal(err)
 	}
-	door, err := referenceframe.NewStaticFrameWithGeometry("door", doorPose, box)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := fs.AddFrame(door, fs.World()); err != nil {
-		t.Fatal(err)
-	}
+	// Door root at (500,0,0), identity orientation: origin == hinge.
+	doorLink := referenceframe.NewLinkInFrame(referenceframe.World,
+		spatialmath.NewPoseFromPoint(r3.Vector{X: 500, Y: 0, Z: 0}), "door", box)
+	// Handle ball 300mm out along the door's -Y, as a child of the door.
+	ballLink := referenceframe.NewLinkInFrame("door",
+		spatialmath.NewPoseFromPoint(r3.Vector{X: 0, Y: -300, Z: 0}), "ball", nil)
 
-	// Handle ball 300mm out along the door's -Y, as a (grand)child of the door.
-	ball, err := referenceframe.NewStaticFrame("ball",
-		spatialmath.NewPoseFromPoint(r3.Vector{X: 0, Y: -300, Z: 0}))
+	fs, err := referenceframe.NewFrameSystem("test",
+		[]*referenceframe.FrameSystemPart{{FrameConfig: doorLink}, {FrameConfig: ballLink}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := fs.AddFrame(ball, door); err != nil {
+	base, err := fs.Frame("door_origin").Transform([]referenceframe.Input{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	return fs, doorPose
+	return fs, base
+}
+
+// panelWorldCenter returns the world-space center of the door panel geometry,
+// resolved the way the planner does: read the geometry off the frame it lives
+// on, then let the frame system lift it to world.
+func panelWorldCenter(t *testing.T, fs *referenceframe.FrameSystem) r3.Vector {
+	t.Helper()
+	f := fs.Frame("door_origin")
+	if f == nil {
+		t.Fatal("door_origin not in frame system")
+	}
+	g, err := f.Geometries([]referenceframe.Input{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	geos := g.Geometries()
+	if len(geos) != 1 {
+		t.Fatalf("door_origin carries %d geometries, want 1", len(geos))
+	}
+	tf, err := fs.Transform(referenceframe.NewZeroInputs(fs).ToLinearInputs(),
+		referenceframe.NewGeometriesInFrame("door_origin", geos), referenceframe.World)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tf.(*referenceframe.GeometriesInFrame).Geometries()[0].Pose().Point()
 }
 
 func worldPoint(t *testing.T, fs *referenceframe.FrameSystem, frame string) r3.Vector {
@@ -105,37 +133,35 @@ func TestSetDoorTheta_BallSweepsArc(t *testing.T) {
 	}
 }
 
+// TestSetDoorTheta_PanelGeometrySweeps is the regression test for the reported
+// bug: on the machine the handle swept but the panel obstacle stayed put, so
+// every plan was collision-checked against a door frozen shut. The panel must
+// ride the same arc as the ball.
 func TestSetDoorTheta_PanelGeometrySweeps(t *testing.T) {
 	fs, base := buildTestDoorFS(t)
+
+	// The RDK puts part geometry on "<name>_origin", never on the model frame.
+	// If this stops holding, setDoorTheta is rotating the wrong frame again.
+	modelGeos, err := fs.Frame("door").Geometries([]referenceframe.Input{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(modelGeos.Geometries()); n != 0 {
+		t.Errorf("model frame \"door\" carries %d geometries; the RDK should put them on door_origin", n)
+	}
+
+	if before := panelWorldCenter(t, fs); before.Sub(r3.Vector{X: 500, Y: -300, Z: 0}).Norm() > 0.5 {
+		t.Fatalf("closed panel center = %v, want ~(500,-300,0)", before)
+	}
+
 	if err := setDoorTheta(fs, "door", base, 90); err != nil {
 		t.Fatal(err)
 	}
 
-	// 1. The door geometry must survive the remove/re-add with its local offset
-	//    intact (Frame.Geometries returns local coords).
-	geos, err := fs.Frame("door").Geometries([]referenceframe.Input{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(geos.Geometries()) == 0 {
-		t.Fatal("door geometry lost across setDoorTheta")
-	}
-	localCenter := geos.Geometries()[0].Pose()
-	if localCenter.Point().Sub(r3.Vector{X: 0, Y: -300, Z: 0}).Norm() > 0.01 {
-		t.Errorf("panel local offset = %v, want (0,-300,0)", localCenter.Point())
-	}
-
-	// 2. That preserved local point must ride the rotation to world (800,0,0),
-	//    the same arc as the ball — via the PoseInFrame path (frame→world).
-	tf, err := fs.Transform(referenceframe.NewZeroInputs(fs).ToLinearInputs(),
-		referenceframe.NewPoseInFrame("door", localCenter),
-		referenceframe.World)
-	if err != nil {
-		t.Fatal(err)
-	}
-	world := tf.(*referenceframe.PoseInFrame).Pose().Point()
-	if world.Sub(r3.Vector{X: 800, Y: 0, Z: 0}).Norm() > 0.5 {
-		t.Errorf("panel world center = %v, want ~(800,0,0)", world)
+	// Panel local (0,-300,0) rotated +90° about Z -> (300,0,0), + hinge (500,0,0):
+	// the same arc the ball sweeps.
+	if got := panelWorldCenter(t, fs); got.Sub(r3.Vector{X: 800, Y: 0, Z: 0}).Norm() > 0.5 {
+		t.Errorf("panel world center = %v after 90° swing, want ~(800,0,0)", got)
 	}
 }
 
@@ -147,7 +173,8 @@ func TestSetDoorTheta_PanelGeometrySweeps(t *testing.T) {
 // believing the door is ajar after it has physically shut.
 func TestSetDoorTheta_CloseSweepReturnsToClosed(t *testing.T) {
 	fs, base := buildTestDoorFS(t)
-	closed := worldPoint(t, fs, "ball")
+	closedBall := worldPoint(t, fs, "ball")
+	closedPanel := panelWorldCenter(t, fs)
 
 	sweep := computeDoorSweep(90, 0, 10)
 	for _, theta := range sweep {
@@ -157,12 +184,64 @@ func TestSetDoorTheta_CloseSweepReturnsToClosed(t *testing.T) {
 	}
 
 	// The sweep's first waypoint must have actually opened the door, or the
-	// "returns to closed" assertion below would pass on a door that never moved.
-	if closed.Sub(r3.Vector{X: 500, Y: -300, Z: 0}).Norm() > 0.5 {
-		t.Fatalf("closed ball = %v, want ~(500,-300,0)", closed)
+	// "returns to closed" assertions below would pass on a door that never moved.
+	if closedBall.Sub(r3.Vector{X: 500, Y: -300, Z: 0}).Norm() > 0.5 {
+		t.Fatalf("closed ball = %v, want ~(500,-300,0)", closedBall)
 	}
-	if got := worldPoint(t, fs, "ball"); got.Sub(closed).Norm() > 0.5 {
-		t.Errorf("ball after close sweep = %v, want closed position %v", got, closed)
+	if got := worldPoint(t, fs, "ball"); got.Sub(closedBall).Norm() > 0.5 {
+		t.Errorf("ball after close sweep = %v, want closed position %v", got, closedBall)
+	}
+	// sweepDoor's deferred undo restores θ=0 in place rather than rebuilding the
+	// frame system, so returning to the authored closed pose has to be exact —
+	// otherwise the stale door leaks into whatever action runs next.
+	if got := panelWorldCenter(t, fs); got.Sub(closedPanel).Norm() > 0.5 {
+		t.Errorf("panel after close sweep = %v, want closed position %v", got, closedPanel)
+	}
+}
+
+// TestRecoverBasePoseFromSweptDoor pins the arithmetic sweepDoor uses to start a
+// sweep on a door that is already open. The modeled door is left standing open
+// between actions (a rebuild re-applies doorOpenDegs), so the frame no longer
+// carries the authored shut transform that setDoorTheta needs as its absolute
+// reference — it has to be recovered by backing the known angle out. Get this
+// wrong and every subsequent sweep composes onto a rotated base and the door
+// walks away from the hinge.
+func TestRecoverBasePoseFromSweptDoor(t *testing.T) {
+	fs, base := buildTestDoorFS(t)
+	closedBall := worldPoint(t, fs, "ball")
+	closedPanel := panelWorldCenter(t, fs)
+
+	const openDegs = 75
+	if err := setDoorTheta(fs, "door", base, openDegs); err != nil {
+		t.Fatal(err)
+	}
+	openBall := worldPoint(t, fs, "ball")
+	if openBall.Sub(closedBall).Norm() < 1 {
+		t.Fatal("door did not open; the recovery below would be vacuous")
+	}
+
+	// What sweepDoor does: read the live (already-swung) transform, back out the
+	// recorded angle, and treat the result as the absolute base.
+	current, err := fs.Frame("door_origin").Transform([]referenceframe.Input{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered := spatialmath.Compose(current, spatialmath.PoseInverse(
+		spatialmath.NewPoseFromOrientation(&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: openDegs})))
+	if !spatialmath.PoseAlmostEqual(recovered, base) {
+		t.Errorf("recovered base = %v, want authored base %v", recovered, base)
+	}
+
+	// Closing from the open position using the recovered base must land exactly
+	// back on the authored shut pose — panel and handle together.
+	if err := setDoorTheta(fs, "door", recovered, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := worldPoint(t, fs, "ball"); got.Sub(closedBall).Norm() > 0.5 {
+		t.Errorf("ball after close = %v, want %v", got, closedBall)
+	}
+	if got := panelWorldCenter(t, fs); got.Sub(closedPanel).Norm() > 0.5 {
+		t.Errorf("panel after close = %v, want %v", got, closedPanel)
 	}
 }
 
