@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 
 	"go.viam.com/rdk/motionplan/armplanning"
 	"go.viam.com/rdk/referenceframe"
@@ -166,11 +167,19 @@ func (s *beanjaminCoffee) openDoor(ctx, cancelCtx context.Context) error {
 	graspWorld := spatialmath.NewPose(ballBase.Point(), graspOrient)
 	collisions := s.filterFakeModeCollisions(doorOpenCollisions(s.doorGraspFrameName()))
 
-	// Move to the standoff, then straight to the ball center, then close.
+	// Move to the standoff, open the jaws there, then straight to the ball
+	// center, then close. Opening at the standoff and not earlier keeps the
+	// wider open-gripper silhouette out of the traverse to the fridge.
 	if err := s.moveToRawPose(ctx,
 		&poseData{pose: approachWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
 		nil, nil, nil); err != nil {
 		return fmt.Errorf("approach handle: %w", err)
+	}
+	if s.gripper != nil {
+		if err := s.gripper.Open(ctx, nil); err != nil {
+			return fmt.Errorf("open gripper for handle grab: %w", err)
+		}
+		time.Sleep(gripperPause)
 	}
 	if err := s.moveToRawPose(ctx,
 		&poseData{pose: graspWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
