@@ -139,6 +139,33 @@ func TestSetDoorTheta_PanelGeometrySweeps(t *testing.T) {
 	}
 }
 
+// TestSetDoorTheta_CloseSweepReturnsToClosed walks the whole close sweep the way
+// sweepDoor does — open angle first, then every waypoint down to 0 — and checks
+// the ball lands back where the closed door put it. This is what makes a close
+// safe: each setDoorTheta is absolute against the authored closed transform, so
+// stepping 90°→0° cannot accumulate residual rotation and leave the world model
+// believing the door is ajar after it has physically shut.
+func TestSetDoorTheta_CloseSweepReturnsToClosed(t *testing.T) {
+	fs, base := buildTestDoorFS(t)
+	closed := worldPoint(t, fs, "ball")
+
+	sweep := computeDoorSweep(90, 0, 10)
+	for _, theta := range sweep {
+		if err := setDoorTheta(fs, "door", base, theta); err != nil {
+			t.Fatalf("theta %v: %v", theta, err)
+		}
+	}
+
+	// The sweep's first waypoint must have actually opened the door, or the
+	// "returns to closed" assertion below would pass on a door that never moved.
+	if closed.Sub(r3.Vector{X: 500, Y: -300, Z: 0}).Norm() > 0.5 {
+		t.Fatalf("closed ball = %v, want ~(500,-300,0)", closed)
+	}
+	if got := worldPoint(t, fs, "ball"); got.Sub(closed).Norm() > 0.5 {
+		t.Errorf("ball after close sweep = %v, want closed position %v", got, closed)
+	}
+}
+
 // TestGraspTracksBallPointFixedOrientation pins the contract openDoor uses
 // through the swing: the grip-point goal tracks the ball's *point* but keeps the
 // grasp orientation fixed. The handle knob is spherical, so the grasp doesn't

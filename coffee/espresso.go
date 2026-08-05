@@ -263,7 +263,8 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 			_, err := s.serveIcedCoffee(ctx, cancelCtx)
 			return err
 		},
-		"open_door": s.openDoor, // grip the fridge handle and swing it open
+		"open_door":  s.openDoor,  // grip the fridge handle and swing it open
+		"close_door": s.closeDoor, // grip the open door's handle and swing it shut
 	}
 
 	action, ok := actions[name]

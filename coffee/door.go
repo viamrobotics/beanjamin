@@ -11,7 +11,6 @@ package coffee
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -120,13 +119,34 @@ func (s *beanjaminCoffee) ballWorldPose(fs *referenceframe.FrameSystem, inputs *
 }
 
 // openDoor grips the passive fridge handle and pulls the door open along its
-// hinge arc, re-placing the static door obstacle at each swept angle so
-// collision-checking stays honest. It then releases and retracts, leaving the
-// door open. Registered as an execute_action action, so the executeAction
-// wrapper takes the running gate, captures cancelCtx, and refreshes the frame
-// system before this runs. The frame system is rebuilt on exit (normal or
-// cancel) so the in-place door mutation cannot leak.
+// hinge arc, leaving it open. Registered as the open_door execute_action.
 func (s *beanjaminCoffee) openDoor(ctx, cancelCtx context.Context) error {
+	return s.sweepDoor(ctx, cancelCtx, "open_door", "Opening fridge", 0, s.doorOpenAngleDegs())
+}
+
+// closeDoor is openDoor in reverse: it grips the handle where the open door
+// leaves it and pushes the panel back to the hinge's closed angle. Registered
+// as the close_door execute_action.
+//
+// The frame system always rebuilds with the door at its authored closed
+// transform, so a close starts by placing the door obstacle at the open angle —
+// otherwise the grasp would be resolved against a panel the world model thinks
+// is shut while the real one stands open. This assumes the door is actually at
+// door_open_angle_degs, which holds when close_door follows open_door.
+func (s *beanjaminCoffee) closeDoor(ctx, cancelCtx context.Context) error {
+	return s.sweepDoor(ctx, cancelCtx, "close_door", "Closing fridge", s.doorOpenAngleDegs(), 0)
+}
+
+// sweepDoor grips the passive fridge handle and drives the door from fromDeg to
+// toDeg along its hinge arc, re-placing the static door obstacle at each swept
+// angle so collision-checking stays honest. It then releases and retracts,
+// leaving the door at toDeg. Both directions share this body — only the
+// endpoints differ, so an open is (0 → open angle) and a close is the reverse.
+//
+// Runs behind executeAction, which takes the running gate, captures cancelCtx,
+// and refreshes the frame system before this runs. The frame system is rebuilt
+// on exit (normal or cancel) so the in-place door mutation cannot leak.
+func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, stepLabel string, fromDeg, toDeg float64) error {
 	logger := s.logger
 
 	// Merge both contexts so cancellation from either stops planning/execution.
@@ -138,23 +158,37 @@ func (s *beanjaminCoffee) openDoor(ctx, cancelCtx context.Context) error {
 	// Always rebuild the frame system afterward to discard the door mutation.
 	defer func() {
 		if err := s.resetFrameSystem(ctx); err != nil {
-			logger.Warnf("open_door: resetFrameSystem failed: %v", err)
+			logger.Warnf("%s: resetFrameSystem failed: %v", action, err)
 		}
 	}()
 
 	if s.cfg.DoorApproachRelativePose == nil {
-		return errors.New("open_door requires door_approach_relative_pose")
+		return fmt.Errorf("%s requires door_approach_relative_pose", action)
 	}
-	s.setStep("Opening fridge")
+	s.setStep(stepLabel)
 
-	// 1. Resolve the grasp frame's (closed) pose, then derive approach + grasp
-	//    from it. door_approach_relative_pose is a RelativePose offset composed
-	//    onto the grasp frame's center (the door analog of
-	//    cup_approach_relative_pose onto a detected cup, via composeCupPose, but
-	//    resolved against a live frame). Its orientation is the grasp orientation,
-	//    held fixed for the whole open so the gripper never twists off the handle.
+	// 1. Place the door at fromDeg, then resolve the grasp frame's pose there and
+	//    derive approach + grasp from it. door_approach_relative_pose is a
+	//    RelativePose offset composed onto the grasp frame's center (the door
+	//    analog of cup_approach_relative_pose onto a detected cup, via
+	//    composeCupPose, but resolved against a live frame). Its orientation is
+	//    the grasp orientation, held fixed for the whole sweep so the gripper
+	//    never twists off the handle.
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
+		return err
+	}
+	// Captured before any mutation, so every setDoorTheta stays absolute against
+	// the authored closed transform rather than accumulating rotation.
+	doorFrame := fs.Frame(frameFridgeDoor)
+	if doorFrame == nil {
+		return fmt.Errorf("door frame %q not found", frameFridgeDoor)
+	}
+	baseDoorPose, err := doorFrame.Transform([]referenceframe.Input{})
+	if err != nil {
+		return fmt.Errorf("door base transform: %w", err)
+	}
+	if err := setDoorTheta(fs, frameFridgeDoor, baseDoorPose, fromDeg); err != nil {
 		return err
 	}
 	ballBase, err := s.ballWorldPose(fs, fsInputs.ToLinearInputs())
@@ -192,21 +226,11 @@ func (s *beanjaminCoffee) openDoor(ctx, cancelCtx context.Context) error {
 		}
 	}
 
-	// 2. Door base transform, captured once so each setDoorTheta stays absolute.
-	doorFrame := fs.Frame(frameFridgeDoor)
-	if doorFrame == nil {
-		return fmt.Errorf("door frame %q not found", frameFridgeDoor)
-	}
-	baseDoorPose, err := doorFrame.Transform([]referenceframe.Input{})
-	if err != nil {
-		return fmt.Errorf("door base transform: %w", err)
-	}
+	// 2. Sweep θ fromDeg→toDeg, re-planning each step with the door repositioned.
+	sweep := computeDoorSweep(fromDeg, toDeg, s.doorPivotDegreesPerStep())
+	logger.Infof("%s: sweeping %.0f°→%.0f° in %d steps", action, fromDeg, toDeg, len(sweep)-1)
 
-	// 3. Sweep θ closed→open, re-planning each step with the door repositioned.
-	sweep := computeDoorSweep(0, s.doorOpenAngleDegs(), s.doorPivotDegreesPerStep())
-	logger.Infof("open_door: sweeping %.0f° in %d steps", s.doorOpenAngleDegs(), len(sweep)-1)
-
-	for _, theta := range sweep[1:] { // skip 0° — already there
+	for _, theta := range sweep[1:] { // skip fromDeg — the door is already there
 		if err := setDoorTheta(fs, frameFridgeDoor, baseDoorPose, theta); err != nil {
 			return err
 		}
@@ -238,23 +262,23 @@ func (s *beanjaminCoffee) openDoor(ctx, cancelCtx context.Context) error {
 			Constraints: buildConstraints(nil, collisions),
 		}
 		plan, _, err := armplanning.PlanMotion(ctx, logger, req)
-		s.savePlanRequestAndResponse(req, plan, "open_door", err)
+		s.savePlanRequestAndResponse(req, plan, action, err)
 		if err != nil {
-			return fmt.Errorf("plan open_door step θ=%.0f: %w", theta, err)
+			return fmt.Errorf("plan %s step θ=%.0f: %w", action, theta, err)
 		}
 		positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
 		if err != nil {
 			return fmt.Errorf("frame inputs θ=%.0f: %w", theta, err)
 		}
 		if err := s.arm.MoveThroughJointPositions(ctx, positions, s.slowMovementMoveOptions(), nil); err != nil {
-			return fmt.Errorf("execute open_door step θ=%.0f: %w", theta, err)
+			return fmt.Errorf("execute %s step θ=%.0f: %w", action, theta, err)
 		}
 	}
 
-	// 4. Release, then retract to a standoff from the open handle: the same
-	//    approach offset resolved against the ball's OPEN pose (fs still holds the
-	//    door at the final θ), so the exit backs off exactly as the approach came
-	//    in. Leaves the door open.
+	// 3. Release, then retract to a standoff from the handle where the sweep
+	//    left it: the same approach offset resolved against the ball's pose at
+	//    toDeg (fs still holds the door at the final θ), so the exit backs off
+	//    exactly as the approach came in.
 	if s.gripper != nil {
 		if err := s.gripper.Open(ctx, nil); err != nil {
 			return fmt.Errorf("release handle: %w", err)
@@ -264,11 +288,11 @@ func (s *beanjaminCoffee) openDoor(ctx, cancelCtx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ballOpen, err := s.ballWorldPose(fs, retractInputs.ToLinearInputs())
+	ballEnd, err := s.ballWorldPose(fs, retractInputs.ToLinearInputs())
 	if err != nil {
 		return err
 	}
-	retractWorld := composeCupPose(ballOpen.Point(), approachRel)
+	retractWorld := composeCupPose(ballEnd.Point(), approachRel)
 	if err := s.moveToRawPose(ctx,
 		&poseData{pose: retractWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
 		nil, collisions, nil); err != nil {
