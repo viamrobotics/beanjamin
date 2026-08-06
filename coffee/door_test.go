@@ -278,6 +278,43 @@ func TestGraspTracksBallPointFixedOrientation(t *testing.T) {
 	}
 }
 
+// TestNearestTheta pins the mid-sweep abort recovery. The sweep is now one arm
+// call, so a failure does not say which waypoint it stopped on; the gripper is
+// holding the handle, so the arm's joints do. Getting this wrong leaves the world
+// model believing the panel is at an angle it is not, and the next plan routes the
+// arm through it.
+func TestNearestTheta(t *testing.T) {
+	inputs := func(v float64) []referenceframe.Input {
+		return []referenceframe.Input{v, 2 * v}
+	}
+	// Two waypoints' worth of trajectory: θ=10 then θ=20.
+	positions := [][]referenceframe.Input{inputs(0), inputs(1), inputs(2), inputs(3)}
+	thetaOf := []float64{10, 10, 20, 20}
+
+	for _, tc := range []struct {
+		name   string
+		actual []referenceframe.Input
+		want   float64
+	}{
+		{"stopped inside the first waypoint", inputs(0.9), 10},
+		{"stopped inside the second", inputs(2.1), 20},
+		{"ran to the end", inputs(3), 20},
+		{"never left the start", inputs(0), 10},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := nearestTheta(tc.actual, positions, thetaOf, -1); got != tc.want {
+				t.Errorf("nearestTheta = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	// Nothing planned (or nothing executed) must fall back, not report 0° — a
+	// spurious 0 would claim the door is shut.
+	if got := nearestTheta(inputs(0), nil, nil, 75); got != 75 {
+		t.Errorf("empty trajectory = %v, want fallback 75", got)
+	}
+}
+
 func TestDoorGetters_Defaults(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{}}
 	if got := s.doorOpenAngleDegs(); got != 90 {
