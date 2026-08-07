@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
@@ -89,7 +89,6 @@ export function Kiosk() {
     connected,
     error: connectionError,
   } = useViamConnection(partId);
-  const anthropicKey = useRef<string>("");
   const [appError, setAppError] = useState<string | null>(null);
   const viamError = connectionError ?? appError;
 
@@ -112,16 +111,6 @@ export function Kiosk() {
         console.log("[app] failed to fetch machine name:", err);
         if (!cancelled) setMachineName("Beanjamin");
       }
-
-      const key = await getMachineMetadataKey(viamConn, "anthropic_api_key");
-      if (cancelled) return;
-      if (!key) {
-        setAppError(
-          'Machine metadata missing "anthropic_api_key". Set it in the Viam app.',
-        );
-        return;
-      }
-      anthropicKey.current = key;
 
       const configuredCam = await getMachineMetadataKey(viamConn, "cam_name");
       if (!cancelled && configuredCam) setCamName(configuredCam);
@@ -281,11 +270,8 @@ export function Kiosk() {
     setLoading(true);
 
     try {
-      if (!anthropicKey.current) {
-        throw new Error("Anthropic API key not loaded");
-      }
-      const result = await misspellName(name.trim(), anthropicKey.current);
-      setMisspelled(result.misspelled || name);
+      const misspelledName = misspellName(name.trim()) || name;
+      setMisspelled(misspelledName);
 
       // If the customer provided an email and wasn't already identified,
       // offer face registration before proceeding to the order.
@@ -302,10 +288,10 @@ export function Kiosk() {
           "[app] skipping face-register:",
           !email.trim() ? "no email" : "returning customer",
         );
-        await placeOrder(result.misspelled || name);
+        await placeOrder(misspelledName);
       }
     } catch (err) {
-      console.error("Misspell error:", err);
+      console.error("Order submit error:", err);
       await placeOrder(name);
     } finally {
       setLoading(false);
