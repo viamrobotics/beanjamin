@@ -58,7 +58,8 @@ func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error 
 		Step{PoseName: filterPoseCoffeeApproach, PoseSwitch: s.filterSw, Pause: shortPause},
 		Step{PoseName: filterPoseCoffeeIn, PoseSwitch: s.filterSw, Pause: shortPause, LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
 		Step{PoseName: filterPoseCoffeeLockedFinal, PoseSwitch: s.filterSw, PivotFromPose: filterPoseCoffeeIn, PivotDegreesPerStep: 5,
-			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
+			PivotExtraDegrees: s.cfg.LockOvershootDegs,
+			LinearConstraint:  defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
 	); err != nil {
 		return err
 	}
