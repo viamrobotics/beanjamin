@@ -84,24 +84,42 @@ func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) erro
 	)
 }
 
+// moveGripperToPoseWithVerify is the portafilter handoff both release_filter and
+// grab_filter perform: open the jaws and wait until they actually read open, move
+// the claws linearly to poseName, then close on whatever is there.
+//
+// The wait is the point. Both moves travel along the filter handle at claw
+// clearance, so jaws that have not finished opening drag the filter against the
+// bayonet on the way out (release) or strike the handle on the way in (grab).
+// Jaw travel scales with clamp force and jaw range, so it cannot be a fixed sleep
+// tuned on one build — openAndVerifyOpen polls the actual position and fails loudly
+// if the jaws never get there. Callers own the portafilterInMachine flag, whose
+// ordering around this call differs by direction.
+func (s *beanjaminCoffee) moveGripperToPoseWithVerify(ctx, cancelCtx context.Context, poseName string) error {
+	if err := s.openAndVerifyOpen(ctx); err != nil {
+		return fmt.Errorf("open gripper: %w", err)
+	}
+	step := Step{PoseName: poseName, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterGrabCollisions}
+	if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+		return err
+	}
+	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		return fmt.Errorf("grab gripper: %w", err)
+	}
+	time.Sleep(gripperPause)
+	return nil
+}
+
 func (s *beanjaminCoffee) releaseFilter(ctx, cancelCtx context.Context) error {
 	if s.gripper == nil {
 		return fmt.Errorf("release_filter: no gripper configured")
 	}
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("release_filter: open gripper: %w", err)
-	}
 	// Bayonet now holds the filter; arm is committed to leaving it behind.
 	// Set the flag before motion so a mid-move cancel still triggers recovery.
 	s.portafilterInMachine.Store(true)
-	step := Step{PoseName: clawPoseFilterReleased, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterGrabCollisions}
-	if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+	if err := s.moveGripperToPoseWithVerify(ctx, cancelCtx, clawPoseFilterReleased); err != nil {
 		return fmt.Errorf("release_filter: %w", err)
 	}
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		return fmt.Errorf("release_filter: grab gripper: %w", err)
-	}
-	time.Sleep(gripperPause)
 	return nil
 }
 
@@ -115,21 +133,11 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("grab_filter: %w", err)
 	}
 
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("grab_filter: open gripper: %w", err)
-	}
-
-	alignStep := Step{PoseName: clawPoseCoffeeLockedFinal, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterGrabCollisions}
-	if err := s.executeStep(ctx, cancelCtx, alignStep); err != nil {
+	if err := s.moveGripperToPoseWithVerify(ctx, cancelCtx, clawPoseCoffeeLockedFinal); err != nil {
 		return fmt.Errorf("grab_filter: %w", err)
-	}
-
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		return fmt.Errorf("grab_filter: grab gripper: %w", err)
 	}
 	// Filter is firmly back in the claws; cancel no longer needs to recover.
 	s.portafilterInMachine.Store(false)
-	time.Sleep(gripperPause)
 	return nil
 }
 

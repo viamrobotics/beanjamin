@@ -42,6 +42,20 @@ const (
 // holding band — no object is between the claws.
 var errGripMissed = errors.New("gripper did not close on an object")
 
+// errGripperNotOpen means the jaws did not reach the open band within the
+// timeout after an Open command.
+var errGripperNotOpen = errors.New("gripper did not open")
+
+// defaultGripperOpenTimeoutSec bounds the wait for the jaws to read open. Jaw
+// travel time scales with how hard the jaws were clamped and with the build's
+// jaw range, so this is a per-machine calibration knob
+// (gripper_open_timeout_sec), not a constant of the code.
+const defaultGripperOpenTimeoutSec = 3.0
+
+func (s *beanjaminCoffee) gripperOpenTimeout() time.Duration {
+	return time.Duration(orDefault(s.cfg.GripperOpenTimeoutSec, defaultGripperOpenTimeoutSec) * float64(time.Second))
+}
+
 func (s *beanjaminCoffee) gripperHoldMinPos() float64 {
 	return orDefault(s.cfg.GripperHoldMinPos, gripperHoldMinPosDefault)
 }
@@ -97,6 +111,43 @@ func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context) error {
 		return fmt.Errorf("%w (pos=%.0f, state=%s)", errGripMissed, pos, state)
 	}
 	return nil
+}
+
+// openAndVerifyOpen opens the jaws and blocks until they actually read open,
+// the mirror of grabAndVerifyHolding on the closing side. Returns
+// errGripperNotOpen (wrapped) when they have not reached the open band within
+// gripperOpenTimeout; a failed position read returns a plain error so an
+// unreadable gripper is never mistaken for a stuck one.
+//
+// A fixed sleep is not enough here. Jaw travel scales with clamp force and jaw
+// range, so a constant tuned on one build silently becomes too short on a
+// stronger one — and the failure mode is the arm moving while the jaws are still
+// closed on the portafilter, which wrenches the filter against the bayonet
+// rather than releasing it. Polling costs nothing when the jaws are quick and
+// fails loudly instead of silently when they are not.
+func (s *beanjaminCoffee) openAndVerifyOpen(ctx context.Context) error {
+	if err := s.gripper.Open(ctx, nil); err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	deadline := time.Now().Add(s.gripperOpenTimeout())
+	for {
+		select {
+		case <-time.After(gripperPause):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		pos, err := s.gripperPos(ctx)
+		if err != nil {
+			return err
+		}
+		if s.classifyGripper(pos) == gripperOpen {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%w within %s (pos=%.0f, state=%s)",
+				errGripperNotOpen, s.gripperOpenTimeout(), pos, s.classifyGripper(pos))
+		}
+	}
 }
 
 // dropHeldContainer releases a cup or glass the gripper is holding so cancel
