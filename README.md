@@ -185,6 +185,17 @@ Returns:
 
 Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` component. Supports preparing espresso and lungo orders, executing individual actions, and cancellation.
 
+`has_separate_brew_buttons` selects which coffee machine the arm is driving, and with it which claw poses the switcher must carry:
+
+| | `false` (default) | `true` |
+|---|---|---|
+| Hardware | one toggle switch | one momentary button per shot size |
+| Claw poses required | `coffee_button_approach`, `coffee_button_on`, `coffee_button_off` | `espresso_button_approach` / `_press`, `lungo_button_approach` / `_press` |
+| Who sets the dose | the hold duration — `brew_time_sec` / `lungo_brew_time_sec` | the machine; the brew times only wait the pour out |
+| Extra actions | `turn_coffee_button_on`, `turn_coffee_button_off` | `press_espresso_button`, `press_lungo_button`, `brew_lungo` |
+
+Only the selected machine's poses are validated at startup, and only its actions are registered for `execute_action`. Under `true`, both shot sizes are required even if only one is on the menu — the drink is known per-order, so a switcher that cannot reach the lungo button is misconfigured regardless of what is queued.
+
 ### Configuration
 
 ```json
@@ -194,8 +205,10 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
   "arm_name": "my-arm",
   "gripper_name": "my-gripper",
   "speech_service_name": "speech",
+  "has_separate_brew_buttons": true,
   "brew_time_sec": 25,
   "lungo_brew_time_sec": 40,
+  "button_press_hold_sec": 0.5,
   "grind_time_sec": 7.5,
   "slow_movement_vel_degs_per_sec": 25,
   "portafilter_shake_sec": 2.5,
@@ -247,11 +260,14 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `arm_name`                 | string | Yes      | Name of the arm component used for motion planning and execution.                                             |
 | `gripper_name`             | string | Yes      | Name of the gripper component.                                                                                |
 | `speech_service_name`      | string | No       | Name of a text-to-speech generic service for spoken greetings.                                                |
-| `brew_time_sec`            | float  | No       | Espresso brew duration in seconds (default: 8).                                                               |
-| `lungo_brew_time_sec`      | float  | No       | Lungo brew duration in seconds (default: 15).                                                                 |
+| `has_separate_brew_buttons` | bool  | No       | `true` when the machine has one momentary button per shot size (poked, then released); `false` (default) for a single toggle switch the claw holds down for the whole brew. Changes which claw poses are required and which actions exist — see the table above. |
+| `brew_time_sec`            | float  | No       | Espresso brew duration in seconds (default: 8). Under a toggle this is the hold time and therefore the dose; with `has_separate_brew_buttons` the machine controls the dose and this must be at least as long as its actual pour, or the arm reaches for the cup mid-stream. |
+| `lungo_brew_time_sec`      | float  | No       | Same, for a lungo (default: 15).                                                                              |
+| `button_press_hold_sec`    | float  | No       | How long the claw dwells on a brew button so the momentary switch registers, in seconds (default: 0.5). Raise if presses are intermittent. Ignored unless `has_separate_brew_buttons` is set. |
 | `grind_time_sec`           | float  | No       | Bean grinding duration in seconds, applied to both regular and decaf grinders (default: 7.5).                 |
 | `gripper_hold_min_pos`     | float  | No       | Gripper jaw position (0–850) below which the gripper is considered closed/empty. Positions in `[min, max]` mean an object (cup or glass) is held; used to verify grabs and self-heal an open gripper at brew-cycle start (default: 430).                 |
 | `gripper_hold_max_pos`     | float  | No       | Gripper jaw position (0–850) above which the gripper is considered open (default: 685).                       |
+| `gripper_open_timeout_sec` | float  | No       | How long the portafilter handoff waits for the jaws to actually read open before giving up (default: 3). `release_filter` and `grab_filter` both open the jaws and then travel along the filter handle at claw clearance, so moving while the jaws are still closing drags the filter against the bayonet on the way out or strikes the handle on the way in. Rather than sleeping a fixed interval, both poll the real jaw position every 500ms until it clears `gripper_hold_max_pos` and fail with a "gripper did not open" error at this timeout. Raise it on a build whose jaws travel slowly — clamp force and jaw range both lengthen the open stroke. |
 | `slow_movement_vel_degs_per_sec` | float | No    | Max joint velocity (degrees/sec) used when a step has a `LinearConstraint` without explicit `MoveOptions`, as well as for pivot and circular motions. Raise carefully — precision and contact steps rely on this (default: 25). |
 | `portafilter_shake_sec`    | float  | No       | Duration in seconds of a small circular shake at the `coffee_shake` pose during `unlock_portafilter`, to dislodge a stuck puck. Requires a `coffee_shake` pose in the filter pose switcher. Defaults to 0 (disabled). |
 | `save_motion_requests_dir` | string | No       | Directory to save debugging payloads. Each plan writes a single request+response JSON (RDK's `WriteRequestAndResponseToFile`; readable back with `ReadRequestAndResponseFromFile`, and the response is absent when planning failed), nested under `tag=<order-id>/tag=step_<step>/tag=motion_<move\|pivot\|circular\|carry>/tag=planning_<success\|failure>/`. When this directory is a Viam data-synced capture dir, the data manager reads those `tag=` segments and tags each uploaded file, so plans are searchable on the data page by order, step, motion type, and planning outcome — and a failed order's Slack notification deep-links to that order's plan requests (which the reader can narrow to `planning_failure` or a specific step). Also writes a `visualization_snapshot_<timestamp>_<cup\|glass>.pb.gz` motion-tools snapshot on each cup/glass observation: the whole frame system resolved at the joint configuration the arm held when the photo was taken, plus every detection's point cloud (as captured, anchored at the camera's world pose) and the world-frame bounding box the grasp was derived from. Drag the file onto a motion-tools visualizer to replay the observation — the `visualization_snapshot` prefix is what its drag-and-drop loader keys off. |
@@ -357,7 +373,7 @@ Only `drink` is required. If `initial_greeting` is omitted, a random greeting is
 
 **`execute_action`** - Run a single coffee-making action by name, for manual step-by-step operation. An unknown name returns the full list of available actions in the error. Available actions:
 
-- Brew cycle: `grind_coffee`, `grind_decaf`, `tamp_ground`, `lock_portafilter`, `unlock_portafilter`, `release_filter`, `grab_filter`, `turn_coffee_button_on`, `turn_coffee_button_off`, `brew_coffee`, `set_cup_for_coffee`, `give_full_cup_to_customer` (place the finished cup in the serving area), `clean_portafilter`, `place_held` (place the currently held vessel in the serving area).
+- Brew cycle: `grind_coffee`, `grind_decaf`, `tamp_ground`, `lock_portafilter`, `unlock_portafilter`, `release_filter`, `grab_filter`, `brew_coffee`, plus the button actions for the configured machine (`turn_coffee_button_on` / `turn_coffee_button_off`, or `press_espresso_button` / `press_lungo_button` / `brew_lungo` under `has_separate_brew_buttons`), `set_cup_for_coffee`, `give_full_cup_to_customer` (place the finished cup in the serving area), `clean_portafilter`, `place_held` (place the currently held vessel in the serving area).
 - Iced coffee (require `can_serve_iced`): `fetch_glass`, `pulse_ice_pin`, `dispense_ice`, `stage_glass`, `grab_brewed_cup`, `pour_espresso`, `grab_staged_glass`, `serve_iced_coffee` (the full iced sequence end-to-end).
 - Fridge door (requires `door_approach_relative_pose`): `open_door` (grip the handle and swing the door open — see below).
 
