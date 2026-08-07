@@ -158,25 +158,39 @@ func (s *beanjaminCoffee) pressLungoButton(ctx, cancelCtx context.Context) error
 	return s.pressBrewButton(ctx, cancelCtx, clawPoseLungoButtonApproach, clawPoseLungoButtonPress, "press_lungo_button")
 }
 
-// pressBrewButton pokes one of the machine's two momentary brew buttons:
-// straight in from the button's own standoff, dwell long enough for the press
-// to register, straight back out. The machine doses on its own from there, so
-// there is nothing to release afterwards — the arm must clear the button before
-// the pour finishes, not stay parked on it.
+// brewButtonSteps is the three-move poke of one momentary brew button: free-plan
+// into the button's own standoff, straight in and dwell long enough for the press
+// to register, straight back out.
 //
-// All three moves carry clawCoffeeButtonCollisions. The buttons sit on the
-// machine face behind coffee-machine-buffer-front, so the claw is inside that
-// obstacle for the whole poke — including the move into the standoff, which is
-// already tight against it. Without the allowance on every step the planner
-// rejects the approach before the press is ever attempted.
+// Only the two linear moves carry clawCoffeeButtonCollisions. The buttons sit on
+// the machine face behind coffee-machine-buffer-front, so the claw is inside that
+// obstacle for the press and the retreat and the planner rejects them without the
+// allowance.
+//
+// The approach must not carry it. An allowed-collision entry is a property of the
+// whole plan, not of the neighbourhood of its goal — buildConstraints hands it to
+// the planner as a CollisionSpecification covering the entire trajectory. The
+// approach is free-planned from wherever the arm happens to be, which mid-brew is
+// cup_under_machine_approach, under the machine; allowing coffee-machine-buffer-front
+// over that whole traverse lets the planner route straight up through the machine's
+// front face, and the claw hits the machine. Free-planned without the allowance it
+// plans fine, and turn_coffee_button_on takes the same shape for the same reason.
+func (s *beanjaminCoffee) brewButtonSteps(approachPose, pressPose string) []Step {
+	return []Step{
+		{PoseName: approachPose, PoseSwitch: s.clawsSw},
+		{PoseName: pressPose, PoseSwitch: s.clawsSw, Pause: s.buttonPressHold(),
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
+		{PoseName: approachPose, PoseSwitch: s.clawsSw,
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
+	}
+}
+
+// pressBrewButton pokes one of the machine's two momentary brew buttons and steps
+// clear. The machine doses on its own from there, so there is nothing to release
+// afterwards — the arm must clear the button before the pour finishes, not stay
+// parked on it.
 func (s *beanjaminCoffee) pressBrewButton(ctx, cancelCtx context.Context, approachPose, pressPose, label string) error {
-	return s.runSteps(ctx, cancelCtx, label,
-		Step{PoseName: approachPose, PoseSwitch: s.clawsSw, AllowedCollisions: clawCoffeeButtonCollisions},
-		Step{PoseName: pressPose, PoseSwitch: s.clawsSw, Pause: s.buttonPressHold(),
-			LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
-		Step{PoseName: approachPose, PoseSwitch: s.clawsSw,
-			LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
-	)
+	return s.runSteps(ctx, cancelCtx, label, s.brewButtonSteps(approachPose, pressPose)...)
 }
 
 // brewCoffee / brewLungo are the execute_action entry points for each shot size.
