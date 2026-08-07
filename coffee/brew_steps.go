@@ -198,11 +198,11 @@ func (s *beanjaminCoffee) cleanPortafilter(ctx, cancelCtx context.Context) error
 		Step{PoseName: filterPoseCloseToCleaning, PoseSwitch: s.filterSw},
 		Step{PoseName: filterPoseApproachToCleaningScrapper, PoseSwitch: s.filterSw, AllowedCollisions: cleaningCollisions, Pause: shortPause},
 		Step{PoseName: filterPoseCleaningScrapperActive, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions},
-		Step{PoseName: filterPoseCleaningScrapperActive, PoseSwitch: s.filterSw, AllowedCollisions: cleaningCollisions, CircularRadiusMm: 3, CircularDurationSec: 2.5, CircularPointsPerRev: 8},
+		Step{PoseName: filterPoseCleaningScrapperActive, PoseSwitch: s.filterSw, AllowedCollisions: cleaningCollisions, CircularRadiusMm: 5, CircularDurationSec: 2.5, CircularPointsPerRev: 8},
 		Step{PoseName: filterPoseApproachToCleaningScrapper, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, Pause: shortPause},
 		Step{PoseName: filterPoseApproachToCleaningBrush, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, Pause: shortPause},
 		Step{PoseName: filterPoseCleaningBrushActive, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions},
-		Step{PoseName: filterPoseCleaningBrushActive, PoseSwitch: s.filterSw, AllowedCollisions: cleaningCollisions, CircularRadiusMm: 3, CircularDurationSec: 2.5, CircularPointsPerRev: 8},
+		Step{PoseName: filterPoseCleaningBrushActive, PoseSwitch: s.filterSw, AllowedCollisions: cleaningCollisions, CircularRadiusMm: 5, CircularDurationSec: 2.5, CircularPointsPerRev: 8},
 		Step{PoseName: filterPoseApproachToCleaningBrush, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, Pause: shortPause},
 		Step{PoseName: filterPoseCloseToCleaning, PoseSwitch: s.filterSw, AllowedCollisions: cleaningCollisions, Pause: shortPause},
 	); err != nil {
