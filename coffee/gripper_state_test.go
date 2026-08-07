@@ -59,6 +59,80 @@ func TestGrabAndVerifyHolding(t *testing.T) {
 	}
 }
 
+// TestOpenAndVerifyOpen covers the release-side wait: it returns only once the
+// jaws read open, surfaces errGripperNotOpen when they never get there, and keeps
+// an unreadable position distinct from a stuck gripper.
+func TestOpenAndVerifyOpen(t *testing.T) {
+	cases := []struct {
+		name string
+		// positions returned by successive reads; the last repeats once exhausted.
+		positions  []float64
+		doErr      error
+		timeoutSec float64
+		wantErr    bool
+		wantStuck  bool // expect errors.Is(err, errGripperNotOpen)
+		wantReads  int
+	}{
+		{name: "open on first read", positions: []float64{850}, wantReads: 1},
+		{name: "opens slowly", positions: []float64{357, 500, 850}, timeoutSec: 5, wantReads: 3},
+		{name: "never opens", positions: []float64{357}, timeoutSec: 0.001, wantErr: true, wantStuck: true, wantReads: 1},
+		{name: "read error not stuck", doErr: errors.New("boom"), wantErr: true, wantStuck: false, wantReads: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opened, reads := 0, 0
+			g := inject.NewGripper("g")
+			g.OpenFunc = func(context.Context, map[string]any) error { opened++; return nil }
+			g.DoFunc = func(context.Context, map[string]any) (map[string]any, error) {
+				reads++
+				if tc.doErr != nil {
+					return nil, tc.doErr
+				}
+				return map[string]any{"pos": tc.positions[min(reads-1, len(tc.positions)-1)]}, nil
+			}
+			s := &beanjaminCoffee{
+				cfg:     &Config{GripperOpenTimeoutSec: tc.timeoutSec},
+				gripper: g,
+				logger:  logging.NewTestLogger(t),
+			}
+			err := s.openAndVerifyOpen(context.Background())
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("openAndVerifyOpen err = %v, wantErr = %v", err, tc.wantErr)
+			}
+			if got := errors.Is(err, errGripperNotOpen); got != tc.wantStuck {
+				t.Errorf("errors.Is(err, errGripperNotOpen) = %v, want %v (err=%v)", got, tc.wantStuck, err)
+			}
+			if opened != 1 {
+				t.Errorf("Open called %d times, want exactly 1 — the retry polls, it does not re-command", opened)
+			}
+			if reads != tc.wantReads {
+				t.Errorf("position reads = %d, want %d", reads, tc.wantReads)
+			}
+		})
+	}
+}
+
+// TestOpenAndVerifyOpenHonorsCancel checks the poll aborts on context
+// cancellation rather than sleeping out the full timeout — an operator cancel
+// must interrupt the wait.
+func TestOpenAndVerifyOpenHonorsCancel(t *testing.T) {
+	g := inject.NewGripper("g")
+	g.OpenFunc = func(context.Context, map[string]any) error { return nil }
+	g.DoFunc = func(context.Context, map[string]any) (map[string]any, error) {
+		return map[string]any{"pos": 357.0}, nil // never opens
+	}
+	s := &beanjaminCoffee{
+		cfg:     &Config{GripperOpenTimeoutSec: 60},
+		gripper: g,
+		logger:  logging.NewTestLogger(t),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.openAndVerifyOpen(ctx); !errors.Is(err, context.Canceled) {
+		t.Errorf("openAndVerifyOpen err = %v, want context.Canceled", err)
+	}
+}
+
 // TestDropHeldContainer covers cancel's pre-recovery release: a cup/glass in the
 // holding band is dropped (open→close) and its geometry detached, while a gripper
 // closed on the filter handle, an already-open gripper, or an unreadable position
