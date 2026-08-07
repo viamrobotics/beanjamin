@@ -44,6 +44,14 @@ type Step struct {
 	PivotFromPose       string                `json:"pivot_from_pose,omitempty"`
 	PivotDegreesPerStep float64               `json:"pivot_degrees_per_step,omitempty"`
 
+	// PivotExtraDegrees rotates past PoseName by this much along the same axis,
+	// then unwinds back onto it — all in one planned trajectory. It compensates
+	// for the gripper slipping on the portafilter handle while the bayonet is
+	// under load: the arm must over-rotate for the filter to seat, and the
+	// unwind re-zeroes the grip, since a seated filter out-holds the claws so
+	// the handle slides back through them.
+	PivotExtraDegrees float64 `json:"pivot_extra_degrees,omitempty"`
+
 	// NoSpill routes this step's move through the level carry (carryHeldLevel)
 	// rather than a direct plan
 	NoSpill bool `json:"no_spill,omitempty"`
@@ -90,8 +98,13 @@ type Config struct {
 	GripperOpenTimeoutSec     float64 `json:"gripper_open_timeout_sec,omitempty"`
 	SlowMovementVelDegsPerSec float64 `json:"slow_movement_vel_degs_per_sec,omitempty"`
 	PortafilterShakeSec       float64 `json:"portafilter_shake_sec,omitempty"`
-	SaveMotionRequestsDir     string  `json:"save_motion_requests_dir,omitempty"`
-	OrderSensorName           string  `json:"order_sensor_name,omitempty"`
+	// LockOvershootDegs over-rotates the portafilter lock pivot so the filter
+	// still reaches the authored angle after the claws slip on its handle under
+	// bayonet load, then unwinds back onto it (Step.PivotExtraDegrees).
+	// Defaults to 0 — tune it on the machine.
+	LockOvershootDegs     float64 `json:"lock_overshoot_degs,omitempty"`
+	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
+	OrderSensorName       string  `json:"order_sensor_name,omitempty"`
 
 	// Optional usage sensor updated during the brew lifecycle via a best-effort
 	// read-modify-write: all counters are read with Readings, the changed one is

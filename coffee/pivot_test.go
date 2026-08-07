@@ -181,3 +181,111 @@ func TestComputePivotPoses_NegativeAxisAngle(t *testing.T) {
 		}
 	}
 }
+
+// angleBetweenDegs is the magnitude of the rotation carrying a to b.
+func angleBetweenDegs(a, b spatialmath.Orientation) float64 {
+	return math.Abs(spatialmath.OrientationBetween(a, b).AxisAngles().Theta) * 180 / math.Pi
+}
+
+func TestPivotOvershootPose_ContinuesPastEnd(t *testing.T) {
+	pt := r3.Vector{X: 100, Y: 200, Z: 300}
+	start := spatialmath.NewPose(pt, &spatialmath.OrientationVectorDegrees{OZ: 1, Theta: 0})
+	end := spatialmath.NewPose(pt, &spatialmath.OrientationVectorDegrees{OZ: 1, Theta: 30})
+
+	over, err := pivotOvershootPose(start, end, 8)
+	if err != nil {
+		t.Fatalf("pivotOvershootPose: %v", err)
+	}
+
+	// The overshoot must extend the arc, not fold back onto it: 38° from the
+	// start and 8° past the end.
+	if got := angleBetweenDegs(start.Orientation(), over.Orientation()); math.Abs(got-38) > 0.01 {
+		t.Errorf("start→overshoot = %.3f°, want 38", got)
+	}
+	if got := angleBetweenDegs(end.Orientation(), over.Orientation()); math.Abs(got-8) > 0.01 {
+		t.Errorf("end→overshoot = %.3f°, want 8", got)
+	}
+	if d := over.Point().Sub(pt).Norm(); d > 1e-9 {
+		t.Errorf("overshoot moved the pivot point by %.6f mm, want 0", d)
+	}
+}
+
+// TestPivotOvershootPose_NegativeAxisAngle guards the same sign trap
+// TestComputePivotPoses_NegativeAxisAngle covers, on the overshoot path: these
+// orientations report the (-axis, -θ) form, so an un-normalized axis turns a
+// positive overshoot into a rotation back toward the start — unwinding a
+// bayonet the arm is trying to seat, which is the exact opposite of the intent.
+func TestPivotOvershootPose_NegativeAxisAngle(t *testing.T) {
+	start := spatialmath.NewPoseFromOrientation(
+		&spatialmath.OrientationVectorDegrees{OX: 0, OY: 1, OZ: 0, Theta: -180},
+	)
+	end := spatialmath.NewPoseFromOrientation(
+		&spatialmath.OrientationVectorDegrees{OX: 0, OY: -0.3, OZ: -1, Theta: 0},
+	)
+
+	rawTheta := spatialmath.OrientationBetween(start.Orientation(), end.Orientation()).AxisAngles().Theta
+	if rawTheta >= 0 {
+		t.Fatalf("test premise broken: expected a negative raw AxisAngles().Theta, got %.4f rad", rawTheta)
+	}
+	totalDegs := math.Abs(rawTheta) * 180 / math.Pi
+
+	over, err := pivotOvershootPose(start, end, 8)
+	if err != nil {
+		t.Fatalf("pivotOvershootPose: %v", err)
+	}
+
+	if got := angleBetweenDegs(start.Orientation(), over.Orientation()); math.Abs(got-(totalDegs+8)) > 0.01 {
+		t.Errorf("start→overshoot = %.3f°, want %.3f (overshoot rotated back toward the start)", got, totalDegs+8)
+	}
+	if got := angleBetweenDegs(end.Orientation(), over.Orientation()); math.Abs(got-8) > 0.01 {
+		t.Errorf("end→overshoot = %.3f°, want 8", got)
+	}
+}
+
+// TestPivotOvershootPose_DegenerateRotation: with no authored rotation there is
+// no axis to continue along, so the caller must get an error rather than a
+// silent rotation about QuatToR4AA's hardcoded +Z fallback.
+func TestPivotOvershootPose_DegenerateRotation(t *testing.T) {
+	pt := r3.Vector{X: 100, Y: 200, Z: 300}
+	pose := spatialmath.NewPose(pt, &spatialmath.OrientationVectorDegrees{OZ: 1, Theta: 0})
+
+	if _, err := pivotOvershootPose(pose, pose, 8); err == nil {
+		t.Error("expected an error for a zero-rotation pivot, got nil")
+	}
+}
+
+// TestPivotOvershootPose_ArcGoesPastAndBack checks the waypoint list executePivot
+// builds: it must climb past the goal and unwind onto it, ending exactly there.
+func TestPivotOvershootPose_ArcGoesPastAndBack(t *testing.T) {
+	pt := r3.Vector{X: 100, Y: 200, Z: 300}
+	start := spatialmath.NewPose(pt, &spatialmath.OrientationVectorDegrees{OZ: 1, Theta: 0})
+	end := spatialmath.NewPose(pt, &spatialmath.OrientationVectorDegrees{OZ: 1, Theta: 30})
+
+	over, err := pivotOvershootPose(start, end, 8)
+	if err != nil {
+		t.Fatalf("pivotOvershootPose: %v", err)
+	}
+
+	logger := logging.NewTestLogger(t)
+	var poses []spatialmath.Pose
+	segStart := start
+	for _, target := range []spatialmath.Pose{over, end} {
+		seg := computePivotPoses(logger, segStart, target, 5)
+		poses = append(poses, seg[1:]...)
+		segStart = target
+	}
+
+	var maxDegs float64
+	for _, p := range poses {
+		if d := angleBetweenDegs(start.Orientation(), p.Orientation()); d > maxDegs {
+			maxDegs = d
+		}
+	}
+	if math.Abs(maxDegs-38) > 0.01 {
+		t.Errorf("arc peaked at %.3f° from start, want 38", maxDegs)
+	}
+	last := poses[len(poses)-1]
+	if d := angleBetweenDegs(end.Orientation(), last.Orientation()); d > 0.01 {
+		t.Errorf("arc ended %.3f° off the goal, want 0", d)
+	}
+}

@@ -647,15 +647,16 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 		return fmt.Errorf("pivot %q → %q: component mismatch (%q vs %q)",
 			step.PivotFromPose, step.PoseName, startPD.componentName, endPD.componentName)
 	}
-	const pivotPositionToleranceMm = 0.5
+	// The authored poses must describe the same point (a pivot is a pure
+	// rotation), and the arm must already be standing on it.
+	const (
+		pivotPositionToleranceMm = 0.5
+		pivotStartToleranceMm    = 2.0
+	)
 	if dist := startPD.pose.Point().Sub(endPD.pose.Point()).Norm(); dist > pivotPositionToleranceMm {
 		return fmt.Errorf("pivot %q → %q: positions differ by %.2f mm (max %.1f mm) — pivot assumes a fixed point",
 			step.PivotFromPose, step.PoseName, dist, pivotPositionToleranceMm)
 	}
-
-	poses := computePivotPoses(logger, startPD.pose, endPD.pose, step.PivotDegreesPerStep)
-	logger.Infof("pivot %q → %q: %d waypoints (%.1f°/step)",
-		step.PivotFromPose, step.PoseName, len(poses)-1, step.PivotDegreesPerStep)
 
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
@@ -663,9 +664,53 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	}
 	linearInputs := fsInputs.ToLinearInputs()
 
-	// Build a goal state for each waypoint (skip poses[0] — we're already there).
-	goals := make([]*armplanning.PlanState, 0, len(poses)-1)
-	for _, pose := range poses[1:] {
+	// Seed the arc from where the arm ACTUALLY is rather than from the authored
+	// start pose. Each segment's first waypoint is dropped on the assumption
+	// we're already standing on it, so an arm that ended the previous step off
+	// the authored pose would get one coarse planner segment to climb back onto
+	// the arc — precisely the free-form rotation the fine waypoints exist to
+	// prevent, and with a portafilter engaged in the bayonet while it happens.
+	// The authored *position* is kept so the pivot stays a rotation about the
+	// intended fixed point even if the arm has drifted a fraction of a mm.
+	curTF, err := fs.Transform(linearInputs,
+		referenceframe.NewPoseInFrame(startPD.componentName, spatialmath.NewZeroPose()),
+		startPD.refFrame)
+	if err != nil {
+		return fmt.Errorf("pivot %q: current pose of %q: %w", step.PivotFromPose, startPD.componentName, err)
+	}
+	actual := curTF.(*referenceframe.PoseInFrame).Pose()
+	if dist := actual.Point().Sub(startPD.pose.Point()).Norm(); dist > pivotStartToleranceMm {
+		return fmt.Errorf("pivot %q → %q: arm is %.2f mm off the pivot start (max %.1f mm) — refusing to pivot about the wrong point",
+			step.PivotFromPose, step.PoseName, dist, pivotStartToleranceMm)
+	}
+	fromPose := spatialmath.NewPose(startPD.pose.Point(), actual.Orientation())
+
+	// Rotate straight onto the goal, or past it and back when the step asks for
+	// an overshoot. Both segments are planned together and run as one
+	// trajectory, so the arm never stops at the overshot pose.
+	targets := []spatialmath.Pose{endPD.pose}
+	if step.PivotExtraDegrees != 0 {
+		// Axis from the authored pair, not fromPose: the arm's drift should seed
+		// where the arc starts, never tilt the axis it turns about.
+		over, err := pivotOvershootPose(startPD.pose, endPD.pose, step.PivotExtraDegrees)
+		if err != nil {
+			return fmt.Errorf("pivot %q → %q: %w", step.PivotFromPose, step.PoseName, err)
+		}
+		targets = []spatialmath.Pose{over, endPD.pose}
+	}
+
+	var poses []spatialmath.Pose
+	segStart := fromPose
+	for _, target := range targets {
+		seg := computePivotPoses(logger, segStart, target, step.PivotDegreesPerStep)
+		poses = append(poses, seg[1:]...) // seg[0] is where the previous segment left us
+		segStart = target
+	}
+	logger.Infof("pivot %q → %q: %d waypoints (%.1f°/step, %.1f° overshoot)",
+		step.PivotFromPose, step.PoseName, len(poses), step.PivotDegreesPerStep, step.PivotExtraDegrees)
+
+	goals := make([]*armplanning.PlanState, 0, len(poses))
+	for _, pose := range poses {
 		pif := referenceframe.NewPoseInFrame(startPD.refFrame, pose)
 		tf, err := fs.Transform(linearInputs, pif, referenceframe.World)
 		if err != nil {
@@ -956,6 +1001,38 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, al
 		return fmt.Errorf("get frame inputs from carry plan: %w", err)
 	}
 	return s.arm.MoveThroughJointPositions(ctx, positions, buildMoveOptions(moveOpts), nil)
+}
+
+// minPivotThetaRads is the smallest authored rotation an overshoot direction
+// can be derived from. Below it QuatToR4AA's axis is numerical noise (it falls
+// back to a hardcoded +Z), so continuing "along the same axis" is meaningless.
+const minPivotThetaRads = 1e-3
+
+// pivotOvershootPose returns endPose rotated a further degrees about the same
+// axis that carries startPose's orientation to endPose's, with the position
+// left untouched. Positive degrees continues past endPose in the direction of
+// travel, so callers do not have to know the pivot's handedness.
+//
+// The extra rotation pre-multiplies because QuatBetween is a left difference
+// (q2 * conj(q1)) — the axis is expressed in the poses' shared reference frame,
+// not the tool's body frame.
+func pivotOvershootPose(startPose, endPose spatialmath.Pose, degrees float64) (spatialmath.Pose, error) {
+	aa := spatialmath.OrientationBetween(startPose.Orientation(), endPose.Orientation()).AxisAngles()
+	// AxisAngles reports the same rotation as either (axis, +θ) or (-axis, -θ).
+	// Normalize to a positive angle so `degrees` continues the travel direction
+	// instead of silently reversing into it. Same signed-Theta trap that
+	// computePivotPoses guards against with math.Abs.
+	if aa.Theta < 0 {
+		aa = &spatialmath.R4AA{Theta: -aa.Theta, RX: -aa.RX, RY: -aa.RY, RZ: -aa.RZ}
+	}
+	if aa.Theta < minPivotThetaRads {
+		return nil, fmt.Errorf("rotation is %.5f rad, too small to derive an overshoot axis", aa.Theta)
+	}
+	extra := spatialmath.NewPoseFromOrientation(&spatialmath.R4AA{
+		Theta: degrees * math.Pi / 180.0, RX: aa.RX, RY: aa.RY, RZ: aa.RZ,
+	})
+	rotated := spatialmath.Compose(extra, spatialmath.NewPoseFromOrientation(endPose.Orientation()))
+	return spatialmath.NewPose(endPose.Point(), rotated.Orientation()), nil
 }
 
 // computePivotPoses returns interpolated poses between startPose and endPose.
