@@ -44,6 +44,14 @@ type Step struct {
 	PivotFromPose       string                `json:"pivot_from_pose,omitempty"`
 	PivotDegreesPerStep float64               `json:"pivot_degrees_per_step,omitempty"`
 
+	// PivotExtraDegrees rotates past PoseName by this much along the same axis,
+	// then unwinds back onto it — all in one planned trajectory. It compensates
+	// for the gripper slipping on the portafilter handle while the bayonet is
+	// under load: the arm must over-rotate for the filter to seat, and the
+	// unwind re-zeroes the grip, since a seated filter out-holds the claws so
+	// the handle slides back through them.
+	PivotExtraDegrees float64 `json:"pivot_extra_degrees,omitempty"`
+
 	// NoSpill routes this step's move through the level carry (carryHeldLevel)
 	// rather than a direct plan
 	NoSpill bool `json:"no_spill,omitempty"`
@@ -60,20 +68,43 @@ type Step struct {
 }
 
 type Config struct {
-	PoseSwitcherName          string  `json:"pose_switcher_name"`
-	ClawsPoseSwitcherName     string  `json:"claws_pose_switcher_name"`
-	ArmName                   string  `json:"arm_name"`
-	GripperName               string  `json:"gripper_name"`
-	SpeechServiceName         string  `json:"speech_service_name,omitempty"`
+	PoseSwitcherName      string `json:"pose_switcher_name"`
+	ClawsPoseSwitcherName string `json:"claws_pose_switcher_name"`
+	ArmName               string `json:"arm_name"`
+	GripperName           string `json:"gripper_name"`
+	SpeechServiceName     string `json:"speech_service_name,omitempty"`
+	// HasSeparateBrewButtons selects which coffee machine this arm is driving.
+	//
+	// false (default): a single toggle switch. The claw holds it down for the
+	// whole brew, so BrewTimeSec/LungoBrewTimeSec *are* the dose. Requires the
+	// coffee_button_approach/_on/_off claw poses.
+	//
+	// true: one momentary button per shot size. The claw pokes the button for
+	// the ordered drink and steps clear; the machine decides the dose, so the
+	// brew times only have to outlast its pour. Requires the espresso_button_
+	// and lungo_button_ approach/press claw poses.
+	HasSeparateBrewButtons bool `json:"has_separate_brew_buttons,omitempty"`
+
+	// BrewTimeSec / LungoBrewTimeSec are the toggle hold duration, or — under
+	// has_separate_brew_buttons — how long to wait out a machine-controlled
+	// pour, in which case they must be >= its actual pour or the arm reaches
+	// in mid-stream. ButtonPressHoldSec applies only to the button machine.
 	BrewTimeSec               float64 `json:"brew_time_sec,omitempty"`
 	LungoBrewTimeSec          float64 `json:"lungo_brew_time_sec,omitempty"`
+	ButtonPressHoldSec        float64 `json:"button_press_hold_sec,omitempty"`
 	GrindTimeSec              float64 `json:"grind_time_sec,omitempty"`
 	GripperHoldMinPos         float64 `json:"gripper_hold_min_pos,omitempty"`
 	GripperHoldMaxPos         float64 `json:"gripper_hold_max_pos,omitempty"`
+	GripperOpenTimeoutSec     float64 `json:"gripper_open_timeout_sec,omitempty"`
 	SlowMovementVelDegsPerSec float64 `json:"slow_movement_vel_degs_per_sec,omitempty"`
 	PortafilterShakeSec       float64 `json:"portafilter_shake_sec,omitempty"`
-	SaveMotionRequestsDir     string  `json:"save_motion_requests_dir,omitempty"`
-	OrderSensorName           string  `json:"order_sensor_name,omitempty"`
+	// LockOvershootDegs over-rotates the portafilter lock pivot so the filter
+	// still reaches the authored angle after the claws slip on its handle under
+	// bayonet load, then unwinds back onto it (Step.PivotExtraDegrees).
+	// Defaults to 0 — tune it on the machine.
+	LockOvershootDegs     float64 `json:"lock_overshoot_degs,omitempty"`
+	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
+	OrderSensorName       string  `json:"order_sensor_name,omitempty"`
 
 	// Optional usage sensor updated during the brew lifecycle via a best-effort
 	// read-modify-write: all counters are read with Readings, the changed one is

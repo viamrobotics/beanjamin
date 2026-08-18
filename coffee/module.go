@@ -126,6 +126,15 @@ type beanjaminCoffee struct {
 	// stagedGlassPlaced tracks whether stageGlassAsObstacle has added the released
 	// glass geometry to world in cachedFS
 	stagedGlassPlaced bool
+
+	// doorOpenDegs is how far the fridge door physically stands open, in degrees
+	// about its hinge (0 = shut). The frame system always rebuilds with the door
+	// at its authored shut transform, so this is the only record that survives a
+	// rebuild — resetFrameSystem re-applies it, keeping the modeled panel where
+	// the real one actually is instead of snapping it closed behind the arm's
+	// back. Cleared by reset_world, the operator's "the world is as configured"
+	// button. Mutated only on the motion sequence goroutine, like cachedFS.
+	doorOpenDegs float64
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {

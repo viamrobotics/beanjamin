@@ -45,6 +45,15 @@ const (
 	clawPoseCupReadyForCoffee       = "cup_ready_for_coffee"
 	clawPoseCupUnderMachineApproach = "cup_under_machine_approach"
 
+	// Brew-button claw poses, used when has_separate_brew_buttons is set. That
+	// machine has one momentary button per shot size, so each size gets its own
+	// standoff and press pose and the press is a straight-in linear poke from
+	// directly in front of that button.
+	clawPoseEspressoButtonApproach = "espresso_button_approach"
+	clawPoseEspressoButtonPress    = "espresso_button_press"
+	clawPoseLungoButtonApproach    = "lungo_button_approach"
+	clawPoseLungoButtonPress       = "lungo_button_press"
+
 	// iced-coffee claw poses (only required when can_serve_iced is set; the
 	// glass itself is vision-detected via the glass observe switch).
 	clawPoseIceMachineApproach = "ice_machine_approach" // staged in front of the ice chute
@@ -99,10 +108,6 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		{s.filterSw, filterPoseCoffeeLockedFinal},
 		// step 4: release filter
 		{s.clawsSw, clawPoseFilterReleased},
-		// step 6: brew (coffee button on/off)
-		{s.clawsSw, clawPoseCoffeeButtonApproach},
-		{s.clawsSw, clawPoseCoffeeButtonOn},
-		{s.clawsSw, clawPoseCoffeeButtonOff},
 		// step 7: grab filter
 		{s.clawsSw, clawPoseCoffeeLockedFinal},
 		// step 8: unlock portafilter (adds the shake pose to the lock poses)
@@ -115,6 +120,25 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		{s.filterSw, filterPoseCleaningScrapperActive},
 		{s.filterSw, filterPoseApproachToCleaningBrush},
 		{s.filterSw, filterPoseCleaningBrushActive},
+	}
+
+	// step 6: brew. Which claw poses exist depends on the machine. On the
+	// button machine both shot sizes are required even if only one is ordered
+	// today — the drink is only known per-order, so a switch that can't reach
+	// the lungo button is misconfigured regardless of what's queued.
+	if s.cfg.HasSeparateBrewButtons {
+		poses = append(poses,
+			requiredPose{s.clawsSw, clawPoseEspressoButtonApproach},
+			requiredPose{s.clawsSw, clawPoseEspressoButtonPress},
+			requiredPose{s.clawsSw, clawPoseLungoButtonApproach},
+			requiredPose{s.clawsSw, clawPoseLungoButtonPress},
+		)
+	} else {
+		poses = append(poses,
+			requiredPose{s.clawsSw, clawPoseCoffeeButtonApproach},
+			requiredPose{s.clawsSw, clawPoseCoffeeButtonOn},
+			requiredPose{s.clawsSw, clawPoseCoffeeButtonOff},
+		)
 	}
 
 	if s.cfg.CanServeDecaf {
@@ -232,25 +256,23 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 	// pickup_position), but a standalone execute_action has no order to attach it
 	// to, so their closures drop it and return only the error.
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
-		"grind_coffee":           s.grindCoffee,
-		"grind_decaf":            s.grindDecaf,
-		"tamp_ground":            s.tampGround,
-		"lock_portafilter":       s.lockPortaFilter,
-		"unlock_portafilter":     s.unlockPortaFilter,
-		"release_filter":         s.releaseFilter,
-		"grab_filter":            s.grabFilter,
-		"turn_coffee_button_on":  s.turnCoffeeButtonOn,
-		"turn_coffee_button_off": s.turnCoffeeButtonOff,
-		"brew_coffee":            s.brewCoffee,
-		"set_cup_for_coffee":     s.setCupForCoffee,
-		"clean_portafilter":      s.cleanPortafilter,
-		"fetch_glass":            s.fetchGlass,               // vision-grab a glass off the shelf
-		"pulse_ice_pin":          s.pulseIcePin,              // hardware only, no arm motion
-		"dispense_ice":           s.dispenseIce,              // arm to chute + pulse + retreat
-		"stage_glass":            s.stageGlass,               // set held glass down, release
-		"grab_brewed_cup":        s.grabBrewedCupFromMachine, // retrieve cup from under machine
-		"pour_espresso":          s.pourEspresso,             // pour held cup over staged glass
-		"grab_staged_glass":      s.grabStagedGlass,          // re-grab the staged glass
+		"grind_coffee":       s.grindCoffee,
+		"grind_decaf":        s.grindDecaf,
+		"tamp_ground":        s.tampGround,
+		"lock_portafilter":   s.lockPortaFilter,
+		"unlock_portafilter": s.unlockPortaFilter,
+		"release_filter":     s.releaseFilter,
+		"grab_filter":        s.grabFilter,
+		"brew_coffee":        s.brewCoffee,
+		"set_cup_for_coffee": s.setCupForCoffee,
+		"clean_portafilter":  s.cleanPortafilter,
+		"fetch_glass":        s.fetchGlass,               // vision-grab a glass off the shelf
+		"pulse_ice_pin":      s.pulseIcePin,              // hardware only, no arm motion
+		"dispense_ice":       s.dispenseIce,              // arm to chute + pulse + retreat
+		"stage_glass":        s.stageGlass,               // set held glass down, release
+		"grab_brewed_cup":    s.grabBrewedCupFromMachine, // retrieve cup from under machine
+		"pour_espresso":      s.pourEspresso,             // pour held cup over staged glass
+		"grab_staged_glass":  s.grabStagedGlass,          // re-grab the staged glass
 		"give_full_cup_to_customer": func(ctx, cancelCtx context.Context) error {
 			_, err := s.placeFullCupOnShelf(ctx, cancelCtx)
 			return err
@@ -263,7 +285,19 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 			_, err := s.serveIcedCoffee(ctx, cancelCtx)
 			return err
 		},
-		"open_door": s.openDoor, // grip the fridge handle and swing it open
+		"open_door":  s.openDoor,  // grip the fridge handle and swing it open
+		"close_door": s.closeDoor, // grip the open door's handle and swing it shut
+	}
+
+	// Only register the button actions this machine actually has, so the
+	// unknown-action error lists a set the operator can really run.
+	if s.cfg.HasSeparateBrewButtons {
+		actions["press_espresso_button"] = s.pressEspressoButton
+		actions["press_lungo_button"] = s.pressLungoButton
+		actions["brew_lungo"] = s.brewLungo
+	} else {
+		actions["turn_coffee_button_on"] = s.turnCoffeeButtonOn
+		actions["turn_coffee_button_off"] = s.turnCoffeeButtonOff
 	}
 
 	action, ok := actions[name]
@@ -360,9 +394,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 		return fmt.Errorf("refresh frame system before brew: %w", err)
 	}
 
-	brewTime := s.drinkBrewTime(drink)
-
-	logger.Infof("starting %s preparation (brew_time=%v)", drink, brewTime)
+	logger.Infof("starting %s preparation (pour_wait=%v)", drink, s.drinkBrewTime(drink))
 
 	if err := s.normalizeGripperAtStart(ctx); err != nil {
 		return fmt.Errorf("normalize gripper before brew: %w", err)
@@ -441,7 +473,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 	}
 	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::brewing")
-		err := s.brew(ctx, cancelCtx, brewTime)
+		err := s.brew(ctx, cancelCtx, drink)
 		stepSpan.End()
 		if err != nil {
 			return err
@@ -528,6 +560,9 @@ const (
 	defaultEspressoBrewTime = 8 * time.Second
 	defaultLungoBrewTime    = 15 * time.Second
 	defaultGrindTimeSec     = 7.5
+	// defaultButtonPressHoldSec is the claw dwell on a brew button when
+	// button_press_hold_sec is unset.
+	defaultButtonPressHoldSec = 0.5
 	// defaultIceDispenseSec is how long the ice pin is held HIGH when
 	// ice_dispense_sec is unset.
 	defaultIceDispenseSec = 5.0

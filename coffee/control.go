@@ -31,9 +31,14 @@ func (s *beanjaminCoffee) clearQueue() (map[string]any, error) {
 // running sequence (waiting for it to actually stop), clears any pending and
 // recently-completed orders, rebuilds the cached frame system from the service
 // (discarding mid-cycle mutations like a portafilter frame reparented to world
-// by lockFilterFrame), and releases the cancel-induced queue pause so
-// processQueue is ready for new orders. Each step is best-effort and skipped
-// when not applicable, so it is safe to call from any state.
+// by lockFilterFrame), forgets that the fridge door is standing open, and
+// releases the cancel-induced queue pause so processQueue is ready for new
+// orders. Each step is best-effort and skipped when not applicable, so it is
+// safe to call from any state.
+//
+// Because it declares the world to be exactly as configured, run it only when
+// that is true — in particular, shut the fridge door by hand first, or the arm
+// will plan straight through a panel the model now believes is closed.
 func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error) {
 	cancelled := s.signalCancel()
 	if cancelled {
@@ -49,6 +54,10 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 	// to run recovery against a state that no longer matches reality.
 	s.portafilterInMachine.Store(false)
 	s.portafilterHasGrounds.Store(false)
+	// Only an operator can assert the fridge door is physically shut, so this is
+	// the one place the recorded angle is cleared — every other rebuild re-applies
+	// it rather than pretending a door closed itself.
+	s.doorOpenDegs = 0
 
 	if err := s.resetFrameSystem(ctx); err != nil {
 		return nil, fmt.Errorf("reset_world: %w", err)
