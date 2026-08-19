@@ -6,9 +6,9 @@ require (
 	github.com/golang/geo v0.0.0-20230421003525-6adc56603217
 	github.com/google/uuid v1.6.0
 	github.com/viam-labs/motion-tools v1.35.1
-	go.viam.com/api v0.1.574
-	go.viam.com/rdk v1.0.1-0.20260722015228-2d2cfb20e978
-	go.viam.com/utils v0.8.0
+	go.viam.com/api v0.1.577
+	go.viam.com/rdk v1.4.0
+	go.viam.com/utils v0.10.1
 	gonum.org/v1/gonum v0.17.0
 	google.golang.org/protobuf v1.36.11
 )
@@ -217,9 +217,9 @@ require (
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	golang.org/x/tools v0.46.0 // indirect
+	golang.org/x/tools v0.47.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	gonum.org/v1/plot v0.15.2 // indirect
 	google.golang.org/api v0.271.0 // indirect
@@ -234,5 +234,5 @@ require (
 	gorgonia.org/vecf64 v0.9.0 // indirect
 	nhooyr.io/websocket v1.8.17 // indirect
 	periph.io/x/conn/v3 v3.7.0 // indirect
-	periph.io/x/host/v3 v3.8.1-0.20230331112814-9f0d9f7d76db // indirect
+	periph.io/x/host/v3 v3.8.1 // indirect
 )
