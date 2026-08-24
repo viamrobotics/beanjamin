@@ -25,9 +25,9 @@ func (s *beanjaminCoffee) notifyOrderFailureSlack(r orderReading) {
 	// configured) and we know the location to filter within.
 	clipURL := ""
 	if s.camStorage != nil {
-		clipURL = buildClipDataURL(s.dataLocationID, r.order.ID)
+		clipURL = buildClipDataURL(s.dataLocationID, s.primaryOrgID, r.order.ID)
 	}
-	planRequestURL := buildPlanRequestDataURL(s.dataLocationID, r.order.ID)
+	planRequestURL := buildPlanRequestDataURL(s.dataLocationID, s.primaryOrgID, r.order.ID)
 	blocks := slackFailureBlocks(r, s.machineLogsURL, clipURL, planRequestURL)
 	// Tag with the order ID so the send logs join the rest of the order's
 	// trail. The send is queued and runs detached, possibly after the order
@@ -162,16 +162,18 @@ func buildMachineLogsURL(machineID, orgID string) string {
 // buildClipDataURL constructs an app.viam.com data-page deep-link filtered to
 // the order's video clip. The clip is tagged with the order ID (a UUID, so the
 // tag filter alone uniquely identifies it); locationID — from VIAM_LOCATION_ID
-// — scopes the view. robotName is intentionally omitted: there is no
-// robot-name env var, and the UUID tag makes it redundant. Returns "" when
-// locationID is empty (e.g. a local/test machine), so callers can omit the
-// link. Note: the clip is uploaded asynchronously after the notification is
-// sent, so the link may show no results for the first ~15-60s.
-func buildClipDataURL(locationID, orderID string) string {
+// — scopes the view and orgID — from VIAM_PRIMARY_ORG_ID — scopes the org.
+// robotName is intentionally omitted: there is no robot-name env var, and the
+// UUID tag makes it redundant. Returns "" when locationID is empty (e.g. a
+// local/test machine), so callers can omit the link. Note: the clip is uploaded
+// asynchronously after the notification is sent, so the link may show no
+// results for the first ~15-60s.
+func buildClipDataURL(locationID, orgID, orderID string) string {
 	if locationID == "" {
 		return ""
 	}
-	return fmt.Sprintf("https://app.viam.com/data/all?locationId=%s&tags=%s&view=media", locationID, orderID)
+	return fmt.Sprintf("https://app.viam.com/data/all?locationId=%s&tags=%s&view=media%s",
+		locationID, orderID, orgQueryParam(orgID))
 }
 
 // buildPlanRequestDataURL constructs an app.viam.com data-page deep-link to the
@@ -180,11 +182,23 @@ func buildClipDataURL(locationID, orderID string) string {
 // planning_failure or step tags). Returns "" when locationID is empty (e.g. a
 // local/test machine). Like the clip link, the files sync asynchronously, so the
 // page may be empty for the first sync interval.
-func buildPlanRequestDataURL(locationID, orderID string) string {
+func buildPlanRequestDataURL(locationID, orgID, orderID string) string {
 	if locationID == "" {
 		return ""
 	}
-	return fmt.Sprintf("https://app.viam.com/data/all?locationId=%s&tags=%s&view=files", locationID, orderID)
+	return fmt.Sprintf("https://app.viam.com/data/all?locationId=%s&tags=%s&view=files%s",
+		locationID, orderID, orgQueryParam(orgID))
+}
+
+// orgQueryParam renders the "&org=..." suffix that pins an app.viam.com link to
+// the owning org, so a reader who belongs to several orgs lands in the right one
+// instead of whichever org their session last used. Returns "" when the org is
+// unknown, leaving a link that still resolves in the reader's current org.
+func orgQueryParam(orgID string) string {
+	if orgID == "" {
+		return ""
+	}
+	return "&org=" + orgID
 }
 
 // slackField builds a single mrkdwn field ("*Label:*\nvalue") for a Block Kit
