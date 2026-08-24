@@ -150,7 +150,7 @@ func (s *beanjaminCoffee) openAndVerifyOpen(ctx context.Context) error {
 	}
 }
 
-// dropHeldContainer releases a cup or glass the gripper is holding so cancel
+// dropHeldContainer releases a cup or glass the gripper is holding so rewind
 // recovery starts from an empty gripper and the cached frame system stops
 // tracking a container that has been let go. It opens the jaws to drop whatever
 // is held, detaches the held-item geometry, then closes the jaws again —
@@ -159,7 +159,7 @@ func (s *beanjaminCoffee) openAndVerifyOpen(ctx context.Context) error {
 // It acts only when the jaws are in the holding band (a cup or glass); a gripper
 // closed on the thin filter handle reads as gripperClosed, so the portafilter is
 // never dropped. A failed position read is logged and skipped rather than
-// aborting the cancel: without a confirmed read we must not blindly open and
+// aborting the rewind: without a confirmed read we must not blindly open and
 // risk dropping the filter. No-op when no gripper is configured.
 func (s *beanjaminCoffee) dropHeldContainer(ctx context.Context) error {
 	if s.gripper == nil {
@@ -168,13 +168,13 @@ func (s *beanjaminCoffee) dropHeldContainer(ctx context.Context) error {
 	logger := s.activeOrderLogger()
 	pos, err := s.gripperPos(ctx)
 	if err != nil {
-		logger.Warnf("cancel: skipping held-container drop, gripper position unreadable: %v", err)
+		logger.Warnf("rewind: skipping held-container drop, gripper position unreadable: %v", err)
 		return nil
 	}
 	if s.classifyGripper(pos) != gripperHolding {
 		return nil
 	}
-	logger.Infof("cancel: gripper holding a container (pos=%.0f); opening to drop it", pos)
+	logger.Infof("rewind: gripper holding a container (pos=%.0f); opening to drop it", pos)
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		return fmt.Errorf("drop held container: open: %w", err)
 	}

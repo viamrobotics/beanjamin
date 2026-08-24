@@ -183,7 +183,7 @@ Returns:
 
 **API:** `rdk:service:generic`
 
-Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` component. Supports preparing espresso and lungo orders, executing individual actions, and cancellation.
+Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` component. Supports preparing espresso and lungo orders, executing individual actions, stopping a run (`cancel`), and driving the arm back to a clean start (`rewind`).
 
 `has_separate_brew_buttons` selects which coffee machine the arm is driving, and with it which claw poses the switcher must carry:
 
@@ -312,7 +312,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 
 Glass pickup reuses `cup_photos_per_vantage` and `cup_pickup_max_attempts` (item-agnostic operational knobs); there are no glass-specific versions.
 
-**Held-item geometry.** A picked-up cup/glass is always tracked: its geometry — a box of the configured `cup_dimensions` / `glass_dimensions` centered on the grasp centroid — is attached to the gripper frame in the cached frame system as a `held-item` frame, so motion planning routes around the held item until it is set down (and is restored on each re-grab — the brewed cup from under the machine, the staged glass). When the brewed cup is re-grabbed but nothing was cached to restore — e.g. a manually-stepped serving that never ran the vision cup pickup — its held-item box is modeled from `cup_dimensions` and the grip point's current world pose, so the pour and shelf placement still track the cup. The gripper-overlap collision pairs are allowed automatically on every move while an item is held; contact phases near a modeled surface (under the machine, the serving-area shelf) allow the held item against that surface too. The held-item frame is dropped when the frame system is rebuilt (`reset_world`, cancel recovery).
+**Held-item geometry.** A picked-up cup/glass is always tracked: its geometry — a box of the configured `cup_dimensions` / `glass_dimensions` centered on the grasp centroid — is attached to the gripper frame in the cached frame system as a `held-item` frame, so motion planning routes around the held item until it is set down (and is restored on each re-grab — the brewed cup from under the machine, the staged glass). When the brewed cup is re-grabbed but nothing was cached to restore — e.g. a manually-stepped serving that never ran the vision cup pickup — its held-item box is modeled from `cup_dimensions` and the grip point's current world pose, so the pour and shelf placement still track the cup. The gripper-overlap collision pairs are allowed automatically on every move while an item is held; contact phases near a modeled surface (under the machine, the serving-area shelf) allow the held item against that surface too. The held-item frame is dropped when the frame system is rebuilt (`reset_world`, `rewind`).
 
 **Resting-surface seating.** Pickup resolves each detection's grasp **Z** from the surface the container stands on rather than the raw detected centroid Z (which depth noise pushes above or below the true base), using the configured container height (`cup_dimensions` / `glass_dimensions`). It finds the highest **static** Box in the framesystem whose world footprint lies directly beneath the detection and whose top face is below the detected centroid, then seats the container's base **1 mm** above that top — so the grasp centroid becomes `surfaceTop + 1 mm + height/2`, keeping the detected X/Y. "Static" means world-anchored (it moves rigidly with the world frame), so the moving arm, gripper, camera, and any held item are never mistaken for a surface; non-box and rotated geometries are bounded by their world axis-aligned extent. No framesystem changes or extra config are required — the resting surface is auto-detected. When no surface is found beneath a detection, pickup uses the raw detected Z unchanged.
 
@@ -381,11 +381,33 @@ Only `drink` is required. If `initial_greeting` is omitted, a random greeting is
 {"execute_action": "grind_coffee"}
 ```
 
-**`cancel`** - Cancel whatever action is currently running.
+**`cancel`** - Stop whatever is running, and nothing else. It cancels the shared sequence context so the run aborts at its next step boundary, calls `Stop` on the arm so the in-flight trajectory halts where it stands instead of playing out to its authored pose, and pauses the queue. No arm motion is planned, no gripper is opened, no state flag is cleared, and the cached frame system is left untouched: the portafilter stays wherever it was, a held cup stays in the jaws, pending orders stay queued.
 
 ```json
 {"cancel": true}
 ```
+
+Returns `{"status": "cancelled", "cancelled": true, "queue": "paused"}` — `cancelled` is `false` when nothing was running, and `queue` reports the real pause state.
+
+To get the arm back to a clean starting state afterwards, run `rewind`, then `proceed` to resume the queue.
+
+**`rewind`** - Drive the arm back to the state a brew cycle starts from: nothing in the gripper, no grounds in the portafilter, the filter home in the claws. It stops any running sequence first, so it is safe to send at any time without a preceding `cancel`.
+
+In order: drop a cup or glass still in the jaws (open → detach the held-item geometry → close; a gripper closed on the thin filter handle reads as closed, so the portafilter is never dropped), then run whichever recovery the recorded portafilter state calls for:
+
+- Portafilter locked in the machine (after `release_filter`, before `grab_filter`): grab → unlock → clean → home.
+- Portafilter in the claws with grounds in it (after grinding, before cleaning): clean → home.
+- Neither: no arm motion.
+
+The cached frame system is rebuilt at the end, discarding any mid-cycle mutation such as a filter frame reparented to world by `lock_portafilter`. The queue stays paused with its pending orders intact; send `proceed` to resume. If recovery motion fails, the frame system is left untouched and the state flags stay set, so a second `rewind` retries from where the first stopped.
+
+> ⚠️ A cancel that fired mid-`lock_portafilter` — between the arm entering the machine and the gripper opening — leaves the bayonet partially engaged, and `rewind` may try to route the arm away from it. There is no safe automated recovery for that window: free the filter by hand first.
+
+```json
+{"rewind": true}
+```
+
+Returns `{"status": "rewound", "cancelled": false, "recovered": true, "queue": "paused"}` — `recovered` reports whether recovery motion actually ran.
 
 **`get_queue`** - Get the current order queue status.
 

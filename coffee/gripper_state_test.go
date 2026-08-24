@@ -133,7 +133,7 @@ func TestOpenAndVerifyOpenHonorsCancel(t *testing.T) {
 	}
 }
 
-// TestDropHeldContainer covers cancel's pre-recovery release: a cup/glass in the
+// TestDropHeldContainer covers rewind's pre-recovery release: a cup/glass in the
 // holding band is dropped (open→close) and its geometry detached, while a gripper
 // closed on the filter handle, an already-open gripper, or an unreadable position
 // leaves the jaws (and the portafilter) untouched.
