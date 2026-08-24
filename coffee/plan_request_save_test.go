@@ -56,12 +56,31 @@ func TestPlanRequestTagDir(t *testing.T) {
 }
 
 func TestBuildPlanRequestDataURL(t *testing.T) {
-	if got := buildPlanRequestDataURL("", "oid"); got != "" {
+	if got := buildPlanRequestDataURL("", "org1", "oid"); got != "" {
 		t.Errorf("empty locationID: got %q, want \"\"", got)
 	}
-	want := "https://app.viam.com/data/all?locationId=loc1&tags=oid-42&view=files"
-	if got := buildPlanRequestDataURL("loc1", "oid-42"); got != want {
+	want := "https://app.viam.com/data/all?locationId=loc1&tags=oid-42&view=files&org=org1"
+	if got := buildPlanRequestDataURL("loc1", "org1", "oid-42"); got != want {
 		t.Errorf("buildPlanRequestDataURL = %q, want %q", got, want)
+	}
+	// An unknown org still yields a usable link, just unscoped.
+	want = "https://app.viam.com/data/all?locationId=loc1&tags=oid-42&view=files"
+	if got := buildPlanRequestDataURL("loc1", "", "oid-42"); got != want {
+		t.Errorf("buildPlanRequestDataURL without org = %q, want %q", got, want)
+	}
+}
+
+func TestBuildClipDataURL(t *testing.T) {
+	if got := buildClipDataURL("", "org1", "oid"); got != "" {
+		t.Errorf("empty locationID: got %q, want \"\"", got)
+	}
+	want := "https://app.viam.com/data/all?locationId=loc1&tags=oid-42&view=media&org=org1"
+	if got := buildClipDataURL("loc1", "org1", "oid-42"); got != want {
+		t.Errorf("buildClipDataURL = %q, want %q", got, want)
+	}
+	want = "https://app.viam.com/data/all?locationId=loc1&tags=oid-42&view=media"
+	if got := buildClipDataURL("loc1", "", "oid-42"); got != want {
+		t.Errorf("buildClipDataURL without org = %q, want %q", got, want)
 	}
 }
 

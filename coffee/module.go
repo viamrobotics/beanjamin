@@ -63,6 +63,7 @@ type beanjaminCoffee struct {
 	deliveryHandler        generic.Service // optional; peer-machine service reached via a remote; nil if delivery_handler_name unset
 	machineLogsURL         string          // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
 	dataLocationID         string          // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
+	primaryOrgID           string          // VIAM_PRIMARY_ORG_ID env; scopes app.viam.com deep-links to the owning org; "" when unavailable
 	pendingOrderClipsDir   string          // optional; directory for pending-clip records to survive restarts
 	mu                     sync.Mutex
 	cancelCtx              context.Context
@@ -377,6 +378,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		deliveryHandler:      deliveryHandler,
 		machineLogsURL:       buildMachineLogsURL(os.Getenv("VIAM_MACHINE_ID"), os.Getenv("VIAM_PRIMARY_ORG_ID")),
 		dataLocationID:       os.Getenv("VIAM_LOCATION_ID"),
+		primaryOrgID:         os.Getenv("VIAM_PRIMARY_ORG_ID"),
 		pendingOrderClipsDir: pendingOrderClipsDir,
 		gripper:              gripperComp,
 		vizEnabled:           true,
