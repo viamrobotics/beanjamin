@@ -7,7 +7,7 @@ import (
 )
 
 // TestActiveOrderLogger_FallbackAndHandoff covers the contract every de-threaded
-// helper — and, critically, cancel() — relies on: activeOrderLogger() returns
+// helper — and, critically, cancel() and rewind() — relies on: activeOrderLogger() returns
 // the base logger when no order is in flight, the published order-scoped logger
 // while one is, and falls back to the base logger once processQueue clears it.
 func TestActiveOrderLogger_FallbackAndHandoff(t *testing.T) {

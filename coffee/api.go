@@ -14,7 +14,7 @@ import (
 
 // Step labels surfaced through setStep -> get_queue, the order sensor's
 // failed_step, and the web tracker. Constants so the brew sequence
-// (espresso.go) and cancel recovery (cancel) reference the same strings.
+// (espresso.go) and rewind recovery reference the same strings.
 const (
 	stepGrinding             = "Grinding"
 	stepTamping              = "Tamping"
@@ -145,6 +145,9 @@ var coffeeCommands = []commandDef{
 	{key: "cancel", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.cancel(ctx)
 	}},
+	{key: "rewind", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
+		return s.rewind(ctx)
+	}},
 	{key: "get_queue", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.Status(ctx)
 	}},
@@ -195,7 +198,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]any) (ma
 		}
 	}
 
-	err := fmt.Errorf("unknown command, supported commands: cancel, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action, send_delivery_message")
+	err := fmt.Errorf("unknown command, supported commands: cancel, rewind, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action, send_delivery_message")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }

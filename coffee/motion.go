@@ -52,7 +52,13 @@ func (s *beanjaminCoffee) slowMovementMoveOptions() *arm.MoveOptions {
 }
 
 // moveToPose fetches a named pose and moves to it.
-func (s *beanjaminCoffee) moveToPose(ctx context.Context, step Step) error {
+func (s *beanjaminCoffee) moveToPose(ctx, cancelCtx context.Context, step Step) error {
+	// Merge both contexts so cancellation from either stops planning and execution.
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(cancelCtx, func() { cancel() })
+	defer stop()
+	defer cancel()
+
 	pd, err := s.fetchPose(ctx, step.PoseSwitch, step.PoseName)
 	if err != nil {
 		return err
@@ -285,7 +291,7 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 // resetFrameSystem rebuilds the cached frame system from the service, discarding
 // any in-flight mutations (e.g. a filter frame that was reparented to world by
 // lockFilterFrame). Shared by unlockFilterFrame during the normal brew cycle and
-// by the reset_world operator command to recover from a mid-cycle cancel.
+// by the reset_world and rewind operator commands to recover from a mid-cycle cancel.
 //
 // The fridge door is the exception: a rebuild puts the panel back at its authored
 // shut transform, but rebuilding a model does not close a real door, so the
@@ -303,7 +309,7 @@ func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 	s.cachedFS = fs
 	// The rebuilt frame system has no held-item frame, and any cached grasp no
 	// longer corresponds to reality — forget it so a stale geometry can't be
-	// re-attached after a cancel/reset. The rebuilt frame system also restores the
+	// re-attached after a rewind/reset. The rebuilt frame system also restores the
 	// filter frame to the arm subtree (undoing any lockFilterFrame mutation) and
 	// drops the staged-glass obstacle (undoing any stageGlassAsObstacle mutation).
 	s.clearHeldGeometry()

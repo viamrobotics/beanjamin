@@ -78,19 +78,19 @@ type beanjaminCoffee struct {
 	currentOrderID atomic.Value // string: ID of the order currently being processed; "" when idle
 	// activeLogger holds the order-scoped logger (tagged with order_id) for the
 	// order currently being processed; set by processQueue and cleared when it
-	// finishes. Entry points that run outside the queue goroutine — notably
-	// cancel — read it via activeOrderLogger() so their logs carry the in-flight
+	// finishes. Entry points that run outside the queue goroutine — cancel and
+	// rewind — read it via activeOrderLogger() so their logs carry the in-flight
 	// order's order_id. nil when idle.
 	activeLogger atomic.Pointer[logging.Logger]
 	queue        *OrderQueue
 	queueStop    chan struct{}
 	paused       atomic.Bool
 	// portafilterInMachine is true between releaseFilter and grabFilter:
-	// the bayonet holds the filter and the arm is free. Cancel uses this
+	// the bayonet holds the filter and the arm is free. Rewind uses this
 	// to decide whether recovery (re-grip + clean + home) is required.
 	portafilterInMachine atomic.Bool
 	// portafilterHasGrounds is true once grinding has put grounds in the
-	// filter, until cleanPortafilter clears them. Cancel uses this (when
+	// filter, until cleanPortafilter clears them. Rewind uses this (when
 	// portafilterInMachine is false) to drive a clean + home recovery so
 	// the filter doesn't get stranded with grounds in it.
 	portafilterHasGrounds atomic.Bool
@@ -409,13 +409,16 @@ func (s *beanjaminCoffee) Name() resource.Name {
 	return s.name
 }
 
-// resetCancelWaitTimeout caps how long resetWorld waits for a running sequence
-// to observe its cancelled context and return. Generous enough to cover any
-// motion-plan cleanup; if exceeded, something is wedged and the operator
-// should look at logs rather than have reset_world appear to "succeed".
+// resetCancelWaitTimeout caps how long cancel, rewind and reset_world wait for
+// a running sequence to observe its cancelled context and return. Generous
+// enough to cover any motion-plan cleanup; if exceeded, something is wedged and
+// the operator should look at logs rather than have the command appear to
+// "succeed".
 const resetCancelWaitTimeout = 30 * time.Second
 
-const cancelAnnouncement = "Cancelling the current order. I'll clean up if needed and return to home. Click proceed when you're ready for the next order."
+const cancelAnnouncement = "Stopping the current order. Nothing else will move until an operator says so."
+
+const rewindAnnouncement = "Rewinding to a clean start. I'll clean up if needed and return to home. Click proceed when you're ready for the next order."
 
 func (s *beanjaminCoffee) Close(context.Context) error {
 	close(s.queueStop)

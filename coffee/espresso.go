@@ -90,9 +90,8 @@ type requiredPose struct {
 // configuration can drive the arm to. The core brew cycle (grind → tamp →
 // lock → release → brew → grab → unlock → home) always runs, so its poses are
 // always required. Cleaning poses are likewise always included: the
-// cancel-recovery path in cancel() runs cleanPortafilter whenever the
-// portafilter holds grounds, which is the case for every order once grinding
-// starts. Optional features (decaf, iced coffee) contribute their
+// recovery path in rewind() runs cleanPortafilter whenever the portafilter
+// holds grounds, which is the case for every order once grinding starts. Optional features (decaf, iced coffee) contribute their
 // poses only when their config flag is set.
 func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 	poses := []requiredPose{
@@ -114,7 +113,7 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		{s.filterSw, filterPoseCoffeeShake},
 		// step 9: home
 		{s.filterSw, filterPoseHome},
-		// cleaning (post-brew and cancel recovery)
+		// cleaning (post-brew and rewind recovery)
 		{s.filterSw, filterPoseCloseToCleaning},
 		{s.filterSw, filterPoseApproachToCleaningScrapper},
 		{s.filterSw, filterPoseCleaningScrapperActive},
@@ -374,8 +373,8 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 	}
 	defer s.running.Store(false)
 	// Capture the step the order errored at before `running` flips false above
-	// (LIFO defers: this runs first). Cancel recovery waits for idle and then
-	// mutates currentStep, so reading it any later would race with recovery.
+	// (LIFO defers: this runs first). Cancel and rewind wait for idle and then
+	// mutate currentStep, so reading it any later would race with them.
 	defer func() {
 		if err != nil {
 			step, _ := s.currentStep.Load().(string)
@@ -604,7 +603,7 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 		}
 	} else {
 		logger.Infof("moving to %q", step.PoseName)
-		if err := s.moveToPose(ctx, step); err != nil {
+		if err := s.moveToPose(ctx, cancelCtx, step); err != nil {
 			return err
 		}
 	}
