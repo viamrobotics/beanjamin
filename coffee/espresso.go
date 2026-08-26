@@ -36,6 +36,12 @@ const (
 	filterPoseCleaningBrushActive        = "cleaning_brush_active"
 	filterPoseCoffeeShake                = "coffee_shake"
 
+	// Keep-alive purge poses (required only when keepalive is configured). Both
+	// are filter-frame poses: the arm holds the portafilter while it presses the
+	// machine's 1 CUP button, so the portafilter is what gets positioned.
+	filterPosePurgeApproach = "purge_approach"
+	filterPosePurgePress    = "purge_press"
+
 	//claw pose switches
 	clawPoseCoffeeButtonApproach    = "coffee_button_approach"
 	clawPoseCoffeeButtonOn          = "coffee_button_on"
@@ -148,6 +154,17 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		poses = append(poses,
 			requiredPose{s.filterSw, filterPoseDecafGrinderApproach},
 			requiredPose{s.filterSw, filterPoseDecafGrinderActivate},
+		)
+	}
+
+	// The keep-alive purge holds the 1 CUP button with the portafilter still in
+	// the claws. Gated: a machine without keepalive configured never travels to
+	// these poses, and requiring them unconditionally would fail construction on
+	// every existing machine.
+	if s.cfg.KeepAlive != nil {
+		poses = append(poses,
+			requiredPose{s.filterSw, filterPosePurgeApproach},
+			requiredPose{s.filterSw, filterPosePurgePress},
 		)
 	}
 

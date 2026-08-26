@@ -484,5 +484,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		optDeps = append(optDeps, board.Named(cfg.IceDispenseBoardName).String())
 	}
 
+	if err := validateKeepAlive(cfg, path); err != nil {
+		return nil, nil, err
+	}
+
 	return reqDeps, optDeps, nil
 }

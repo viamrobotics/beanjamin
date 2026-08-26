@@ -160,3 +160,95 @@ func TestKeepAliveWindowContainsAcrossDST(t *testing.T) {
 		})
 	}
 }
+
+func TestKeepAliveGetters(t *testing.T) {
+	// Unset fields fall back to the defaults.
+	ka := validKeepAlive()
+	if got, want := ka.idleThreshold(), time.Duration(defaultKeepAliveAfterMin*float64(time.Minute)); got != want {
+		t.Errorf("idleThreshold() = %v, want %v", got, want)
+	}
+	if got, want := ka.checkInterval(), time.Duration(defaultKeepAliveCheckIntervalMin*float64(time.Minute)); got != want {
+		t.Errorf("checkInterval() = %v, want %v", got, want)
+	}
+	if got, want := ka.hold(), time.Duration(defaultKeepAliveHoldSec*float64(time.Second)); got != want {
+		t.Errorf("hold() = %v, want %v", got, want)
+	}
+
+	// Configured values win.
+	ka.AfterMin = 30
+	ka.CheckIntervalMin = 2
+	ka.HoldSec = 1.5
+	if got, want := ka.idleThreshold(), 30*time.Minute; got != want {
+		t.Errorf("idleThreshold() = %v, want %v", got, want)
+	}
+	if got, want := ka.checkInterval(), 2*time.Minute; got != want {
+		t.Errorf("checkInterval() = %v, want %v", got, want)
+	}
+	if got, want := ka.hold(), 1500*time.Millisecond; got != want {
+		t.Errorf("hold() = %v, want %v", got, want)
+	}
+}
+
+func TestValidateKeepAlive(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     *Config
+		wantErr bool
+	}{
+		{
+			name:    "nil keepalive is allowed",
+			cfg:     &Config{},
+			wantErr: false,
+		},
+		{
+			name:    "valid on the button machine",
+			cfg:     &Config{HasSeparateBrewButtons: true, KeepAlive: validKeepAlive()},
+			wantErr: false,
+		},
+		{
+			name:    "rejected on the single-toggle machine",
+			cfg:     &Config{HasSeparateBrewButtons: false, KeepAlive: validKeepAlive()},
+			wantErr: true,
+		},
+		{
+			name: "bad schedule is rejected",
+			cfg: &Config{HasSeparateBrewButtons: true, KeepAlive: &KeepAlive{
+				AutoStart: "07:45", End: "17:00", Timezone: "Nowhere/Nothing",
+			}},
+			wantErr: true,
+		},
+		{
+			name: "margin exactly at the limit is rejected",
+			cfg: &Config{HasSeparateBrewButtons: true, KeepAlive: &KeepAlive{
+				AutoStart: "07:45", End: "17:00", Timezone: "UTC",
+				// 45 + 2*5 = 55, which is the limit and therefore too tight.
+				AfterMin: 45, CheckIntervalMin: 5,
+			}},
+			wantErr: true,
+		},
+		{
+			name: "the documented 50/10 pairing is rejected",
+			cfg: &Config{HasSeparateBrewButtons: true, KeepAlive: &KeepAlive{
+				AutoStart: "07:45", End: "17:00", Timezone: "UTC",
+				AfterMin: 50, CheckIntervalMin: 10,
+			}},
+			wantErr: true,
+		},
+		{
+			name: "the default 40/5 pairing is accepted",
+			cfg: &Config{HasSeparateBrewButtons: true, KeepAlive: &KeepAlive{
+				AutoStart: "07:45", End: "17:00", Timezone: "UTC",
+				AfterMin: 40, CheckIntervalMin: 5,
+			}},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateKeepAlive(tt.cfg, "services.coffee")
+			if gotErr := err != nil; gotErr != tt.wantErr {
+				t.Errorf("validateKeepAlive() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
