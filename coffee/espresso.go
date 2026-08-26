@@ -109,8 +109,6 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		{s.clawsSw, clawPoseFilterReleased},
 		// step 7: grab filter
 		{s.clawsSw, clawPoseCoffeeLockedFinal},
-		// step 8: unlock portafilter (adds the shake pose to the lock poses)
-		{s.filterSw, filterPoseCoffeeShake},
 		// step 9: home
 		{s.filterSw, filterPoseHome},
 		// cleaning (post-brew and rewind recovery)
@@ -138,6 +136,12 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 			requiredPose{s.clawsSw, clawPoseCoffeeButtonOn},
 			requiredPose{s.clawsSw, clawPoseCoffeeButtonOff},
 		)
+	}
+
+	// step 8: unlock portafilter. The arm only travels to the shake pose when a
+	// shake duration is configured.
+	if s.cfg.PortafilterShakeSec > 0 {
+		poses = append(poses, requiredPose{s.filterSw, filterPoseCoffeeShake})
 	}
 
 	if s.cfg.CanServeDecaf {
