@@ -82,7 +82,12 @@ func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) erro
 	if s.cfg.PortafilterShakeSec > 0 {
 		// Shake once at each pose. The two lean opposite ways, so a puck stuck
 		// on either side of the basket gets worked from both.
-		for _, shakePose := range []string{filterPoseCoffeeShake, filterPoseCoffeeShakeLeft} {
+		for i, shakePose := range []string{filterPoseCoffeeShake, filterPoseCoffeeShakeLeft} {
+			if i > 0 {
+				// Every shake starts from coffee_in, so each one runs the same move.
+				steps = append(steps, Step{PoseName: filterPoseCoffeeIn, PoseSwitch: s.filterSw,
+					AllowedCollisions: coffeeBrewingCollisions, LinearConstraint: defaultApproachConstraint})
+			}
 			steps = append(steps,
 				Step{PoseName: shakePose, PoseSwitch: s.filterSw,
 					AllowedCollisions: coffeeBrewingCollisions, LinearConstraint: defaultApproachConstraint},
