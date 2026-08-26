@@ -84,7 +84,7 @@ func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) erro
 			Step{PoseName: filterPoseCoffeeShake, PoseSwitch: s.filterSw, AllowedCollisions: coffeeBrewingCollisions, LinearConstraint: defaultApproachConstraint},
 			// Shake the filter laterally to dislodge the puck.
 			Step{PoseName: filterPoseCoffeeShake, PoseSwitch: s.filterSw,
-				CircularRadiusMm: 2, CircularDurationSec: s.cfg.PortafilterShakeSec, CircularPointsPerRev: 8,
+				CircularRadiusMm: 1, CircularDurationSec: s.cfg.PortafilterShakeSec, CircularPointsPerRev: 8,
 				LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
 		)
 	} else {
