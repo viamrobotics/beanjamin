@@ -196,6 +196,8 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
 
 Only the selected machine's poses are validated at startup, and only its actions are registered for `execute_action`. Under `true`, both shot sizes are required even if only one is on the menu — the drink is known per-order, so a switcher that cannot reach the lungo button is misconfigured regardless of what is queued.
 
+When `keepalive` is configured, the **filter** pose switcher must additionally carry `purge_approach` and `purge_press`. These are filter-frame poses, not claw-frame ones: the arm keeps the portafilter in its claws and presses the machine's 1 CUP button with the assembly in hand, so nothing is parked in the group head and no filter basket gets wet. Author `purge_press` so the press is a straight-in linear move from `purge_approach`. See "Keeping the machine at brew temperature" below.
+
 ### Configuration
 
 ```json

@@ -274,3 +274,30 @@ func (a *machineActivityStore) record(logger logging.Logger, t time.Time) {
 		logger.Warnf("keepalive: persisting machine activity to %s: %v", path, err)
 	}
 }
+
+// purgeSteps is the three-move hold of the machine's 1 CUP button: free-plan into
+// the standoff with the portafilter in hand, straight in and dwell so the pump
+// runs, straight back out.
+//
+// Only the two linear moves carry filterCoffeeButtonCollisions. The button sits
+// on the machine face behind coffee-machine-buffer-front, so the press and the
+// retreat are inside that obstacle and the planner rejects them without the
+// allowance.
+//
+// The approach must not carry it, for exactly the reason brewButtonSteps'
+// approach doesn't: an allowed-collision entry is a property of the whole plan,
+// not of the neighbourhood of its goal — buildConstraints hands the planner a
+// CollisionSpecification covering the entire trajectory. The approach is
+// free-planned from home, and allowing coffee-machine-buffer-front across that
+// traverse lets the planner route the portafilter through the machine's front
+// face.
+func (s *beanjaminCoffee) purgeSteps() []Step {
+	hold := s.cfg.KeepAlive.hold()
+	return []Step{
+		{PoseName: filterPosePurgeApproach, PoseSwitch: s.filterSw},
+		{PoseName: filterPosePurgePress, PoseSwitch: s.filterSw, Pause: hold,
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterCoffeeButtonCollisions},
+		{PoseName: filterPosePurgeApproach, PoseSwitch: s.filterSw,
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterCoffeeButtonCollisions},
+	}
+}
