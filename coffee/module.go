@@ -406,6 +406,19 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, err
 	}
 
+	// Keep the machine at brew temperature during working hours. Started after
+	// pose validation so a misconfigured purge pose fails construction rather than
+	// surfacing as a failed tick an hour later.
+	if conf.KeepAlive != nil {
+		window, err := newKeepAliveWindow(conf.KeepAlive)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("keepalive: %w", err)
+		}
+		s.machineActivity = newMachineActivityStore(logger)
+		go s.keepAliveLoop(window)
+	}
+
 	go s.processQueue()
 	return s, nil
 }

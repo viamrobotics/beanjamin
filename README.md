@@ -502,6 +502,17 @@ Returns `{"status": "complete", "action": "open_door"}`.
 
 Returns `{"status": "opened"}` or `{"status": "closed", "grabbed": true}`.
 
+### Keeping the machine at brew temperature
+
+The Breville BES920 drops into POWER SAVE after one hour idle and powers off completely after four, and the one-hour sleep cannot be disabled in its settings. A brew started on a sleeping machine is refused with three beeps, so the arm serves an empty cup and records it as a success. Two things prevent that, and both are needed:
+
+1. **Program the machine's own Auto Start.** `MENU` → `AUTO START` → `ON` → a time ~15 minutes before people arrive. This handles the cold morning in hardware, and the same time goes in `keepalive.auto_start`. Note Auto Start has no day-of-week setting, so it also fires at weekends; the machine's own Auto Off shuts it down again after four hours.
+2. **Configure `keepalive`.** During the window, the arm holds the 1 CUP button for about a second whenever nothing has run water through the machine for `after_min`. This is Breville's documented group-head purge, and it resets the machine's idle timer so it never leaves brew temperature. The filter pose switcher needs `purge_approach` and `purge_press` for this.
+
+The arm never presses POWER — per the manual, pressing POWER while the machine is in POWER SAVE turns it *off*. The consequence is that this cannot recover a machine that is genuinely powered down: if Auto Start does not fire, or someone switches the machine off, every order that day will brew cold and be recorded as a success. Detecting that needs a machine-state sensor, which is not part of this feature.
+
+Water from each purge goes to the drip tray and is counted in the `drip_tray_brews` usage-sensor field, so empty the tray on the counter rather than on brew count alone.
+
 ---
 
 ## Model: `viam:beanjamin:dial-control-motion`

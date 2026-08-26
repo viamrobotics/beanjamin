@@ -399,6 +399,59 @@ func (s *beanjaminCoffee) recordMachineActivity() {
 	s.machineActivity.record(s.logger, time.Now())
 }
 
+// keepAliveLoop is the background ticker that keeps the machine at brew
+// temperature. Started by NewCoffee only when keepalive is configured, and it
+// runs for the life of the service.
+//
+// It deliberately does not watch cancelCtx. An operator cancel pauses the queue
+// rather than shutting the service down, and shouldPurge already declines while
+// paused — so the loop keeps ticking and resumes on its own once 'proceed'
+// arrives. queueStop, closed by Close, is the shutdown signal, and Close also
+// cancels cancelCtx, which aborts any purge mid-move.
+func (s *beanjaminCoffee) keepAliveLoop(w *keepAliveWindow) {
+	ka := s.cfg.KeepAlive
+	interval := ka.checkInterval()
+	threshold := ka.idleThreshold()
+	s.logger.Infof("keepalive: purging the group head when the machine has been idle %s; checking "+
+		"every %s inside %s-%s %s", threshold, interval, ka.AutoStart, ka.End, ka.Timezone)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.queueStop:
+			s.logger.Infof("keepalive: shutting down")
+			return
+		case <-ticker.C:
+		}
+
+		st := keepAliveState{
+			now:          time.Now(),
+			lastActivity: s.machineActivity.get(),
+			busy:         s.running.Load(),
+			paused:       s.paused.Load(),
+			queued:       s.queue.Len(),
+		}
+		ok, why := shouldPurge(w, threshold, st)
+		if !ok {
+			s.logger.Debugf("keepalive: skipping this tick — %s", why)
+			continue
+		}
+
+		idle := st.now.Sub(st.lastActivity).Round(time.Second)
+		s.logger.Infof("keepalive: machine idle %s — purging the group head to hold brew temperature", idle)
+		if err := s.runPurge(context.Background()); err != nil {
+			s.logger.Errorf("keepalive: purge failed, the machine may drop out of brew temperature: %v", err)
+			s.notifyKeepAliveFailureSlack(err)
+			// Back off to the next tick rather than retrying immediately: whatever
+			// blocked the arm is unlikely to clear in the same second.
+			continue
+		}
+		s.recordMachineActivity()
+	}
+}
+
 // notifyKeepAliveFailureSlack sends a plain-text Slack message for a failed
 // purge. Text-only rather than the Block Kit layout notifyOrderFailureSlack
 // builds: there is no order, customer, or clip to link, just one
