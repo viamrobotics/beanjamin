@@ -1,8 +1,12 @@
 package coffee
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"go.viam.com/rdk/logging"
 )
 
 func TestParseClock(t *testing.T) {
@@ -250,5 +254,61 @@ func TestValidateKeepAlive(t *testing.T) {
 				t.Errorf("validateKeepAlive() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestMachineActivityStoreRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("VIAM_MODULE_DATA", dir)
+	logger := logging.NewTestLogger(t)
+
+	// A fresh store with no file on disk reports the zero time, which makes any
+	// elapsed check due — the machine is treated as long idle.
+	first := newMachineActivityStore(logger)
+	if got := first.get(); !got.IsZero() {
+		t.Errorf("get() on an empty store = %v, want the zero time", got)
+	}
+
+	stamp := time.Date(2026, 8, 26, 9, 30, 0, 0, time.UTC)
+	first.record(logger, stamp)
+	if got := first.get(); !got.Equal(stamp) {
+		t.Errorf("get() after record = %v, want %v", got, stamp)
+	}
+
+	// A new store reads the persisted value back — this is the reconfigure case.
+	second := newMachineActivityStore(logger)
+	if got := second.get(); !got.Equal(stamp) {
+		t.Errorf("get() on a reloaded store = %v, want %v", got, stamp)
+	}
+}
+
+func TestMachineActivityStoreWithoutModuleData(t *testing.T) {
+	t.Setenv("VIAM_MODULE_DATA", "")
+	logger := logging.NewTestLogger(t)
+
+	// No directory to write to: the store still works in memory, it just does not
+	// survive a restart.
+	a := newMachineActivityStore(logger)
+	stamp := time.Date(2026, 8, 26, 9, 30, 0, 0, time.UTC)
+	a.record(logger, stamp)
+	if got := a.get(); !got.Equal(stamp) {
+		t.Errorf("in-memory get() = %v, want %v", got, stamp)
+	}
+}
+
+func TestMachineActivityStoreCorruptFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("VIAM_MODULE_DATA", dir)
+	logger := logging.NewTestLogger(t)
+
+	if err := os.WriteFile(filepath.Join(dir, machineActivityFile), []byte("not a timestamp"), 0o644); err != nil {
+		t.Fatalf("seeding a corrupt file: %v", err)
+	}
+
+	// Unreadable content must degrade to "long idle" rather than failing
+	// construction — a purge is cheap and a wedged coffee service is not.
+	a := newMachineActivityStore(logger)
+	if got := a.get(); !got.IsZero() {
+		t.Errorf("get() with a corrupt file = %v, want the zero time", got)
 	}
 }

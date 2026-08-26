@@ -17,9 +17,14 @@ package coffee
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"go.viam.com/rdk/logging"
 )
 
 // defaultKeepAliveDays is the window's weekday set when days is unset.
@@ -188,4 +193,84 @@ func (w *keepAliveWindow) contains(t time.Time) bool {
 	}
 	minOfDay := local.Hour()*60 + local.Minute()
 	return minOfDay >= w.startMin && minOfDay < w.endMin
+}
+
+// machineActivityFile is the file inside VIAM_MODULE_DATA holding the last time
+// water ran through the machine.
+const machineActivityFile = "machine-activity"
+
+// machineActivityStore tracks when the machine last saw use — a brew or a purge,
+// both of which reset the machine's own idle timer.
+//
+// Held in memory and mirrored to VIAM_MODULE_DATA, the RDK's per-machine,
+// per-module directory, which survives restarts, reconfigures, and module
+// version upgrades. Persisting matters because the coffee service is
+// AlwaysRebuild: without it, an afternoon of config edits would fire a spurious
+// purge after every reload.
+//
+// The zero time means "never", which makes any elapsed check due.
+type machineActivityStore struct {
+	mu   sync.Mutex
+	last time.Time
+	// path is "" when VIAM_MODULE_DATA is unset (tests, a local main.go run), in
+	// which case the store is in-memory only.
+	path string
+}
+
+// newMachineActivityStore builds the store, loading any previously persisted
+// timestamp. Every failure to read degrades to "never used" and logs — a purge
+// costs a second of arm motion, so there is nothing here worth failing
+// construction over.
+func newMachineActivityStore(logger logging.Logger) *machineActivityStore {
+	a := &machineActivityStore{}
+
+	dir := os.Getenv("VIAM_MODULE_DATA")
+	if dir == "" {
+		logger.Warnf("keepalive: VIAM_MODULE_DATA is unset — machine activity will be tracked in " +
+			"memory only and a reconfigure will trigger one extra purge")
+		return a
+	}
+	a.path = filepath.Join(dir, machineActivityFile)
+
+	raw, err := os.ReadFile(a.path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logger.Warnf("keepalive: reading %s: %v — treating the machine as long idle", a.path, err)
+		}
+		return a
+	}
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(string(raw)))
+	if err != nil {
+		logger.Warnf("keepalive: %s holds %q, which is not an RFC3339 time: %v — treating the "+
+			"machine as long idle", a.path, string(raw), err)
+		return a
+	}
+
+	a.last = t
+	logger.Infof("keepalive: last machine activity was %s (loaded from %s)", t.Format(time.RFC3339), a.path)
+	return a
+}
+
+// get returns the last recorded activity time.
+func (a *machineActivityStore) get() time.Time {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.last
+}
+
+// record stamps t as the last activity and best-effort persists it. A write
+// failure is logged and swallowed: the in-memory value is still correct, so the
+// only consequence is one extra purge after the next restart.
+func (a *machineActivityStore) record(logger logging.Logger, t time.Time) {
+	a.mu.Lock()
+	a.last = t
+	path := a.path
+	a.mu.Unlock()
+
+	if path == "" {
+		return
+	}
+	if err := os.WriteFile(path, []byte(t.Format(time.RFC3339)), 0o644); err != nil {
+		logger.Warnf("keepalive: persisting machine activity to %s: %v", path, err)
+	}
 }
