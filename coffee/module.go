@@ -99,11 +99,16 @@ type beanjaminCoffee struct {
 	// nil when usage_sensor_name is unset, in which case every update is a
 	// no-op. Holds all counters keyed by regular_grinds, decaf_grinds, usage,
 	// cleanings, and successful_consecutive_orders.
-	usageSensor    sensor.Sensor
-	cupVision      vision.Service // vision service for cup pickup (always configured)
-	cupCameraName  string         // SrcCameraName, validated to exist in cachedFS
-	glassVision    vision.Service // optional; nil unless CanServeIced
-	glassObserveSw toggleswitch.Switch
+	usageSensor sensor.Sensor
+	// machineActivity tracks when water last ran through the espresso machine, so
+	// the keep-alive loop knows whether the machine is about to fall out of brew
+	// temperature (keepalive.go). nil when keepalive is unconfigured, which makes
+	// recordMachineActivity a no-op.
+	machineActivity *machineActivityStore
+	cupVision       vision.Service // vision service for cup pickup (always configured)
+	cupCameraName   string         // SrcCameraName, validated to exist in cachedFS
+	glassVision     vision.Service // optional; nil unless CanServeIced
+	glassObserveSw  toggleswitch.Switch
 	// servingAreaSlotCounter is the round-robin counter for serving-area placement.
 	// It increments once per placeFullCupOnShelf and selects the shelf slot
 	// modulo the number of tiles. Process-local; resets to 0 on rebuild.

@@ -312,3 +312,94 @@ func TestMachineActivityStoreCorruptFile(t *testing.T) {
 		t.Errorf("get() with a corrupt file = %v, want the zero time", got)
 	}
 }
+
+func TestShouldPurge(t *testing.T) {
+	w, err := newKeepAliveWindow(validKeepAlive()) // 07:45–17:00 America/New_York, Mon–Fri
+	if err != nil {
+		t.Fatalf("newKeepAliveWindow: %v", err)
+	}
+	threshold := 40 * time.Minute
+
+	// A Thursday inside the window.
+	inWindow := time.Date(2026, 1, 15, 12, 0, 0, 0, w.loc)
+	longIdle := inWindow.Add(-90 * time.Minute)
+	recent := inWindow.Add(-5 * time.Minute)
+
+	tests := []struct {
+		name string
+		st   keepAliveState
+		want bool
+	}{
+		{
+			name: "idle inside the window purges",
+			st:   keepAliveState{now: inWindow, lastActivity: longIdle},
+			want: true,
+		},
+		{
+			name: "never used purges",
+			st:   keepAliveState{now: inWindow},
+			want: true,
+		},
+		{
+			name: "outside the window never purges",
+			st:   keepAliveState{now: time.Date(2026, 1, 15, 3, 0, 0, 0, w.loc), lastActivity: longIdle},
+			want: false,
+		},
+		{
+			name: "weekend never purges",
+			st:   keepAliveState{now: time.Date(2026, 1, 17, 12, 0, 0, 0, w.loc), lastActivity: longIdle},
+			want: false,
+		},
+		{
+			name: "a running sequence defers",
+			st:   keepAliveState{now: inWindow, lastActivity: longIdle, busy: true},
+			want: false,
+		},
+		{
+			name: "a paused queue defers",
+			st:   keepAliveState{now: inWindow, lastActivity: longIdle, paused: true},
+			want: false,
+		},
+		{
+			name: "queued orders defer — one is about to reset the timer anyway",
+			st:   keepAliveState{now: inWindow, lastActivity: longIdle, queued: 1},
+			want: false,
+		},
+		{
+			name: "recent use defers",
+			st:   keepAliveState{now: inWindow, lastActivity: recent},
+			want: false,
+		},
+		{
+			name: "exactly at the threshold purges",
+			st:   keepAliveState{now: inWindow, lastActivity: inWindow.Add(-threshold)},
+			want: true,
+		},
+		{
+			name: "one second under the threshold defers",
+			st:   keepAliveState{now: inWindow, lastActivity: inWindow.Add(-threshold + time.Second)},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, why := shouldPurge(w, threshold, tt.st)
+			if got != tt.want {
+				t.Errorf("shouldPurge() = %v (%q), want %v", got, why, tt.want)
+			}
+			if !got && why == "" {
+				t.Error("shouldPurge() declined without giving a reason; the reason is logged")
+			}
+			if got && why != "" {
+				t.Errorf("shouldPurge() approved but gave reason %q, want empty", why)
+			}
+		})
+	}
+}
+
+func TestRecordMachineActivityWithoutKeepAlive(t *testing.T) {
+	// Every machine without keepalive configured has a nil store, and prepareDrink
+	// calls this unconditionally after a successful brew.
+	s := &beanjaminCoffee{cfg: &Config{}, logger: logging.NewTestLogger(t)}
+	s.recordMachineActivity() // must not panic
+}

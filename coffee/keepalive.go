@@ -16,6 +16,8 @@ package coffee
 // filter basket gets wet and none of the rewind recovery state is touched.
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -300,4 +302,122 @@ func (s *beanjaminCoffee) purgeSteps() []Step {
 		{PoseName: filterPosePurgeApproach, PoseSwitch: s.filterSw,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterCoffeeButtonCollisions},
 	}
+}
+
+// keepAlivePurgeTimeout bounds one purge. Generous next to three short moves; if
+// it is ever hit, something is wedged and the loop must not keep holding the
+// `running` flag that the order queue waits on.
+const keepAlivePurgeTimeout = 2 * time.Minute
+
+// keepAliveState is the snapshot one tick decides from. Pulled out so the
+// decision is a pure function, testable without a service or an arm.
+type keepAliveState struct {
+	now          time.Time
+	lastActivity time.Time
+	busy         bool // an order or another sequence holds the running flag
+	paused       bool // the operator cancelled; nothing moves until 'proceed'
+	queued       int
+}
+
+// shouldPurge reports whether this tick should run a purge, and when it should
+// not, why — the reason goes straight into the skip log, which is the only way to
+// tell a quiet loop from a broken one.
+//
+// The checks are ordered cheapest and most-common first. Queued orders defer
+// because one is about to run and reset the machine's idle timer anyway; a purge
+// would only make it wait.
+func shouldPurge(w *keepAliveWindow, threshold time.Duration, st keepAliveState) (bool, string) {
+	if !w.contains(st.now) {
+		return false, "outside the keep-alive window"
+	}
+	if st.busy {
+		return false, "a sequence is already running"
+	}
+	if st.paused {
+		return false, "the queue is paused"
+	}
+	if st.queued > 0 {
+		return false, fmt.Sprintf("%d order(s) queued — one will reset the machine's timer", st.queued)
+	}
+	if idle := st.now.Sub(st.lastActivity); idle < threshold {
+		return false, fmt.Sprintf("machine used %s ago, threshold is %s", idle.Round(time.Second), threshold)
+	}
+	return true, ""
+}
+
+// runPurge holds the machine's 1 CUP button so the pump runs and the machine's
+// idle timer resets.
+//
+// It takes the same `running` compare-and-swap that prepareDrink takes, so to the
+// order queue a purge is indistinguishable from an order: one arriving mid-purge
+// waits rather than planning against an arm that is already moving. Releasing
+// that flag on every path is load-bearing — a purge that returned while holding
+// it would stall the queue permanently, which is also why the whole thing runs
+// under a timeout.
+func (s *beanjaminCoffee) runPurge(ctx context.Context) error {
+	if !s.running.CompareAndSwap(false, true) {
+		return errors.New("keepalive: a sequence is already running")
+	}
+	defer s.running.Store(false)
+
+	// Snapshot the cancel context under the mutex, as every other sequence does,
+	// so an operator cancel interrupts the moves mid-trajectory.
+	s.mu.Lock()
+	cancelCtx := s.cancelCtx
+	s.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(ctx, keepAlivePurgeTimeout)
+	defer cancel()
+
+	s.setStep(stepKeepAlive)
+	defer s.setStep("")
+
+	if err := s.runSteps(ctx, cancelCtx, "keepalive_purge", s.purgeSteps()...); err != nil {
+		// The purge never parks the portafilter in the machine, so there is no
+		// recovery to do beyond leaving the arm somewhere the next order can plan
+		// from.
+		homeStep := Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw}
+		if homeErr := s.executeStep(ctx, cancelCtx, homeStep); homeErr != nil {
+			s.logger.Warnf("keepalive: returning to home after a failed purge: %v", homeErr)
+		}
+		return err
+	}
+
+	// The water went to the drip tray, so the tray-emptying counter has to see it
+	// or the maintenance interval quietly under-reports.
+	s.incrementSensorReading(ctx, s.usageSensor, "drip tray", "drip_tray_brews", 1)
+	return nil
+}
+
+// recordMachineActivity stamps now as the last time water ran through the
+// machine. Called after a successful brew and after a successful purge, both of
+// which reset the machine's own idle timer. No-op when keepalive is unconfigured.
+func (s *beanjaminCoffee) recordMachineActivity() {
+	if s.machineActivity == nil {
+		return
+	}
+	s.machineActivity.record(s.logger, time.Now())
+}
+
+// notifyKeepAliveFailureSlack sends a plain-text Slack message for a failed
+// purge. Text-only rather than the Block Kit layout notifyOrderFailureSlack
+// builds: there is no order, customer, or clip to link, just one
+// operator-actionable fact.
+func (s *beanjaminCoffee) notifyKeepAliveFailureSlack(purgeErr error) {
+	if s.slackNotifier == nil {
+		return
+	}
+	text := fmt.Sprintf(":warning: Keep-alive purge failed — the espresso machine may drop out of "+
+		"brew temperature and the next order could brew cold. Error: %v", purgeErr)
+	logger := s.logger
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), notifySlackTimeout)
+		defer cancel()
+		if _, err := s.slackNotifier.DoCommand(ctx, map[string]any{
+			"command": "send",
+			"text":    text,
+		}); err != nil {
+			logger.Warnf("keepalive: slack notify failed: %v", err)
+		}
+	}()
 }
