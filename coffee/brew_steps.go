@@ -73,16 +73,26 @@ func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) erro
 	if err := s.unlockFilterFrame(ctx); err != nil {
 		return fmt.Errorf("unlock filter frame: %w", err)
 	}
-	return s.runSteps(ctx, cancelCtx, "unlock_portafilter",
-		Step{PoseName: filterPoseCoffeeIn, PoseSwitch: s.filterSw, PivotFromPose: filterPoseCoffeeLockedFinal, PivotDegreesPerStep: 5,
+	steps := []Step{
+		{PoseName: filterPoseCoffeeIn, PoseSwitch: s.filterSw, PivotFromPose: filterPoseCoffeeLockedFinal, PivotDegreesPerStep: 5,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
-		Step{PoseName: filterPoseCoffeeShake, PoseSwitch: s.filterSw, AllowedCollisions: coffeeBrewingCollisions, LinearConstraint: defaultApproachConstraint},
-		// Shake the filter laterally to dislodge the puck.
-		Step{PoseName: filterPoseCoffeeShake, PoseSwitch: s.filterSw,
-			CircularRadiusMm: 4, CircularDurationSec: s.cfg.PortafilterShakeSec, CircularPointsPerRev: 8,
-			LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
-		Step{PoseName: filterPoseCoffeeApproach, PoseSwitch: s.filterSw, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
-	)
+	}
+	withdraw := Step{PoseName: filterPoseCoffeeApproach, PoseSwitch: s.filterSw, Pause: shortPause,
+		LinearConstraint: defaultApproachConstraint}
+	if s.cfg.PortafilterShakeSec > 0 {
+		steps = append(steps,
+			Step{PoseName: filterPoseCoffeeShake, PoseSwitch: s.filterSw, AllowedCollisions: coffeeBrewingCollisions, LinearConstraint: defaultApproachConstraint},
+			// Shake the filter laterally to dislodge the puck.
+			Step{PoseName: filterPoseCoffeeShake, PoseSwitch: s.filterSw,
+				CircularRadiusMm: 2, CircularDurationSec: s.cfg.PortafilterShakeSec, CircularPointsPerRev: 8,
+				LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
+		)
+	} else {
+		// Withdrawing straight from coffee_in holds the filter inside the
+		// actuation area for the first part of the move.
+		withdraw.AllowedCollisions = coffeeBrewingCollisions
+	}
+	return s.runSteps(ctx, cancelCtx, "unlock_portafilter", append(steps, withdraw)...)
 }
 
 // moveGripperToPoseWithVerify is the portafilter handoff both release_filter and
