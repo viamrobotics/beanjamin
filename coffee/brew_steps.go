@@ -80,13 +80,23 @@ func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) erro
 	withdraw := Step{PoseName: filterPoseCoffeeApproach, PoseSwitch: s.filterSw, Pause: shortPause,
 		LinearConstraint: defaultApproachConstraint}
 	if s.cfg.PortafilterShakeSec > 0 {
-		steps = append(steps,
-			Step{PoseName: filterPoseCoffeeShake, PoseSwitch: s.filterSw, AllowedCollisions: coffeeBrewingCollisions, LinearConstraint: defaultApproachConstraint},
-			// Shake the filter laterally to dislodge the puck.
-			Step{PoseName: filterPoseCoffeeShake, PoseSwitch: s.filterSw,
-				CircularRadiusMm: 1, CircularDurationSec: s.cfg.PortafilterShakeSec, CircularPointsPerRev: 8,
-				LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
-		)
+		// Shake once at each pose. The two lean opposite ways, so a puck stuck
+		// on either side of the basket gets worked from both.
+		for i, shakePose := range []string{filterPoseCoffeeShake, filterPoseCoffeeShakeLeft} {
+			if i > 0 {
+				// Every shake starts from coffee_in, so each one runs the same move.
+				steps = append(steps, Step{PoseName: filterPoseCoffeeIn, PoseSwitch: s.filterSw,
+					AllowedCollisions: coffeeBrewingCollisions, LinearConstraint: defaultApproachConstraint})
+			}
+			steps = append(steps,
+				Step{PoseName: shakePose, PoseSwitch: s.filterSw,
+					AllowedCollisions: coffeeBrewingCollisions, LinearConstraint: defaultApproachConstraint},
+				// Shake the filter laterally to dislodge the puck.
+				Step{PoseName: shakePose, PoseSwitch: s.filterSw,
+					CircularRadiusMm: 1, CircularDurationSec: s.cfg.PortafilterShakeSec, CircularPointsPerRev: 8,
+					LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions},
+			)
+		}
 	} else {
 		// Withdrawing straight from coffee_in holds the filter inside the
 		// actuation area for the first part of the move.
