@@ -13,10 +13,39 @@ import (
 	"go.viam.com/rdk/logging"
 )
 
-func (s *beanjaminCoffee) proceedQueue() (map[string]any, error) {
+// proceedQueue releases the pause a cancel left behind so processQueue starts
+// the next order.
+//
+// A cancel-induced pause is the one idle state where the recorded world can
+// still hold mid-cycle mutations — a filter frame reparented to world, a held
+// cup geometry, a staged glass obstacle — that no longer describe the machine
+// the operator has since tidied up by hand or with a rewind. So the frame
+// system is rebuilt from the service before the pause is released: after the
+// signal lands the queue goroutine may start planning immediately, and cachedFS
+// may only be swapped while no sequence owns the arm. The recorded fridge-door
+// angle survives the rebuild — only reset_world can assert the door is shut.
+//
+// When the queue is not paused there is nothing to resume against, so the frame
+// system is left alone rather than discarding state a manually-stepped action
+// (a held portafilter, a locked filter frame) still depends on.
+func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, error) {
+	reset := false
+	if s.paused.Load() {
+		if !s.running.CompareAndSwap(false, true) {
+			return nil, errors.New("proceed: a sequence is still running — wait for it to stop, or cancel it first")
+		}
+		err := s.resetFrameSystem(ctx)
+		s.running.Store(false)
+		if err != nil {
+			return nil, fmt.Errorf("proceed: %w", err)
+		}
+		reset = true
+	}
+
 	select {
 	case s.queue.proceed <- struct{}{}:
-		return map[string]any{"status": "resumed"}, nil
+		s.logger.Infof("proceed: queue resumed, frame_system_reset=%v", reset)
+		return map[string]any{"status": "resumed", "frame_system_reset": reset}, nil
 	default:
 		return nil, errors.New("not currently paused between orders")
 	}

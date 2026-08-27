@@ -2,10 +2,13 @@ package coffee
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"go.viam.com/rdk/referenceframe"
+	"go.viam.com/rdk/robot/framesystem"
 	"go.viam.com/rdk/testutils/inject"
 )
 
@@ -120,4 +123,114 @@ func TestRewindIsDispatched(t *testing.T) {
 		}
 	}
 	t.Fatal("no rewind entry in the DoCommand dispatch table")
+}
+
+// pausedCoffeeWithDirtyWorld returns a service parked where a cancelled order
+// leaves it: the queue paused, and a cached frame system carrying mid-cycle
+// mutations (a held item, a locked filter frame, a staged glass). The frame
+// system it returns is the dirty one, so a caller can tell a rebuild from a
+// no-op, and the counter reports how many times the injected framesystem
+// service was asked for a config. cfgErr, when set, makes every rebuild fail.
+func pausedCoffeeWithDirtyWorld(t *testing.T, cfgErr error) (*beanjaminCoffee, *referenceframe.FrameSystem, *int) {
+	t.Helper()
+	s, _ := newTestCoffee(t, nil)
+
+	rebuilds := 0
+	fsSvc := inject.NewFrameSystemService("fs")
+	fsSvc.FrameSystemConfigFunc = func(context.Context) (*framesystem.Config, error) {
+		rebuilds++
+		if cfgErr != nil {
+			return nil, cfgErr
+		}
+		return &framesystem.Config{}, nil
+	}
+	s.fsSvc = fsSvc
+
+	dirty := referenceframe.NewEmptyFrameSystem("dirty")
+	s.cachedFS = dirty
+	s.heldItemAttached = true
+	s.filterFrameLocked = true
+	s.stagedGlassPlaced = true
+	s.paused.Store(true)
+
+	return s, dirty, &rebuilds
+}
+
+// TestProceedRebuildsFrameSystemWhenPaused pins the reset half of proceed:
+// resuming from a cancel-induced pause rebuilds the cached frame system from
+// the service, so the next order plans against the configured world instead of
+// the mutations the cancelled order left behind.
+func TestProceedRebuildsFrameSystemWhenPaused(t *testing.T) {
+	s, dirty, rebuilds := pausedCoffeeWithDirtyWorld(t, nil)
+
+	resp, err := s.proceedQueue(context.Background())
+	if err != nil {
+		t.Fatalf("proceed error: %v", err)
+	}
+	if resp["status"] != "resumed" || resp["frame_system_reset"] != true {
+		t.Errorf("resp = %v, want status=resumed frame_system_reset=true", resp)
+	}
+	if *rebuilds != 1 {
+		t.Errorf("frame system rebuilt %d times, want 1", *rebuilds)
+	}
+	if s.cachedFS == dirty {
+		t.Error("cached frame system should have been replaced by the rebuild")
+	}
+	if s.heldItemAttached || s.filterFrameLocked || s.stagedGlassPlaced {
+		t.Errorf("rebuild must clear the mutation flags: held=%v locked=%v staged=%v",
+			s.heldItemAttached, s.filterFrameLocked, s.stagedGlassPlaced)
+	}
+	if s.running.Load() {
+		t.Error("proceed must hand the arm back after rebuilding")
+	}
+	select {
+	case <-s.queue.proceed:
+	default:
+		t.Error("proceed signal should have been sent to unpause the queue")
+	}
+}
+
+// TestProceedRefusesWhileASequenceRuns covers the ownership gate: a cancelled
+// sequence that has not unwound yet is still planning against cachedFS, so
+// proceed must not swap it out from under it.
+func TestProceedRefusesWhileASequenceRuns(t *testing.T) {
+	s, dirty, rebuilds := pausedCoffeeWithDirtyWorld(t, nil)
+	s.running.Store(true)
+
+	if _, err := s.proceedQueue(context.Background()); err == nil {
+		t.Fatal("proceed should refuse while a sequence is still running")
+	}
+	if *rebuilds != 0 {
+		t.Errorf("frame system rebuilt %d times, want 0", *rebuilds)
+	}
+	if s.cachedFS != dirty {
+		t.Error("a refused proceed must leave the cached frame system alone")
+	}
+	select {
+	case <-s.queue.proceed:
+		t.Error("a refused proceed must not unpause the queue")
+	default:
+	}
+}
+
+// TestProceedRebuildFailureKeepsQueuePaused: when the world can't be rebuilt the
+// queue stays paused rather than starting the next order against a frame system
+// that no longer matches the machine.
+func TestProceedRebuildFailureKeepsQueuePaused(t *testing.T) {
+	s, _, _ := pausedCoffeeWithDirtyWorld(t, errors.New("boom"))
+
+	if _, err := s.proceedQueue(context.Background()); err == nil {
+		t.Fatal("proceed should fail when the frame system can't be rebuilt")
+	}
+	if s.running.Load() {
+		t.Error("a failed rebuild must still hand the arm back")
+	}
+	if !s.paused.Load() {
+		t.Error("queue should still be paused after a failed rebuild")
+	}
+	select {
+	case <-s.queue.proceed:
+		t.Error("a failed rebuild must not unpause the queue")
+	default:
+	}
 }

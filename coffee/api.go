@@ -151,8 +151,8 @@ var coffeeCommands = []commandDef{
 	{key: "get_queue", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.Status(ctx)
 	}},
-	{key: "proceed", run: func(s *beanjaminCoffee, _ context.Context, _ map[string]any) (map[string]any, error) {
-		return s.proceedQueue()
+	{key: "proceed", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
+		return s.proceedQueue(ctx)
 	}},
 	{key: "clear_queue", run: func(s *beanjaminCoffee, _ context.Context, _ map[string]any) (map[string]any, error) {
 		return s.clearQueue()
