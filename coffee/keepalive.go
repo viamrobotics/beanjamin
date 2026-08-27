@@ -322,10 +322,16 @@ func (s *beanjaminCoffee) purgeSteps() []Step {
 	}
 }
 
-// keepAlivePurgeTimeout bounds one purge. Generous next to three short moves; if
+// keepAlivePurgeTimeout bounds one purge. Generous next to four short moves; if
 // it is ever hit, something is wedged and the loop must not keep holding the
 // `running` flag that the order queue waits on.
 const keepAlivePurgeTimeout = 2 * time.Minute
+
+// keepAlivePurgeWarningDelay is how long to wait between announcing a purge and
+// actually moving, so anyone standing at the machine has a moment to step back.
+const keepAlivePurgeWarningDelay = 5 * time.Second
+
+const keepAlivePurgeAnnouncement = "Heads up — I'm about to move to keep the coffee machine warm. Please stand clear."
 
 // keepAliveState is the snapshot one tick decides from. Pulled out so the
 // decision is a pure function, testable without a service or an arm.
@@ -372,6 +378,25 @@ func shouldPurge(w *keepAliveWindow, threshold time.Duration, st keepAliveState)
 // running gate and snapshots cancelCtx before dispatching, so a purge that took
 // the gate itself would deadlock against it).
 func (s *beanjaminCoffee) purge(ctx, cancelCtx context.Context) error {
+	// Warn before moving. Every other arm motion in this service answers a request
+	// someone just made; a purge fires on a timer, so whoever is at the machine has
+	// no reason to expect it. Spoken through sayAlways rather than say: this is a
+	// safety notice, not status narration an external orchestrator might want to
+	// own, so conversational mode must not silence it.
+	//
+	// The line is queued asynchronously (say_async), so the delay starts when the
+	// speech service accepts it rather than when it finishes playing.
+	if err := s.sayAlways(ctx, keepAlivePurgeAnnouncement); err != nil {
+		s.logger.Warnf("keepalive: purge announcement failed: %v", err)
+	}
+	select {
+	case <-time.After(keepAlivePurgeWarningDelay):
+	case <-ctx.Done():
+		return fmt.Errorf("keepalive: cancelled during the pre-purge warning: %w", ctx.Err())
+	case <-cancelCtx.Done():
+		return errors.New("keepalive: cancelled during the pre-purge warning")
+	}
+
 	if err := s.runSteps(ctx, cancelCtx, "keepalive_purge", s.purgeSteps()...); err != nil {
 		// The purge never parks the portafilter in the machine, so there is no
 		// recovery to do beyond leaving the arm somewhere the next order can plan
