@@ -35,6 +35,7 @@ const (
 	filterPoseApproachToCleaningBrush    = "approach_to_cleaning_brush"
 	filterPoseCleaningBrushActive        = "cleaning_brush_active"
 	filterPoseCoffeeShake                = "coffee_shake"
+	filterPoseCoffeeShakeLeft            = "coffee_shake_left"
 
 	// Keep-alive purge poses (required only when keepalive is configured). Both
 	// are filter-frame poses: the arm holds the portafilter while it presses the
@@ -144,10 +145,13 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		)
 	}
 
-	// step 8: unlock portafilter. The arm only travels to the shake pose when a
+	// step 8: unlock portafilter. The arm only travels to the shake poses when a
 	// shake duration is configured.
 	if s.cfg.PortafilterShakeSec > 0 {
-		poses = append(poses, requiredPose{s.filterSw, filterPoseCoffeeShake})
+		poses = append(poses,
+			requiredPose{s.filterSw, filterPoseCoffeeShake},
+			requiredPose{s.filterSw, filterPoseCoffeeShakeLeft},
+		)
 	}
 
 	if s.cfg.CanServeDecaf {
