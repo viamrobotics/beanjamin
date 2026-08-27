@@ -293,8 +293,18 @@ func (a *machineActivityStore) record(logger logging.Logger, t time.Time) {
 // free-planned from home, and allowing coffee-machine-buffer-front across that
 // traverse lets the planner route the portafilter through the machine's front
 // face.
+// purgeHold is how long to dwell on the 1 CUP button. Falls back to the default
+// when keepalive is unconfigured, so the keepalive_purge action can be used to
+// verify the purge poses before the loop is ever switched on.
+func (s *beanjaminCoffee) purgeHold() time.Duration {
+	if s.cfg.KeepAlive == nil {
+		return time.Duration(defaultKeepAliveHoldSec * float64(time.Second))
+	}
+	return s.cfg.KeepAlive.hold()
+}
+
 func (s *beanjaminCoffee) purgeSteps() []Step {
-	hold := s.cfg.KeepAlive.hold()
+	hold := s.purgeHold()
 	return []Step{
 		{PoseName: filterPosePurgeApproach, PoseSwitch: s.filterSw},
 		{PoseName: filterPosePurgePress, PoseSwitch: s.filterSw, Pause: hold,
@@ -345,14 +355,43 @@ func shouldPurge(w *keepAliveWindow, threshold time.Duration, st keepAliveState)
 	return true, ""
 }
 
-// runPurge holds the machine's 1 CUP button so the pump runs and the machine's
-// idle timer resets.
+// purge holds the machine's 1 CUP button so the pump runs and the machine's idle
+// timer resets. This is the motion only: the caller owns the `running` gate, the
+// cancel context, and the step label.
 //
-// It takes the same `running` compare-and-swap that prepareDrink takes, so to the
-// order queue a purge is indistinguishable from an order: one arriving mid-purge
-// waits rather than planning against an arm that is already moving. Releasing
-// that flag on every path is load-bearing — a purge that returned while holding
-// it would stall the queue permanently, which is also why the whole thing runs
+// Its signature matches the execute_action map, which is how an operator drives
+// one purge on demand to verify the poses (executeAction already takes the
+// running gate and snapshots cancelCtx before dispatching, so a purge that took
+// the gate itself would deadlock against it).
+func (s *beanjaminCoffee) purge(ctx, cancelCtx context.Context) error {
+	if err := s.runSteps(ctx, cancelCtx, "keepalive_purge", s.purgeSteps()...); err != nil {
+		// The purge never parks the portafilter in the machine, so there is no
+		// recovery to do beyond leaving the arm somewhere the next order can plan
+		// from.
+		homeStep := Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw}
+		if homeErr := s.executeStep(ctx, cancelCtx, homeStep); homeErr != nil {
+			s.logger.Warnf("keepalive: returning to home after a failed purge: %v", homeErr)
+		}
+		return err
+	}
+
+	// The water went to the drip tray, so the tray-emptying counter has to see it
+	// or the maintenance interval quietly under-reports.
+	s.incrementSensorReading(ctx, s.usageSensor, "drip tray", "drip_tray_brews", 1)
+	// Water ran, so the machine's idle timer restarted — including for a purge an
+	// operator triggered by hand, which is just as much machine use as a scheduled
+	// one and should push the next tick out by the full threshold.
+	s.recordMachineActivity()
+	return nil
+}
+
+// runPurge is the keep-alive loop's entry point: it takes the same `running`
+// compare-and-swap that prepareDrink takes, so to the order queue a purge is
+// indistinguishable from an order and one arriving mid-purge waits rather than
+// planning against an arm that is already moving.
+//
+// Releasing that flag on every path is load-bearing — a purge that returned while
+// holding it would stall the queue permanently, which is also why the motion runs
 // under a timeout.
 func (s *beanjaminCoffee) runPurge(ctx context.Context) error {
 	if !s.running.CompareAndSwap(false, true) {
@@ -372,21 +411,7 @@ func (s *beanjaminCoffee) runPurge(ctx context.Context) error {
 	s.setStep(stepKeepAlive)
 	defer s.setStep("")
 
-	if err := s.runSteps(ctx, cancelCtx, "keepalive_purge", s.purgeSteps()...); err != nil {
-		// The purge never parks the portafilter in the machine, so there is no
-		// recovery to do beyond leaving the arm somewhere the next order can plan
-		// from.
-		homeStep := Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw}
-		if homeErr := s.executeStep(ctx, cancelCtx, homeStep); homeErr != nil {
-			s.logger.Warnf("keepalive: returning to home after a failed purge: %v", homeErr)
-		}
-		return err
-	}
-
-	// The water went to the drip tray, so the tray-emptying counter has to see it
-	// or the maintenance interval quietly under-reports.
-	s.incrementSensorReading(ctx, s.usageSensor, "drip tray", "drip_tray_brews", 1)
-	return nil
+	return s.purge(ctx, cancelCtx)
 }
 
 // recordMachineActivity stamps now as the last time water ran through the
@@ -448,7 +473,6 @@ func (s *beanjaminCoffee) keepAliveLoop(w *keepAliveWindow) {
 			// blocked the arm is unlikely to clear in the same second.
 			continue
 		}
-		s.recordMachineActivity()
 	}
 }
 

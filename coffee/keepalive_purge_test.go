@@ -2,6 +2,7 @@ package coffee
 
 import (
 	"testing"
+	"time"
 
 	"go.viam.com/rdk/testutils/inject"
 )
@@ -60,6 +61,45 @@ func TestPurgeStepsCollisionScope(t *testing.T) {
 	}
 	if steps[0].Pause != 0 || steps[2].Pause != 0 {
 		t.Errorf("approach/retreat Pause = %v/%v, want 0", steps[0].Pause, steps[2].Pause)
+	}
+}
+
+// TestPurgeStepsWithoutKeepAliveConfigured covers the keepalive_purge action being
+// available before the loop is switched on, so the poses can be verified first.
+// purgeSteps must not dereference a nil KeepAlive.
+func TestPurgeStepsWithoutKeepAliveConfigured(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{HasSeparateBrewButtons: true}}
+
+	steps := s.purgeSteps() // must not panic
+	if len(steps) != 3 {
+		t.Fatalf("purgeSteps returned %d steps, want 3", len(steps))
+	}
+	want := time.Duration(defaultKeepAliveHoldSec * float64(time.Second))
+	if steps[1].Pause != want {
+		t.Errorf("press Pause = %v, want the default hold %v", steps[1].Pause, want)
+	}
+}
+
+// TestKeepAlivePurgeActionRegistration pins the action to the machine that has
+// separate brew buttons, independent of whether keepalive is configured. On the
+// single-toggle machine it must be absent: holding that switch pours a dose.
+func TestKeepAlivePurgeActionRegistration(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     *Config
+		wantHas bool
+	}{
+		{"button machine, keepalive off", &Config{HasSeparateBrewButtons: true}, true},
+		{"button machine, keepalive on", &Config{HasSeparateBrewButtons: true, KeepAlive: validKeepAlive()}, true},
+		{"toggle machine", &Config{HasSeparateBrewButtons: false}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &beanjaminCoffee{cfg: tt.cfg}
+			if _, gotHas := s.actionFuncs()["keepalive_purge"]; gotHas != tt.wantHas {
+				t.Errorf("keepalive_purge registered = %v, want %v", gotHas, tt.wantHas)
+			}
+		})
 	}
 }
 
