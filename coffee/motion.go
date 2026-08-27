@@ -36,6 +36,32 @@ var defaultApproachConstraint = &StepLinearConstraint{
 	OrientationToleranceDegs: 2,
 }
 
+// freeMoveCollisionBufferMM is the clearance the planner must keep between any
+// two geometries that did not begin the motion in collision. It applies to free
+// traverses — both the ordinary direct plans and the no-spill level carry — but
+// not to steps carrying a LinearConstraint: those have to close the last
+// millimetres onto hardware (portafilter into the group head, claws onto a cup)
+// and so keep armplanning's own hair-thin default.
+const freeMoveCollisionBufferMM = 3.0
+
+// freeMovePlannerOptions returns planner options carrying the free-traverse
+// collision buffer.
+func freeMovePlannerOptions() *armplanning.PlannerOptions {
+	opts := armplanning.NewBasicPlannerOptions()
+	opts.CollisionBufferMM = freeMoveCollisionBufferMM
+	return opts
+}
+
+// plannerOptionsForConstraint returns the planner options for a step's move, or
+// nil to let armplanning apply its defaults. A move with no linear constraint is
+// a free traverse and gets the extra collision buffer.
+func plannerOptionsForConstraint(lc *StepLinearConstraint) *armplanning.PlannerOptions {
+	if lc != nil {
+		return nil
+	}
+	return freeMovePlannerOptions()
+}
+
 const defaultSlowMovementVelDegsPerSec = 25.0
 
 // slowMovementMoveOptions returns the MoveOptions used whenever a step carries
@@ -566,9 +592,12 @@ func (s *beanjaminCoffee) planToRawPose(
 
 	allowedCollisions = s.filterFakeModeCollisions(s.appendHeldItemCollisions(allowedCollisions))
 	constraints := buildConstraints(lc, allowedCollisions)
+	plannerOpts := plannerOptionsForConstraint(lc)
 	if lc != nil {
 		logger.Infof("applying linear constraint (line=%.1fmm, orient=%.1f°)",
 			lc.LineToleranceMm, lc.OrientationToleranceDegs)
+	} else {
+		logger.Infof("applying %.1fmm collision buffer", plannerOpts.CollisionBufferMM)
 	}
 	if len(allowedCollisions) > 0 {
 		logger.Infof("allowing %d collision pair(s)", len(allowedCollisions))
@@ -579,8 +608,9 @@ func (s *beanjaminCoffee) planToRawPose(
 		Goals: []*armplanning.PlanState{
 			armplanning.NewPlanState(referenceframe.FrameSystemPoses{pd.componentName: goalPose}, nil),
 		},
-		StartState:  armplanning.NewPlanState(nil, startInputs),
-		Constraints: constraints,
+		StartState:     armplanning.NewPlanState(nil, startInputs),
+		Constraints:    constraints,
+		PlannerOptions: plannerOpts,
 	}
 	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
 	s.savePlanRequestAndResponse(req, plan, "move", err)
@@ -967,8 +997,9 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, al
 	destPose := destTF.(*referenceframe.PoseInFrame).Pose()
 
 	waypoints := computeLevelCarryWaypoints(startPose, destPose, defaultCarryWaypointSpacingMm)
-	logger.Infof("no-spill carry: moving %q through %d waypoint(s) over %.0fmm (cloud: tilt±%.2f, twist±%.0f°)",
-		moveFrame, len(waypoints), destPose.Point().Sub(startPose.Point()).Norm(), noSpillGoalCloud.OX, noSpillGoalCloud.Theta)
+	logger.Infof("no-spill carry: moving %q through %d waypoint(s) over %.0fmm (cloud: tilt±%.2f, twist±%.0f°, buffer: %.1fmm)",
+		moveFrame, len(waypoints), destPose.Point().Sub(startPose.Point()).Norm(), noSpillGoalCloud.OX, noSpillGoalCloud.Theta,
+		freeMoveCollisionBufferMM)
 
 	goals := make([]*armplanning.PlanState, 0, len(waypoints))
 	for i, pose := range waypoints {
@@ -991,10 +1022,11 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, al
 	constraints := buildConstraints(nil, s.filterFakeModeCollisions(s.appendHeldItemCollisions(allowedCollisions)))
 
 	req := &armplanning.PlanRequest{
-		FrameSystem: fs,
-		Goals:       goals,
-		StartState:  armplanning.NewPlanState(nil, fsInputs),
-		Constraints: constraints,
+		FrameSystem:    fs,
+		Goals:          goals,
+		StartState:     armplanning.NewPlanState(nil, fsInputs),
+		Constraints:    constraints,
+		PlannerOptions: freeMovePlannerOptions(),
 	}
 	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
 	s.savePlanRequestAndResponse(req, plan, "carry", err)
