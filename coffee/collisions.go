@@ -28,23 +28,21 @@ var clawCoffeeButtonCollisions = []AllowedCollision{
 	{Frame1: "gripper:claws", Frame2: "coffee-machine-buffer-front"},
 }
 
-// filterCoffeeButtonCollisions permits the portafilter assembly to sit inside the
-// machine's modeled bulk while the arm presses the 1 CUP button with the filter
-// still in the claws (the keep-alive purge, keepalive.go). Mirrors
-// clawCoffeeButtonCollisions with the filter frames added, since here the
-// portafilter — not the bare claw — is what reaches the machine face.
+// filterCoffeeButtonCollisions permits the filter to sit inside the machine's
+// modeled bulk while the arm presses the 1 CUP button with the portafilter still
+// in the claws (the keep-alive purge, keepalive.go).
 //
-// coffee-machine-top is in the set for the same reason as the front buffer: the
-// button sits high on the face, so reaching it puts the filter inside the modeled
-// top even though the real one clears it. Only the filter itself is allowed there
-// — the handle sits behind it and should stay a hard obstacle. Applied only to
-// the two short linear moves, so the grant covers a straight line onto the button
-// and back, not a free traverse the planner could route through the machine.
+// The button sits high on the machine face, so reaching it puts the filter inside
+// both the front buffer and the modeled top even though the real machine clears
+// them. Only the filter is granted this: the handle, the claws, and the gripper
+// all sit behind it and stay hard obstacles, so a plan that would drive any of
+// them into the machine is still rejected.
+//
+// Applied only to the two short linear moves, so the grant covers a straight line
+// onto the button and back — not a free traverse the planner could route through
+// the machine.
 var filterCoffeeButtonCollisions = []AllowedCollision{
 	{Frame1: componentFilter, Frame2: "coffee-machine-buffer-front"},
-	{Frame1: "portafilter-handle", Frame2: "coffee-machine-buffer-front"},
-	{Frame1: componentClaws, Frame2: "coffee-machine-buffer-front"},
-	{Frame1: "gripper:claws", Frame2: "coffee-machine-buffer-front"},
 	{Frame1: componentFilter, Frame2: "coffee-machine-top"},
 }
 
