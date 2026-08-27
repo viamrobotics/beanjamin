@@ -28,16 +28,24 @@ var clawCoffeeButtonCollisions = []AllowedCollision{
 	{Frame1: "gripper:claws", Frame2: "coffee-machine-buffer-front"},
 }
 
-// filterCoffeeButtonCollisions permits the portafilter assembly to sit inside
-// coffee-machine-buffer-front while the arm presses the machine's 1 CUP button
-// with the filter still in the claws (the keep-alive purge, keepalive.go).
-// Mirrors clawCoffeeButtonCollisions with the filter frames added, since here the
+// filterCoffeeButtonCollisions permits the portafilter assembly to sit inside the
+// machine's modeled bulk while the arm presses the 1 CUP button with the filter
+// still in the claws (the keep-alive purge, keepalive.go). Mirrors
+// clawCoffeeButtonCollisions with the filter frames added, since here the
 // portafilter — not the bare claw — is what reaches the machine face.
+//
+// coffee-machine-top is in the set for the same reason as the front buffer: the
+// button sits high on the face, so reaching it puts the filter inside the modeled
+// top even though the real one clears it. Applied only to the two short linear
+// moves, so the grant covers a straight line onto the button and back, not a
+// free traverse the planner could route through the machine.
 var filterCoffeeButtonCollisions = []AllowedCollision{
 	{Frame1: componentFilter, Frame2: "coffee-machine-buffer-front"},
 	{Frame1: "portafilter-handle", Frame2: "coffee-machine-buffer-front"},
 	{Frame1: componentClaws, Frame2: "coffee-machine-buffer-front"},
 	{Frame1: "gripper:claws", Frame2: "coffee-machine-buffer-front"},
+	{Frame1: componentFilter, Frame2: "coffee-machine-top"},
+	{Frame1: "portafilter-handle", Frame2: "coffee-machine-top"},
 }
 
 // Held-item surface collisions. When a cup/glass geometry is
