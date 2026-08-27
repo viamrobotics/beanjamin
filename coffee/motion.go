@@ -291,7 +291,8 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 // resetFrameSystem rebuilds the cached frame system from the service, discarding
 // any in-flight mutations (e.g. a filter frame that was reparented to world by
 // lockFilterFrame). Shared by unlockFilterFrame during the normal brew cycle and
-// by the reset_world and rewind operator commands to recover from a mid-cycle cancel.
+// by the reset_world, rewind and proceed operator commands to recover from a
+// mid-cycle cancel.
 //
 // The fridge door is the exception: a rebuild puts the panel back at its authored
 // shut transform, but rebuilding a model does not close a real door, so the

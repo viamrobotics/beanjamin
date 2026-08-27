@@ -108,13 +108,20 @@ func TestDoCommandDispatch(t *testing.T) {
 
 // TestProceedQueueSignal characterizes proceed as a cap-1 buffered signal: the
 // first proceed is accepted; a second, with the slot still full (no consumer
-// draining it), reports that nothing is waiting to resume.
+// draining it), reports that nothing is waiting to resume. The queue is not
+// paused here, so no frame system rebuild is attempted — the service has no
+// framesystem service to rebuild from.
 func TestProceedQueueSignal(t *testing.T) {
+	ctx := context.Background()
 	s := newStatusService(t, &Config{})
-	if _, err := s.proceedQueue(); err != nil {
+	resp, err := s.proceedQueue(ctx)
+	if err != nil {
 		t.Fatalf("first proceed: unexpected error %v", err)
 	}
-	if _, err := s.proceedQueue(); err == nil {
+	if resp["frame_system_reset"] != false {
+		t.Errorf("frame_system_reset = %v, want false when the queue is not paused", resp["frame_system_reset"])
+	}
+	if _, err := s.proceedQueue(ctx); err == nil {
 		t.Error("second proceed with the buffer full should error")
 	}
 }

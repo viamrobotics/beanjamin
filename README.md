@@ -312,7 +312,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 
 Glass pickup reuses `cup_photos_per_vantage` and `cup_pickup_max_attempts` (item-agnostic operational knobs); there are no glass-specific versions.
 
-**Held-item geometry.** A picked-up cup/glass is always tracked: its geometry — a box of the configured `cup_dimensions` / `glass_dimensions` centered on the grasp centroid — is attached to the gripper frame in the cached frame system as a `held-item` frame, so motion planning routes around the held item until it is set down (and is restored on each re-grab — the brewed cup from under the machine, the staged glass). When the brewed cup is re-grabbed but nothing was cached to restore — e.g. a manually-stepped serving that never ran the vision cup pickup — its held-item box is modeled from `cup_dimensions` and the grip point's current world pose, so the pour and shelf placement still track the cup. The gripper-overlap collision pairs are allowed automatically on every move while an item is held; contact phases near a modeled surface (under the machine, the serving-area shelf) allow the held item against that surface too. The held-item frame is dropped when the frame system is rebuilt (`reset_world`, `rewind`).
+**Held-item geometry.** A picked-up cup/glass is always tracked: its geometry — a box of the configured `cup_dimensions` / `glass_dimensions` centered on the grasp centroid — is attached to the gripper frame in the cached frame system as a `held-item` frame, so motion planning routes around the held item until it is set down (and is restored on each re-grab — the brewed cup from under the machine, the staged glass). When the brewed cup is re-grabbed but nothing was cached to restore — e.g. a manually-stepped serving that never ran the vision cup pickup — its held-item box is modeled from `cup_dimensions` and the grip point's current world pose, so the pour and shelf placement still track the cup. The gripper-overlap collision pairs are allowed automatically on every move while an item is held; contact phases near a modeled surface (under the machine, the serving-area shelf) allow the held item against that surface too. The held-item frame is dropped when the frame system is rebuilt (`reset_world`, `rewind`, `proceed`).
 
 **Resting-surface seating.** Pickup resolves each detection's grasp **Z** from the surface the container stands on rather than the raw detected centroid Z (which depth noise pushes above or below the true base), using the configured container height (`cup_dimensions` / `glass_dimensions`). It finds the highest **static** Box in the framesystem whose world footprint lies directly beneath the detection and whose top face is below the detected centroid, then seats the container's base **1 mm** above that top — so the grasp centroid becomes `surfaceTop + 1 mm + height/2`, keeping the detected X/Y. "Static" means world-anchored (it moves rigidly with the world frame), so the moving arm, gripper, camera, and any held item are never mistaken for a surface; non-box and rotated geometries are bounded by their world axis-aligned extent. No framesystem changes or extra config are required — the resting surface is auto-detected. When no surface is found beneath a detection, pickup uses the raw detected Z unchanged.
 
@@ -421,13 +421,17 @@ Returns:
 {"count": 2, "orders": ["Alice", "Bob"], "is_paused": false, "is_busy": true}
 ```
 
-**`proceed`** - Resume queue processing after a pause between orders.
+**`proceed`** - Resume queue processing after a cancel-induced pause, rebuilding the cached frame system first.
+
+Releasing the pause is also where the recorded world is re-synced with the real one: the frame system is rebuilt from the framesystem service before the queue is let go, discarding whatever the cancelled order left mid-cycle — a filter frame reparented to world by `lock_portafilter`, a held-item geometry, a staged-glass obstacle. The recorded fridge-door angle survives the rebuild (only `reset_world` clears that). If the rebuild fails, the queue stays paused and nothing resumes.
+
+`proceed` refuses while a cancelled sequence is still unwinding: the frame system cannot be swapped under a goroutine that is planning with it. And when the queue is not paused there is nothing to resume against, so the frame system is left untouched — a stray `proceed` can't discard state a manually-stepped `execute_action` still depends on, such as a portafilter in the jaws or a locked filter frame.
 
 ```json
 {"proceed": true}
 ```
 
-Returns `{"status": "resumed"}`.
+Returns `{"status": "resumed", "frame_system_reset": true}` — `frame_system_reset` is `false` when the queue was not paused and the world was left as it was.
 
 **`clear_queue`** - Remove all pending orders from the queue.
 
