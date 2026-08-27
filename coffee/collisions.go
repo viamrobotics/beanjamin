@@ -36,16 +36,16 @@ var clawCoffeeButtonCollisions = []AllowedCollision{
 //
 // coffee-machine-top is in the set for the same reason as the front buffer: the
 // button sits high on the face, so reaching it puts the filter inside the modeled
-// top even though the real one clears it. Applied only to the two short linear
-// moves, so the grant covers a straight line onto the button and back, not a
-// free traverse the planner could route through the machine.
+// top even though the real one clears it. Only the filter itself is allowed there
+// — the handle sits behind it and should stay a hard obstacle. Applied only to
+// the two short linear moves, so the grant covers a straight line onto the button
+// and back, not a free traverse the planner could route through the machine.
 var filterCoffeeButtonCollisions = []AllowedCollision{
 	{Frame1: componentFilter, Frame2: "coffee-machine-buffer-front"},
 	{Frame1: "portafilter-handle", Frame2: "coffee-machine-buffer-front"},
 	{Frame1: componentClaws, Frame2: "coffee-machine-buffer-front"},
 	{Frame1: "gripper:claws", Frame2: "coffee-machine-buffer-front"},
 	{Frame1: componentFilter, Frame2: "coffee-machine-top"},
-	{Frame1: "portafilter-handle", Frame2: "coffee-machine-top"},
 }
 
 // Held-item surface collisions. When a cup/glass geometry is
