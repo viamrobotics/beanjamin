@@ -277,9 +277,14 @@ func (a *machineActivityStore) record(logger logging.Logger, t time.Time) {
 	}
 }
 
-// purgeSteps is the three-move hold of the machine's 1 CUP button: free-plan into
-// the standoff with the portafilter in hand, straight in and dwell so the pump
-// runs, straight back out.
+// purgeSteps is the hold of the machine's 1 CUP button: free-plan into the
+// standoff with the portafilter in hand, straight in and dwell so the pump runs,
+// straight back out, then home.
+//
+// Ending at home rather than the standoff matters: the arm's resting pose is
+// home, every other sequence returns there (prepareDrink's final step), and
+// leaving it parked at the machine face would make the next order plan from an
+// unusual configuration.
 //
 // Only the two linear moves carry filterCoffeeButtonCollisions. The button sits
 // on the machine face behind coffee-machine-buffer-front, so the press and the
@@ -311,6 +316,9 @@ func (s *beanjaminCoffee) purgeSteps() []Step {
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterCoffeeButtonCollisions},
 		{PoseName: filterPosePurgeApproach, PoseSwitch: s.filterSw,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterCoffeeButtonCollisions},
+		// Free traverse back to the resting pose: no constraint, no allowances, so
+		// it plans clear of the machine with the free-move collision buffer.
+		{PoseName: filterPoseHome, PoseSwitch: s.filterSw},
 	}
 }
 

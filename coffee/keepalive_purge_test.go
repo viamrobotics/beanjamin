@@ -22,8 +22,8 @@ func TestPurgeStepsCollisionScope(t *testing.T) {
 	}}
 	steps := s.purgeSteps()
 
-	if len(steps) != 3 {
-		t.Fatalf("purgeSteps returned %d steps, want 3 (approach, press, retreat)", len(steps))
+	if len(steps) != 4 {
+		t.Fatalf("purgeSteps returned %d steps, want 4 (approach, press, retreat, home)", len(steps))
 	}
 
 	tests := []struct {
@@ -36,6 +36,9 @@ func TestPurgeStepsCollisionScope(t *testing.T) {
 		{"approach", steps[0], filterPosePurgeApproach, false, false},
 		{"press", steps[1], filterPosePurgePress, true, true},
 		{"retreat", steps[2], filterPosePurgeApproach, true, true},
+		// Home is a free traverse away from the machine: no constraint, and no
+		// allowances, or the planner could route the return through the machine.
+		{"home", steps[3], filterPoseHome, false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -59,8 +62,9 @@ func TestPurgeStepsCollisionScope(t *testing.T) {
 	if steps[1].Pause != s.cfg.KeepAlive.hold() {
 		t.Errorf("press Pause = %v, want the configured hold %v", steps[1].Pause, s.cfg.KeepAlive.hold())
 	}
-	if steps[0].Pause != 0 || steps[2].Pause != 0 {
-		t.Errorf("approach/retreat Pause = %v/%v, want 0", steps[0].Pause, steps[2].Pause)
+	if steps[0].Pause != 0 || steps[2].Pause != 0 || steps[3].Pause != 0 {
+		t.Errorf("approach/retreat/home Pause = %v/%v/%v, want 0",
+			steps[0].Pause, steps[2].Pause, steps[3].Pause)
 	}
 }
 
@@ -71,8 +75,8 @@ func TestPurgeStepsWithoutKeepAliveConfigured(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{HasSeparateBrewButtons: true}}
 
 	steps := s.purgeSteps() // must not panic
-	if len(steps) != 3 {
-		t.Fatalf("purgeSteps returned %d steps, want 3", len(steps))
+	if len(steps) != 4 {
+		t.Fatalf("purgeSteps returned %d steps, want 4", len(steps))
 	}
 	want := time.Duration(defaultKeepAliveHoldSec * float64(time.Second))
 	if steps[1].Pause != want {
