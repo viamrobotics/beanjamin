@@ -37,6 +37,12 @@ const (
 	filterPoseCoffeeShake                = "coffee_shake"
 	filterPoseCoffeeShakeLeft            = "coffee_shake_left"
 
+	// Keep-alive purge poses (required only when keepalive is configured). Both
+	// are filter-frame poses: the arm holds the portafilter while it presses the
+	// machine's 1 CUP button, so the portafilter is what gets positioned.
+	filterPosePurgeApproach = "purge_approach"
+	filterPosePurgePress    = "purge_press"
+
 	//claw pose switches
 	clawPoseCoffeeButtonApproach    = "coffee_button_approach"
 	clawPoseCoffeeButtonOn          = "coffee_button_on"
@@ -155,6 +161,15 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		)
 	}
 
+	// Gated: requiring these unconditionally would fail construction on every
+	// machine that never travels to them.
+	if s.cfg.KeepAlive != nil {
+		poses = append(poses,
+			requiredPose{s.filterSw, filterPosePurgeApproach},
+			requiredPose{s.filterSw, filterPosePurgePress},
+		)
+	}
+
 	poses = append(poses,
 		requiredPose{s.clawsSw, clawPoseCupUnderMachineApproach},
 		requiredPose{s.clawsSw, clawPoseCupReadyForCoffee},
@@ -258,10 +273,15 @@ func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order Order) {
 	}
 }
 
-func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]any, error) {
-	// The three placement actions report a serving slot (for a delivery order's
-	// pickup_position), but a standalone execute_action has no order to attach it
-	// to, so their closures drop it and return only the error.
+// actionFuncs is the execute_action surface for this machine's configuration.
+// Split out from executeAction so which actions exist is assertable without a
+// constructed service (executeAction refreshes the frame system before
+// dispatching, so it needs real dependencies).
+//
+// The three placement actions report a serving slot (for a delivery order's
+// pickup_position), but a standalone execute_action has no order to attach it
+// to, so their closures drop it and return only the error.
+func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.Context) error {
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
 		"grind_coffee":       s.grindCoffee,
 		"grind_decaf":        s.grindDecaf,
@@ -302,10 +322,20 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 		actions["press_espresso_button"] = s.pressEspressoButton
 		actions["press_lungo_button"] = s.pressLungoButton
 		actions["brew_lungo"] = s.brewLungo
+		// Gated on the machine, not on keepalive, so the purge poses can be verified
+		// before the loop is switched on — and never offered on the toggle machine,
+		// where holding the switch pours an uncontrolled dose.
+		actions["keepalive_purge"] = s.purge
 	} else {
 		actions["turn_coffee_button_on"] = s.turnCoffeeButtonOn
 		actions["turn_coffee_button_off"] = s.turnCoffeeButtonOff
 	}
+
+	return actions
+}
+
+func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]any, error) {
+	actions := s.actionFuncs()
 
 	action, ok := actions[name]
 	if !ok {

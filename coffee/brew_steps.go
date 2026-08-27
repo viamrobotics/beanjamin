@@ -271,6 +271,11 @@ func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, drink string) err
 			return fmt.Errorf("brew_coffee: %w", err)
 		}
 	}
+
+	// Water has run, so the keep-alive clock restarts (keepalive.go). Here rather
+	// than in prepareDrink so it covers every path that pours, including a
+	// hand-driven brew_coffee action.
+	s.recordMachineActivity()
 	return nil
 }
 

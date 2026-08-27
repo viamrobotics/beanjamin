@@ -224,6 +224,11 @@ type Config struct {
 	// orientation is also the grasp orientation the gripper holds through the
 	// swing. Required to run open_door.
 	DoorApproachRelativePose *RelativePose `json:"door_approach_relative_pose,omitempty"`
+
+	// KeepAlive, when set, runs the idle-purge loop (keepalive.go) that holds the
+	// machine's 1 CUP button periodically so it never falls out of brew
+	// temperature. Requires HasSeparateBrewButtons. Unset disables it.
+	KeepAlive *KeepAlive `json:"keepalive,omitempty"`
 }
 
 // defaultMaxBatchSize is used when Config.MaxBatchSize is unset or zero.
@@ -341,6 +346,28 @@ func (d *ContainerDimensions) validate(path, field string) error {
 	return nil
 }
 
+// KeepAlive configures the idle-purge loop that holds the espresso machine at
+// brew temperature (keepalive.go). Presence enables the loop; nil disables it.
+//
+// AutoStart must mirror the time programmed into the machine's own Auto Start
+// setting, and is also the window's open. Deliberately one number: as two
+// settings they drift, and a window opening after Auto Start leaves the machine
+// awake long enough to fall into POWER SAVE before anyone can order.
+type KeepAlive struct {
+	// AutoStart / End bound the window as "HH:MM" local times, half-open.
+	AutoStart string `json:"auto_start"`
+	End       string `json:"end"`
+	// Timezone is a required IANA name, so the window does not depend on host TZ.
+	Timezone string `json:"timezone"`
+	// Days are three-letter weekday names; defaults to Monday–Friday.
+	Days []string `json:"days,omitempty"`
+
+	AfterMin         float64 `json:"after_min,omitempty"`
+	CheckIntervalMin float64 `json:"check_interval_min,omitempty"`
+	// HoldSec sets the water volume per purge — the knob if the tray fills fast.
+	HoldSec float64 `json:"hold_sec,omitempty"`
+}
+
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.PoseSwitcherName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "pose_switcher_name")
@@ -448,6 +475,10 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 	if cfg.IceDispenseBoardName != "" {
 		optDeps = append(optDeps, board.Named(cfg.IceDispenseBoardName).String())
+	}
+
+	if err := validateKeepAlive(cfg, path); err != nil {
+		return nil, nil, err
 	}
 
 	return reqDeps, optDeps, nil

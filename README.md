@@ -196,6 +196,8 @@ Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` com
 
 Only the selected machine's poses are validated at startup, and only its actions are registered for `execute_action`. Under `true`, both shot sizes are required even if only one is on the menu — the drink is known per-order, so a switcher that cannot reach the lungo button is misconfigured regardless of what is queued.
 
+When `keepalive` is configured, the **filter** pose switcher must additionally carry `purge_approach` and `purge_press`. These are filter-frame poses, not claw-frame ones: the arm keeps the portafilter in its claws and presses the machine's 1 CUP button with the assembly in hand, so nothing is parked in the group head and no filter basket gets wet. Author `purge_press` so the press is a straight-in linear move from `purge_approach`. See "Keeping the machine at brew temperature" below.
+
 ### Configuration
 
 ```json
@@ -293,6 +295,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `door_pivot_degrees_per_step` | float | No     | Per-step θ increment for the `open_door` sweep, in degrees. Smaller values re-plan the door pose more finely (smoother tracking, more planning calls). Defaults to 10. |
 | `door_grasp_frame_name`    | string | No       | Frame the gripper aims at for `open_door` — its center is the grasp target, and it's the frame tracked through the sweep and allowed to contact the gripper. Must be a child frame within the `fridge-door` subtree so it rides the swing. Defaults to `fridge-handle-ball`. |
 | `door_approach_relative_pose` | object | For `open_door` | A `RelativePose` (`x`,`y`,`z`,`o_x`,`o_y`,`o_z`,`theta`) offset composed onto the grasp frame's center (world axes) to produce the pre-grasp standoff — the door analog of `cup_approach_relative_pose`, but resolved against the live grasp frame instead of a detected cup. Its orientation is also the grasp orientation the gripper holds through the swing. Required to run `open_door`. |
+| `keepalive`                | object | No       | Enables the keep-alive purge loop, which holds the machine's 1 CUP button periodically so the machine never falls out of brew temperature. Requires `has_separate_brew_buttons`. Omit to disable. Fields: `auto_start` and `end` (`"HH:MM"` local, the half-open window `[auto_start, end)`; `auto_start` must mirror the time programmed into the machine's own Auto Start setting), `timezone` (IANA name, required — an empty value is rejected rather than silently meaning UTC), `days` (lowercase three-letter names, default Mon–Fri), `after_min` (idle minutes before a purge is due, default 40), `check_interval_min` (tick period, default 5), `hold_sec` (button dwell, default 1 — this sets how much water reaches the drip tray). `after_min + 2*check_interval_min` must be under 55, since the machine sleeps after roughly 60 idle minutes. See "Keeping the machine at brew temperature" below. |
 | `can_serve_decaf`          | bool   | No       | Enables the `decaf` and `decaf_lungo` drinks, which grind from the decaf grinder instead of the regular one. Orders for those drinks are rejected when this is `false`. Default `false`. |
 | `can_serve_iced`           | bool   | No       | Enables the `iced_coffee` drink. When `true`, after brewing the espresso the arm vision-detects a glass off the top shelf, dispenses ice into it via `ice_board_name`/`ice_pin_name`, sets the glass in a staging area, then pours the espresso over the ice. Both finished items — the empty espresso cup and the iced glass — are then placed in the serving area at the next round-robin slots (two slots are consumed per order). The glass is always vision-detected, so iced coffee requires `ice_board_name`, `ice_pin_name`, the `glass_*` vision fields below, and the iced claws poses below. A `serving-area` (or `serving-area_origin`) Box geometry must exist in the framesystem; this is checked at runtime, not at config time. Default `false`. |
 | `ice_board_name`           | string | When `can_serve_iced` is enabled | Name of a `rdk:component:board` whose GPIO pin triggers the ice machine. |
@@ -373,7 +376,7 @@ Only `drink` is required. If `initial_greeting` is omitted, a random greeting is
 
 **`execute_action`** - Run a single coffee-making action by name, for manual step-by-step operation. An unknown name returns the full list of available actions in the error. Available actions:
 
-- Brew cycle: `grind_coffee`, `grind_decaf`, `tamp_ground`, `lock_portafilter`, `unlock_portafilter`, `release_filter`, `grab_filter`, `brew_coffee`, plus the button actions for the configured machine (`turn_coffee_button_on` / `turn_coffee_button_off`, or `press_espresso_button` / `press_lungo_button` / `brew_lungo` under `has_separate_brew_buttons`), `set_cup_for_coffee`, `give_full_cup_to_customer` (place the finished cup in the serving area), `clean_portafilter`, `place_held` (place the currently held vessel in the serving area).
+- Brew cycle: `grind_coffee`, `grind_decaf`, `tamp_ground`, `lock_portafilter`, `unlock_portafilter`, `release_filter`, `grab_filter`, `brew_coffee`, plus the button actions for the configured machine (`turn_coffee_button_on` / `turn_coffee_button_off`, or `press_espresso_button` / `press_lungo_button` / `brew_lungo` under `has_separate_brew_buttons`), `set_cup_for_coffee`, `give_full_cup_to_customer` (place the finished cup in the serving area), `clean_portafilter`, `place_held` (place the currently held vessel in the serving area), `keepalive_purge` (one group-head purge on demand — available on the `has_separate_brew_buttons` machine whether or not `keepalive` is configured, so the `purge_*` poses can be verified before the loop is switched on).
 - Iced coffee (require `can_serve_iced`): `fetch_glass`, `pulse_ice_pin`, `dispense_ice`, `stage_glass`, `grab_brewed_cup`, `pour_espresso`, `grab_staged_glass`, `serve_iced_coffee` (the full iced sequence end-to-end).
 - Fridge door (requires `door_approach_relative_pose`): `open_door` (grip the handle and swing the door open — see below).
 
@@ -502,6 +505,19 @@ Returns `{"status": "complete", "action": "open_door"}`.
 ```
 
 Returns `{"status": "opened"}` or `{"status": "closed", "grabbed": true}`.
+
+### Keeping the machine at brew temperature
+
+The Breville BES920 drops into POWER SAVE after one hour idle and powers off completely after four, and the one-hour sleep cannot be disabled in its settings. A brew started on a sleeping machine is refused with three beeps, so the arm serves an empty cup and records it as a success. Two things prevent that, and both are needed:
+
+1. **Program the machine's own Auto Start.** `MENU` → `AUTO START` → `ON` → a time ~15 minutes before people arrive. This handles the cold morning in hardware, and the same time goes in `keepalive.auto_start`. Note Auto Start has no day-of-week setting, so it also fires at weekends; the machine's own Auto Off shuts it down again after four hours.
+2. **Configure `keepalive`.** During the window, the arm holds the 1 CUP button for about a second whenever nothing has run water through the machine for `after_min`. This is Breville's documented group-head purge, and it resets the machine's idle timer so it never leaves brew temperature. The filter pose switcher needs `purge_approach` and `purge_press` for this.
+
+Because a purge is the one arm motion nobody requested, it announces itself through `speech_service_name` and waits 5 seconds before moving, regardless of `conversational` — it's a safety notice rather than status narration. The arm returns to `home` when the purge finishes.
+
+The arm never presses POWER — per the manual, pressing POWER while the machine is in POWER SAVE turns it *off*. The consequence is that this cannot recover a machine that is genuinely powered down: if Auto Start does not fire, or someone switches the machine off, every order that day will brew cold and be recorded as a success. Detecting that needs a machine-state sensor, which is not part of this feature.
+
+Water from each purge goes to the drip tray and is counted in the `drip_tray_brews` usage-sensor field, so empty the tray on the counter rather than on brew count alone.
 
 ---
 

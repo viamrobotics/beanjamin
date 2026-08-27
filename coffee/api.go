@@ -28,6 +28,9 @@ const (
 	stepCleaning             = "Cleaning"
 	stepFinishingUp          = "Finishing up"
 	stepRecoveringFilter     = "Recovering filter"
+	// stepKeepAlive is published while a keep-alive purge runs. No order is
+	// active, so it surfaces through Status/get_queue only, never on an order.
+	stepKeepAlive = "Keep-alive purge"
 )
 
 func (s *beanjaminCoffee) setStep(step string) {
