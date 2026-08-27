@@ -261,6 +261,12 @@ func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, drink string) err
 			return fmt.Errorf("brew_coffee: %w", err)
 		}
 	}
+
+	// Water has run, so the machine's own idle timer has restarted and the
+	// keep-alive clock restarts with it (keepalive.go). Recorded here rather than
+	// in prepareDrink so it covers every path that actually pours — a queued
+	// order, and a standalone brew_coffee/brew_lungo action driven by hand.
+	s.recordMachineActivity()
 	return nil
 }
 

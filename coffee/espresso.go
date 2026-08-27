@@ -516,10 +516,6 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 		}
 		s.incrementSensorReading(ctx, s.usageSensor, "water", "usage", waterDelta(drink))
 		s.incrementSensorReading(ctx, s.usageSensor, "drip tray", "drip_tray_brews", 1)
-		// The pour reset the machine's own idle timer, so the keep-alive loop's
-		// clock restarts here. Keyed off the brew rather than the order: a shot
-		// that poured and then failed at serving still counts as machine use.
-		s.recordMachineActivity()
 	}
 
 	s.setStep(stepServing)
