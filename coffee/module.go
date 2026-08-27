@@ -100,10 +100,8 @@ type beanjaminCoffee struct {
 	// no-op. Holds all counters keyed by regular_grinds, decaf_grinds, usage,
 	// cleanings, and successful_consecutive_orders.
 	usageSensor sensor.Sensor
-	// machineActivity tracks when water last ran through the espresso machine, so
-	// the keep-alive loop knows whether the machine is about to fall out of brew
-	// temperature (keepalive.go). nil when keepalive is unconfigured, which makes
-	// recordMachineActivity a no-op.
+	// machineActivity is when water last ran through the espresso machine, driving
+	// the keep-alive loop (keepalive.go). nil when keepalive is unconfigured.
 	machineActivity *machineActivityStore
 	cupVision       vision.Service // vision service for cup pickup (always configured)
 	cupCameraName   string         // SrcCameraName, validated to exist in cachedFS
@@ -406,9 +404,8 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, err
 	}
 
-	// Keep the machine at brew temperature during working hours. Started after
-	// pose validation so a misconfigured purge pose fails construction rather than
-	// surfacing as a failed tick an hour later.
+	// Started after pose validation so a bad purge pose fails construction rather
+	// than surfacing as a failed tick an hour later.
 	if conf.KeepAlive != nil {
 		window, err := newKeepAliveWindow(conf.KeepAlive)
 		if err != nil {

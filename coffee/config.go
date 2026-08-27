@@ -346,32 +346,25 @@ func (d *ContainerDimensions) validate(path, field string) error {
 	return nil
 }
 
-// KeepAlive configures the idle-purge loop that keeps the espresso machine at
-// brew temperature (keepalive.go). Presence enables the loop; nil disables the
-// whole feature.
+// KeepAlive configures the idle-purge loop that holds the espresso machine at
+// brew temperature (keepalive.go). Presence enables the loop; nil disables it.
 //
 // AutoStart must mirror the time programmed into the machine's own Auto Start
-// setting. It is both "when the machine turns itself on" and the window's open,
-// deliberately one number: as two independent settings they drift, and a window
-// that opens after Auto Start leaves the machine awake and idling — long enough
-// to fall into POWER SAVE before anyone can order.
+// setting, and is also the window's open. Deliberately one number: as two
+// settings they drift, and a window opening after Auto Start leaves the machine
+// awake long enough to fall into POWER SAVE before anyone can order.
 type KeepAlive struct {
-	// AutoStart / End bound the window, as "HH:MM" 24-hour local times. The
-	// interval is half-open, [AutoStart, End).
+	// AutoStart / End bound the window as "HH:MM" local times, half-open.
 	AutoStart string `json:"auto_start"`
 	End       string `json:"end"`
-	// Timezone is an IANA location name (e.g. "America/New_York"). Required, so
-	// the window means the same thing regardless of the host's TZ.
+	// Timezone is a required IANA name, so the window does not depend on host TZ.
 	Timezone string `json:"timezone"`
-	// Days are lowercase three-letter weekday names; defaults to Monday–Friday.
+	// Days are three-letter weekday names; defaults to Monday–Friday.
 	Days []string `json:"days,omitempty"`
 
-	// AfterMin is how many idle minutes must pass before a purge is due.
-	AfterMin float64 `json:"after_min,omitempty"`
-	// CheckIntervalMin is the tick period.
+	AfterMin         float64 `json:"after_min,omitempty"`
 	CheckIntervalMin float64 `json:"check_interval_min,omitempty"`
-	// HoldSec is how long the arm holds the 1 CUP button. It sets the water
-	// volume, so it is the knob to turn if the drip tray fills too fast.
+	// HoldSec sets the water volume per purge — the knob if the tray fills fast.
 	HoldSec float64 `json:"hold_sec,omitempty"`
 }
 

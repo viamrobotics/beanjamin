@@ -1,19 +1,13 @@
 package coffee
 
-// Keep-alive: a periodic short hold of the espresso machine's 1 CUP button that
-// resets the machine's own idle timer, so it never falls out of STANDBY (brew
-// temperature) during working hours.
+// Keep-alive: a periodic short hold of the machine's 1 CUP button. It runs water
+// through the group head — Breville's documented purge — which resets the
+// machine's own idle timer and keeps it at brew temperature. The machine sleeps
+// after an hour idle and that hour is not configurable, so something physical has
+// to touch it.
 //
-// The machine enters POWER SAVE after an hour idle and powers off completely
-// after four, and the one-hour sleep is not disableable in its settings — so
-// something physical has to touch it. Holding the 1 CUP button runs water
-// through the group head, which is Breville's own documented purge procedure and
-// is unambiguously "use" as far as the firmware's idle timer is concerned.
-//
-// The arm keeps the portafilter in its claws throughout, which is why the purge
-// poses live on the filter switch rather than the claws switch: the portafilter
-// is the frame being positioned. Nothing is parked in the group head, so no
-// filter basket gets wet and none of the rewind recovery state is touched.
+// The arm holds the portafilter throughout, so the purge poses are filter-frame
+// poses on the filter switch and nothing is parked in the group head.
 
 import (
 	"context"
@@ -29,10 +23,8 @@ import (
 	"go.viam.com/rdk/logging"
 )
 
-// defaultKeepAliveDays is the window's weekday set when days is unset.
 var defaultKeepAliveDays = []string{"mon", "tue", "wed", "thu", "fri"}
 
-// weekdayNames maps configured day names onto time.Weekday.
 var weekdayNames = map[string]time.Weekday{
 	"sun": time.Sunday,
 	"mon": time.Monday,
@@ -43,9 +35,9 @@ var weekdayNames = map[string]time.Weekday{
 	"sat": time.Saturday,
 }
 
-// keepAliveWindow is a KeepAlive schedule resolved into the form the tick needs:
-// the location, open/close as minutes since midnight, and the weekday set. Built
-// once at construction so a tick does no parsing and no repeated LoadLocation.
+// keepAliveWindow is a KeepAlive schedule resolved for the tick: location,
+// open/close as minutes since midnight, weekday set. Built once so a tick does no
+// parsing and no repeated LoadLocation.
 type keepAliveWindow struct {
 	loc      *time.Location
 	startMin int
@@ -70,14 +62,12 @@ func parseClock(s string) (int, error) {
 	return h*60 + m, nil
 }
 
-// newKeepAliveWindow resolves a KeepAlive schedule, returning an error for any
-// field that cannot be parsed. Config validation calls this and discards the
-// result, so a bad schedule is rejected at config time rather than at 3am.
+// newKeepAliveWindow resolves a schedule, erroring on any unparseable field.
+// Config validation calls it and discards the result, so a bad schedule is
+// rejected at config time rather than at 3am.
 func newKeepAliveWindow(ka *KeepAlive) (*keepAliveWindow, error) {
-	// An empty name is not a missing timezone to time.LoadLocation — it resolves
-	// to UTC without error. Rejecting it here is the difference between an
-	// operator who forgot the field being told so, and their window silently
-	// meaning 07:45 UTC.
+	// time.LoadLocation("") is UTC, not an error, so an omitted timezone has to be
+	// rejected here or the window silently means UTC hours.
 	if strings.TrimSpace(ka.Timezone) == "" {
 		return nil, fmt.Errorf("timezone is required (an IANA name, e.g. \"America/New_York\")")
 	}
@@ -114,43 +104,33 @@ func newKeepAliveWindow(ka *KeepAlive) (*keepAliveWindow, error) {
 }
 
 const (
-	// defaultKeepAliveAfterMin is the idle time before a purge is due, in
-	// minutes, when after_min is unset. The machine sleeps after roughly 60 idle
-	// minutes, so this leaves room for a skipped tick.
-	defaultKeepAliveAfterMin = 40.0
-	// defaultKeepAliveCheckIntervalMin is the tick period when unset.
+	defaultKeepAliveAfterMin         = 40.0
 	defaultKeepAliveCheckIntervalMin = 5.0
-	// defaultKeepAliveHoldSec is how long the arm holds the 1 CUP button when
-	// unset. Deliberately shorter than Breville's documented 5-second purge: the
-	// purge only has to make the pump run so the firmware counts it as use, not
-	// stabilize group-head temperature.
+	// defaultKeepAliveHoldSec is shorter than Breville's documented 5-second
+	// purge: this only has to make the pump run, not stabilize temperature.
 	defaultKeepAliveHoldSec = 1.0
-	// keepAliveMarginLimitMin bounds after_min + 2*check_interval_min. The
-	// machine sleeps after ~60 idle minutes, and the margin has to absorb the
-	// tick period, one tick skipped because an order was running, and the purge's
-	// own duration. after_min 50 with a 10-minute interval lands exactly on the
-	// cliff with nothing to spare, which is the pairing this rejects.
+	// keepAliveMarginLimitMin bounds after_min + 2*check_interval_min. The machine
+	// sleeps after ~60 idle minutes and the margin must absorb the tick period, a
+	// tick skipped by a running order, and the purge itself.
 	keepAliveMarginLimitMin = 55.0
 )
 
-// idleThreshold is how long the machine may go unused before a purge is due.
 func (ka *KeepAlive) idleThreshold() time.Duration {
 	return time.Duration(orDefault(ka.AfterMin, defaultKeepAliveAfterMin) * float64(time.Minute))
 }
 
-// checkInterval is the keep-alive loop's tick period.
 func (ka *KeepAlive) checkInterval() time.Duration {
 	return time.Duration(orDefault(ka.CheckIntervalMin, defaultKeepAliveCheckIntervalMin) * float64(time.Minute))
 }
 
-// hold is how long the arm dwells on the 1 CUP button, which sets how much water
-// each purge sends to the drip tray.
+// hold is the dwell on the 1 CUP button, which sets how much water each purge
+// sends to the drip tray.
 func (ka *KeepAlive) hold() time.Duration {
 	return time.Duration(orDefault(ka.HoldSec, defaultKeepAliveHoldSec) * float64(time.Second))
 }
 
-// validate checks a KeepAlive block on its own: the schedule must parse, and the
-// idle threshold must leave enough margin below the machine's ~60-minute sleep.
+// validate checks the schedule parses and the idle threshold leaves enough margin
+// below the machine's ~60-minute sleep.
 func (ka *KeepAlive) validate(path string) error {
 	if _, err := newKeepAliveWindow(ka); err != nil {
 		return fmt.Errorf("%s: keepalive: %w", path, err)
@@ -166,9 +146,8 @@ func (ka *KeepAlive) validate(path string) error {
 	return nil
 }
 
-// validateKeepAlive checks the keepalive block against the rest of the config.
-// Split out from Config.Validate so it is testable without building a Config
-// that satisfies every unrelated requirement.
+// validateKeepAlive checks the block against the rest of the config. Split from
+// Config.Validate so it is testable without a fully-valid Config.
 func validateKeepAlive(cfg *Config, path string) error {
 	if cfg.KeepAlive == nil {
 		return nil
@@ -181,13 +160,9 @@ func validateKeepAlive(cfg *Config, path string) error {
 	return cfg.KeepAlive.validate(path)
 }
 
-// contains reports whether t falls inside the window. The interval is half-open,
-// [start, end) — a purge fired at exactly the closing minute would run with the
-// window already shut.
-//
-// t is converted into the window's own location before the comparison, so the
-// window means the same local wall-clock hours all year and does not shift under
-// a daylight-saving transition.
+// contains reports whether t is in the window. Half-open, [start, end). t is
+// converted into the window's location first, so the hours mean the same local
+// wall-clock time across a daylight-saving transition.
 func (w *keepAliveWindow) contains(t time.Time) bool {
 	local := t.In(w.loc)
 	if !w.days[local.Weekday()] {
@@ -197,32 +172,21 @@ func (w *keepAliveWindow) contains(t time.Time) bool {
 	return minOfDay >= w.startMin && minOfDay < w.endMin
 }
 
-// machineActivityFile is the file inside VIAM_MODULE_DATA holding the last time
-// water ran through the machine.
 const machineActivityFile = "machine-activity"
 
-// machineActivityStore tracks when the machine last saw use — a brew or a purge,
-// both of which reset the machine's own idle timer.
-//
-// Held in memory and mirrored to VIAM_MODULE_DATA, the RDK's per-machine,
-// per-module directory, which survives restarts, reconfigures, and module
-// version upgrades. Persisting matters because the coffee service is
-// AlwaysRebuild: without it, an afternoon of config edits would fire a spurious
-// purge after every reload.
-//
-// The zero time means "never", which makes any elapsed check due.
+// machineActivityStore tracks when water last ran through the machine — a brew or
+// a purge. Mirrored to VIAM_MODULE_DATA because the service is AlwaysRebuild:
+// without persisting, every reconfigure would fire a spurious purge. The zero
+// time means "never", which makes any elapsed check due.
 type machineActivityStore struct {
 	mu   sync.Mutex
 	last time.Time
-	// path is "" when VIAM_MODULE_DATA is unset (tests, a local main.go run), in
-	// which case the store is in-memory only.
+	// path is "" when VIAM_MODULE_DATA is unset (tests, a local run): in-memory only.
 	path string
 }
 
-// newMachineActivityStore builds the store, loading any previously persisted
-// timestamp. Every failure to read degrades to "never used" and logs — a purge
-// costs a second of arm motion, so there is nothing here worth failing
-// construction over.
+// newMachineActivityStore loads any persisted timestamp. Every read failure
+// degrades to "never used" — a purge is cheap, a wedged coffee service is not.
 func newMachineActivityStore(logger logging.Logger) *machineActivityStore {
 	a := &machineActivityStore{}
 
@@ -253,16 +217,14 @@ func newMachineActivityStore(logger logging.Logger) *machineActivityStore {
 	return a
 }
 
-// get returns the last recorded activity time.
 func (a *machineActivityStore) get() time.Time {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.last
 }
 
-// record stamps t as the last activity and best-effort persists it. A write
-// failure is logged and swallowed: the in-memory value is still correct, so the
-// only consequence is one extra purge after the next restart.
+// record persists best-effort: a write failure leaves the in-memory value correct,
+// costing one extra purge after the next restart.
 func (a *machineActivityStore) record(logger logging.Logger, t time.Time) {
 	a.mu.Lock()
 	a.last = t
@@ -277,30 +239,8 @@ func (a *machineActivityStore) record(logger logging.Logger, t time.Time) {
 	}
 }
 
-// purgeSteps is the hold of the machine's 1 CUP button: free-plan into the
-// standoff with the portafilter in hand, straight in and dwell so the pump runs,
-// straight back out, then home.
-//
-// Ending at home rather than the standoff matters: the arm's resting pose is
-// home, every other sequence returns there (prepareDrink's final step), and
-// leaving it parked at the machine face would make the next order plan from an
-// unusual configuration.
-//
-// Only the two linear moves carry filterCoffeeButtonCollisions. The button sits
-// on the machine face behind coffee-machine-buffer-front, so the press and the
-// retreat are inside that obstacle and the planner rejects them without the
-// allowance.
-//
-// The approach must not carry it, for exactly the reason brewButtonSteps'
-// approach doesn't: an allowed-collision entry is a property of the whole plan,
-// not of the neighbourhood of its goal — buildConstraints hands the planner a
-// CollisionSpecification covering the entire trajectory. The approach is
-// free-planned from home, and allowing coffee-machine-buffer-front across that
-// traverse lets the planner route the portafilter through the machine's front
-// face.
-// purgeHold is how long to dwell on the 1 CUP button. Falls back to the default
-// when keepalive is unconfigured, so the keepalive_purge action can be used to
-// verify the purge poses before the loop is ever switched on.
+// purgeHold falls back to the default when keepalive is unconfigured, so the
+// keepalive_purge action can verify the poses before the loop is switched on.
 func (s *beanjaminCoffee) purgeHold() time.Duration {
 	if s.cfg.KeepAlive == nil {
 		return time.Duration(defaultKeepAliveHoldSec * float64(time.Second))
@@ -308,6 +248,14 @@ func (s *beanjaminCoffee) purgeHold() time.Duration {
 	return s.cfg.KeepAlive.hold()
 }
 
+// purgeSteps: standoff, straight in and dwell so the pump runs, straight back
+// out, then home (the arm's resting pose — leaving it at the machine face would
+// make the next order plan from an unusual configuration).
+//
+// Only the two linear moves may allow filterCoffeeButtonCollisions. An
+// allowed-collision entry covers the whole trajectory, not the neighbourhood of
+// its goal, so carrying it on the free-planned approach or the trip home would
+// let the planner route the portafilter through the machine.
 func (s *beanjaminCoffee) purgeSteps() []Step {
 	hold := s.purgeHold()
 	return []Step{
@@ -316,25 +264,20 @@ func (s *beanjaminCoffee) purgeSteps() []Step {
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterCoffeeButtonCollisions},
 		{PoseName: filterPosePurgeApproach, PoseSwitch: s.filterSw,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterCoffeeButtonCollisions},
-		// Free traverse back to the resting pose: no constraint, no allowances, so
-		// it plans clear of the machine with the free-move collision buffer.
 		{PoseName: filterPoseHome, PoseSwitch: s.filterSw},
 	}
 }
 
-// keepAlivePurgeTimeout bounds one purge. Generous next to four short moves; if
-// it is ever hit, something is wedged and the loop must not keep holding the
-// `running` flag that the order queue waits on.
+// keepAlivePurgeTimeout bounds one purge: if it is hit, something is wedged and
+// the loop must not keep holding the `running` flag the order queue waits on.
 const keepAlivePurgeTimeout = 2 * time.Minute
 
-// keepAlivePurgeWarningDelay is how long to wait between announcing a purge and
-// actually moving, so anyone standing at the machine has a moment to step back.
+// keepAlivePurgeWarningDelay gives anyone at the machine a moment to step back.
 const keepAlivePurgeWarningDelay = 5 * time.Second
 
 const keepAlivePurgeAnnouncement = "Heads up — I'm about to move to keep the coffee machine warm. Please stand clear."
 
-// keepAliveState is the snapshot one tick decides from. Pulled out so the
-// decision is a pure function, testable without a service or an arm.
+// keepAliveState is one tick's snapshot, so the decision is a pure function.
 type keepAliveState struct {
 	now          time.Time
 	lastActivity time.Time
@@ -343,13 +286,9 @@ type keepAliveState struct {
 	queued       int
 }
 
-// shouldPurge reports whether this tick should run a purge, and when it should
-// not, why — the reason goes straight into the skip log, which is the only way to
-// tell a quiet loop from a broken one.
-//
-// The checks are ordered cheapest and most-common first. Queued orders defer
-// because one is about to run and reset the machine's idle timer anyway; a purge
-// would only make it wait.
+// shouldPurge reports whether to purge, and if not, why — the reason is logged,
+// which is the only way to tell a quiet loop from a broken one. Queued orders
+// defer because one is about to reset the machine's timer anyway.
 func shouldPurge(w *keepAliveWindow, threshold time.Duration, st keepAliveState) (bool, string) {
 	if !w.contains(st.now) {
 		return false, "outside the keep-alive window"
@@ -369,23 +308,15 @@ func shouldPurge(w *keepAliveWindow, threshold time.Duration, st keepAliveState)
 	return true, ""
 }
 
-// purge holds the machine's 1 CUP button so the pump runs and the machine's idle
-// timer resets. This is the motion only: the caller owns the `running` gate, the
-// cancel context, and the step label.
-//
-// Its signature matches the execute_action map, which is how an operator drives
-// one purge on demand to verify the poses (executeAction already takes the
-// running gate and snapshots cancelCtx before dispatching, so a purge that took
-// the gate itself would deadlock against it).
+// purge is the motion only — the caller owns the `running` gate, the cancel
+// context, and the step label. The signature matches the execute_action map,
+// which already holds that gate before dispatching, so a purge taking the gate
+// itself would deadlock against it.
 func (s *beanjaminCoffee) purge(ctx, cancelCtx context.Context) error {
-	// Warn before moving. Every other arm motion in this service answers a request
-	// someone just made; a purge fires on a timer, so whoever is at the machine has
-	// no reason to expect it. Spoken through sayAlways rather than say: this is a
-	// safety notice, not status narration an external orchestrator might want to
-	// own, so conversational mode must not silence it.
-	//
-	// The line is queued asynchronously (say_async), so the delay starts when the
-	// speech service accepts it rather than when it finishes playing.
+	// A purge fires on a timer, so whoever is at the machine has no reason to
+	// expect it. sayAlways, not say: a safety notice, not status narration, so
+	// conversational mode must not silence it. say_async returns on queueing, so
+	// the delay starts when the line is accepted, not when it finishes playing.
 	if err := s.sayAlways(ctx, keepAlivePurgeAnnouncement); err != nil {
 		s.logger.Warnf("keepalive: purge announcement failed: %v", err)
 	}
@@ -398,9 +329,8 @@ func (s *beanjaminCoffee) purge(ctx, cancelCtx context.Context) error {
 	}
 
 	if err := s.runSteps(ctx, cancelCtx, "keepalive_purge", s.purgeSteps()...); err != nil {
-		// The purge never parks the portafilter in the machine, so there is no
-		// recovery to do beyond leaving the arm somewhere the next order can plan
-		// from.
+		// Nothing is parked in the machine, so recovery is just getting back to a
+		// pose the next order can plan from.
 		homeStep := Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw}
 		if homeErr := s.executeStep(ctx, cancelCtx, homeStep); homeErr != nil {
 			s.logger.Warnf("keepalive: returning to home after a failed purge: %v", homeErr)
@@ -408,32 +338,25 @@ func (s *beanjaminCoffee) purge(ctx, cancelCtx context.Context) error {
 		return err
 	}
 
-	// The water went to the drip tray, so the tray-emptying counter has to see it
-	// or the maintenance interval quietly under-reports.
+	// Water reached the drip tray, so the tray counter has to see it.
 	s.incrementSensorReading(ctx, s.usageSensor, "drip tray", "drip_tray_brews", 1)
-	// Water ran, so the machine's idle timer restarted — including for a purge an
-	// operator triggered by hand, which is just as much machine use as a scheduled
-	// one and should push the next tick out by the full threshold.
+	// Counts for a hand-triggered purge too: it is just as much machine use.
 	s.recordMachineActivity()
 	return nil
 }
 
-// runPurge is the keep-alive loop's entry point: it takes the same `running`
-// compare-and-swap that prepareDrink takes, so to the order queue a purge is
-// indistinguishable from an order and one arriving mid-purge waits rather than
-// planning against an arm that is already moving.
-//
-// Releasing that flag on every path is load-bearing — a purge that returned while
-// holding it would stall the queue permanently, which is also why the motion runs
-// under a timeout.
+// runPurge is the loop's entry point. It takes the same `running` gate
+// prepareDrink takes, so the queue treats a purge like an order; releasing that
+// gate on every path is load-bearing, since holding it would stall the queue
+// permanently.
 func (s *beanjaminCoffee) runPurge(ctx context.Context) error {
 	if !s.running.CompareAndSwap(false, true) {
 		return errors.New("keepalive: a sequence is already running")
 	}
 	defer s.running.Store(false)
 
-	// Snapshot the cancel context under the mutex, as every other sequence does,
-	// so an operator cancel interrupts the moves mid-trajectory.
+	// Snapshot cancelCtx under the mutex, as every other sequence does, so an
+	// operator cancel interrupts the moves mid-trajectory.
 	s.mu.Lock()
 	cancelCtx := s.cancelCtx
 	s.mu.Unlock()
@@ -448,8 +371,7 @@ func (s *beanjaminCoffee) runPurge(ctx context.Context) error {
 }
 
 // recordMachineActivity stamps now as the last time water ran through the
-// machine. Called after a successful brew and after a successful purge, both of
-// which reset the machine's own idle timer. No-op when keepalive is unconfigured.
+// machine. No-op when keepalive is unconfigured.
 func (s *beanjaminCoffee) recordMachineActivity() {
 	if s.machineActivity == nil {
 		return
@@ -457,15 +379,12 @@ func (s *beanjaminCoffee) recordMachineActivity() {
 	s.machineActivity.record(s.logger, time.Now())
 }
 
-// keepAliveLoop is the background ticker that keeps the machine at brew
-// temperature. Started by NewCoffee only when keepalive is configured, and it
-// runs for the life of the service.
+// keepAliveLoop runs for the life of the service, started by NewCoffee only when
+// keepalive is configured.
 //
-// It deliberately does not watch cancelCtx. An operator cancel pauses the queue
-// rather than shutting the service down, and shouldPurge already declines while
-// paused — so the loop keeps ticking and resumes on its own once 'proceed'
-// arrives. queueStop, closed by Close, is the shutdown signal, and Close also
-// cancels cancelCtx, which aborts any purge mid-move.
+// It watches queueStop rather than cancelCtx: a cancel pauses the queue rather
+// than shutting down, shouldPurge already declines while paused, and cancelCtx is
+// rotated under s.mu so reading it here would race.
 func (s *beanjaminCoffee) keepAliveLoop(w *keepAliveWindow) {
 	ka := s.cfg.KeepAlive
 	interval := ka.checkInterval()
@@ -502,17 +421,14 @@ func (s *beanjaminCoffee) keepAliveLoop(w *keepAliveWindow) {
 		if err := s.runPurge(context.Background()); err != nil {
 			s.logger.Errorf("keepalive: purge failed, the machine may drop out of brew temperature: %v", err)
 			s.notifyKeepAliveFailureSlack(err)
-			// Back off to the next tick rather than retrying immediately: whatever
-			// blocked the arm is unlikely to clear in the same second.
+			// Back off to the next tick; whatever blocked the arm won't clear instantly.
 			continue
 		}
 	}
 }
 
-// notifyKeepAliveFailureSlack sends a plain-text Slack message for a failed
-// purge. Text-only rather than the Block Kit layout notifyOrderFailureSlack
-// builds: there is no order, customer, or clip to link, just one
-// operator-actionable fact.
+// notifyKeepAliveFailureSlack sends a plain-text message: unlike a failed order
+// there is no customer or clip to link, just one operator-actionable fact.
 func (s *beanjaminCoffee) notifyKeepAliveFailureSlack(purgeErr error) {
 	if s.slackNotifier == nil {
 		return

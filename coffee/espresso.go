@@ -161,10 +161,8 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		)
 	}
 
-	// The keep-alive purge holds the 1 CUP button with the portafilter still in
-	// the claws. Gated: a machine without keepalive configured never travels to
-	// these poses, and requiring them unconditionally would fail construction on
-	// every existing machine.
+	// Gated: requiring these unconditionally would fail construction on every
+	// machine that never travels to them.
 	if s.cfg.KeepAlive != nil {
 		poses = append(poses,
 			requiredPose{s.filterSw, filterPosePurgeApproach},
@@ -324,10 +322,9 @@ func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.C
 		actions["press_espresso_button"] = s.pressEspressoButton
 		actions["press_lungo_button"] = s.pressLungoButton
 		actions["brew_lungo"] = s.brewLungo
-		// One keep-alive purge on demand. Gated on the machine, not on keepalive
-		// being configured, so the purge poses can be verified before the loop is
-		// switched on — and never offered on the toggle machine, where holding the
-		// switch would pour an uncontrolled dose.
+		// Gated on the machine, not on keepalive, so the purge poses can be verified
+		// before the loop is switched on — and never offered on the toggle machine,
+		// where holding the switch pours an uncontrolled dose.
 		actions["keepalive_purge"] = s.purge
 	} else {
 		actions["turn_coffee_button_on"] = s.turnCoffeeButtonOn
