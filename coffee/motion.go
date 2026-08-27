@@ -944,6 +944,41 @@ func computeLevelCarryWaypoints(startPose, endPose spatialmath.Pose, spacingMm f
 	return poses
 }
 
+// carryGoalForMoveFrame converts dest — a pose authored for dest.componentName,
+// whatever component the pose switch is configured to command — into the world
+// pose moveFrame must reach for that component to land on dest.
+//
+// The two frames are rigidly linked but not coincident: held-item hangs off the
+// claws, which sit short of the grip point along the tool axis. Commanding the
+// container straight at a grip-point goal would leave the gripper that far past
+// it — enough to trip executePivot's start-position check on the step that
+// follows the carry. Returns dest's world pose unchanged when the moving frame
+// is the authored component itself.
+func carryGoalForMoveFrame(
+	fs *referenceframe.FrameSystem,
+	inputs *referenceframe.LinearInputs,
+	dest *poseData,
+	moveFrame string,
+) (spatialmath.Pose, error) {
+	destTF, err := fs.Transform(inputs,
+		referenceframe.NewPoseInFrame(dest.refFrame, dest.pose), referenceframe.World)
+	if err != nil {
+		return nil, fmt.Errorf("transform carry destination to world: %w", err)
+	}
+	destPose := destTF.(*referenceframe.PoseInFrame).Pose()
+	if moveFrame == dest.componentName {
+		return destPose, nil
+	}
+	// moveFrame expressed in the authored component's frame — constant, since both
+	// hang rigidly off the gripper.
+	offTF, err := fs.Transform(inputs,
+		referenceframe.NewPoseInFrame(moveFrame, spatialmath.NewZeroPose()), dest.componentName)
+	if err != nil {
+		return nil, fmt.Errorf("transform %q into %q: %w", moveFrame, dest.componentName, err)
+	}
+	return spatialmath.Compose(destPose, offTF.(*referenceframe.PoseInFrame).Pose()), nil
+}
+
 // carryHeldLevel carries the held container from its current pose to dest along
 // the straight line between them, stepping through waypoints (one per
 // defaultCarryWaypointSpacingMm). Each waypoint's pose is interpolated from the
@@ -951,19 +986,20 @@ func computeLevelCarryWaypoints(startPose, endPose spatialmath.Pose, spacingMm f
 // upright to the approach pose while a goal pose cloud keeps it close to level —
 // so the drink doesn't slosh.
 //
-// The goals command the held-item frame (the container) rather than the gripper:
-// the held-item frame is coincident with the gripper (attached with an identity
-// offset, geometry aside), so converting the gripper start/dest poses to it is
-// the same world pose, but expressing the goals against the container frame keeps
-// the upright goal and the relaxing pose cloud about the container itself. When
-// no item is attached (tracking off, or a static pickup left nothing cached) it
-// falls back to the gripper frame, which is equivalent. Each goal carries
-// noSpillGoalCloud to loosen the orientation; held-item self-collisions are
-// injected so the tracked geometry still routes around obstacles, and any
-// caller-supplied allowedCollisions are merged in alongside them. moveOpts, when
-// non-nil, sets the execution speed (otherwise the arm's default). Planning
-// failures are wrapped in errMotionPlanning so placeHeldInServingArea can fall
-// through to the next slot.
+// The goals command the held-item frame (the container) rather than the gripper,
+// so the upright goal and the relaxing pose cloud stay expressed about the
+// container itself. That frame hangs off the claws and is NOT coincident with the
+// one dest is authored for, so dest is converted into it (carryGoalForMoveFrame)
+// before planning. When no item is attached (tracking off, or a static pickup
+// left nothing cached) it falls back to the gripper frame and that conversion is
+// a no-op.
+//
+// Each goal carries noSpillGoalCloud to loosen the orientation; held-item
+// self-collisions are injected so the tracked geometry still routes around
+// obstacles, and any caller-supplied allowedCollisions are merged in alongside
+// them. moveOpts, when non-nil, sets the execution speed (otherwise the arm's
+// default). Planning failures are wrapped in errMotionPlanning so
+// placeHeldInServingArea can fall through to the next slot.
 func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
 	logger := s.activeOrderLogger()
 	fs, fsInputs, err := s.currentInputs(ctx)
@@ -987,14 +1023,11 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, al
 	}
 	startPose := startTF.(*referenceframe.PoseInFrame).Pose()
 
-	// End: the gripper destination, converted to the moving frame (coincident, so
-	// the same world position).
-	destPIF := referenceframe.NewPoseInFrame(dest.refFrame, dest.pose)
-	destTF, err := fs.Transform(linearInputs, destPIF, referenceframe.World)
+	// End: the goal moveFrame must reach for dest's component to land on dest.
+	destPose, err := carryGoalForMoveFrame(fs, linearInputs, dest, moveFrame)
 	if err != nil {
-		return fmt.Errorf("transform carry destination to world: %w", err)
+		return err
 	}
-	destPose := destTF.(*referenceframe.PoseInFrame).Pose()
 
 	waypoints := computeLevelCarryWaypoints(startPose, destPose, defaultCarryWaypointSpacingMm)
 	logger.Infof("no-spill carry: moving %q through %d waypoint(s) over %.0fmm (cloud: tilt±%.2f, twist±%.0f°, buffer: %.1fmm)",

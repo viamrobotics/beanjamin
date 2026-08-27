@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/golang/geo/r3"
+	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
 )
 
@@ -112,5 +113,82 @@ func TestComputeLevelCarryWaypoints_OnLineAndOrientationInterpolates(t *testing.
 	// The final waypoint reaches the destination's 90° twist.
 	if math.Abs(prevAngle-90.0) > 0.1 {
 		t.Errorf("final orientation rotation %.4f° differs from expected 90°", prevAngle)
+	}
+}
+
+// gripperFS builds world -> gripper -> {grip-point, coffee-claws-middle ->
+// held-item}, mirroring the real machine: grip-point sits 115mm out along the
+// gripper's Z, the claws 90mm, and held-item is attached to the claws with an
+// identity offset. gripperPose places the gripper in the world.
+func gripperFS(t *testing.T, gripperPose spatialmath.Pose) *referenceframe.FrameSystem {
+	t.Helper()
+	fs := referenceframe.NewEmptyFrameSystem("test")
+	add := func(name string, pose spatialmath.Pose, parent referenceframe.Frame) referenceframe.Frame {
+		f, err := referenceframe.NewStaticFrame(name, pose)
+		if err != nil {
+			t.Fatalf("new %s frame: %v", name, err)
+		}
+		if err := fs.AddFrame(f, parent); err != nil {
+			t.Fatalf("add %s frame: %v", name, err)
+		}
+		return f
+	}
+	gripper := add("gripper", gripperPose, fs.World())
+	add(gripPoint, spatialmath.NewPoseFromPoint(r3.Vector{Z: 115}), gripper)
+	claws := add(componentClaws, spatialmath.NewPoseFromPoint(r3.Vector{Z: 90}), gripper)
+	add(heldItemFrameName, spatialmath.NewZeroPose(), claws)
+	return fs
+}
+
+// The pour poses are authored for grip-point, but a no-spill carry commands the
+// held-item frame. held-item sits 25mm short of grip-point along the tool axis,
+// so the goal must be shifted by that offset — otherwise grip-point overshoots
+// the authored pose by 25mm and executePivot refuses to pivot (max 2mm).
+func TestCarryGoalForMoveFrame_ShiftsByHeldItemOffset(t *testing.T) {
+	// Gripper level, tool axis (its local Z) pointing along world +X.
+	gripperPose := spatialmath.NewPose(
+		r3.Vector{X: 100, Y: -300, Z: 240},
+		&spatialmath.OrientationVectorDegrees{OX: 1, Theta: -180},
+	)
+	fs := gripperFS(t, gripperPose)
+	inputs := referenceframe.NewZeroInputs(fs).ToLinearInputs()
+
+	authored := spatialmath.NewPose(
+		r3.Vector{X: 160, Y: -300, Z: 240},
+		&spatialmath.OrientationVectorDegrees{OX: 1, Theta: -180},
+	)
+	dest := &poseData{pose: authored, refFrame: referenceframe.World, componentName: gripPoint}
+
+	goal, err := carryGoalForMoveFrame(fs, inputs, dest, heldItemFrameName)
+	if err != nil {
+		t.Fatalf("carryGoalForMoveFrame: %v", err)
+	}
+
+	// The tool axis points along world +X, so held-item must stop 25mm short of
+	// the authored grip-point pose.
+	want := r3.Vector{X: 135, Y: -300, Z: 240}
+	if got := goal.Point(); got.Sub(want).Norm() > 1e-6 {
+		t.Errorf("goal = %v, want %v", got, want)
+	}
+}
+
+// With nothing held the carry commands grip-point itself, so the authored pose
+// is already the goal and no shift may be applied.
+func TestCarryGoalForMoveFrame_NoShiftWhenFrameMatches(t *testing.T) {
+	fs := gripperFS(t, spatialmath.NewZeroPose())
+	inputs := referenceframe.NewZeroInputs(fs).ToLinearInputs()
+
+	authored := spatialmath.NewPose(
+		r3.Vector{X: 160, Y: -300, Z: 240},
+		&spatialmath.OrientationVectorDegrees{OX: 1, Theta: -180},
+	)
+	dest := &poseData{pose: authored, refFrame: referenceframe.World, componentName: gripPoint}
+
+	goal, err := carryGoalForMoveFrame(fs, inputs, dest, gripPoint)
+	if err != nil {
+		t.Fatalf("carryGoalForMoveFrame: %v", err)
+	}
+	if !spatialmath.PoseAlmostEqual(goal, authored) {
+		t.Errorf("goal = %v, want the authored pose %v", goal, authored)
 	}
 }
