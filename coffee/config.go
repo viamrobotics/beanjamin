@@ -256,6 +256,11 @@ type Config struct {
 	// theta as the door swings; see defaultDoorGraspYawRatio. A pointer because
 	// 0 and negatives are real settings, not "unset".
 	DoorGraspYawRatio *float64 `json:"door_grasp_yaw_ratio,omitempty"`
+
+	// DoorPlanAttempts is how many independent approach branches a door sweep
+	// plans before committing to the cheapest; see defaultDoorPlanAttempts. 1 commits
+	// to the first that plans. Trades latency for a better arm posture.
+	DoorPlanAttempts int `json:"door_plan_attempts,omitempty"`
 }
 
 // defaultMaxBatchSize is used when Config.MaxBatchSize is unset or zero.
@@ -288,6 +293,12 @@ func (s *beanjaminCoffee) doorPivotDegreesPerStep() float64 {
 // there. Replanning a failed 75-degree sweep offline put +1 out of IK solutions
 // at theta=47 and 0 out by theta=75; only -1 reached full open.
 const defaultDoorGraspYawRatio = -1
+
+// doorPlanAttempts returns how many door-motion candidates to plan, defaulting
+// to defaultDoorPlanAttempts.
+func (s *beanjaminCoffee) doorPlanAttempts() int {
+	return orDefault(s.cfg.DoorPlanAttempts, defaultDoorPlanAttempts)
+}
 
 // doorGraspYawRatio returns the configured world-Z yaw ratio for the door sweep.
 // It cannot use orDefault: that helper treats any non-positive value as unset,

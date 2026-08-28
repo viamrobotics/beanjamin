@@ -404,3 +404,40 @@ func TestYawAboutWorldZ(t *testing.T) {
 		t.Errorf("counter-yawed point = %v, want (0,-100,0)", back.Point())
 	}
 }
+
+// TestJointTravel pins the branch-ranking metric: it sums joint-space distance
+// along a trajectory, so a contorted route between the same endpoints scores
+// worse than a direct one. That ordering is the whole basis for picking an
+// approach branch, so it is the part worth guarding.
+func TestJointTravel(t *testing.T) {
+	if got := jointTravel(nil); got != 0 {
+		t.Errorf("empty travel = %v, want 0", got)
+	}
+	if got := jointTravel([][]referenceframe.Input{{0, 0, 0}}); got != 0 {
+		t.Errorf("single-waypoint travel = %v, want 0", got)
+	}
+
+	direct := [][]referenceframe.Input{{0, 0, 0}, {1, 0, 0}}
+	detour := [][]referenceframe.Input{{0, 0, 0}, {5, 0, 0}, {1, 0, 0}}
+	d, dt := jointTravel(direct), jointTravel(detour)
+	if math.Abs(d-1) > 1e-9 {
+		t.Errorf("direct travel = %v, want 1", d)
+	}
+	if dt <= d {
+		t.Errorf("detour travel %v must exceed direct %v, or ranking picks the contorted branch", dt, d)
+	}
+
+	// Travel accumulates across every joint, not just the one that moved most.
+	if got := jointTravel([][]referenceframe.Input{{0, 0, 0}, {3, 4, 0}}); math.Abs(got-5) > 1e-9 {
+		t.Errorf("multi-joint travel = %v, want 5", got)
+	}
+}
+
+func TestDoorPlanAttempts(t *testing.T) {
+	if got := (&beanjaminCoffee{cfg: &Config{}}).doorPlanAttempts(); got != defaultDoorPlanAttempts {
+		t.Errorf("default attempts = %d, want %d", got, defaultDoorPlanAttempts)
+	}
+	if got := (&beanjaminCoffee{cfg: &Config{DoorPlanAttempts: 1}}).doorPlanAttempts(); got != 1 {
+		t.Errorf("configured attempts = %d, want 1", got)
+	}
+}
