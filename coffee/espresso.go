@@ -70,6 +70,12 @@ const (
 	clawPosePourApproach       = "pour_approach"        // espresso cup upright above the staged glass
 	clawPosePour               = "pour"                 // espresso cup tilted to pour over the ice
 
+	// iced-latte claw poses (only required when can_serve_iced_latte is set; the
+	// milk bottle itself is vision-detected via the milk observe switch, and it
+	// goes back to the spot it was detected at, so the fridge needs no poses).
+	clawPoseMilkPourApproach = "milk_pour_approach" // milk bottle upright above the staged glass
+	clawPoseMilkPour         = "milk_pour"          // milk bottle tilted to pour into the glass
+
 	// camera pose switches (extra vantages live on
 	// the same switch and are enumerated at runtime).
 	camPoseCupObserve = "cup_observe"
@@ -85,6 +91,10 @@ const (
 // glassPoseObserve is the home/recovery observe pose on the glass observe
 // switch (parallel to camPoseCupObserve on the cup observe switch).
 const glassPoseObserve = "glass_observe"
+
+// milkPoseObserve is the home/recovery observe pose on the milk observe switch,
+// looking into the open fridge (parallel to glassPoseObserve).
+const milkPoseObserve = "milk_observe"
 
 // requiredPose pairs a pose name with the switch it must resolve on. Used by
 // validateConfiguredPoses.
@@ -187,6 +197,17 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 			requiredPose{s.clawsSw, clawPosePourApproach},
 			requiredPose{s.clawsSw, clawPosePour},
 			requiredPose{s.glassObserveSw, glassPoseObserve},
+		)
+	}
+
+	if s.cfg.CanServeIcedLatte {
+		// Only the pour is authored: the bottle is vision-detected inside the
+		// fridge and set back down at the centroid it was grasped at, and the door
+		// is tracked through its hinge arc rather than driven to switch poses.
+		poses = append(poses,
+			requiredPose{s.clawsSw, clawPoseMilkPourApproach},
+			requiredPose{s.clawsSw, clawPoseMilkPour},
+			requiredPose{s.milkObserveSw, milkPoseObserve},
 		)
 	}
 
@@ -312,6 +333,14 @@ func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.C
 			_, err := s.serveIcedCoffee(ctx, cancelCtx)
 			return err
 		},
+		"fetch_milk":  s.fetchMilkBottle,  // vision-grab the bottle from the open fridge
+		"pour_milk":   s.pourMilk,         // pour held bottle into the staged glass
+		"return_milk": s.returnMilkBottle, // set the bottle back where it was picked up
+		"add_milk":    s.addMilk,          // open fridge + fetch + pour + return + close
+		"serve_iced_latte": func(ctx, cancelCtx context.Context) error { // iced coffee + milk, end-to-end
+			_, err := s.serveIcedLatte(ctx, cancelCtx)
+			return err
+		},
 		"open_door":  s.openDoor,  // grip the fridge handle and swing it open
 		"close_door": s.closeDoor, // grip the open door's handle and swing it shut
 	}
@@ -383,11 +412,19 @@ func isLungoDrink(drink string) bool {
 	return drink == "lungo" || drink == "decaf_lungo"
 }
 
-// isIcedDrink reports whether the drink uses the iced-coffee serving path
+// isIcedDrink reports whether the drink uses the iced serving path
 // (fetch glass -> dispense ice -> pour espresso over ice) instead of handing
 // the espresso cup to the customer. It brews espresso like any other drink.
 func isIcedDrink(drink string) bool {
-	return drink == "iced_coffee"
+	return drink == "iced_coffee" || drink == "iced_latte"
+}
+
+// isMilkDrink reports whether the iced serving path additionally fetches the
+// milk bottle from the fridge and pours it into the glass (coffee/milk.go).
+// Every milk drink is also an iced drink — the milk goes into the same staged
+// glass, on top of the espresso.
+func isMilkDrink(drink string) bool {
+	return drink == "iced_latte"
 }
 
 // waterDelta returns the water-usage increment for a brew: 1.5 for lungo sizes
@@ -526,7 +563,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 		var servedSlot int
 		var err error
 		if isIcedDrink(drink) {
-			servedSlot, err = s.serveIcedCoffee(ctx, cancelCtx)
+			servedSlot, err = s.serveIced(ctx, cancelCtx, isMilkDrink(drink))
 		} else {
 			servedSlot, err = s.placeFullCupOnShelf(ctx, cancelCtx)
 		}

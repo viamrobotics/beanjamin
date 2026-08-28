@@ -46,6 +46,7 @@ import (
 const (
 	pickupLabelCup   = "cup"
 	pickupLabelGlass = "glass"
+	pickupLabelMilk  = "milk"
 )
 
 // Clean-area shield obstacles enclosing the zone of standing clean cups / glasses
@@ -512,11 +513,16 @@ func (s *beanjaminCoffee) pickupAreaShieldCollisions(shieldFrame string) []Allow
 // grab descent best-effort restores the arm to the observe home pose so the next
 // candidate starts from a known state.
 //
+// On success it returns the world-frame centroid the item was actually grasped
+// at — the grab offsets were composed onto it, so composing them onto it again
+// reproduces the same poses. Milk pickup keeps it to put the bottle back where
+// it came from (returnMilkBottle); cup and glass pickup discard it.
+//
 // Returned errors fall into two categories the caller distinguishes via
 // errors.Is:
 //   - wraps errMotionPlanning → planning failure; try a different candidate.
 //   - anything else → execution error or operator cancel; bubble up.
-func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarget, cand pickupCandidate) error {
+func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarget, cand pickupCandidate) (r3.Vector, error) {
 	centroid := cand.centroid
 	// For the glass, grab at the geometry centroid's Z (the middle of the box)
 	// while keeping the detected X/Y. The point-cloud centroid Z can land high on
@@ -548,44 +554,44 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	// grab plans the same before the descent as it would at descent time.)
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
-		return err
+		return centroid, err
 	}
 	approachPlan, err := s.planToRawPose(ctx, fs, fsInputs, approachPD, nil, nil)
 	if err != nil {
-		return fmt.Errorf("plan approach to centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
+		return centroid, fmt.Errorf("plan approach to centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
 	approachEnd, err := s.planEndArmInputs(approachPlan)
 	if err != nil {
-		return fmt.Errorf("approach plan to centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
+		return centroid, fmt.Errorf("approach plan to centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
 	grabPlan, err := s.planToRawPose(ctx, fs, s.withArmInputs(fsInputs, approachEnd), grabPD, defaultApproachConstraint, s.pickupAreaShieldCollisions(t.shieldFrame))
 	if err != nil {
-		return fmt.Errorf("plan grab of centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
+		return centroid, fmt.Errorf("plan grab of centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
 
 	// Both plans succeeded — commit to the motion.
 	// 1. Approach (free planning).
 	if err := s.executePlan(ctx, approachPlan, nil, nil); err != nil {
-		return fmt.Errorf("approach centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
+		return centroid, fmt.Errorf("approach centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
 
 	// 2. Open gripper before descending.
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		s.recoverToObserve(ctx, cancelCtx, t)
-		return fmt.Errorf("open gripper for grab: %w", err)
+		return centroid, fmt.Errorf("open gripper for grab: %w", err)
 	}
 	time.Sleep(gripperPause)
 
 	// 3. Linear descent to grab pose.
 	if err := s.executePlan(ctx, grabPlan, defaultApproachConstraint, nil); err != nil {
 		s.recoverToObserve(ctx, cancelCtx, t)
-		return fmt.Errorf("grab centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
+		return centroid, fmt.Errorf("grab centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
 
 	// 4. Grab and verify the gripper is holding the item.
 	if err := s.grabAndVerifyHolding(ctx); err != nil {
 		s.recoverToObserve(ctx, cancelCtx, t)
-		return fmt.Errorf("grab %s: %w", t.label, err)
+		return centroid, fmt.Errorf("grab %s: %w", t.label, err)
 	}
 
 	// Attach the detected geometry to the gripper while the arm is at the grab
@@ -601,9 +607,9 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	// errMotionPlanning chain (%v, not %w) so the caller does not treat this
 	// as a try-another-candidate planning failure.
 	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, s.pickupAreaShieldCollisions(t.shieldFrame), nil); err != nil {
-		return fmt.Errorf("retreat with %s grabbed (centroid x=%.1f, y=%.1f, z=%.1f): %v", t.label, centroid.X, centroid.Y, centroid.Z, err)
+		return centroid, fmt.Errorf("retreat with %s grabbed (centroid x=%.1f, y=%.1f, z=%.1f): %v", t.label, centroid.X, centroid.Y, centroid.Z, err)
 	}
-	return nil
+	return centroid, nil
 }
 
 // recoverToObserve best-effort returns the arm to the target's observe home
@@ -626,15 +632,18 @@ func (s *beanjaminCoffee) recoverToObserve(ctx, cancelCtx context.Context, t *pi
 }
 
 // pickCupDynamic picks an empty cup via the vision pipeline. Called by
-// setCupForCoffee.
+// setCupForCoffee. The grasp centroid is dropped — the cup is never put back
+// where it came from.
 func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
-	return s.pickDynamic(ctx, cancelCtx, s.cupPickupTarget())
+	_, err := s.pickDynamic(ctx, cancelCtx, s.cupPickupTarget())
+	return err
 }
 
 // pickGlassDynamic picks an iced-coffee glass via the vision pipeline (its own
 // vision service + observe switch). Called by fetchGlass (can_serve_iced).
 func (s *beanjaminCoffee) pickGlassDynamic(ctx, cancelCtx context.Context) error {
-	return s.pickDynamic(ctx, cancelCtx, s.glassPickupTarget())
+	_, err := s.pickDynamic(ctx, cancelCtx, s.glassPickupTarget())
+	return err
 }
 
 // announceAndWaitForRetry recovers the arm to the observe home pose, speaks the
@@ -664,9 +673,10 @@ func (s *beanjaminCoffee) announceAndWaitForRetry(ctx, cancelCtx context.Context
 
 // sweepResult reports the outcome of one full observe-pose sweep (sweepAndGrab).
 type sweepResult struct {
-	grabbed  bool  // an item was grabbed and is in hand
-	sawItem  bool  // at least one observe pose detected an item (reachable or not)
-	lastGrab error // last recoverable grab failure (planning / grip-miss), for diagnostics
+	grabbed   bool      // an item was grabbed and is in hand
+	grabbedAt r3.Vector // world-frame centroid it was grasped at; only meaningful when grabbed
+	sawItem   bool      // at least one observe pose detected an item (reachable or not)
+	lastGrab  error     // last recoverable grab failure (planning / grip-miss), for diagnostics
 }
 
 // sweepAndGrab visits every observe pose in order and, at each pose that sees
@@ -696,9 +706,9 @@ func (s *beanjaminCoffee) sweepAndGrab(ctx, cancelCtx context.Context, t *pickup
 
 		logger.Infof("dynamic %s pickup: pass %d/%d — %d candidate(s) to try", t.label, i+1, passes, len(candidates))
 		for j, cand := range candidates {
-			grabErr := s.tryGrab(ctx, cancelCtx, t, cand)
+			graspedAt, grabErr := s.tryGrab(ctx, cancelCtx, t, cand)
 			if grabErr == nil {
-				res.grabbed = true
+				res.grabbed, res.grabbedAt = true, graspedAt
 				return res, nil
 			}
 
@@ -728,8 +738,12 @@ func (s *beanjaminCoffee) sweepAndGrab(ctx, cancelCtx context.Context, t *pickup
 // grabs nothing it re-observes and retries up to t.maxAttempts, asking the
 // customer to place an item (nothing was seen anywhere) or to nudge the items
 // (some were seen but none reachable) and waiting noItemRetryDelay between
-// attempts. Shared by cup and glass pickup.
-func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupTarget) error {
+// attempts. Shared by cup, glass and milk-bottle pickup.
+//
+// On success it returns the world-frame centroid the item was grasped at (see
+// tryGrab), so a caller that has to put the item back — milk pickup — can
+// reproduce the grasp without re-detecting.
+func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupTarget) (r3.Vector, error) {
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::dynamic_pickup::"+t.label)
 	defer span.End()
@@ -742,13 +756,13 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 	defer cancel()
 
 	if s.gripper == nil {
-		return fmt.Errorf("dynamic_%s_pickup: no gripper configured", t.label)
+		return r3.Vector{}, fmt.Errorf("dynamic_%s_pickup: no gripper configured", t.label)
 	}
 
 	// Observe poses don't change between attempts, so enumerate them once.
 	poseNames, err := s.observationPoseNames(ctx, t.observeSw)
 	if err != nil {
-		return fmt.Errorf("dynamic_%s_pickup: %w", t.label, err)
+		return r3.Vector{}, fmt.Errorf("dynamic_%s_pickup: %w", t.label, err)
 	}
 
 	maxAttempts := t.maxAttempts
@@ -756,10 +770,10 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		res, err := s.sweepAndGrab(ctx, cancelCtx, t, poseNames)
 		if err != nil {
-			return err
+			return r3.Vector{}, err
 		}
 		if res.grabbed {
-			return nil
+			return res.grabbedAt, nil
 		}
 
 		// The sweep grabbed nothing. Choose the recovery prompt from what it saw:
@@ -784,9 +798,9 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 			logger.Infof("dynamic %s pickup: %s on attempt %d/%d — prompting the customer and waiting %s before retry",
 				t.label, reason, attempt, maxAttempts, noItemRetryDelay)
 			if waitErr := s.announceAndWaitForRetry(ctx, cancelCtx, t, prompt); waitErr != nil {
-				return waitErr
+				return r3.Vector{}, waitErr
 			}
 		}
 	}
-	return fmt.Errorf("dynamic_%s_pickup: exhausted %d attempt(s); last error: %w", t.label, maxAttempts, lastErr)
+	return r3.Vector{}, fmt.Errorf("dynamic_%s_pickup: exhausted %d attempt(s); last error: %w", t.label, maxAttempts, lastErr)
 }
