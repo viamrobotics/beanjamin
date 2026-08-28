@@ -42,7 +42,7 @@ var defaultApproachConstraint = &StepLinearConstraint{
 // not to steps carrying a LinearConstraint: those have to close the last
 // millimetres onto hardware (portafilter into the group head, claws onto a cup)
 // and so keep armplanning's own hair-thin default.
-const freeMoveCollisionBufferMM = 3.0
+const freeMoveCollisionBufferMM = 2.0
 
 // freeMovePlannerOptions returns planner options carrying the free-traverse
 // collision buffer.
