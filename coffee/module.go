@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/board"
 	"go.viam.com/rdk/components/gripper"
@@ -107,20 +108,29 @@ type beanjaminCoffee struct {
 	cupCameraName   string         // SrcCameraName, validated to exist in cachedFS
 	glassVision     vision.Service // optional; nil unless CanServeIced
 	glassObserveSw  toggleswitch.Switch
+	milkVision      vision.Service // optional; nil unless CanServeIcedLatte
+	milkObserveSw   toggleswitch.Switch
 	// servingAreaSlotCounter is the round-robin counter for serving-area placement.
 	// It increments once per placeFullCupOnShelf and selects the shelf slot
 	// modulo the number of tiles. Process-local; resets to 0 on rebuild.
 	servingAreaSlotCounter atomic.Uint64
 
 	// Held-item geometry tracking (held_geometry.go).
-	// heldCupGeom / heldGlassGeom cache the gripper-local geometry of the cup /
-	// glass detected at pickup so a re-grab can restore it; heldItemAttached
-	// tracks whether the held-item frame is currently present in cachedFS. These
-	// are mutated only on the motion sequence goroutine (like cachedFS, gated by
-	// the running flag), so they need no extra locking.
+	// heldCupGeom / heldGlassGeom / heldMilkGeom cache the gripper-local geometry
+	// of the cup / glass / milk bottle detected at pickup so a re-grab can restore
+	// it; heldItemAttached tracks whether the held-item frame is currently present
+	// in cachedFS. These are mutated only on the motion sequence goroutine (like
+	// cachedFS, gated by the running flag), so they need no extra locking.
 	heldCupGeom      spatialmath.Geometry
 	heldGlassGeom    spatialmath.Geometry
+	heldMilkGeom     spatialmath.Geometry
 	heldItemAttached bool
+
+	// milkGraspCentroid is the world-frame centroid the milk bottle was grasped
+	// at, recorded by fetchMilkBottle and replayed by returnMilkBottle to set the
+	// bottle back down where it came from (milk.go). nil when no bottle is held.
+	// Mutated only on the motion sequence goroutine, like cachedFS.
+	milkGraspCentroid *r3.Vector
 
 	// filterFrameLocked tracks whether lockFilterFrame has re-parented the filter
 	// frame to world in cachedFS (i.e. an in-flight lock that must be preserved).
@@ -251,6 +261,31 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		}
 		logger.Infof("iced coffee glass vision pickup (vision=%q, camera=%q, observe_switch=%q)",
 			conf.GlassVisionServiceName, conf.SrcCameraName, conf.GlassObservePoseSwitcherName)
+	}
+
+	// An iced latte additionally fetches a milk bottle from the fridge via its
+	// own vision pipeline (shares the cup camera resolved above).
+	var milkVision vision.Service
+	var milkObserveSw toggleswitch.Switch
+	if conf.CanServeIcedLatte {
+		milkVision, err = vision.FromProvider(deps, conf.MilkVisionServiceName)
+		if err != nil {
+			cancelFunc()
+			return nil, fmt.Errorf("milk vision service %q: %w", conf.MilkVisionServiceName, err)
+		}
+
+		milkSwRes, ok := deps[toggleswitch.Named(conf.MilkObservePoseSwitcherName)]
+		if !ok {
+			cancelFunc()
+			return nil, fmt.Errorf("milk observe switch %q not found in dependencies", conf.MilkObservePoseSwitcherName)
+		}
+		milkObserveSw, ok = milkSwRes.(toggleswitch.Switch)
+		if !ok {
+			cancelFunc()
+			return nil, fmt.Errorf("resource %q is not a switch", conf.MilkObservePoseSwitcherName)
+		}
+		logger.Infof("iced latte milk vision pickup (vision=%q, camera=%q, observe_switch=%q)",
+			conf.MilkVisionServiceName, conf.SrcCameraName, conf.MilkObservePoseSwitcherName)
 	}
 
 	var speech resource.Resource
@@ -395,6 +430,8 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		cupCameraName:        cupCameraName,
 		glassVision:          glassVision,
 		glassObserveSw:       glassObserveSw,
+		milkVision:           milkVision,
+		milkObserveSw:        milkObserveSw,
 	}
 
 	// Fail fast if the enabled configuration references poses that are missing

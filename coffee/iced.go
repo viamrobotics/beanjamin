@@ -1,7 +1,8 @@
 package coffee
 
-// The iced-coffee path: fetch a glass, dispense ice into it, stage it, grab the
-// brewed espresso, pour it over the ice, and serve. Gated by can_serve_iced.
+// The iced path: fetch a glass, dispense ice into it, stage it, grab the brewed
+// espresso, pour it over the ice, and serve. Gated by can_serve_iced. An iced
+// latte runs the same sequence with the milk step from milk.go spliced in.
 
 import (
 	"context"
@@ -9,31 +10,43 @@ import (
 	"time"
 )
 
-// serveIcedCoffee finishes an iced_coffee order after the espresso has brewed
-// into the cup under the machine. It fetches a separate glass, dispenses ice
-// into it via the board pin, sets the glass down in the staging area, retrieves
-// the espresso cup, and pours the espresso over the ice. Both finished items
-// then go into the serving area at the next round-robin slots: the empty
-// espresso cup first, then the iced glass (re-grabbed from staging).
+// serveIced finishes an iced order after the espresso has brewed into the cup
+// under the machine. It fetches a separate glass, dispenses ice into it via the
+// board pin, sets the glass down in the staging area, retrieves the espresso
+// cup, and pours the espresso over the ice. Both finished items then go into the
+// serving area at the next round-robin slots: the empty espresso cup first, then
+// the iced glass (re-grabbed from staging).
+//
+// With withMilk set (the iced_latte drink) the milk sequence runs on the staged
+// glass between those two placements — once the espresso cup is out of the
+// gripper and before the glass is picked back up (see addMilk, milk.go).
 //
 // Returns the position of the glass — the actual drink, placed last — for
 // the delivery pickup_position
-func (s *beanjaminCoffee) serveIcedCoffee(ctx, cancelCtx context.Context) (int, error) {
-	if err := s.prepIcedGlass(ctx, cancelCtx); err != nil {
+func (s *beanjaminCoffee) serveIced(ctx, cancelCtx context.Context, withMilk bool) (int, error) {
+	if err := s.prepIcedGlass(ctx, cancelCtx, withMilk); err != nil {
 		return -1, err
 	}
-	return s.finishIcedCoffee(ctx, cancelCtx)
+	return s.finishIced(ctx, cancelCtx, withMilk)
 }
 
 // prepIcedGlass runs the ice-side half of the iced flow (steps 1-3): fetch a
 // glass, ice it, and stage it, leaving the gripper free. It never approaches
 // the coffee machine, so it can run mid-pour (see brewAndPrepIce).
-func (s *beanjaminCoffee) prepIcedGlass(ctx, cancelCtx context.Context) error {
+func (s *beanjaminCoffee) prepIcedGlass(ctx, cancelCtx context.Context, withMilk bool) error {
 	if s.gripper == nil {
 		return fmt.Errorf("prep_iced_glass: no gripper configured")
 	}
 	if s.iceBoard == nil {
 		return fmt.Errorf("prep_iced_glass: no ice board configured (set ice_board_name)")
+	}
+	// Checked before the first move, not when the milk step is reached: failing
+	// halfway through would leave an iced glass standing in staging with the
+	// order dead.
+	if withMilk {
+		if err := s.requireMilk("prep_iced_glass"); err != nil {
+			return err
+		}
 	}
 
 	// 1. Fetch the glass off the top shelf.
@@ -48,35 +61,50 @@ func (s *beanjaminCoffee) prepIcedGlass(ctx, cancelCtx context.Context) error {
 	return s.stageGlass(ctx, cancelCtx)
 }
 
-// finishIcedCoffee runs steps 4-8 once the pour is done and the glass is
-// staged: grab the brewed cup, pour it over the ice, and place both items.
-// Returns the serving-area position of the glass (the actual drink).
-func (s *beanjaminCoffee) finishIcedCoffee(ctx, cancelCtx context.Context) (int, error) {
-	// 4. Retrieve the brewed espresso cup from the machine.
+// finishIced runs the rest of the iced flow (steps 4-9) once the pour is done
+// and the glass is staged: milk for a latte, then grab the brewed cup, pour it
+// over the ice, and place both items. Returns the serving-area position of the
+// glass (the actual drink).
+func (s *beanjaminCoffee) finishIced(ctx, cancelCtx context.Context, withMilk bool) (int, error) {
+	// 4. For a latte, fetch the milk from the fridge and pour it into the glass.
+	//    It runs here, with the gripper empty and the glass still standing in
+	//    staging, because the pour needs both a free gripper and a glass the arm
+	//    is not holding.
+	if withMilk {
+		if err := s.addMilk(ctx, cancelCtx); err != nil {
+			return -1, err
+		}
+		// addMilk and the door sweeps publish their own step labels; put the
+		// order's step back to serving for the placement that follows.
+		s.setStep(stepServing)
+	}
+	// 5. Retrieve the brewed espresso cup from the machine.
 	if err := s.grabBrewedCupFromMachine(ctx, cancelCtx); err != nil {
 		return -1, err
 	}
-	// 5. Pour the espresso over the ice in the staged glass.
+	// 6. Pour the espresso over the ice in the staged glass.
 	if err := s.pourEspresso(ctx, cancelCtx); err != nil {
 		return -1, err
 	}
-	// 6. Place the now-empty espresso cup in the serving area (round-robin).
+	// 7. Place the now-empty espresso cup in the serving area (round-robin).
 	if _, err := s.placeHeldInServingArea(ctx, cancelCtx); err != nil {
 		return -1, err
 	}
-	// 7. Re-grab the iced glass from the staging area.
+
+	// 8. Re-grab the iced glass from the staging area.
 	if err := s.grabStagedGlass(ctx, cancelCtx); err != nil {
 		return -1, err
 	}
-	// 8. Place the iced glass in the serving area (next round-robin slot).
+	// 9. Place the iced glass in the serving area (next round-robin slot).
 	return s.placeHeldInServingArea(ctx, cancelCtx)
 }
 
 // brewAndPrepIce pokes the brew button, runs prepIcedGlass while the machine
 // pours, then waits out the rest of the brew window. On return the pour is done
-// and the glass is staged, so the caller continues with finishIcedCoffee.
-// Separate-buttons machines only — the toggle style holds the switch for the
-// whole pour, leaving no idle arm time to reclaim.
+// and the glass is staged, so the caller continues with finishIced (a latte's
+// milk step runs there, after the pour). Separate-buttons machines only — the
+// toggle style holds the switch for the whole pour, leaving no idle arm time
+// to reclaim.
 func (s *beanjaminCoffee) brewAndPrepIce(ctx, cancelCtx context.Context, drink string) error {
 	if !s.cfg.HasSeparateBrewButtons {
 		return fmt.Errorf("brew_and_prep_ice: requires has_separate_brew_buttons (the toggle machine's claw holds the switch for the whole pour)")
@@ -90,7 +118,7 @@ func (s *beanjaminCoffee) brewAndPrepIce(ctx, cancelCtx context.Context, drink s
 	}
 	pourStarted := time.Now()
 
-	prepErr := s.prepIcedGlass(ctx, cancelCtx)
+	prepErr := s.prepIcedGlass(ctx, cancelCtx, isMilkDrink(drink))
 
 	// Wait out the rest of the pour even when the ice prep failed, so the
 	// machine is quiescent before an operator or a rewind gets near it.
@@ -107,6 +135,18 @@ func (s *beanjaminCoffee) brewAndPrepIce(ctx, cancelCtx context.Context, drink s
 	// Water has run, so the keep-alive clock restarts (keepalive.go).
 	s.recordMachineActivity()
 	return nil
+}
+
+// serveIcedCoffee is the iced serving path without milk — the iced_coffee drink
+// and the serve_iced_coffee action.
+func (s *beanjaminCoffee) serveIcedCoffee(ctx, cancelCtx context.Context) (int, error) {
+	return s.serveIced(ctx, cancelCtx, false)
+}
+
+// serveIcedLatte is the iced serving path with the milk sequence — the
+// iced_latte drink and the serve_iced_latte action.
+func (s *beanjaminCoffee) serveIcedLatte(ctx, cancelCtx context.Context) (int, error) {
+	return s.serveIced(ctx, cancelCtx, true)
 }
 
 // grabBrewedCupFromMachine retrieves the brewed cup from under the machine:

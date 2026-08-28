@@ -122,6 +122,15 @@ type Config struct {
 	PourVelDegsPerSec    float64 `json:"pour_vel_degs_per_sec,omitempty"`
 	PourAccDegsPerSec2   float64 `json:"pour_acc_degs_per_sec2,omitempty"`
 
+	// CanServeIcedLatte enables the iced_latte drink: the iced-coffee flow plus
+	// a fridge trip for milk (coffee/milk.go). It builds on can_serve_iced — the
+	// glass, the ice and the staging area all come from there — and on the
+	// fridge-door sweep, so both must be configured alongside it.
+	CanServeIcedLatte bool `json:"can_serve_iced_latte,omitempty"`
+	// MilkPourSec is how long the bottle is held tilted over the glass: the knob
+	// that sets how much milk a latte gets.
+	MilkPourSec float64 `json:"milk_pour_sec,omitempty"`
+
 	// Optional Slack notifier (viam:notifications:slack generic service). When
 	// set, the coffee service sends a best-effort Slack message via DoCommand
 	// for every non-successful order attempt — genuine faults and operator
@@ -177,6 +186,19 @@ type Config struct {
 	// modeled from (see ContainerDimensions). Required when can_serve_iced is set.
 	GlassDimensions *ContainerDimensions `json:"glass_dimensions,omitempty"`
 
+	// Milk-bottle pickup (iced latte) mirrors cup and glass pickup with its own
+	// vision service and observe-pose switch, whose vantages look into the open
+	// fridge. These fields are required when can_serve_iced_latte is set.
+	MilkVisionServiceName       string        `json:"milk_vision_service_name,omitempty"`
+	MilkObservePoseSwitcherName string        `json:"milk_observe_pose_switcher_name,omitempty"`
+	MilkApproachRelativePose    *RelativePose `json:"milk_approach_relative_pose,omitempty"`
+	MilkGrabRelativePose        *RelativePose `json:"milk_grab_relative_pose,omitempty"`
+	// MilkBottleDimensions is the known bottle diameter/height the held bottle is
+	// modeled from (see ContainerDimensions). The same offsets that grabbed the
+	// bottle put it back, so these are also what the return descent is planned
+	// around. Required when can_serve_iced_latte is set.
+	MilkBottleDimensions *ContainerDimensions `json:"milk_bottle_dimensions,omitempty"`
+
 	// Serving placement offsets are composed onto the serving-area slot anchor
 	// when releasing a finished drink onto the served shelf. The same pair is
 	// used for both the hot cup and the iced glass. Both are required.
@@ -221,14 +243,19 @@ type Config struct {
 	// frame's center to produce the pre-grasp standoff (like
 	// cup_approach_relative_pose onto a detected cup centroid — see
 	// composeCupPose), but resolved against the live grasp frame. Its
-	// orientation is also the grasp orientation the gripper holds through the
-	// swing. Required to run open_door.
+	// orientation is the base grasp orientation, which DoorGraspYawRatio then
+	// yaws through the swing. Required to run open_door.
 	DoorApproachRelativePose *RelativePose `json:"door_approach_relative_pose,omitempty"`
 
 	// KeepAlive, when set, runs the idle-purge loop (keepalive.go) that holds the
 	// machine's 1 CUP button periodically so it never falls out of brew
 	// temperature. Requires HasSeparateBrewButtons. Unset disables it.
 	KeepAlive *KeepAlive `json:"keepalive,omitempty"`
+
+	// DoorGraspYawRatio turns the grasp orientation about world Z by ratio x
+	// theta as the door swings; see defaultDoorGraspYawRatio. A pointer because
+	// 0 and negatives are real settings, not "unset".
+	DoorGraspYawRatio *float64 `json:"door_grasp_yaw_ratio,omitempty"`
 }
 
 // defaultMaxBatchSize is used when Config.MaxBatchSize is unset or zero.
@@ -253,6 +280,25 @@ func (s *beanjaminCoffee) doorPivotDegreesPerStep() float64 {
 	return orDefault(s.cfg.DoorPivotDegreesPerStep, defaultDoorPivotDegreesPerStep)
 }
 
+// defaultDoorGraspYawRatio counter-rotates the gripper as the door swings.
+//
+// Reachability sets this sign, not grasp mechanics: the handle is a ball, so the
+// grasp does not constrain wrist roll. The gripper sits behind its tool center
+// along -OV, so co-rotating drives the wrist into +y just as the handle travels
+// there. Replanning a failed 75-degree sweep offline put +1 out of IK solutions
+// at theta=47 and 0 out by theta=75; only -1 reached full open.
+const defaultDoorGraspYawRatio = -1
+
+// doorGraspYawRatio returns the configured world-Z yaw ratio for the door sweep.
+// It cannot use orDefault: that helper treats any non-positive value as unset,
+// and 0 (hold orientation fixed) and -1 (counter-rotate) are both real settings.
+func (s *beanjaminCoffee) doorGraspYawRatio() float64 {
+	if s.cfg.DoorGraspYawRatio != nil {
+		return *s.cfg.DoorGraspYawRatio
+	}
+	return defaultDoorGraspYawRatio
+}
+
 // doorGraspFrameName returns the frame the gripper aims at (its center is the
 // grasp target), tracks through the sweep, and is allowed to contact. Defaults
 // to frameFridgeHandleBall.
@@ -261,6 +307,17 @@ func (s *beanjaminCoffee) doorGraspFrameName() string {
 		return s.cfg.DoorGraspFrameName
 	}
 	return frameFridgeHandleBall
+}
+
+// defaultMilkPourSec is how long the bottle is held tilted over the glass when
+// milk_pour_sec is unset.
+const defaultMilkPourSec = 4.0
+
+// milkPourDwell returns how long the tilted bottle is held over the glass —
+// the configured pour time or the default. This is what sets the milk dose, so
+// it is tuned on the machine against the bottle and the glass in use.
+func (s *beanjaminCoffee) milkPourDwell() time.Duration {
+	return time.Duration(orDefault(s.cfg.MilkPourSec, defaultMilkPourSec) * float64(time.Second))
 }
 
 // orDefault returns v when it is positive, otherwise def. It backs the
@@ -473,6 +530,38 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 			cfg.GlassObservePoseSwitcherName,
 		)
 	}
+
+	if cfg.CanServeIcedLatte {
+		// The milk path is the iced flow plus a fridge trip, so it inherits every
+		// iced requirement rather than restating them, and additionally needs the
+		// handle offset open_door resolves the fridge grasp against.
+		if !cfg.CanServeIced {
+			return nil, nil, fmt.Errorf("%s: can_serve_iced_latte requires can_serve_iced (the latte is served in the iced glass, over ice)", path)
+		}
+		if cfg.DoorApproachRelativePose == nil {
+			return nil, nil, fmt.Errorf("%s: can_serve_iced_latte requires door_approach_relative_pose (the milk is fetched from behind the fridge door)", path)
+		}
+		if cfg.MilkVisionServiceName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "milk_vision_service_name")
+		}
+		if cfg.MilkObservePoseSwitcherName == "" {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "milk_observe_pose_switcher_name")
+		}
+		if cfg.MilkApproachRelativePose == nil {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "milk_approach_relative_pose")
+		}
+		if cfg.MilkGrabRelativePose == nil {
+			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "milk_grab_relative_pose")
+		}
+		if err := cfg.MilkBottleDimensions.validate(path, "milk_bottle_dimensions"); err != nil {
+			return nil, nil, err
+		}
+		reqDeps = append(reqDeps,
+			vision.Named(cfg.MilkVisionServiceName).String(),
+			cfg.MilkObservePoseSwitcherName,
+		)
+	}
+
 	if cfg.IceDispenseBoardName != "" {
 		optDeps = append(optDeps, board.Named(cfg.IceDispenseBoardName).String())
 	}

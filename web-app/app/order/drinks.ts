@@ -20,6 +20,7 @@ export const GRID_DRINK_IDS = [
   "lungo",
   "americano",
   "iced_coffee",
+  "iced_latte",
   "latte",
   "cappuccino",
 ] as const;
@@ -82,6 +83,13 @@ export const DRINKS: Drink[] = [
     label: "Iced Coffee",
     description: "Espresso + ice",
     image: "./iced-coffee.png",
+    available: true,
+  },
+  {
+    id: "iced_latte",
+    label: "Iced Latte",
+    description: "Espresso + ice + cold milk",
+    image: "./latte.png",
     available: true,
   },
   {

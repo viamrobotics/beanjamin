@@ -273,29 +273,41 @@ func (s *beanjaminCoffee) stagedGlassGrabCollisions() []AllowedCollision {
 // clearHeldGeometry forgets all cached item geometry and clears the attached
 // flag. Called from resetFrameSystem: rebuilding the cached frame system from the
 // service already drops the held-item frame, and any cached grasp no longer
-// corresponds to reality.
+// corresponds to reality. The recorded milk pickup position goes with it — it
+// describes a bottle the gripper is no longer known to hold.
 func (s *beanjaminCoffee) clearHeldGeometry() {
 	s.heldItemAttached = false
 	s.heldCupGeom = nil
 	s.heldGlassGeom = nil
+	s.heldMilkGeom = nil
+	s.milkGraspCentroid = nil
 }
 
 // cachedHeldGeometry returns the cached gripper-local geometry for the given item
-// label, or nil if none has been recorded this order.
+// label, or nil if none has been recorded this order. Each label gets its own
+// slot: an iced latte carries a cup, a glass and a bottle within one order, and
+// a shared slot would hand a re-grab the shape of whichever came last.
 func (s *beanjaminCoffee) cachedHeldGeometry(label string) spatialmath.Geometry {
-	if label == pickupLabelGlass {
+	switch label {
+	case pickupLabelGlass:
 		return s.heldGlassGeom
+	case pickupLabelMilk:
+		return s.heldMilkGeom
+	default:
+		return s.heldCupGeom
 	}
-	return s.heldCupGeom
 }
 
 // cacheHeldGeometry stores the gripper-local geometry for the given item label.
 func (s *beanjaminCoffee) cacheHeldGeometry(label string, gripperLocal spatialmath.Geometry) {
-	if label == pickupLabelGlass {
+	switch label {
+	case pickupLabelGlass:
 		s.heldGlassGeom = gripperLocal
-		return
+	case pickupLabelMilk:
+		s.heldMilkGeom = gripperLocal
+	default:
+		s.heldCupGeom = gripperLocal
 	}
-	s.heldCupGeom = gripperLocal
 }
 
 // heldItemSelfCollisions returns the allowed-collision pairs between the tracked
