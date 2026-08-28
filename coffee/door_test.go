@@ -405,31 +405,35 @@ func TestYawAboutWorldZ(t *testing.T) {
 	}
 }
 
-// TestJointTravel pins the branch-ranking metric: it sums joint-space distance
-// along a trajectory, so a contorted route between the same endpoints scores
-// worse than a direct one. That ordering is the whole basis for picking an
-// approach branch, so it is the part worth guarding.
-func TestJointTravel(t *testing.T) {
-	if got := jointTravel(nil); got != 0 {
-		t.Errorf("empty travel = %v, want 0", got)
+// TestDoorSweepLinearConstraint pins the tolerance policy. The default has to
+// clear the chord-vs-arc divergence (~1.9mm at the default step), a partially
+// configured constraint must fill only the missing half, and both-negative is
+// the explicit opt-out — zero would be an unsatisfiable constraint, not an
+// absent one.
+func TestDoorSweepLinearConstraint(t *testing.T) {
+	got := (&beanjaminCoffee{cfg: &Config{}}).doorSweepLinearConstraint()
+	if got == nil {
+		t.Fatal("default constraint = nil, want the default tolerances")
 	}
-	if got := jointTravel([][]referenceframe.Input{{0, 0, 0}}); got != 0 {
-		t.Errorf("single-waypoint travel = %v, want 0", got)
+	if got.LineToleranceMm != defaultDoorSweepLineMm || got.OrientationToleranceDegs != defaultDoorSweepOrientDegs {
+		t.Errorf("default = %+v, want %v/%v", got, defaultDoorSweepLineMm, defaultDoorSweepOrientDegs)
 	}
-
-	direct := [][]referenceframe.Input{{0, 0, 0}, {1, 0, 0}}
-	detour := [][]referenceframe.Input{{0, 0, 0}, {5, 0, 0}, {1, 0, 0}}
-	d, dt := jointTravel(direct), jointTravel(detour)
-	if math.Abs(d-1) > 1e-9 {
-		t.Errorf("direct travel = %v, want 1", d)
-	}
-	if dt <= d {
-		t.Errorf("detour travel %v must exceed direct %v, or ranking picks the contorted branch", dt, d)
+	if got.LineToleranceMm <= 1.9 {
+		t.Errorf("default line tolerance %v does not clear the chord-vs-arc divergence", got.LineToleranceMm)
 	}
 
-	// Travel accumulates across every joint, not just the one that moved most.
-	if got := jointTravel([][]referenceframe.Input{{0, 0, 0}, {3, 4, 0}}); math.Abs(got-5) > 1e-9 {
-		t.Errorf("multi-joint travel = %v, want 5", got)
+	partial := &Config{DoorSweepLinearConstraint: &StepLinearConstraint{LineToleranceMm: 12}}
+	got = (&beanjaminCoffee{cfg: partial}).doorSweepLinearConstraint()
+	if got.LineToleranceMm != 12 {
+		t.Errorf("configured line tolerance = %v, want 12", got.LineToleranceMm)
+	}
+	if got.OrientationToleranceDegs != defaultDoorSweepOrientDegs {
+		t.Errorf("unset orientation tolerance = %v, want the default %v", got.OrientationToleranceDegs, defaultDoorSweepOrientDegs)
+	}
+
+	off := &Config{DoorSweepLinearConstraint: &StepLinearConstraint{LineToleranceMm: -1, OrientationToleranceDegs: -1}}
+	if got := (&beanjaminCoffee{cfg: off}).doorSweepLinearConstraint(); got != nil {
+		t.Errorf("both-negative = %+v, want nil (unconstrained sweep)", got)
 	}
 }
 

@@ -211,14 +211,27 @@ func nearestTheta(actual []referenceframe.Input, positions [][]referenceframe.In
 	return best
 }
 
+// Default tolerances for the sweep's linear constraint. Deliberately looser
+// than defaultApproachConstraint (1mm/2deg), which would be wrong here: the
+// constraint holds the tool to the CHORD between two theta waypoints while the
+// handle it is gripping travels the ARC, and the two diverge mid-segment by
+// R*(1-cos(step/2)) — about 1.9mm on a 557mm handle radius at the default
+// 9.375deg step. A tolerance under that fights the door instead of following it.
+// Halving door_pivot_degrees_per_step quarters the divergence, so the two knobs
+// move together.
+const (
+	defaultDoorSweepLineMm     = 5.0
+	defaultDoorSweepOrientDegs = 5.0
+)
+
 // defaultDoorPlanAttempts is how many independent approach branches a sweep
 // plans before committing to one. A 6-DoF arm has several IK solutions for the
 // standoff pose and the planner returns the first good-enough one, scored on
 // reaching the standoff and knowing nothing about the swing that follows.
 //
-// Each attempt costs a full approach + grasp + one plan per θ waypoint, all
-// before the arm moves, so this is a latency-for-posture trade —
-// door_plan_attempts dials it.
+// Under the sweep's linear constraint such a branch fails to plan rather than
+// planning something contorted, so another attempt is worth making. Each one
+// costs a full approach + grasp + one plan per θ waypoint before the arm moves.
 const defaultDoorPlanAttempts = 3
 
 // doorPlan is everything sweepDoor derives from the door's current angle, and
@@ -233,6 +246,9 @@ type doorPlan struct {
 	fromDeg        float64
 	yawRatio       float64
 	collisions     []AllowedCollision
+	// sweepConstraint holds the tool to a straight line between consecutive theta
+	// waypoints; see doorSweepLinearConstraint.
+	sweepConstraint *StepLinearConstraint
 }
 
 // doorMotion is a fully planned open or close — approach, grasp descent, and the
@@ -242,19 +258,6 @@ type doorMotion struct {
 	grasp     motionplan.Plan
 	positions [][]referenceframe.Input
 	thetaOf   []float64
-	// cost is total joint travel across all three pieces, used to rank branches.
-	cost float64
-}
-
-// jointTravel is the total joint-space distance along a trajectory. A contorted
-// IK branch reaches the same poses through far more joint motion, so this
-// separates a sane posture from an awkward one without needing a threshold.
-func jointTravel(positions [][]referenceframe.Input) float64 {
-	var total float64
-	for i := 1; i < len(positions); i++ {
-		total += referenceframe.InputsL2Distance(positions[i-1], positions[i])
-	}
-	return total
 }
 
 // planDoorMotion plans the approach, the grasp descent and every sweep waypoint
@@ -306,9 +309,7 @@ func (s *beanjaminCoffee) planDoorMotion(
 		if err != nil {
 			return nil, err
 		}
-		// The plan is unconstrained, so these waypoints are the only thing telling
-		// the planner how to point the tool along the arc. Sign: see
-		// defaultDoorGraspYawRatio.
+		// Sign of the yaw: see defaultDoorGraspYawRatio.
 		goalPose := spatialmath.NewPose(ballNow.Point(),
 			yawAboutWorldZ(spatialmath.NewPoseFromOrientation(p.graspOrient),
 				p.yawRatio*(theta-p.fromDeg)).Orientation())
@@ -320,7 +321,7 @@ func (s *beanjaminCoffee) planDoorMotion(
 			FrameSystem: fs,
 			Goals:       []*armplanning.PlanState{goal},
 			StartState:  armplanning.NewPlanState(nil, planInputs),
-			Constraints: buildConstraints(nil, p.collisions),
+			Constraints: buildConstraints(p.sweepConstraint, p.collisions),
 		}
 		plan, _, err := armplanning.PlanMotion(ctx, logger, req)
 		s.savePlanRequestAndResponse(req, plan, p.action, err)
@@ -341,9 +342,6 @@ func (s *beanjaminCoffee) planDoorMotion(
 		planInputs = s.withArmInputs(planInputs, stepPositions[len(stepPositions)-1])
 	}
 
-	approachPositions, _ := approachPlan.Trajectory().GetFrameInputs(s.cfg.ArmName)
-	graspPositions, _ := graspPlan.Trajectory().GetFrameInputs(s.cfg.ArmName)
-	m.cost = jointTravel(approachPositions) + jointTravel(graspPositions) + jointTravel(m.positions)
 	return m, nil
 }
 
@@ -429,27 +427,26 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	//    only be collision-checked against one door angle, and the door is the
 	//    obstacle that moves.
 	//
-	//    Planning several candidates and keeping the cheapest is what picks the
-	//    arm's posture. The approach goal is a Cartesian standoff, so the planner
-	//    may reach it on any IK branch and scores that choice purely on getting
-	//    there — it has no idea a 75-degree swing follows. A branch that barely
-	//    reaches drags the sweep through huge joint excursions, and since
-	//    waypoints interpolate in joint space the tool bows off the arc and shears
-	//    the handle out of the jaws. Ranking by total joint travel selects against
-	//    exactly that, with no threshold to tune.
+	//    Retrying is what picks the arm's posture. The approach goal is a
+	//    Cartesian standoff, so the planner may reach it on any IK branch and
+	//    scores that choice purely on getting there — it has no idea a swing
+	//    follows. Under doorSweepLinearConstraint a branch that cannot carry the
+	//    swing in a straight line fails to plan outright rather than producing a
+	//    valid-but-contorted trajectory, so retrying moves on to another branch.
 	sweep := computeDoorSweep(fromDeg, toDeg, s.doorPivotDegreesPerStep())
 	logger.Infof("%s: planning %.0f°→%.0f° in %d steps", action, fromDeg, toDeg, len(sweep)-1)
 
 	dp := &doorPlan{
-		action:         action,
-		approachWorld:  approachWorld,
-		graspWorld:     graspWorld,
-		graspOrient:    graspOrient,
-		baseOriginPose: baseOriginPose,
-		sweep:          sweep,
-		fromDeg:        fromDeg,
-		yawRatio:       yawRatio,
-		collisions:     collisions,
+		action:          action,
+		approachWorld:   approachWorld,
+		graspWorld:      graspWorld,
+		graspOrient:     graspOrient,
+		baseOriginPose:  baseOriginPose,
+		sweep:           sweep,
+		fromDeg:         fromDeg,
+		yawRatio:        yawRatio,
+		collisions:      collisions,
+		sweepConstraint: s.doorSweepLinearConstraint(),
 	}
 
 	attempts := s.doorPlanAttempts()
@@ -464,18 +461,16 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 		m, err := s.planDoorMotion(ctx, fs, fsInputs, dp)
 		if err != nil {
 			lastErr = err
-			logger.Warnf("%s: candidate %d/%d failed to plan: %v", action, attempt, attempts, err)
+			logger.Warnf("%s: attempt %d/%d failed to plan: %v", action, attempt, attempts, err)
 			continue
 		}
-		logger.Infof("%s: candidate %d/%d plans, joint travel %.2f rad", action, attempt, attempts, m.cost)
-		if best == nil || m.cost < best.cost {
-			best = m
-		}
+		logger.Infof("%s: attempt %d/%d planned the full swing", action, attempt, attempts)
+		best = m
+		break
 	}
 	if best == nil {
-		return fmt.Errorf("%s: no candidate planned in %d attempts: %w", action, attempts, lastErr)
+		return fmt.Errorf("%s: no branch planned the full swing in %d attempts: %w", action, attempts, lastErr)
 	}
-	logger.Infof("%s: committing to the cheapest of %d candidates (%.2f rad)", action, attempts, best.cost)
 
 	// Leave the frame system holding the door where the chosen sweep ends: the
 	// losing candidates each walked it to the same place and back.

@@ -257,10 +257,15 @@ type Config struct {
 	// 0 and negatives are real settings, not "unset".
 	DoorGraspYawRatio *float64 `json:"door_grasp_yaw_ratio,omitempty"`
 
-	// DoorPlanAttempts is how many independent approach branches a door sweep
-	// plans before committing to the cheapest; see defaultDoorPlanAttempts. 1 commits
-	// to the first that plans. Trades latency for a better arm posture.
+	// DoorPlanAttempts is how many approach branches a door sweep will try before
+	// giving up; see defaultDoorPlanAttempts.
 	DoorPlanAttempts int `json:"door_plan_attempts,omitempty"`
+
+	// DoorSweepLinearConstraint holds the gripper to a straight line between
+	// consecutive theta waypoints; see defaultDoorSweepLine/OrientDegs for why it
+	// has to be loose. Set both tolerances to a negative value to sweep with no
+	// linear constraint at all.
+	DoorSweepLinearConstraint *StepLinearConstraint `json:"door_sweep_linear_constraint,omitempty"`
 }
 
 // defaultMaxBatchSize is used when Config.MaxBatchSize is unset or zero.
@@ -294,10 +299,31 @@ func (s *beanjaminCoffee) doorPivotDegreesPerStep() float64 {
 // at theta=47 and 0 out by theta=75; only -1 reached full open.
 const defaultDoorGraspYawRatio = -1
 
-// doorPlanAttempts returns how many door-motion candidates to plan, defaulting
-// to defaultDoorPlanAttempts.
+// doorPlanAttempts returns how many approach branches to try, defaulting to
+// defaultDoorPlanAttempts.
 func (s *beanjaminCoffee) doorPlanAttempts() int {
 	return orDefault(s.cfg.DoorPlanAttempts, defaultDoorPlanAttempts)
+}
+
+// doorSweepLinearConstraint returns the linear constraint applied between sweep
+// waypoints, or nil when both tolerances are configured negative (an explicit
+// opt-out, since zero tolerances would be an unsatisfiable constraint rather
+// than an absent one).
+func (s *beanjaminCoffee) doorSweepLinearConstraint() *StepLinearConstraint {
+	lc := s.cfg.DoorSweepLinearConstraint
+	if lc == nil {
+		return &StepLinearConstraint{
+			LineToleranceMm:          defaultDoorSweepLineMm,
+			OrientationToleranceDegs: defaultDoorSweepOrientDegs,
+		}
+	}
+	if lc.LineToleranceMm < 0 && lc.OrientationToleranceDegs < 0 {
+		return nil
+	}
+	return &StepLinearConstraint{
+		LineToleranceMm:          orDefault(lc.LineToleranceMm, defaultDoorSweepLineMm),
+		OrientationToleranceDegs: orDefault(lc.OrientationToleranceDegs, defaultDoorSweepOrientDegs),
+	}
 }
 
 // doorGraspYawRatio returns the configured world-Z yaw ratio for the door sweep.
