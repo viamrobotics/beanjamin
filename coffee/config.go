@@ -230,13 +230,9 @@ type Config struct {
 	// temperature. Requires HasSeparateBrewButtons. Unset disables it.
 	KeepAlive *KeepAlive `json:"keepalive,omitempty"`
 
-	// DoorGraspYawRatio scales how far the gripper yaws about world Z as the
-	// door swings: at each swept angle the grasp orientation is turned by
-	// ratio x (theta - start). 1 keeps the tool rigidly square to the panel
-	// (zero relative rotation between gripper and handle), 0 holds the
-	// approach orientation fixed in world, and -1 counter-rotates. A pointer
-	// because 0 and negative values are meaningful settings, not "unset".
-	// Defaults to defaultDoorGraspYawRatio.
+	// DoorGraspYawRatio turns the grasp orientation about world Z by ratio x
+	// theta as the door swings; see defaultDoorGraspYawRatio. A pointer because
+	// 0 and negatives are real settings, not "unset".
 	DoorGraspYawRatio *float64 `json:"door_grasp_yaw_ratio,omitempty"`
 }
 
@@ -262,9 +258,14 @@ func (s *beanjaminCoffee) doorPivotDegreesPerStep() float64 {
 	return orDefault(s.cfg.DoorPivotDegreesPerStep, defaultDoorPivotDegreesPerStep)
 }
 
-// defaultDoorGraspYawRatio keeps the gripper rigidly square to the door panel
-// through the sweep, so the grasp sees no relative rotation.
-const defaultDoorGraspYawRatio = 1
+// defaultDoorGraspYawRatio counter-rotates the gripper as the door swings.
+//
+// Reachability sets this sign, not grasp mechanics: the handle is a ball, so the
+// grasp does not constrain wrist roll. The gripper sits behind its tool center
+// along -OV, so co-rotating drives the wrist into +y just as the handle travels
+// there. Replanning a failed 75-degree sweep offline put +1 out of IK solutions
+// at theta=47 and 0 out by theta=75; only -1 reached full open.
+const defaultDoorGraspYawRatio = -1
 
 // doorGraspYawRatio returns the configured world-Z yaw ratio for the door sweep.
 // It cannot use orDefault: that helper treats any non-positive value as unset,
