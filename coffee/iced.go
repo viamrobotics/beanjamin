@@ -74,16 +74,11 @@ func (s *beanjaminCoffee) finishIcedCoffee(ctx, cancelCtx context.Context) (int,
 	return s.placeHeldInServingArea(ctx, cancelCtx)
 }
 
-// brewAndPrepIce overlaps the machine's pour with the ice-side prep: it pokes
-// the brew button for the drink's shot size, then — while the machine doses on
-// its own — fetches the glass, dispenses ice, and stages it, and finally waits
-// out whatever is left of the brew window before returning. On return the pour
-// is finished and the iced glass is staged, so the caller continues with
-// finishIcedCoffee instead of serveIcedCoffee.
-//
-// Only valid on the separate-buttons machine: the single-toggle style parks
-// the claw on the switch for the whole pour, so there is no idle arm time to
-// reclaim there.
+// brewAndPrepIce pokes the brew button, runs prepIcedGlass while the machine
+// pours, then waits out the rest of the brew window. On return the pour is done
+// and the glass is staged, so the caller continues with finishIcedCoffee.
+// Separate-buttons machines only — the toggle style holds the switch for the
+// whole pour, leaving no idle arm time to reclaim.
 func (s *beanjaminCoffee) brewAndPrepIce(ctx, cancelCtx context.Context, drink string) error {
 	if !s.cfg.HasSeparateBrewButtons {
 		return fmt.Errorf("brew_and_prep_ice: requires has_separate_brew_buttons (the toggle machine's claw holds the switch for the whole pour)")
