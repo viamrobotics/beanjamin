@@ -24,33 +24,48 @@ import (
 // Returns the position of the glass — the actual drink, placed last — for
 // the delivery pickup_position
 func (s *beanjaminCoffee) serveIced(ctx, cancelCtx context.Context, withMilk bool) (int, error) {
+	if err := s.prepIcedGlass(ctx, cancelCtx, withMilk); err != nil {
+		return -1, err
+	}
+	return s.finishIced(ctx, cancelCtx, withMilk)
+}
+
+// prepIcedGlass runs the ice-side half of the iced flow (steps 1-3): fetch a
+// glass, ice it, and stage it, leaving the gripper free. It never approaches
+// the coffee machine, so it can run mid-pour (see brewAndPrepIce).
+func (s *beanjaminCoffee) prepIcedGlass(ctx, cancelCtx context.Context, withMilk bool) error {
 	if s.gripper == nil {
-		return -1, fmt.Errorf("serve_iced: no gripper configured")
+		return fmt.Errorf("prep_iced_glass: no gripper configured")
 	}
 	if s.iceBoard == nil {
-		return -1, fmt.Errorf("serve_iced: no ice board configured (set ice_board_name)")
+		return fmt.Errorf("prep_iced_glass: no ice board configured (set ice_board_name)")
 	}
 	// Checked before the first move, not when the milk step is reached: failing
 	// halfway through would leave an iced glass standing in staging with the
 	// order dead.
 	if withMilk {
-		if err := s.requireMilk("serve_iced"); err != nil {
-			return -1, err
+		if err := s.requireMilk("prep_iced_glass"); err != nil {
+			return err
 		}
 	}
 
 	// 1. Fetch the glass off the top shelf.
 	if err := s.fetchGlass(ctx, cancelCtx); err != nil {
-		return -1, err
+		return err
 	}
 	// 2. Carry the glass to the ice machine and dispense ice.
 	if err := s.dispenseIce(ctx, cancelCtx); err != nil {
-		return -1, err
+		return err
 	}
 	// 3. Set the glass down in the staging area to free the gripper.
-	if err := s.stageGlass(ctx, cancelCtx); err != nil {
-		return -1, err
-	}
+	return s.stageGlass(ctx, cancelCtx)
+}
+
+// finishIced runs the rest of the iced flow (steps 4-9) once the pour is done
+// and the glass is staged: milk for a latte, then grab the brewed cup, pour it
+// over the ice, and place both items. Returns the serving-area position of the
+// glass (the actual drink).
+func (s *beanjaminCoffee) finishIced(ctx, cancelCtx context.Context, withMilk bool) (int, error) {
 	// 4. For a latte, fetch the milk from the fridge and pour it into the glass.
 	//    It runs here, with the gripper empty and the glass still standing in
 	//    staging, because the pour needs both a free gripper and a glass the arm
@@ -82,6 +97,44 @@ func (s *beanjaminCoffee) serveIced(ctx, cancelCtx context.Context, withMilk boo
 	}
 	// 9. Place the iced glass in the serving area (next round-robin slot).
 	return s.placeHeldInServingArea(ctx, cancelCtx)
+}
+
+// brewAndPrepIce pokes the brew button, runs prepIcedGlass while the machine
+// pours, then waits out the rest of the brew window. On return the pour is done
+// and the glass is staged, so the caller continues with finishIced (a latte's
+// milk step runs there, after the pour). Separate-buttons machines only — the
+// toggle style holds the switch for the whole pour, leaving no idle arm time
+// to reclaim.
+func (s *beanjaminCoffee) brewAndPrepIce(ctx, cancelCtx context.Context, drink string) error {
+	if !s.cfg.HasSeparateBrewButtons {
+		return fmt.Errorf("brew_and_prep_ice: requires has_separate_brew_buttons (the toggle machine's claw holds the switch for the whole pour)")
+	}
+	press := s.pressEspressoButton
+	if isLungoDrink(drink) {
+		press = s.pressLungoButton
+	}
+	if err := press(ctx, cancelCtx); err != nil {
+		return fmt.Errorf("brew_and_prep_ice: %w", err)
+	}
+	pourStarted := time.Now()
+
+	prepErr := s.prepIcedGlass(ctx, cancelCtx, isMilkDrink(drink))
+
+	// Wait out the rest of the pour even when the ice prep failed, so the
+	// machine is quiescent before an operator or a rewind gets near it.
+	remaining := s.drinkBrewTime(drink) - time.Since(pourStarted)
+	s.activeOrderLogger().Infof("waiting out the remaining %s of the %s pour (ice prep error: %v)", remaining, drink, prepErr)
+	waitErr := waitOutPour(ctx, cancelCtx, remaining)
+	if prepErr != nil {
+		return fmt.Errorf("brew_and_prep_ice: %w", prepErr)
+	}
+	if waitErr != nil {
+		return fmt.Errorf("brew_and_prep_ice: %w", waitErr)
+	}
+
+	// Water has run, so the keep-alive clock restarts (keepalive.go).
+	s.recordMachineActivity()
+	return nil
 }
 
 // serveIcedCoffee is the iced serving path without milk — the iced_coffee drink

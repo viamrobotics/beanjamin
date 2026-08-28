@@ -541,13 +541,26 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 	}
 
 	s.setStep(stepBrewing)
-	logger.Infof("step 6/9: brewing %s", drink)
+	// The separate-buttons machine doses itself, leaving the arm idle mid-pour,
+	// so iced drinks run the ice-side prep during the pour instead of after it.
+	// The toggle machine holds the switch throughout, so it stays sequential.
+	overlapIce := isIcedDrink(drink) && s.cfg.HasSeparateBrewButtons
+	if overlapIce {
+		logger.Infof("step 6/9: brewing %s while prepping the iced glass", drink)
+	} else {
+		logger.Infof("step 6/9: brewing %s", drink)
+	}
 	if err := s.say(ctx, pickAlmostReady()); err != nil {
 		logger.Warnf("failed to say almost-ready: %v", err)
 	}
 	{
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::brewing")
-		err := s.brew(ctx, cancelCtx, drink)
+		var err error
+		if overlapIce {
+			err = s.brewAndPrepIce(ctx, cancelCtx, drink)
+		} else {
+			err = s.brew(ctx, cancelCtx, drink)
+		}
 		stepSpan.End()
 		if err != nil {
 			return err
@@ -562,9 +575,13 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::serving")
 		var servedSlot int
 		var err error
-		if isIcedDrink(drink) {
+		switch {
+		case overlapIce:
+			// Glass already iced and staged during the brew; finish the rest.
+			servedSlot, err = s.finishIced(ctx, cancelCtx, isMilkDrink(drink))
+		case isIcedDrink(drink):
 			servedSlot, err = s.serveIced(ctx, cancelCtx, isMilkDrink(drink))
-		} else {
+		default:
 			servedSlot, err = s.placeFullCupOnShelf(ctx, cancelCtx)
 		}
 		stepSpan.End()

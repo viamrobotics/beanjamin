@@ -257,12 +257,8 @@ func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, drink string) err
 
 	brewTime := s.drinkBrewTime(drink)
 	logger.Infof("waiting %s for the %s pour to finish", brewTime, drink)
-	select {
-	case <-time.After(brewTime):
-	case <-ctx.Done():
-		return fmt.Errorf("brew_coffee: cancelled during brew wait: %w", ctx.Err())
-	case <-cancelCtx.Done():
-		return fmt.Errorf("brew_coffee: cancelled during brew wait")
+	if err := waitOutPour(ctx, cancelCtx, brewTime); err != nil {
+		return fmt.Errorf("brew_coffee: %w", err)
 	}
 
 	// A poked button self-terminates; only the toggle needs releasing.
@@ -277,6 +273,23 @@ func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, drink string) err
 	// hand-driven brew_coffee action.
 	s.recordMachineActivity()
 	return nil
+}
+
+// waitOutPour blocks until d elapses or either context is cancelled.
+// Non-positive durations return immediately, so overlapped callers can pass
+// brewTime - elapsed unclamped.
+func waitOutPour(ctx, cancelCtx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	select {
+	case <-time.After(d):
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("cancelled during brew wait: %w", ctx.Err())
+	case <-cancelCtx.Done():
+		return fmt.Errorf("cancelled during brew wait")
+	}
 }
 
 // grindDurationSec returns the configured or default grind duration in seconds.
