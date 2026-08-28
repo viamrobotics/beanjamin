@@ -221,14 +221,19 @@ type Config struct {
 	// frame's center to produce the pre-grasp standoff (like
 	// cup_approach_relative_pose onto a detected cup centroid — see
 	// composeCupPose), but resolved against the live grasp frame. Its
-	// orientation is also the grasp orientation the gripper holds through the
-	// swing. Required to run open_door.
+	// orientation is the base grasp orientation, which DoorGraspYawRatio then
+	// yaws through the swing. Required to run open_door.
 	DoorApproachRelativePose *RelativePose `json:"door_approach_relative_pose,omitempty"`
 
 	// KeepAlive, when set, runs the idle-purge loop (keepalive.go) that holds the
 	// machine's 1 CUP button periodically so it never falls out of brew
 	// temperature. Requires HasSeparateBrewButtons. Unset disables it.
 	KeepAlive *KeepAlive `json:"keepalive,omitempty"`
+
+	// DoorGraspYawRatio turns the grasp orientation about world Z by ratio x
+	// theta as the door swings; see defaultDoorGraspYawRatio. A pointer because
+	// 0 and negatives are real settings, not "unset".
+	DoorGraspYawRatio *float64 `json:"door_grasp_yaw_ratio,omitempty"`
 }
 
 // defaultMaxBatchSize is used when Config.MaxBatchSize is unset or zero.
@@ -251,6 +256,25 @@ func (s *beanjaminCoffee) doorOpenAngleDegs() float64 {
 // door sweep, defaulting to defaultDoorPivotDegreesPerStep.
 func (s *beanjaminCoffee) doorPivotDegreesPerStep() float64 {
 	return orDefault(s.cfg.DoorPivotDegreesPerStep, defaultDoorPivotDegreesPerStep)
+}
+
+// defaultDoorGraspYawRatio counter-rotates the gripper as the door swings.
+//
+// Reachability sets this sign, not grasp mechanics: the handle is a ball, so the
+// grasp does not constrain wrist roll. The gripper sits behind its tool center
+// along -OV, so co-rotating drives the wrist into +y just as the handle travels
+// there. Replanning a failed 75-degree sweep offline put +1 out of IK solutions
+// at theta=47 and 0 out by theta=75; only -1 reached full open.
+const defaultDoorGraspYawRatio = -1
+
+// doorGraspYawRatio returns the configured world-Z yaw ratio for the door sweep.
+// It cannot use orDefault: that helper treats any non-positive value as unset,
+// and 0 (hold orientation fixed) and -1 (counter-rotate) are both real settings.
+func (s *beanjaminCoffee) doorGraspYawRatio() float64 {
+	if s.cfg.DoorGraspYawRatio != nil {
+		return *s.cfg.DoorGraspYawRatio
+	}
+	return defaultDoorGraspYawRatio
 }
 
 // doorGraspFrameName returns the frame the gripper aims at (its center is the

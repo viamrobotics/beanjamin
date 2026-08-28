@@ -363,3 +363,44 @@ func TestDoorGraspFrameName(t *testing.T) {
 		t.Errorf("configured grasp frame = %q, want custom-knob", got)
 	}
 }
+
+// TestDoorGraspYawRatio pins that 0 and negative ratios survive as configured
+// values — they are real settings (hold the orientation fixed / counter-rotate),
+// and the orDefault helper the other door tunables use would swallow both.
+func TestDoorGraspYawRatio(t *testing.T) {
+	if got := (&beanjaminCoffee{cfg: &Config{}}).doorGraspYawRatio(); got != defaultDoorGraspYawRatio {
+		t.Errorf("default yaw ratio = %v, want %v", got, defaultDoorGraspYawRatio)
+	}
+	for _, want := range []float64{0, -1, 0.5} {
+		if got := (&beanjaminCoffee{cfg: &Config{DoorGraspYawRatio: &want}}).doorGraspYawRatio(); got != want {
+			t.Errorf("configured yaw ratio = %v, want %v", got, want)
+		}
+	}
+}
+
+// TestYawAboutWorldZ checks the rotation lands in the world frame and not the
+// tool's own: a tool pointing straight down — where a tool-frame roll would come
+// out mirrored — must still yaw the way the door does, and the standoff
+// translation must swing with it.
+func TestYawAboutWorldZ(t *testing.T) {
+	// +X offset, tool pointing straight down.
+	base := spatialmath.NewPose(r3.Vector{X: 100}, &spatialmath.OrientationVectorDegrees{OZ: -1})
+
+	if got := yawAboutWorldZ(base, 0); got.Point().Sub(base.Point()).Norm() > 1e-6 {
+		t.Errorf("yaw of 0 moved the point to %v", got.Point())
+	}
+
+	// +90° about world Z sends +X to +Y and leaves the down-pointing axis alone.
+	got := yawAboutWorldZ(base, 90)
+	if got.Point().Sub(r3.Vector{Y: 100}).Norm() > 1e-6 {
+		t.Errorf("yawed point = %v, want (0,100,0)", got.Point())
+	}
+	if ov := got.Orientation().OrientationVectorDegrees(); math.Abs(ov.OZ+1) > 1e-6 {
+		t.Errorf("yawed OZ = %v, want -1 (still pointing down)", ov.OZ)
+	}
+
+	// The opposite sign must mirror it — the counter-rotating setting.
+	if back := yawAboutWorldZ(base, -90); back.Point().Sub(r3.Vector{Y: -100}).Norm() > 1e-6 {
+		t.Errorf("counter-yawed point = %v, want (0,-100,0)", back.Point())
+	}
+}

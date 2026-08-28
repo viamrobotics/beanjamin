@@ -133,6 +133,14 @@ func setDoorTheta(fs *referenceframe.FrameSystem, doorFrameName string, baseOrig
 	return nil
 }
 
+// yawAboutWorldZ turns p by degs about world Z, the hinge axis. Pre-composed so
+// the rotation lands in world, not in p's own frame; on a full pose it swings
+// the translation too, which is what carries a standoff along.
+func yawAboutWorldZ(p spatialmath.Pose, degs float64) spatialmath.Pose {
+	rz := spatialmath.NewPoseFromOrientation(&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: degs})
+	return spatialmath.Compose(rz, p)
+}
+
 // ballWorldPose returns the grasp frame's (handle ball's) current world pose
 // from fs — its point is the grasp target the gripper tracks through the sweep.
 func (s *beanjaminCoffee) ballWorldPose(fs *referenceframe.FrameSystem, inputs *referenceframe.LinearInputs) (spatialmath.Pose, error) {
@@ -241,8 +249,7 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	//    RelativePose offset composed onto the grasp frame's center (the door
 	//    analog of cup_approach_relative_pose onto a detected cup, via
 	//    composeCupPose, but resolved against a live frame). Its orientation is
-	//    the grasp orientation, held fixed for the whole sweep so the gripper
-	//    never twists off the handle.
+	//    the base grasp orientation, yawed by doorGraspYawRatio as the door swings.
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return err
@@ -268,7 +275,10 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	if err != nil {
 		return err
 	}
-	approachRel := relativePoseToSpatial(s.cfg.DoorApproachRelativePose)
+	// Yaw is a function of the door angle, not of this sweep's travel, so open and
+	// close are exact inverses and the configured pose is the SHUT-door one.
+	yawRatio := s.doorGraspYawRatio()
+	approachRel := yawAboutWorldZ(relativePoseToSpatial(s.cfg.DoorApproachRelativePose), yawRatio*fromDeg)
 	approachWorld := composeCupPose(ballBase.Point(), approachRel)
 	graspOrient := approachRel.Orientation()
 	graspWorld := spatialmath.NewPose(ballBase.Point(), graspOrient)
@@ -277,6 +287,9 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	// Move to the standoff, open the jaws there, then straight to the ball
 	// center, then close. Opening at the standoff and not earlier keeps the
 	// wider open-gripper silhouette out of the traverse to the fridge.
+	// The insertion is linear because doorOpenCollisions exempts the jaws/ball
+	// pair for the whole pull — unconstrained, the planner could arc in through
+	// the handle bar and still call the path clear.
 	if err := s.moveToRawPose(ctx,
 		&poseData{pose: approachWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
 		nil, nil, nil); err != nil {
@@ -290,7 +303,7 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	}
 	if err := s.moveToRawPose(ctx,
 		&poseData{pose: graspWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
-		nil, collisions, nil); err != nil {
+		defaultApproachConstraint, collisions, nil); err != nil {
 		return fmt.Errorf("move to grasp (ball center): %w", err)
 	}
 	if s.gripper != nil {
@@ -334,13 +347,12 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 		if err != nil {
 			return err
 		}
-		// Track only the ball's point through the swing while holding the grasp
-		// orientation fixed. The handle knob is spherical, so the grasp doesn't
-		// constrain wrist roll; letting grip-point ride the door panel's rotation
-		// (Compose with the rigid grasp offset) twisted the wrist off the handle.
-		// Commanding a constant tool orientation and following only the point
-		// keeps the gripper square to the handle the whole way.
-		goalPose := spatialmath.NewPose(ballNow.Point(), graspOrient)
+		// The plan is unconstrained, so these waypoints are the only thing telling
+		// the planner how to point the tool along the arc. Sign: see
+		// defaultDoorGraspYawRatio.
+		goalPose := spatialmath.NewPose(ballNow.Point(),
+			yawAboutWorldZ(spatialmath.NewPoseFromOrientation(graspOrient),
+				yawRatio*(theta-fromDeg)).Orientation())
 		goal := armplanning.NewPlanState(referenceframe.FrameSystemPoses{
 			frameGripPoint: referenceframe.NewPoseInFrame(referenceframe.World, goalPose),
 		}, nil)
@@ -407,10 +419,12 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	if err != nil {
 		return err
 	}
-	retractWorld := composeCupPose(ballEnd.Point(), approachRel)
+	// composeCupPose applies approachRel's translation in world axes, so a
+	// standoff left at the start angle would back out into the swung panel.
+	retractWorld := composeCupPose(ballEnd.Point(), yawAboutWorldZ(approachRel, yawRatio*(toDeg-fromDeg)))
 	if err := s.moveToRawPose(ctx,
 		&poseData{pose: retractWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
-		nil, collisions, nil); err != nil {
+		defaultApproachConstraint, collisions, nil); err != nil {
 		return fmt.Errorf("retract: %w", err)
 	}
 	// An open gripper has a wider collision silhouette than the allowed-collision
