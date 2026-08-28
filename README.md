@@ -562,6 +562,43 @@ Because a purge is the one arm motion nobody requested, it announces itself thro
 The arm never presses POWER — per the manual, pressing POWER while the machine is in POWER SAVE turns it *off*. The consequence is that this cannot recover a machine that is genuinely powered down: if Auto Start does not fire, or someone switches the machine off, every order that day will brew cold and be recorded as a success. Detecting that needs a machine-state sensor, which is not part of this feature.
 
 Water from each purge goes to the drip tray and is counted in the `drip_tray_brews` usage-sensor field, so empty the tray on the counter rather than on brew count alone.
+### Pose reference
+
+Which poses the service can reach, and which frame each moves. The frame is the switch's `component_name`; the table records what those switches are expected to carry.
+
+**`filter` frame** — the `pose_switcher_name` switch
+
+| Pose | Used for | Required when |
+| ---- | -------- | ------------- |
+| `grinder_approach`, `grinder_activate` | grind | always |
+| `decaf_grinder_approach`, `decaf_grinder_activate` | decaf grind | `can_serve_decaf` |
+| `tamper_approach`, `tamper_activate` | tamp | always |
+| `coffee_approach`, `coffee_in`, `coffee_locked_final` | lock the portafilter | always |
+| `coffee_shake` | dislodge a stuck puck while unlocking | `portafilter_shake_sec > 0` |
+| `close_to_cleaning`, `approach_to_cleaning_scrapper`, `cleaning_scrapper_active`, `approach_to_cleaning_brush`, `cleaning_brush_active` | clean | always — `rewind` recovery cleans too |
+| `purge_approach`, `purge_press` | hold the 1 CUP button to keep the machine at brew temperature | `keepalive` is configured |
+| `home` | end of cycle | always |
+
+**`grip-point` frame** — the `claws_pose_switcher_name` switch
+
+| Pose | Used for | Required when |
+| ---- | -------- | ------------- |
+| `filter_released`, `coffee_locked_final` | hand the portafilter off and re-grab it | always |
+| `coffee_button_approach`, `coffee_button_on`, `coffee_button_off` | hold the toggle down through the brew | `has_separate_brew_buttons: false` |
+| `espresso_button_approach`/`_press`, `lungo_button_approach`/`_press` | poke the per-shot buttons | `has_separate_brew_buttons: true` |
+| `cup_under_machine_approach`, `cup_ready_for_coffee` | place and retrieve the cup | always |
+| `ice_machine_approach`, `ice_machine_dispense`, `staging_approach`, `staging`, `pour_approach`, `pour` | iced coffee | `can_serve_iced` |
+
+**`cam` frame** — the observe switches
+
+| Pose | Switch | Required when |
+| ---- | ------ | ------------- |
+| `cup_observe` | `camera_observe_pose_switcher_name` | always |
+| `glass_observe` | `glass_observe_pose_switcher_name` | `can_serve_iced` |
+
+Both observe switches sweep **every** pose they carry, so additional vantages alongside these are used even though only these are required.
+
+Note that `coffee_locked_final` exists on both the filter and claws switches as two genuinely different poses in two different frames.
 
 ---
 
@@ -980,4 +1017,6 @@ viam robot part motion set-pose \
 Note: Only the pose values specified will be modified. Example if you only set `-x 100`, it will move the component by just changing the X value of its current pose
 
 Once you've found the right poses, add them to your `multi-poses-execution-switch` configuration.
+
+The web app's calibration view at `?view=calibrate` lists which poses belong to which frame on a given machine, and which of them are set by hand rather than derived from another pose. It also polls the live `filter` / `grip-point` / `cam` positions off the running machine and offers each as a copyable pose, so the jog-read-paste loop doesn't need the CLI. The pose list comes from a manifest generated from the machines' live app config — regenerate it with `make web-app-manifest` whenever a pose is added, removed, renamed, or re-baselined.
 

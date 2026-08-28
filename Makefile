@@ -41,6 +41,30 @@ web-app-install:
 web-app-build: web-app-install
 	cd web-app && npm run build
 
+# Dev targets deliberately skip web-app-install: `npm ci` wipes and reinstalls
+# node_modules, which is right before a build but wrong in a dev loop. Run
+# `make web-app-install` yourself after a dependency change.
+web-app-dev:
+	cd web-app && npm run dev
+
+# Serves the dev server through a Viam origin so the userToken cookie is set and
+# the app can reach real machines. Needs `make web-app-dev` running alongside it;
+# then open http://localhost:8012.
+web-app-local-test:
+	cd web-app && viam module local-app-testing --app-url http://localhost:3000
+
+web-app-test:
+	cd web-app && npm test
+
+# Part IDs for the pose calibration manifest. Defaults to whatever the
+# checked-in manifest already covers, so a bare `make web-app-manifest` just
+# refreshes it; pass PART_IDS="<id> ..." to add or change machines.
+PART_IDS ?= $(shell sed -n 's/.*"partId": "\([^"]*\)".*/\1/p' web-app/app/lib/calibrationManifest.ts 2>/dev/null)
+
+web-app-manifest:
+	@test -n "$(PART_IDS)" || { echo 'no part IDs found; pass PART_IDS="<partId> ..."'; exit 1; }
+	cd web-app && npm run gen:manifest -- $(PART_IDS)
+
 WEB_APP_BINARY := web-app/beanjamin-app
 
 $(WEB_APP_BINARY): cmd/web-app/main.go

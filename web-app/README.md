@@ -58,15 +58,54 @@ Run the following and go to http://localhost:8012 to get the cookie.
 viam module local-app-testing --app-url http://localhost:3000
 ```
 
+## Pose calibration view
+
+`?view=calibrate&partId=<partId>` shows which poses belong to which frame on a
+given machine. Reached from the fleet dashboard: each row links to
+its own machine as `[poses →]`, shown only for machines the manifest covers. A
+`partId` that isn't in the manifest says so rather than quietly showing a
+different machine's poses.
+
+It shows which poses belong to which frame on a given machine,
+and which of them are set by hand versus derived from another pose. At the top
+it polls where the machine believes `filter`, `grip-point`, and `cam` currently
+are — the same reading as `viam robot part motion get-pose` — each with a copy
+button. That is the loop: jog the arm, copy the live frame, paste it into one of
+the poses listed for that frame.
+
+The live readout needs the machine online and a `userToken` cookie; without one
+it falls back to dev mode. The pose list itself comes from a generated manifest,
+so regenerate it whenever a pose is added, removed, renamed, or re-baselined:
+
+```bash
+make web-app-manifest                          # refresh the machines already in it
+make web-app-manifest PART_IDS="<id> <id>"     # add or change machines
+```
+
+`viam login` is the only setup. The page always warns that the list may be out
+of date — it shows the capture time and how long ago that was, and escalates
+past 30 days, but never claims the list is current, because nothing in the page
+can detect a pose change.
+
 ## Other commands
 
 ```bash
 npm run build        # static export → web-app/out/
 npm run lint         # eslint
+npm test             # unit tests (node:test)
 ```
 
-To build the bundled Viam module (web app + Go launcher), run from the repo root:
+From the repo root:
 
 ```bash
-make web-app-module
+make web-app-dev          # dev server (npm run dev)
+make web-app-local-test   # serve it through a Viam origin so the userToken cookie is set
+make web-app-test         # unit tests
+make web-app-install      # npm ci, after a dependency change
+make web-app-module       # bundled Viam module (web app + Go launcher)
 ```
+
+`make web-app-local-test` wraps the `viam module local-app-testing` command
+above; run it alongside `make web-app-dev` and open
+[http://localhost:8012](http://localhost:8012). The dev targets deliberately
+skip `npm ci`, which would wipe `node_modules` on every invocation.

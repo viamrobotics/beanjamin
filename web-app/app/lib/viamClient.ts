@@ -1,5 +1,6 @@
 // Types only — no runtime side effects
 import type { ViamClient, RobotClient } from "@viamrobotics/sdk";
+import type { PoseValue } from "./calibration";
 
 export interface ViamConnection {
   viamClient: ViamClient;
@@ -462,4 +463,59 @@ export async function getCustomerDetectorInfo(
   );
   const result = await svc.doCommand({ get_info: true });
   return result as unknown as { camera_name: string };
+}
+
+// --- Live frame poses ---
+
+/**
+ * Where the machine currently believes the named frame is, in world
+ * coordinates — the same reading as `viam robot part motion get-pose`. The
+ * calibration view polls this so an operator can jog the arm and copy the
+ * result straight into a pose, instead of transcribing it from the CLI.
+ */
+export async function getFramePose(
+  conn: ViamConnection,
+  frame: string,
+): Promise<PoseValue> {
+  if (isDevMode()) return devFramePose(frame);
+
+  const pif = await conn.robotClient.getPose(frame, "world", []);
+  const p = pif.pose;
+  if (!p) throw new Error(`no pose returned for ${frame}`);
+  // Rounded at the source so the page can serialize once and use that single
+  // string for both the on-screen preview and the clipboard — a reading shown
+  // at one precision and copied at another is the bug this view exists to stop.
+  return round({
+    x: p.x,
+    y: p.y,
+    z: p.z,
+    o_x: p.oX,
+    o_y: p.oY,
+    o_z: p.oZ,
+    theta: p.theta,
+  });
+}
+
+const POSE_DECIMALS = 4;
+
+function round(pose: PoseValue): PoseValue {
+  return Object.fromEntries(
+    Object.entries(pose).map(([k, v]) => [k, Number(v.toFixed(POSE_DECIMALS))]),
+  ) as unknown as PoseValue;
+}
+
+// A slowly drifting pose, so dev mode shows the reading is live rather than a
+// frozen constant.
+function devFramePose(frame: string): PoseValue {
+  const seed = [...frame].reduce((n, c) => n + c.charCodeAt(0), 0);
+  const drift = Math.sin(Date.now() / 2000 + seed) * 5;
+  return round({
+    x: 400 + seed / 10 + drift,
+    y: -120 + drift * 2,
+    z: 210 + drift,
+    o_x: 0.67,
+    o_y: -0.74,
+    o_z: 0.03,
+    theta: -180,
+  });
 }
