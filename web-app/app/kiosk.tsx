@@ -186,6 +186,7 @@ export function Kiosk() {
       "decaf",
       "decaf_lungo",
       "iced_coffee",
+      "iced_latte",
     ]);
     if (supportedDrinks.has(selectedDrink)) {
       setStep("name");

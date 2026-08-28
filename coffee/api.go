@@ -26,6 +26,7 @@ const (
 	stepGrabbingFilter       = "Grabbing filter"
 	stepUnlockingPortafilter = "Unlocking portafilter"
 	stepCleaning             = "Cleaning"
+	stepAddingMilk           = "Adding milk"
 	stepFinishingUp          = "Finishing up"
 	stepRecoveringFilter     = "Recovering filter"
 	// stepKeepAlive is published while a keep-alive purge runs. No order is

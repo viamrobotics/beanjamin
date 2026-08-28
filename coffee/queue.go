@@ -465,6 +465,17 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 			}
 			return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
 		}
+	case "iced_latte":
+		// can_serve_iced_latte implies can_serve_iced (Validate rejects it
+		// otherwise), so the one flag is the whole gate.
+		if !s.cfg.CanServeIcedLatte {
+			s.logger.Infof("rejected iced latte order %q from %s (can_serve_iced_latte=false)", drink, customerName)
+			msg := pickUnsupportedDrink(drink)
+			if err := s.say(ctx, msg); err != nil {
+				s.logger.Warnf("failed to say rejection: %v", err)
+			}
+			return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
+		}
 	default:
 		s.logger.Infof("rejected order for unsupported drink %q from %s", drink, customerName)
 		msg := pickUnsupportedDrink(drink)

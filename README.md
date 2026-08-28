@@ -242,6 +242,7 @@ Add a **`viam:beanjamin:order-sensor`** component to the machine, put it in the 
 - `usage` — +1 after a regular brew (espresso/decaf), +1.5 after a lungo brew (lungo/decaf_lungo)
 - `cleanings` — +1 after each cleaning cycle
 - `ice_dispenses` — +1 after each ice dispense (iced coffee only)
+- `milk_pours` — +1 after each milk pour (iced latte only)
 - `drip_tray_brews` — +1 after each brew
 - `successful_consecutive_orders` — +1 after each successful order, reset to 0 after any failed **or** operator-cancelled order
 
@@ -301,21 +302,28 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `ice_board_name`           | string | When `can_serve_iced` is enabled | Name of a `rdk:component:board` whose GPIO pin triggers the ice machine. |
 | `ice_pin_name`             | string | When `can_serve_iced` is enabled | Board pin held HIGH to dispense ice. Required — there is no default pin. |
 | `ice_dispense_sec`         | float  | No       | How long the ice pin is held HIGH per drink, in seconds. Defaults to 5. |
-| `pour_vel_degs_per_sec`    | float  | No       | Max joint velocity (degrees/sec) for the pour tilt and return-upright pivots. Overrides the general slow-movement velocity so the pour isn't dragged out (default: 60). Lower it if the espresso splashes over the ice. |
+| `pour_vel_degs_per_sec`    | float  | No       | Max joint velocity (degrees/sec) for the pour tilt and return-upright pivots — the espresso pour and the milk pour alike. Overrides the general slow-movement velocity so the pour isn't dragged out (default: 60). Lower it if the espresso splashes over the ice. |
 | `pour_acc_degs_per_sec2`   | float  | No       | Max joint acceleration (degrees/sec²) for the pour pivots. The tilt is a short move that's usually acceleration-limited, so this — not velocity — is what actually snaps it faster. Default `0` leaves the arm's own acceleration in place; raise it to speed the tilt, watching for splash and joint stress. |
 | `glass_vision_service_name`           | string | When `can_serve_iced` is enabled | Name of a `rdk:service:vision` segmenter that returns glass detections via `GetObjectPointClouds`. Glass pickup mirrors cup pickup but with its own vision service and observe poses (tuned for the taller iced-coffee glass); it shares the cup camera (`src_camera_name`). |
 | `glass_observe_pose_switcher_name`    | string | When `can_serve_iced` is enabled | Switcher holding the glass observation vantages (swept one at a time, same as the cup observe switch). Must include a pose named `glass_observe` (home/recovery), and all poses must move the `cam` frame. |
 | `glass_approach_relative_pose`        | object | When `can_serve_iced` is enabled | 6-DoF gripper offset composed onto the detected glass centroid for the pre-grab pose (same shape as `cup_approach_relative_pose`), tuned for the taller glass. |
 | `glass_grab_relative_pose`            | object | When `can_serve_iced` is enabled | 6-DoF gripper offset for the final glass grab pose. |
 | `glass_dimensions`                    | object | When `can_serve_iced` is enabled | Known glass size. Same shape and behavior as `cup_dimensions` (`{ "diameter_mm", "height_mm" }`, both > 0), applied to the glass held-item geometry; its `height_mm` likewise drives resting-surface seating (below). Only the iced flow picks up a glass, so it is required — and only checked — when `can_serve_iced` is set. |
+| `can_serve_iced_latte`                | bool   | No       | Enables the `iced_latte` drink: the whole iced-coffee sequence, plus a fridge trip for milk between placing the empty espresso cup and picking the glass back up. The arm opens the fridge door, vision-detects the milk bottle inside, pours it into the staged glass, sets the bottle back down where it found it, and shuts the door. Requires `can_serve_iced` (the latte is served in the iced glass, over ice), `door_approach_relative_pose` (the milk is behind the fridge door), the `milk_*` fields below and the iced-latte claws poses below. Default `false`. |
+| `milk_vision_service_name`            | string | When `can_serve_iced_latte` is enabled | Name of a `rdk:service:vision` segmenter that returns milk-bottle detections via `GetObjectPointClouds`. Milk pickup mirrors cup and glass pickup with its own vision service and observe poses; it shares the cup camera (`src_camera_name`). |
+| `milk_observe_pose_switcher_name`     | string | When `can_serve_iced_latte` is enabled | Switcher holding the milk observation vantages, looking into the **open** fridge. Must include a pose named `milk_observe` (home/recovery), and all poses must move the `cam` frame. Same sweep semantics as the cup observe switch. |
+| `milk_approach_relative_pose`         | object | When `can_serve_iced_latte` is enabled | 6-DoF gripper offset composed onto the detected bottle centroid for the pre-grab standoff (same shape as `cup_approach_relative_pose`). It is also what the **return** aims at, so it must be a clean straight-up standoff over the bottle's spot on the shelf. |
+| `milk_grab_relative_pose`             | object | When `can_serve_iced_latte` is enabled | 6-DoF gripper offset for the final bottle grab pose — and, replayed onto the recorded pickup centroid, the pose the bottle is set back down at. |
+| `milk_bottle_dimensions`              | object | When `can_serve_iced_latte` is enabled | Known bottle size. Same shape and behavior as `cup_dimensions` (`{ "diameter_mm", "height_mm" }`, both > 0), applied to the held-bottle geometry; its `height_mm` likewise drives resting-surface seating (below). Required — and only checked — when `can_serve_iced_latte` is set. |
+| `milk_pour_sec`                       | float  | No       | How long the tilted bottle is held over the glass, in seconds. This — not the tilt angle — is the milk dose, so tune it on the machine against the bottle and glass in use. Defaults to 4. |
 | `serving_approach_relative_pose`      | object | Yes      | 6-DoF gripper offset composed onto the serving-area slot anchor for the pre-release approach pose (same shape as `cup_approach_relative_pose`). Used for both the hot cup and the iced glass. |
 | `serving_grab_relative_pose`          | object | Yes      | 6-DoF gripper offset composed onto the serving-area slot anchor for the release pose. Same shape as `serving_approach_relative_pose`; shared by cup and glass placement. |
 | `fake_mode`                           | bool   | No       | Test-machine knob. When `true`, `AllowedCollision` entries that reference gripper sub-geometries (e.g. `gripper:claws`, which only exist on the real ufactory gripper) are skipped, so motion plans validate against fake hardware. Leave unset on the real bot. Default `false`. |
-| `no_spill_carry`                      | bool   | No       | When `true`, every **free traverse of a filled container** is carried along a straight line broken into waypoints (one every 150 mm) instead of free-planning straight to the goal. This covers the serving-area placement (the hot cup and the iced glass), carrying the ice-filled glass to the staging area, and carrying the espresso cup to the pour position. Each waypoint commands the **held-item (container) frame** — the start and goal poses are converted onto it — interpolating the pose from the container's **upright** start to the goal, with a goal pose cloud that keeps the **orientation** tight (so the drink stays close to level) while opening up **translational** slack generously (position can't tip the drink, so the extra reach is free). The **final** waypoint — the true target — is pinned exactly with no pose cloud, so the following linear descent or pour pivot starts from the intended pose. The waypoints are planned as one multi-goal trajectory. The pose-cloud leeways are constants in `coffee/motion.go` (`noSpillGoalCloud`) — which orientation axis is safe to widen depends on the grasp, so tune them on hardware. Default `false` (those moves free-plan straight to the goal pose). |
+| `no_spill_carry`                      | bool   | No       | When `true`, every **free traverse of a filled container** is carried along a straight line broken into waypoints (one every 150 mm) instead of free-planning straight to the goal. This covers the serving-area placement (the hot cup and the iced glass), carrying the ice-filled glass to the staging area, carrying the espresso cup to the pour position, and — for an iced latte — carrying the milk bottle to the pour position and back to the fridge. Each waypoint commands the **held-item (container) frame** — the start and goal poses are converted onto it — interpolating the pose from the container's **upright** start to the goal, with a goal pose cloud that keeps the **orientation** tight (so the drink stays close to level) while opening up **translational** slack generously (position can't tip the drink, so the extra reach is free). The **final** waypoint — the true target — is pinned exactly with no pose cloud, so the following linear descent or pour pivot starts from the intended pose. The waypoints are planned as one multi-goal trajectory. The pose-cloud leeways are constants in `coffee/motion.go` (`noSpillGoalCloud`) — which orientation axis is safe to widen depends on the grasp, so tune them on hardware. Default `false` (those moves free-plan straight to the goal pose). |
 
-Glass pickup reuses `cup_photos_per_vantage` and `cup_pickup_max_attempts` (item-agnostic operational knobs); there are no glass-specific versions.
+Glass and milk-bottle pickup reuse `cup_photos_per_vantage` and `cup_pickup_max_attempts` (item-agnostic operational knobs); there are no glass- or milk-specific versions.
 
-**Held-item geometry.** A picked-up cup/glass is always tracked: its geometry — a box of the configured `cup_dimensions` / `glass_dimensions` centered on the grasp centroid — is attached to the gripper frame in the cached frame system as a `held-item` frame, so motion planning routes around the held item until it is set down (and is restored on each re-grab — the brewed cup from under the machine, the staged glass). When the brewed cup is re-grabbed but nothing was cached to restore — e.g. a manually-stepped serving that never ran the vision cup pickup — its held-item box is modeled from `cup_dimensions` and the grip point's current world pose, so the pour and shelf placement still track the cup. The gripper-overlap collision pairs are allowed automatically on every move while an item is held; contact phases near a modeled surface (under the machine, the serving-area shelf) allow the held item against that surface too. The held-item frame is dropped when the frame system is rebuilt (`reset_world`, `rewind`, `proceed`).
+**Held-item geometry.** A picked-up cup/glass/milk bottle is always tracked: its geometry — a box of the configured `cup_dimensions` / `glass_dimensions` / `milk_bottle_dimensions` centered on the grasp centroid — is attached to the gripper frame in the cached frame system as a `held-item` frame, so motion planning routes around the held item until it is set down (and is restored on each re-grab — the brewed cup from under the machine, the staged glass). When the brewed cup is re-grabbed but nothing was cached to restore — e.g. a manually-stepped serving that never ran the vision cup pickup — its held-item box is modeled from `cup_dimensions` and the grip point's current world pose, so the pour and shelf placement still track the cup. The gripper-overlap collision pairs are allowed automatically on every move while an item is held; contact phases near a modeled surface (under the machine, the serving-area shelf) allow the held item against that surface too. The held-item frame is dropped when the frame system is rebuilt (`reset_world`, `rewind`, `proceed`).
 
 **Resting-surface seating.** Pickup resolves each detection's grasp **Z** from the surface the container stands on rather than the raw detected centroid Z (which depth noise pushes above or below the true base), using the configured container height (`cup_dimensions` / `glass_dimensions`). It finds the highest **static** Box in the framesystem whose world footprint lies directly beneath the detection and whose top face is below the detected centroid, then seats the container's base **1 mm** above that top — so the grasp centroid becomes `surfaceTop + 1 mm + height/2`, keeping the detected X/Y. "Static" means world-anchored (it moves rigidly with the world frame), so the moving arm, gripper, camera, and any held item are never mistaken for a surface; non-box and rotated geometries are bounded by their world axis-aligned extent. No framesystem changes or extra config are required — the resting surface is auto-detected. When no surface is found beneath a detection, pickup uses the raw detected Z unchanged.
 
@@ -333,6 +341,15 @@ When `can_serve_iced` is enabled, the claws switch must additionally hold these 
 | `staging`              | Down in the staging area; the glass is set here to free the gripper for the pour, then re-grabbed and placed in the serving area. |
 | `pour_approach`        | Espresso cup held upright above the staged glass. |
 | `pour`                 | Espresso cup tilted to pour over the ice. |
+
+**Iced latte — required poses on the claws pose switcher (`claws_pose_switcher_name`):**
+
+When `can_serve_iced_latte` is enabled, the claws switch must hold these two poses on top of the iced-coffee ones. Nothing is authored for the fridge itself: the bottle is vision-detected (see the milk-observe switch below) and set back down at the spot it was detected at, and the door is tracked through its hinge arc rather than driven to poses.
+
+| Pose name              | Description |
+| ---------------------- | ----------- |
+| `milk_pour_approach`   | Milk bottle held upright above the staged glass. The bottle is taller and heavier than the espresso cup, so this is its own pose rather than a reuse of `pour_approach`. |
+| `milk_pour`            | Milk bottle tilted to pour into the glass. The tilt only has to clear the rim — how much milk lands is `milk_pour_sec`, the dwell at this pose. |
 
 **Cup pickup — required poses on the camera-observe pose switcher (`camera_observe_pose_switcher_name`):**
 
@@ -352,9 +369,18 @@ When `can_serve_iced` is enabled, the dedicated glass-observe switch must hold o
 | `glass_observe`     | Absolute world pose | Required. The primary view of the glass storage area and the home/recovery pose between grab attempts. |
 | additional poses    | Absolute world pose | Optional extra vantages tried only when earlier poses found no glass. |
 
+**Dynamic milk pickup — required poses on the milk-observe pose switcher (`milk_observe_pose_switcher_name`):**
+
+When `can_serve_iced_latte` is enabled, the dedicated milk-observe switch must hold one or more observation poses, all moving the `cam` frame. The switch must include a pose named `milk_observe`. Same sweep semantics as the cup observe switch — but calibrate these vantages with the fridge door **open**, since that is the only state the arm ever observes the milk in.
+
+| Pose name           | Type                | Description |
+| ------------------- | ------------------- | ----------- |
+| `milk_observe`      | Absolute world pose | Required. The primary view into the open fridge and the home/recovery pose between grab attempts. |
+| additional poses    | Absolute world pose | Optional extra vantages tried only when earlier poses found no bottle. |
+
 ### DoCommand
 
-**`prepare_order`** - Prepare a drink order with optional speech greetings. Supports `"espresso"` and `"lungo"`; `"decaf"`/`"decaf_lungo"` when `can_serve_decaf` is set, and `"iced_coffee"` when `can_serve_iced` is set.
+**`prepare_order`** - Prepare a drink order with optional speech greetings. Supports `"espresso"` and `"lungo"`; `"decaf"`/`"decaf_lungo"` when `can_serve_decaf` is set, `"iced_coffee"` when `can_serve_iced` is set, and `"iced_latte"` when `can_serve_iced_latte` is set.
 
 ```json
 {
@@ -378,6 +404,7 @@ Only `drink` is required. If `initial_greeting` is omitted, a random greeting is
 
 - Brew cycle: `grind_coffee`, `grind_decaf`, `tamp_ground`, `lock_portafilter`, `unlock_portafilter`, `release_filter`, `grab_filter`, `brew_coffee`, plus the button actions for the configured machine (`turn_coffee_button_on` / `turn_coffee_button_off`, or `press_espresso_button` / `press_lungo_button` / `brew_lungo` under `has_separate_brew_buttons`), `set_cup_for_coffee`, `give_full_cup_to_customer` (place the finished cup in the serving area), `clean_portafilter`, `place_held` (place the currently held vessel in the serving area), `keepalive_purge` (one group-head purge on demand — available on the `has_separate_brew_buttons` machine whether or not `keepalive` is configured, so the `purge_*` poses can be verified before the loop is switched on).
 - Iced coffee (require `can_serve_iced`): `fetch_glass`, `pulse_ice_pin`, `dispense_ice`, `stage_glass`, `grab_brewed_cup`, `pour_espresso`, `grab_staged_glass`, `serve_iced_coffee` (the full iced sequence end-to-end).
+- Iced latte (require `can_serve_iced_latte`): `fetch_milk` (vision-grab the bottle from the **already open** fridge), `pour_milk` (pour the held bottle into the staged glass), `return_milk` (set the bottle back down where `fetch_milk` picked it up), `add_milk` (the whole fridge trip: open door → fetch → pour → return → close door), `serve_iced_latte` (the full iced-plus-milk sequence end-to-end). `fetch_milk`, `pour_milk` and `return_milk` are meant for stepping the sequence one move at a time while calibrating; each assumes the state the one before it leaves behind, and `return_milk` fails if no `fetch_milk` recorded a pickup position.
 - Fridge door (requires `door_approach_relative_pose`): `open_door` (grip the handle and swing the door open — see below).
 
 ```json
@@ -497,6 +524,22 @@ Returns `{"status": "complete", "iterations": 5}`.
 ```
 
 Returns `{"status": "complete", "action": "open_door"}`.
+
+### Iced latte: the milk step
+
+An `iced_latte` is an `iced_coffee` with one extra stretch spliced into the serving step. Everything up to and including "place the empty espresso cup in the serving area" is identical; then, with the gripper free and the iced glass still standing in the staging area:
+
+1. **Open the fridge** — the `open_door` sweep, so the modeled panel tracks the real one and every plan that follows routes around it.
+2. **Fetch the bottle** — the same vision pickup cups and glasses use, against `milk_vision_service_name` and the vantages on `milk_observe_pose_switcher_name`. Detections are seated on the shelf beneath them (resting-surface seating), ranked closest-first, and grabbed via `milk_approach_relative_pose` / `milk_grab_relative_pose`. **The world centroid it was grasped at is recorded.** If no bottle is seen — or none can be reached — the arm asks the customer to put the milk back on its shelf (or nudge it) and retries, exactly like a missing cup.
+3. **Pour** — carry the bottle to `milk_pour_approach` and tilt to `milk_pour` as a fixed-point pivot, the same pour the espresso gets. The dwell at the tilted pose (`milk_pour_sec`) is the milk dose; the staged glass stays a hard obstacle throughout.
+4. **Put the bottle back** — not at an authored pose, but at the centroid step 2 recorded, with the same two offsets composed onto it. Where the milk stands in the fridge changes every time somebody puts it away, so the return is the grasp replayed rather than a spot to calibrate.
+5. **Shut the fridge** — the `close_door` sweep.
+
+Then the sequence rejoins the iced flow: re-grab the staged glass and place it in the serving area. As with iced coffee, two serving slots are consumed per order (the empty espresso cup, then the latte).
+
+The door is opened once and closed once, so the fridge stands open for the pour — a few seconds of open door in exchange for halving the door sweeps, which are the slowest and most failure-prone part of the trip.
+
+**When a milk step fails.** The arm does not try to shut the door itself: it may still be holding the bottle, and a sweep needs the gripper for the handle. So the door is left where it stands, the model keeps recording that angle, and the error says so. Take the bottle out of the gripper if it is holding one, shut the door by hand, then `rewind` and `proceed` (or `reset_world`, which is also what clears the recorded door angle).
 
 **`action`** - Control the gripper. Supported values: `"open_gripper"`, `"close_gripper"`.
 
