@@ -146,9 +146,12 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 	if err := s.requireMilk("pour_milk"); err != nil {
 		return err
 	}
-	// The bottle is full here — carry it level to the pour position so it doesn't
-	// slosh before the tilt (NoSpill honored only with no_spill_carry).
-	approachStep := Step{PoseName: clawPoseMilkPourApproach, PoseSwitch: s.clawsSw, Pause: shortPause, NoSpill: true}
+	// TODO: the carry to the pour position and the carry back to the fridge both
+	// free-plan, where a full cup would be carried level (no_spill_carry). The
+	// bottle is tall and grasped high, so the level-carry pose cloud may simply be
+	// unplannable for it — revisit once the poses are calibrated and we know what
+	// the arm can actually hold.
+	approachStep := Step{PoseName: clawPoseMilkPourApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}
@@ -210,13 +213,8 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 	s.activeOrderLogger().Infof("return_milk: putting the bottle back at (x=%.1f, y=%.1f, z=%.1f)",
 		centroid.X, centroid.Y, centroid.Z)
 
-	// The bottle still holds milk, so carry it level back to the fridge under
-	// no_spill_carry — the same choice tryDropCupInSlot makes for a full cup.
-	carry := func() error { return s.moveToRawPose(ctx, approachPD, nil, nil, nil) }
-	if s.cfg.NoSpillCarry {
-		carry = func() error { return s.carryHeldLevel(ctx, approachPD, nil, nil) }
-	}
-	if err := carry(); err != nil {
+	// Free-plan back to the fridge; see the TODO in pourMilk on the level carry.
+	if err := s.moveToRawPose(ctx, approachPD, nil, nil, nil); err != nil {
 		return fmt.Errorf("return_milk: approach the shelf: %w", err)
 	}
 
