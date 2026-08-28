@@ -26,9 +26,8 @@ func (s *beanjaminCoffee) serveIcedCoffee(ctx, cancelCtx context.Context) (int, 
 }
 
 // prepIcedGlass runs the ice-side half of the iced flow (steps 1-3): fetch a
-// glass, dispense ice into it, and stage it, leaving the gripper free. It
-// never touches the espresso cup or the coffee machine, so it is safe to run
-// while a separate-buttons machine is still pouring (see brewAndPrepIce).
+// glass, ice it, and stage it, leaving the gripper free. It never approaches
+// the coffee machine, so it can run mid-pour (see brewAndPrepIce).
 func (s *beanjaminCoffee) prepIcedGlass(ctx, cancelCtx context.Context) error {
 	if s.gripper == nil {
 		return fmt.Errorf("prep_iced_glass: no gripper configured")
@@ -49,9 +48,8 @@ func (s *beanjaminCoffee) prepIcedGlass(ctx, cancelCtx context.Context) error {
 	return s.stageGlass(ctx, cancelCtx)
 }
 
-// finishIcedCoffee runs the espresso-side half of the iced flow (steps 4-8),
-// assuming prepIcedGlass has already staged the iced glass and the pour has
-// finished: grab the brewed cup, pour it over the ice, and place both items.
+// finishIcedCoffee runs steps 4-8 once the pour is done and the glass is
+// staged: grab the brewed cup, pour it over the ice, and place both items.
 // Returns the serving-area position of the glass (the actual drink).
 func (s *beanjaminCoffee) finishIcedCoffee(ctx, cancelCtx context.Context) (int, error) {
 	// 4. Retrieve the brewed espresso cup from the machine.
@@ -94,10 +92,8 @@ func (s *beanjaminCoffee) brewAndPrepIce(ctx, cancelCtx context.Context, drink s
 
 	prepErr := s.prepIcedGlass(ctx, cancelCtx)
 
-	// Wait out whatever is left of the pour even when the ice prep failed
-	// (remaining <= 0 returns immediately): the poked button self-terminates,
-	// but surfacing the failure only after the stream stops means the machine
-	// is quiescent by the time an operator or a rewind gets near it.
+	// Wait out the rest of the pour even when the ice prep failed, so the
+	// machine is quiescent before an operator or a rewind gets near it.
 	remaining := s.drinkBrewTime(drink) - time.Since(pourStarted)
 	s.activeOrderLogger().Infof("waiting out the remaining %s of the %s pour (ice prep error: %v)", remaining, drink, prepErr)
 	waitErr := waitOutPour(ctx, cancelCtx, remaining)
@@ -108,8 +104,7 @@ func (s *beanjaminCoffee) brewAndPrepIce(ctx, cancelCtx context.Context, drink s
 		return fmt.Errorf("brew_and_prep_ice: %w", waitErr)
 	}
 
-	// Water has run, so the keep-alive clock restarts (keepalive.go), mirroring
-	// the sequential brew path.
+	// Water has run, so the keep-alive clock restarts (keepalive.go).
 	s.recordMachineActivity()
 	return nil
 }

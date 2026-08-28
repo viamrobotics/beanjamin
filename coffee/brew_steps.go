@@ -275,9 +275,9 @@ func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, drink string) err
 	return nil
 }
 
-// waitOutPour blocks until d has elapsed or either context is cancelled.
-// Non-positive durations return immediately, so callers that overlap arm work
-// with the pour can pass `brewTime - elapsed` without clamping.
+// waitOutPour blocks until d elapses or either context is cancelled.
+// Non-positive durations return immediately, so overlapped callers can pass
+// brewTime - elapsed unclamped.
 func waitOutPour(ctx, cancelCtx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return nil
