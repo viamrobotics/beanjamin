@@ -5,9 +5,9 @@ go 1.25.10
 require (
 	github.com/golang/geo v0.0.0-20230421003525-6adc56603217
 	github.com/google/uuid v1.6.0
-	github.com/viam-labs/motion-tools v1.35.1
+	github.com/viam-labs/motion-tools v1.45.2-0.20260825171254-94549756064c
 	go.viam.com/api v0.1.578
-	go.viam.com/rdk v1.5.0
+	go.viam.com/rdk v1.5.0-rc0.0.20260825182119-cb0409467f50
 	go.viam.com/utils v0.11.0
 	gonum.org/v1/gonum v0.17.0
 	google.golang.org/protobuf v1.36.12
