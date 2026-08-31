@@ -29,6 +29,16 @@ func realMain() error {
 	switch os.Args[1] {
 	case "say":
 		return runSay(os.Args[2:])
+	case "ice-snapshot":
+		return runIceSnapshot(os.Args[2:])
+	case "ice-dispense":
+		return runIceDispense(os.Args[2:])
+	case "ice-level":
+		return runIceLevel(os.Args[2:])
+	case "ice-analyze":
+		return runIceAnalyze(os.Args[2:])
+	case "ice-fit":
+		return runIceFit(os.Args[2:])
 	default:
 		printUsage()
 		return fmt.Errorf("unknown command: %s", os.Args[1])
@@ -39,7 +49,13 @@ func printUsage() {
 	fmt.Println("Usage: beanjamin-cli <command> [flags]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  say  Say text aloud via the speech service")
+	fmt.Println("  say           Say text aloud via the speech service")
+	fmt.Println("  ice-snapshot  Capture a point cloud at the arm's current pose and count")
+	fmt.Println("                the points inside the held glass (see ICE_LEVEL_PLAN.md, G2)")
+	fmt.Println("  ice-dispense  Drive the ice pin and capture the fill over time (G6)")
+	fmt.Println("  ice-level     Measure ice height from a capture dir's color images")
+	fmt.Println("  ice-analyze   Replay a raw capture dir through a depth sample volume")
+	fmt.Println("  ice-fit       Fit glass height and floor out of an ice-snapshot CSV (G4)")
 }
 
 // connFlags holds the shared connection flags used by all commands.
