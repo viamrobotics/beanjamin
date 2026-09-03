@@ -12,7 +12,7 @@ export const MANIFEST: MachineManifest[] = [
   {
     "machine": "cappuccina-main",
     "partId": "5be4df6e-b9ae-4a5f-acc0-e258d51be17d",
-    "generatedAt": "2026-08-28T16:17:18.255Z",
+    "generatedAt": "2026-09-03T15:39:20.534Z",
     "frames": [
       {
         "frame": "filter",
@@ -118,6 +118,14 @@ export const MANIFEST: MachineManifest[] = [
           {
             "pose": "lungo_button_press",
             "baseline": "lungo_button_approach"
+          },
+          {
+            "pose": "milk_pour",
+            "baseline": "milk_pour_approach"
+          },
+          {
+            "pose": "milk_pour_approach",
+            "baseline": "pour_approach"
           },
           {
             "pose": "pour",
