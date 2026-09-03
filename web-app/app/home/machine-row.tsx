@@ -4,6 +4,12 @@ import Link from "next/link";
 import { type Machine } from "./data";
 import { type MachineQueueState } from "../lib/viamClient";
 import { drinkLabel } from "../order/drinks";
+import { MANIFEST } from "../lib/calibrationManifest";
+
+// Pose lists are per machine, so only offer the link for machines the manifest
+// actually covers — sending someone to another machine's poses would be worse
+// than not offering it.
+const CALIBRATED_PARTS = new Set(MANIFEST.map((m) => m.partId));
 
 function renderQueueStatus(queue: MachineQueueState | undefined): string {
   if (queue === undefined) return "loading queue…";
@@ -78,6 +84,14 @@ export function MachineRow({
       >
         [kiosk mode →]
       </Link>
+      {CALIBRATED_PARTS.has(m.mainPartId) && (
+        <Link
+          href={`/?view=calibrate&partId=${m.mainPartId}`}
+          className="text-blue-600 ml-2 hover:underline"
+        >
+          [poses →]
+        </Link>
+      )}
     </li>
   );
 }

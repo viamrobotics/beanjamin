@@ -8,6 +8,7 @@
     "start": "next start",
     "build:viam": "next build && tar -czvf module.tar.gz -C out . -C .. meta.json",
     "lint": "eslint",
+    "gen:manifest": "node scripts/gen-calibration-manifest.mjs",
     "test": "node --import tsx --test \"app/**/*.test.ts\""
   },
   "dependencies": {
