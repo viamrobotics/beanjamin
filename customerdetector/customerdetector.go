@@ -59,10 +59,10 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "data_dir")
 	}
 	return []string{
-		camera.Named(cfg.CameraName).String(),
-	}, []string{
-		vision.Named(cfg.VisionServiceName).String(),
-	}, nil
+			camera.Named(cfg.CameraName).String(),
+		}, []string{
+			vision.Named(cfg.VisionServiceName).String(),
+		}, nil
 }
 
 // orderHistoryEntry is one completed drink.
