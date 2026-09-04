@@ -35,6 +35,24 @@ endif
 
 module: test module.tar.gz
 
+CLI_BINARY := bin/beanjamin-cli
+
+$(CLI_BINARY): Makefile go.mod $(GO_SOURCES)
+	go build -o $(CLI_BINARY) ./cmd/cli/
+
+# Downloads one order's saved motion plan requests into ./<order-id>/, flattened
+# out of the export's tag= directories and renamed so alphabetical order is
+# execution order. Needs a logged-in `viam` CLI.
+# Usage: make fetch-order ORDER=<order-id> [WITH_VIDEO=1] [FETCH_FLAGS="--out /tmp"]
+FETCH_FLAGS ?=
+ifdef WITH_VIDEO
+FETCH_FLAGS += --with-video
+endif
+
+fetch-order: $(CLI_BINARY)
+	@test -n "$(ORDER)" || { echo 'usage: make fetch-order ORDER=<order-id>'; exit 1; }
+	$(CLI_BINARY) fetch-order $(FETCH_FLAGS) $(ORDER)
+
 web-app-install:
 	cd web-app && npm ci
 
