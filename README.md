@@ -1020,3 +1020,66 @@ Once you've found the right poses, add them to your `multi-poses-execution-switc
 
 The web app's calibration view at `?view=calibrate` lists which poses belong to which frame on a given machine, and which of them are set by hand rather than derived from another pose. It also polls the live `filter` / `grip-point` / `cam` positions off the running machine and offers each as a copyable pose, so the jog-read-paste loop doesn't need the CLI. The pose list comes from a manifest generated from the machines' live app config — regenerate it with `make web-app-manifest` whenever a pose is added, removed, renamed, or re-baselined.
 
+### Fetch one order's data
+
+Every plan the module makes while `save_motion_requests_dir` is set is synced to
+the data page tagged with its order ID, step, motion type, and planning outcome
+(see the `save_motion_requests_dir` row above). To pull one order's plans down
+for offline debugging:
+
+```bash
+make fetch-order ORDER=5fb95a4c-83f8-4e66-862d-52cbca842ed5
+```
+
+That shells out to `viam data export binary filter --tags <order-id>` (so a
+logged-in `viam` CLI is required), then flattens the export's `tag=` directory
+tree into a single `./<order-id>/` directory, renaming each file to
+`<index>-<timestamp>-<step>-<motion>-<outcome>.json`. One order is roughly 70
+plans / 80 MB, and the directories are gitignored:
+
+```
+5fb95a4c-83f8-4e66-862d-52cbca842ed5/
+  001-20260903_141523.123-locking_portafilter-move-success.json
+  002-20260903_141527.880-locking_portafilter-carry-success.json
+  003-20260903_141602.410-grinding-circular-success.json
+  004-20260903_141640.005-brewing-move-failure.json
+```
+
+The timestamp is the machine's **local** clock, not UTC, so these names do not
+line up directly with the UTC times in the `order-events` sensor readings.
+
+The leading index and the timestamp both make alphabetical order the order the
+plans were executed in, so the directory reads top-to-bottom as the order's
+motion history — which is what you want when hunting the plan that preceded a
+failure.
+
+Each file still round-trips through RDK's `ReadRequestAndResponseFromFile`. Note
+that means **two concatenated JSON documents** per file — the request
+(`frame_system`, `goals`, `start_state`, `obstacles_in_world_frame`,
+`constraints`, `planner_options`) followed by the response (`path`,
+`trajectory`), which is absent when planning failed. Plain `jq .` fails on them
+with "Extra data"; use `jq -s` to read the pair as an array.
+
+Add `WITH_VIDEO=1` for the camera clips, pass other flags through
+`FETCH_FLAGS`, or call the CLI directly:
+
+```bash
+make fetch-order ORDER=<order-id> WITH_VIDEO=1
+go run ./cmd/cli fetch-order --help
+go run ./cmd/cli fetch-order --out /tmp --with-video <order-id>
+```
+
+| Flag           | Description                                                                                                                                                                                                                                                                                                       |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--out`        | Parent directory to create `<order-id>/` in. Defaults to the working directory.                                                                                                                                                                                                                                   |
+| `--from`       | Reorganize an export destination you already downloaded instead of downloading again. Copies rather than moves, leaving your export tree intact.                                                                                                                                                                  |
+| `--with-video` | Also download the order's three camera clips (~130 MB of mp4). They share the order's tag but aren't plan requests, so the export asks only for `application/json` unless this is set. Clips keep the names the video store gave them (which embed a `{"order_id": ...}` blob) and sort after the numbered plans. |
+| `--viam`       | Path to the `viam` CLI binary. Defaults to `viam` on `PATH`.                                                                                                                                                                                                                                                      |
+| `--timeout`    | Seconds to allow the export. `0` (the default) leaves the `viam` CLI's own default in place.                                                                                                                                                                                                                      |
+
+Note that `viam data export binary` **exits 0 having downloaded nothing** when the
+account can't read the machine's location, so a missing order and a missing
+permission look alike from the outside. The command turns that into a
+`no data found for order <id>` error rather than reporting success, and leaves no
+directory behind. A truncated order ID looks identical from the outside, so check
+it is a full UUID (8-4-4-4-**12**) first.
