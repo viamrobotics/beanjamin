@@ -31,6 +31,8 @@ func realMain() error {
 		return runSay(os.Args[2:])
 	case "fetch-order":
 		return runFetchOrder(os.Args[2:])
+	case "orders":
+		return runOrders(os.Args[2:])
 	default:
 		printUsage()
 		return fmt.Errorf("unknown command: %s", os.Args[1])
@@ -43,6 +45,7 @@ func printUsage() {
 	fmt.Println("Commands:")
 	fmt.Println("  say          Say text aloud via the speech service")
 	fmt.Println("  fetch-order  Download one order's plan requests into ./<order-id>/")
+	fmt.Println("  orders       Show the most recent orders and how they ended")
 }
 
 // connFlags holds the shared connection flags used by all commands.

@@ -53,6 +53,14 @@ fetch-order: $(CLI_BINARY)
 	@test -n "$(ORDER)" || { echo 'usage: make fetch-order ORDER=<order-id>'; exit 1; }
 	$(CLI_BINARY) fetch-order $(FETCH_FLAGS) $(ORDER)
 
+# Prints the most recent orders and how each ended, read from the order-events
+# sensor's tabular data. Needs a logged-in `viam` CLI.
+# Usage: make orders [LIMIT=50] [ORDERS_FLAGS="--errors --newest-first"]
+LIMIT ?= 20
+
+orders: $(CLI_BINARY)
+	$(CLI_BINARY) orders --limit $(LIMIT) $(ORDERS_FLAGS)
+
 web-app-install:
 	cd web-app && npm ci
 
