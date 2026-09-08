@@ -1020,6 +1020,60 @@ Once you've found the right poses, add them to your `multi-poses-execution-switc
 
 The web app's calibration view at `?view=calibrate` lists which poses belong to which frame on a given machine, and which of them are set by hand rather than derived from another pose. It also polls the live `filter` / `grip-point` / `cam` positions off the running machine and offers each as a copyable pose, so the jog-read-paste loop doesn't need the CLI. The pose list comes from a manifest generated from the machines' live app config — regenerate it with `make web-app-manifest` whenever a pose is added, removed, renamed, or re-baselined.
 
+### List recent orders
+
+`order_sensor_name` writes one reading per order attempt, which makes the recent
+brew history queryable without opening the data page:
+
+```bash
+make orders LIMIT=20
+```
+
+```
+#  When (UTC)        Result     Drink       Customer  Dur    Failed step     Order ID
+-  ----------------  ---------  ----------  --------  -----  --------------  ------------------------------------
+1  2026-09-04 13:16  OK         espresso    —         202s                   aee279d8-fc5f-4d2b-934c-50c8c0037108
+2  2026-09-04 13:20  FAILED     espresso    —         122s   Serving         2917a819-3f9b-4955-8ac1-1624482c6067
+3  2026-09-04 13:35  CANCELLED  espresso    —         2.1s   Grinding        3ea3deb5-5f12-4621-944e-8fabc94b876c
+4  2026-09-04 13:49  OK         espresso    —         199s                   47b90796-1d45-4ab8-bf84-7f2886dfacc8
+5  2026-09-04 16:49  OK         espresso    Adam      199s                   53f5ef7a-202a-4da3-87de-bbecf3a283fd
+
+3 OK · 1 failed · 1 operator-cancelled
+```
+
+Rows are in brew order, oldest first, so `#` reads as the sequence the machine
+actually ran — which is what you want when looking for a run of failures. An
+order that isn't `order_ok` is split into **FAILED** (a genuine fault) and
+**CANCELLED** (an operator stopped it), since the two mean very different things
+when reading a bad afternoon. A `—` customer is an order placed outside the
+kiosk, which has no name attached.
+
+Durations below a second are printed in milliseconds rather than rounded to
+`0s`: an order that died in 126ms and one that ran a full second are very
+different diagnostics, and the instant ones are usually the interesting
+failures.
+
+The order ID is a column rather than an option, because it is what makes a row
+actionable — copy one straight into `fetch-order`:
+
+```bash
+make orders LIMIT=50 ORDERS_FLAGS="--errors"
+make fetch-order ORDER=<the id from that table>
+```
+
+| Flag | Description |
+| ---- | ----------- |
+| `--limit` | How many of the most recent orders to show. Defaults to 20. |
+| `--errors` | Print each unsuccessful order's `error_message` under its row. |
+| `--newest-first` | List newest first instead of in brew order. Drops the `#` column, which would otherwise count backwards. |
+| `--part-id` | Only show orders from one machine part. Defaults to every part in the org. |
+| `--org-id` | Viam organization to query. Defaults to `$VIAM_ORG_ID`, else the `viam-dev` org the beanjamin machines live in. |
+| `--viam` | Path to the `viam` CLI binary. Defaults to `viam` on `PATH`. |
+
+This reads the sensor's tabular data through `viam data query tabular mql`. It
+has to be **MQL, not SQL** — `viam data query tabular sql` cannot resolve the
+nested `data.readings.*` paths the readings live under.
+
 ### Fetch one order's data
 
 Every plan the module makes while `save_motion_requests_dir` is set is synced to
