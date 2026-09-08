@@ -61,8 +61,8 @@ func TestStatusReportsQueueAndFlags(t *testing.T) {
 }
 
 // TestDoCommandDispatch covers the command routing for the paths that don't
-// touch the arm: get_queue, clear_queue, proceed (errors when not paused), the
-// run_cup_flow count guard, and the two unknown-command errors.
+// touch the arm: get_queue, clear_queue, the run_cup_flow count guard, and the
+// two unknown-command errors.
 func TestDoCommandDispatch(t *testing.T) {
 	ctx := context.Background()
 	s := newStatusService(t, &Config{})
@@ -103,26 +103,6 @@ func TestDoCommandDispatch(t *testing.T) {
 	}
 	if _, err := s.DoCommand(ctx, map[string]any{"nonsense": true}); err == nil {
 		t.Error("unknown command should error")
-	}
-}
-
-// TestProceedQueueSignal characterizes proceed as a cap-1 buffered signal: the
-// first proceed is accepted; a second, with the slot still full (no consumer
-// draining it), reports that nothing is waiting to resume. The queue is not
-// paused here, so no frame system rebuild is attempted — the service has no
-// framesystem service to rebuild from.
-func TestProceedQueueSignal(t *testing.T) {
-	ctx := context.Background()
-	s := newStatusService(t, &Config{})
-	resp, err := s.proceedQueue(ctx)
-	if err != nil {
-		t.Fatalf("first proceed: unexpected error %v", err)
-	}
-	if resp["frame_system_reset"] != false {
-		t.Errorf("frame_system_reset = %v, want false when the queue is not paused", resp["frame_system_reset"])
-	}
-	if _, err := s.proceedQueue(ctx); err == nil {
-		t.Error("second proceed with the buffer full should error")
 	}
 }
 

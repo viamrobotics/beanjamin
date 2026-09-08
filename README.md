@@ -452,17 +452,19 @@ Returns:
 {"count": 2, "orders": ["Alice", "Bob"], "is_paused": false, "is_busy": true}
 ```
 
-**`proceed`** - Resume queue processing after a cancel-induced pause, rebuilding the cached frame system first.
+**`proceed`** - Re-sync the recorded world with the real one, and resume queue processing after a cancel-induced pause.
 
-Releasing the pause is also where the recorded world is re-synced with the real one: the frame system is rebuilt from the framesystem service before the queue is let go, discarding whatever the cancelled order left mid-cycle — a filter frame reparented to world by `lock_portafilter`, a held-item geometry, a staged-glass obstacle. The recorded fridge-door angle survives the rebuild (only `reset_world` clears that). If the rebuild fails, the queue stays paused and nothing resumes.
+The frame system is rebuilt from the framesystem service on every `proceed`, discarding whatever an interrupted order left mid-cycle — a filter frame reparented to world by `lock_portafilter`, a held-item geometry, a staged-glass obstacle. This is unconditional because a cancel is not the only thing that strands those mutations: an order that fails on its own never pauses the queue, and the next order's opportunistic refresh deliberately declines to rebuild while a held item or locked filter is recorded, so without a `proceed` the stale world is inherited by every order that follows the failure. The recorded fridge-door angle survives the rebuild (only `reset_world` clears that). If the rebuild fails, nothing resumes and a paused queue stays paused.
 
-`proceed` refuses while a cancelled sequence is still unwinding: the frame system cannot be swapped under a goroutine that is planning with it. And when the queue is not paused there is nothing to resume against, so the frame system is left untouched — a stray `proceed` can't discard state a manually-stepped `execute_action` still depends on, such as a portafilter in the jaws or a locked filter frame.
+The pause is only released if there is one — `proceed` on a running queue rebuilds the world and reports `resumed: false`, rather than parking a resume signal that the next cancel would swallow on arrival. `proceed` refuses outright while a sequence is still running (including one that is unwinding from a cancel): the frame system cannot be swapped under a goroutine that is planning with it.
+
+Because the rebuild forgets the modeled contents of the gripper without opening the gripper, `proceed` is the wrong command when the jaws really are holding something — a portafilter or cup a manually-stepped `execute_action` picked up. Use `cancel` then `rewind`, which physically lets go and homes the arm, and only then `proceed`. A `proceed` that forgets a held item logs a warning saying so.
 
 ```json
 {"proceed": true}
 ```
 
-Returns `{"status": "resumed", "frame_system_reset": true}` — `frame_system_reset` is `false` when the queue was not paused and the world was left as it was.
+Returns `{"status": "resumed", "resumed": true, "frame_system_reset": true}`, or `{"status": "reset", "resumed": false, "frame_system_reset": true}` when the queue was not paused.
 
 **`clear_queue`** - Remove all pending orders from the queue.
 
