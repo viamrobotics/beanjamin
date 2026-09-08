@@ -125,13 +125,13 @@ func TestRewindIsDispatched(t *testing.T) {
 	t.Fatal("no rewind entry in the DoCommand dispatch table")
 }
 
-// pausedCoffeeWithDirtyWorld returns a service parked where a cancelled order
-// leaves it: the queue paused, and a cached frame system carrying mid-cycle
-// mutations (a held item, a locked filter frame, a staged glass). The frame
-// system it returns is the dirty one, so a caller can tell a rebuild from a
-// no-op, and the counter reports how many times the injected framesystem
-// service was asked for a config. cfgErr, when set, makes every rebuild fail.
-func pausedCoffeeWithDirtyWorld(t *testing.T, cfgErr error) (*beanjaminCoffee, *referenceframe.FrameSystem, *int) {
+// coffeeWithDirtyWorld returns a service whose cached frame system carries the
+// mid-cycle mutations an interrupted order leaves behind (a held item, a locked
+// filter frame, a staged glass), with the queue running. The frame system it
+// returns is the dirty one, so a caller can tell a rebuild from a no-op, and
+// the counter reports how many times the injected framesystem service was asked
+// for a config. cfgErr, when set, makes every rebuild fail.
+func coffeeWithDirtyWorld(t *testing.T, cfgErr error) (*beanjaminCoffee, *referenceframe.FrameSystem, *int) {
 	t.Helper()
 	s, _ := newTestCoffee(t, nil)
 
@@ -151,9 +151,17 @@ func pausedCoffeeWithDirtyWorld(t *testing.T, cfgErr error) (*beanjaminCoffee, *
 	s.heldItemAttached = true
 	s.filterFrameLocked = true
 	s.stagedGlassPlaced = true
-	s.paused.Store(true)
 
 	return s, dirty, &rebuilds
+}
+
+// pausedCoffeeWithDirtyWorld is coffeeWithDirtyWorld parked where a cancelled
+// order leaves it, with the queue paused as well.
+func pausedCoffeeWithDirtyWorld(t *testing.T, cfgErr error) (*beanjaminCoffee, *referenceframe.FrameSystem, *int) {
+	t.Helper()
+	s, dirty, rebuilds := coffeeWithDirtyWorld(t, cfgErr)
+	s.paused.Store(true)
+	return s, dirty, rebuilds
 }
 
 // TestProceedRebuildsFrameSystemWhenPaused pins the reset half of proceed:
@@ -187,6 +195,67 @@ func TestProceedRebuildsFrameSystemWhenPaused(t *testing.T) {
 	case <-s.queue.proceed:
 	default:
 		t.Error("proceed signal should have been sent to unpause the queue")
+	}
+}
+
+// TestProceedRebuildsFrameSystemWhenNotPaused is the order-failed-on-its-own
+// case: nothing cancelled, so the queue never paused, but the failed order still
+// left its mutations in cachedFS and refreshFrameSystemIfClean won't clear them
+// for the next order. proceed has to rebuild anyway.
+func TestProceedRebuildsFrameSystemWhenNotPaused(t *testing.T) {
+	s, dirty, rebuilds := coffeeWithDirtyWorld(t, nil)
+
+	resp, err := s.proceedQueue(context.Background())
+	if err != nil {
+		t.Fatalf("proceed error: %v", err)
+	}
+	if resp["frame_system_reset"] != true {
+		t.Errorf("frame_system_reset = %v, want true even when the queue is not paused", resp["frame_system_reset"])
+	}
+	if resp["resumed"] != false {
+		t.Errorf("resumed = %v, want false — there was no pause to release", resp["resumed"])
+	}
+	if *rebuilds != 1 {
+		t.Errorf("frame system rebuilt %d times, want 1", *rebuilds)
+	}
+	if s.cachedFS == dirty {
+		t.Error("cached frame system should have been replaced by the rebuild")
+	}
+	if s.heldItemAttached || s.filterFrameLocked || s.stagedGlassPlaced {
+		t.Errorf("rebuild must clear the mutation flags: held=%v locked=%v staged=%v",
+			s.heldItemAttached, s.filterFrameLocked, s.stagedGlassPlaced)
+	}
+}
+
+// TestProceedOnRunningQueueParksNoSignal pins the other half of the unpaused
+// case: the resume signal must not be sent when nothing is waiting for it. A
+// token left in the cap-1 buffer would be consumed by the next cancel-induced
+// pause the instant it arrived, resuming the queue without an operator asking.
+func TestProceedOnRunningQueueParksNoSignal(t *testing.T) {
+	s, _, _ := coffeeWithDirtyWorld(t, nil)
+
+	if _, err := s.proceedQueue(context.Background()); err != nil {
+		t.Fatalf("proceed error: %v", err)
+	}
+	select {
+	case <-s.queue.proceed:
+		t.Error("proceed must not park a resume signal while the queue is running")
+	default:
+	}
+}
+
+// TestProceedTwiceWhilePausedErrors: the resume signal is a cap-1 buffered
+// channel, so a second proceed with the slot still full (no consumer draining
+// it) reports that a resume is already pending.
+func TestProceedTwiceWhilePausedErrors(t *testing.T) {
+	s, _, _ := pausedCoffeeWithDirtyWorld(t, nil)
+	ctx := context.Background()
+
+	if _, err := s.proceedQueue(ctx); err != nil {
+		t.Fatalf("first proceed: unexpected error %v", err)
+	}
+	if _, err := s.proceedQueue(ctx); err == nil {
+		t.Error("second proceed with the buffer full should error")
 	}
 }
 

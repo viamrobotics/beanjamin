@@ -13,41 +13,56 @@ import (
 	"go.viam.com/rdk/logging"
 )
 
-// proceedQueue releases the pause a cancel left behind so processQueue starts
-// the next order.
+// proceedQueue re-syncs the recorded world with the real one and, when a cancel
+// left the queue paused, releases the pause so processQueue starts the next
+// order.
 //
-// A cancel-induced pause is the one idle state where the recorded world can
-// still hold mid-cycle mutations — a filter frame reparented to world, a held
-// cup geometry, a staged glass obstacle — that no longer describe the machine
-// the operator has since tidied up by hand or with a rewind. So the frame
-// system is rebuilt from the service before the pause is released: after the
-// signal lands the queue goroutine may start planning immediately, and cachedFS
-// may only be swapped while no sequence owns the arm. The recorded fridge-door
-// angle survives the rebuild — only reset_world can assert the door is shut.
+// The rebuild is unconditional because every idle state can hold mid-cycle
+// mutations — a filter frame reparented to world, a held cup geometry, a staged
+// glass obstacle — that no longer describe the machine an operator has since
+// tidied up by hand or with a rewind. A cancel leaves them behind, and so does
+// an order that fails on its own: that path never pauses the queue, and
+// refreshFrameSystemIfClean declines to rebuild for the next order precisely
+// because those mutations are present, so a stale world would otherwise be
+// inherited by every order that follows the failure. cachedFS may only be
+// swapped while no sequence owns the arm, hence the running gate; once the
+// signal lands the queue goroutine may start planning immediately.
 //
-// When the queue is not paused there is nothing to resume against, so the frame
-// system is left alone rather than discarding state a manually-stepped action
-// (a held portafilter, a locked filter frame) still depends on.
+// Two things the rebuild does not do. The recorded fridge-door angle survives
+// it — only reset_world can assert the door is shut. And it drops the modeled
+// contents of the gripper without opening the gripper, so an operator who has
+// manually stepped execute_action into a held portafilter or cup wants rewind,
+// which physically lets go, rather than proceed.
 func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, error) {
-	reset := false
-	if s.paused.Load() {
-		if !s.running.CompareAndSwap(false, true) {
-			return nil, errors.New("proceed: a sequence is still running — wait for it to stop, or cancel it first")
-		}
-		err := s.resetFrameSystem(ctx)
-		s.running.Store(false)
-		if err != nil {
-			return nil, fmt.Errorf("proceed: %w", err)
-		}
-		reset = true
+	if !s.running.CompareAndSwap(false, true) {
+		return nil, errors.New("proceed: a sequence is still running — wait for it to stop, or cancel it first")
+	}
+	// Warn before the flag is cleared: forgetting a held item without opening
+	// the jaws leaves the arm planning through whatever it is still carrying.
+	if s.heldItemAttached {
+		s.activeOrderLogger().Warn("proceed: forgetting a held item — if the gripper really is holding something, cancel and rewind instead so it lets go first")
+	}
+	err := s.resetFrameSystem(ctx)
+	s.running.Store(false)
+	if err != nil {
+		return nil, fmt.Errorf("proceed: %w", err)
+	}
+
+	// Only a paused queue has a consumer for the signal. Sending it regardless
+	// would park a token in the buffered slot that the next cancel-induced pause
+	// would consume the moment it arrived, resuming without an operator ever
+	// asking for it.
+	if !s.paused.Load() {
+		s.logger.Info("proceed: frame system rebuilt, queue was not paused")
+		return map[string]any{"status": "reset", "resumed": false, "frame_system_reset": true}, nil
 	}
 
 	select {
 	case s.queue.proceed <- struct{}{}:
-		s.logger.Infof("proceed: queue resumed, frame_system_reset=%v", reset)
-		return map[string]any{"status": "resumed", "frame_system_reset": reset}, nil
+		s.logger.Info("proceed: frame system rebuilt, queue resumed")
+		return map[string]any{"status": "resumed", "resumed": true, "frame_system_reset": true}, nil
 	default:
-		return nil, errors.New("not currently paused between orders")
+		return nil, errors.New("proceed: a resume is already pending")
 	}
 }
 
