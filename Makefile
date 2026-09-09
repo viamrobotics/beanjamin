@@ -106,6 +106,6 @@ ifeq ($(shell uname), Darwin)
 	brew tap viamrobotics/brews
 	brew install nlopt-static
 else ifeq ($(shell uname), Linux)
-	sudo apt-get update && sudo apt-get install -y --no-install-recommends libnlopt-dev
+	sudo apt-get install -y --no-install-recommends libnlopt-dev
 endif
 	go mod tidy
