@@ -907,10 +907,14 @@ const defaultCarryWaypointSpacingMm = 150.0
 // no cloud (see carryHeldLevel), so this slack only ever applies to the
 // intermediate, in-transit goals.
 //
-// Which axis is genuinely "safe" to open up depends on how the cup sits in the
-// gripper (its vertical axis relative to the goal orientation vector); opening the
-// wrong orientation axis can tip the drink (see the referenceframe.PoseCloud
-// docs). Tune on hardware before changing the orientation leeways.
+// Every leeway is measured in the commanded frame's own axes — PoseInCloud tests
+// the pose between goal and candidate — so which physical degree of freedom each
+// one opens depends on how that frame is oriented. The split above holds because
+// carryHeldLevel commands the held-item frame, whose +Z is the container's
+// vertical axis (heldItemFramePose). With nothing tracked it falls back to
+// grip-point, whose +Z is the tool axis: there Theta is a roll that tips a
+// container held crosswise, so the leeways stop meaning what they say. Tune on
+// hardware before changing them.
 var noSpillGoalCloud = &referenceframe.PoseCloud{
 	X: 75, Y: 75, Z: 75,
 	// OX/OY of 0.1 cap the container axis's off-vertical tilt at arcsin(0.1)≈5.7°
@@ -949,12 +953,15 @@ func computeLevelCarryWaypoints(startPose, endPose spatialmath.Pose, spacingMm f
 // whatever component the pose switch is configured to command — into the world
 // pose moveFrame must reach for that component to land on dest.
 //
-// The two frames are rigidly linked but not coincident: held-item hangs off the
-// claws, which sit short of the grip point along the tool axis. Commanding the
-// container straight at a grip-point goal would leave the gripper that far past
-// it — enough to trip executePivot's start-position check on the step that
-// follows the carry. Returns dest's world pose unchanged when the moving frame
-// is the authored component itself.
+// The two frames are rigidly linked but neither coincident nor co-oriented:
+// held-item hangs off the claws, which sit short of the grip point along the tool
+// axis, and it is rotated onto the container's axes (heldItemFramePose).
+// Commanding the container straight at a grip-point goal would leave the gripper
+// past it and mis-rotated — the offset alone is enough to trip executePivot's
+// start-position check on the step that follows the carry. Composing the full
+// relative pose lands the authored component exactly on dest whatever the
+// held-item frame's orientation. Returns dest's world pose unchanged when the
+// moving frame is the authored component itself.
 func carryGoalForMoveFrame(
 	fs *referenceframe.FrameSystem,
 	inputs *referenceframe.LinearInputs,
@@ -989,9 +996,11 @@ func carryGoalForMoveFrame(
 //
 // The goals command the held-item frame (the container) rather than the gripper,
 // so the upright goal and the relaxing pose cloud stay expressed about the
-// container itself. That frame hangs off the claws and is NOT coincident with the
-// one dest is authored for, so dest is converted into it (carryGoalForMoveFrame)
-// before planning. When no item is attached (tracking off, or a static pickup
+// container itself: that frame's +Z is the container's vertical axis
+// (heldItemFramePose), which is what makes noSpillGoalCloud's tilt leeways bound
+// the drink's tilt. That frame hangs off the claws and is neither coincident nor
+// co-oriented with the one dest is authored for, so dest is converted into it
+// (carryGoalForMoveFrame) before planning. When no item is attached (tracking off, or a static pickup
 // left nothing cached) it falls back to the gripper frame and that conversion is
 // a no-op.
 //

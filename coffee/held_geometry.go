@@ -8,6 +8,12 @@ package coffee
 // present, every motion plan routes around the held item — so the arm doesn't
 // drive the cup into the machine, the shelf, or itself while carrying it.
 //
+// The frame is attached rotated (heldItemFramePose) so its own +Z is the
+// container's vertical axis rather than the gripper's tool axis. No collision
+// geometry depends on that rotation, but the no-spill carry commands this frame
+// by name, and a pose cloud's leeways are measured in the commanded frame's own
+// axes (see noSpillGoalCloud in motion.go).
+//
 // The geometry is attached on grab (attachDetectedGeometry for a fresh vision
 // detection, reattachGeometry when re-grabbing an item whose geometry was already
 // cached this order) and removed on release (detachHeldGeometry). The grasp is
@@ -51,9 +57,9 @@ func (s *beanjaminCoffee) attachDetectedGeometry(ctx context.Context, label stri
 		return err
 	}
 	// Express the world-frame geometry in the gripper frame at the current pose.
-	// Cached in gripper-local coordinates, the held-item frame can be added with
-	// an identity transform and the geometry will track the gripper as it moves
-	// (FrameSystemGeometries places it at claws_to_world ∘ gripperLocalPose).
+	// Cached in gripper-local coordinates, the geometry tracks the gripper as it
+	// moves: FrameSystemGeometries places it at claws_to_world ∘ gripperLocalPose,
+	// whatever transform the held-item frame itself carries.
 	tf, err := fs.Transform(
 		fsInputs.ToLinearInputs(),
 		referenceframe.NewGeometriesInFrame(referenceframe.World, []spatialmath.Geometry{geomWorld}),
@@ -142,10 +148,37 @@ func (s *beanjaminCoffee) configuredCupBox(fs *referenceframe.FrameSystem, fsInp
 	return containerBox(gripPointWorld.Sub(grabOffset), s.cfg.CupDimensions, pickupLabelCup)
 }
 
+// heldItemFramePose returns the transform the held-item frame is attached at,
+// relative to the gripper, for a container geometry already expressed in
+// gripper-local coordinates.
+//
+// The frame adopts the geometry's own orientation. containerBox builds the
+// container box world-axis-aligned with its height on Z, so this makes the
+// frame's +Z the container's vertical axis: upright in the world at the moment of
+// the grab, and tilting with the container afterwards as the wrist moves.
+// carryHeldLevel depends on that — the no-spill pose cloud's tilt leeways only
+// bound the drink's tilt if the frame they are measured against is the
+// container's own.
+//
+// The geometry stays in gripper-local coordinates and is deliberately not
+// re-expressed in the rotated frame. RDK attaches a frame's geometry at the
+// frame's parent, never at the frame itself (the GeometriesInFrame special case
+// in referenceframe.FrameSystem.Transform, and FrameSystemGeometriesForFrames),
+// so this rotation cannot move the collision box; it only changes the pose the
+// frame system reports for — and the planner drives — the held-item frame.
+//
+// The translation stays zero so the frame origin remains the gripper's. A pure
+// rotation leaves every carry waypoint at the same physical pose, since
+// computeLevelCarryWaypoints interpolates about the frame origin.
+func heldItemFramePose(gripperLocal spatialmath.Geometry) spatialmath.Pose {
+	return spatialmath.NewPoseFromOrientation(gripperLocal.Pose().Orientation())
+}
+
 // addHeldItemFrame adds the held-item static frame under the gripper frame,
 // carrying gripperLocal (geometry already expressed in gripper-local
-// coordinates). Any existing held-item frame is removed first so attach is
-// idempotent. Sets heldItemAttached on success.
+// coordinates) and rotated onto the container's axes (heldItemFramePose). Any
+// existing held-item frame is removed first so attach is idempotent. Sets
+// heldItemAttached on success.
 func (s *beanjaminCoffee) addHeldItemFrame(gripperLocal spatialmath.Geometry) error {
 	gripperFrame := s.cachedFS.Frame(componentClaws)
 	if gripperFrame == nil {
@@ -154,9 +187,7 @@ func (s *beanjaminCoffee) addHeldItemFrame(gripperLocal spatialmath.Geometry) er
 	if existing := s.cachedFS.Frame(heldItemFrameName); existing != nil {
 		s.cachedFS.RemoveFrame(existing)
 	}
-	// Identity frame transform: the geometry carries its own gripper-local pose,
-	// so the planner places it relative to the gripper and it tracks the arm.
-	frame, err := referenceframe.NewStaticFrameWithGeometry(heldItemFrameName, spatialmath.NewZeroPose(), gripperLocal)
+	frame, err := referenceframe.NewStaticFrameWithGeometry(heldItemFrameName, heldItemFramePose(gripperLocal), gripperLocal)
 	if err != nil {
 		return fmt.Errorf("create held-item frame: %w", err)
 	}
@@ -207,6 +238,10 @@ func (s *beanjaminCoffee) stageGlassAsObstacle(ctx context.Context) error {
 		return fmt.Errorf("held-item frame carries no geometry to stage")
 	}
 	// Lift the gripper-local geometry into world coordinates at the current pose.
+	// Transforming a GeometriesInFrame resolves through the source frame's parent,
+	// so this composes claws_to_world with the geometry's own gripper-local pose
+	// and rightly ignores the held-item frame's container rotation — the geometry
+	// was never expressed in that frame's coordinates.
 	worldTF, err := s.cachedFS.Transform(
 		fsInputs.ToLinearInputs(),
 		referenceframe.NewGeometriesInFrame(heldItemFrameName, geos),
