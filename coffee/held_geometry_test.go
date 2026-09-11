@@ -139,6 +139,48 @@ func geometryToWorldInverse(fs *referenceframe.FrameSystem, inputs referencefram
 	return tf.(*referenceframe.GeometriesInFrame).Geometries()[0], nil
 }
 
+// TestHeldItemFrameIsContainerAligned verifies the frame is attached rotated onto
+// the container's axes — world-aligned, +Z up, at the grab — while the geometry
+// stays exactly where it was. The rotation is what the no-spill goal cloud
+// measures tilt against; it must not move the collision box.
+func TestHeldItemFrameIsContainerAligned(t *testing.T) {
+	// Claws well away from world-aligned: tool axis along world +X, plus a roll.
+	clawsPose := spatialmath.NewPose(
+		r3.Vector{X: 200, Y: -50, Z: 300},
+		&spatialmath.OrientationVectorDegrees{OX: 1, Theta: 30},
+	)
+	fs := clawsStaticFS(t, clawsPose)
+	s := heldGeomService(t, fs)
+	inputs := referenceframe.NewZeroInputs(fs)
+
+	worldCenter := r3.Vector{X: 250, Y: 80, Z: 120}
+	gripperLocal, err := geometryToWorldInverse(fs, inputs, testBox(t, spatialmath.NewPoseFromPoint(worldCenter)))
+	if err != nil {
+		t.Fatalf("to gripper frame: %v", err)
+	}
+	if err := s.addHeldItemFrame(gripperLocal); err != nil {
+		t.Fatalf("addHeldItemFrame: %v", err)
+	}
+
+	tf, err := fs.Transform(inputs.ToLinearInputs(),
+		referenceframe.NewPoseInFrame(heldItemFrameName, spatialmath.NewZeroPose()), referenceframe.World)
+	if err != nil {
+		t.Fatalf("transform held-item to world: %v", err)
+	}
+	framePose := tf.(*referenceframe.PoseInFrame).Pose()
+
+	// The frame reads back world-aligned even though the claws are not.
+	if !spatialmath.OrientationAlmostEqual(framePose.Orientation(), spatialmath.NewZeroOrientation()) {
+		t.Errorf("held-item world orientation = %v, want world-aligned",
+			framePose.Orientation().OrientationVectorDegrees())
+	}
+	// Its origin is still the gripper's, so carry waypoints are unmoved.
+	requireVecEqual(t, framePose.Point(), clawsPose.Point(), 1e-6)
+	// And the geometry is unmoved by the rotation: RDK places a frame's geometry
+	// at the frame's parent, so it stays where the gripper-local pose puts it.
+	requireVecEqual(t, heldItemWorldCenter(t, fs, inputs), worldCenter, 1e-4)
+}
+
 // TestHeldItemTracksGripper verifies the attached geometry moves with the gripper
 // as the joint angle changes.
 func TestHeldItemTracksGripper(t *testing.T) {

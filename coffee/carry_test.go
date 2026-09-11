@@ -116,11 +116,21 @@ func TestComputeLevelCarryWaypoints_OnLineAndOrientationInterpolates(t *testing.
 	}
 }
 
-// gripperFS builds world -> gripper -> {grip-point, coffee-claws-middle ->
-// held-item}, mirroring the real machine: grip-point sits 115mm out along the
-// gripper's Z, the claws 90mm, and held-item is attached to the claws with an
-// identity offset. gripperPose places the gripper in the world.
+// gripperFS builds the machine's gripper chain with held-item attached at an
+// identity offset — the shape it has when the geometry happens to be grasped
+// world-aligned. Use gripperFSWithHeldItem for a container-rotated frame.
 func gripperFS(t *testing.T, gripperPose spatialmath.Pose) *referenceframe.FrameSystem {
+	t.Helper()
+	return gripperFSWithHeldItem(t, gripperPose, spatialmath.NewZeroPose())
+}
+
+// gripperFSWithHeldItem builds world -> gripper -> {grip-point,
+// coffee-claws-middle -> held-item}, mirroring the real machine: grip-point sits
+// 115mm out along the gripper's Z and the claws 90mm, so held-item is 25mm short
+// of grip-point along the tool axis. gripperPose places the gripper in the world;
+// heldItemPose is the transform the container geometry gives the held-item frame
+// (heldItemFramePose).
+func gripperFSWithHeldItem(t *testing.T, gripperPose, heldItemPose spatialmath.Pose) *referenceframe.FrameSystem {
 	t.Helper()
 	fs := referenceframe.NewEmptyFrameSystem("test")
 	add := func(name string, pose spatialmath.Pose, parent referenceframe.Frame) referenceframe.Frame {
@@ -136,7 +146,7 @@ func gripperFS(t *testing.T, gripperPose spatialmath.Pose) *referenceframe.Frame
 	gripper := add("gripper", gripperPose, fs.World())
 	add(gripPoint, spatialmath.NewPoseFromPoint(r3.Vector{Z: 115}), gripper)
 	claws := add(componentClaws, spatialmath.NewPoseFromPoint(r3.Vector{Z: 90}), gripper)
-	add(heldItemFrameName, spatialmath.NewZeroPose(), claws)
+	add(heldItemFrameName, heldItemPose, claws)
 	return fs
 }
 
@@ -190,5 +200,53 @@ func TestCarryGoalForMoveFrame_NoShiftWhenFrameMatches(t *testing.T) {
 	}
 	if !spatialmath.PoseAlmostEqual(goal, authored) {
 		t.Errorf("goal = %v, want the authored pose %v", goal, authored)
+	}
+}
+
+// The held-item frame is rotated onto the container's axes, so it is no longer
+// co-oriented with grip-point. Converting the authored destination must undo that
+// rotation as well as the 25mm offset: placing the gripper so held-item lands
+// exactly on the returned goal has to put grip-point back on the authored pose.
+func TestCarryGoalForMoveFrame_UndoesHeldItemRotation(t *testing.T) {
+	// A grasp whose container axis is nowhere near the tool axis, as on the real
+	// machine where the cup hangs crosswise in the claws.
+	heldItemPose := spatialmath.NewPoseFromOrientation(
+		&spatialmath.OrientationVectorDegrees{OX: 1, Theta: 25},
+	)
+	gripperPose := spatialmath.NewPose(
+		r3.Vector{X: 100, Y: -300, Z: 240},
+		&spatialmath.OrientationVectorDegrees{OY: 1, Theta: -180},
+	)
+	fs := gripperFSWithHeldItem(t, gripperPose, heldItemPose)
+	inputs := referenceframe.NewZeroInputs(fs).ToLinearInputs()
+
+	authored := spatialmath.NewPose(
+		r3.Vector{X: 160, Y: -120, Z: 240},
+		&spatialmath.OrientationVectorDegrees{OY: 1, Theta: -180},
+	)
+	dest := &poseData{pose: authored, refFrame: referenceframe.World, componentName: gripPoint}
+
+	goal, err := carryGoalForMoveFrame(fs, inputs, dest, heldItemFrameName)
+	if err != nil {
+		t.Fatalf("carryGoalForMoveFrame: %v", err)
+	}
+
+	// Where the gripper has to be for held-item to sit on the goal.
+	heldInGripper, err := fs.Transform(inputs,
+		referenceframe.NewPoseInFrame(heldItemFrameName, spatialmath.NewZeroPose()), "gripper")
+	if err != nil {
+		t.Fatalf("transform held-item into gripper: %v", err)
+	}
+	moved := gripperFSWithHeldItem(t,
+		spatialmath.Compose(goal, spatialmath.PoseInverse(heldInGripper.(*referenceframe.PoseInFrame).Pose())),
+		heldItemPose)
+
+	gp, err := moved.Transform(referenceframe.NewZeroInputs(moved).ToLinearInputs(),
+		referenceframe.NewPoseInFrame(gripPoint, spatialmath.NewZeroPose()), referenceframe.World)
+	if err != nil {
+		t.Fatalf("transform grip-point to world: %v", err)
+	}
+	if got := gp.(*referenceframe.PoseInFrame).Pose(); !spatialmath.PoseAlmostEqual(got, authored) {
+		t.Errorf("grip-point landed at %v, want the authored pose %v", got, authored)
 	}
 }
