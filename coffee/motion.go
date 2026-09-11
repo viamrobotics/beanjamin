@@ -916,13 +916,13 @@ const defaultCarryWaypointSpacingMm = 150.0
 // container held crosswise, so the leeways stop meaning what they say. Tune on
 // hardware before changing them.
 var noSpillGoalCloud = &referenceframe.PoseCloud{
-	X: 75, Y: 75, Z: 75,
+	X: 100, Y: 100, Z: 100,
 	// OX/OY of 0.1 cap the container axis's off-vertical tilt at arcsin(0.1)≈5.7°
 	// per axis (≈8.1° along the OX+OY diagonal, since the leeways apply
 	// independently), which sits well below a full cup's static spill angle. Theta
 	// stays wide because a twist about a symmetric cup's own axis can't spill it,
 	// and narrowing it only starves IK.
-	OX: 0.1, OY: 0.1, OZ: 0.05, Theta: 45,
+	OX: 0.1, OY: 0.1, OZ: 0.05, Theta: 90,
 }
 
 // computeLevelCarryWaypoints returns the ordered goal poses for a straight-line
