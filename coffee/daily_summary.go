@@ -12,11 +12,15 @@ package coffee
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
+	"text/template"
 	"time"
 
+	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/module"
 )
 
@@ -25,6 +29,20 @@ import (
 // it returns.
 const dailySummaryTimeout = 60 * time.Second
 
+// orderRow is one order-sensor reading, projected flat out of the tabular
+// document. The json tags are the single source of truth for the field names:
+// dailySummaryStages builds its $project from them by reflection, so a renamed
+// field can't leave the query and the decode disagreeing — which would show up
+// as a day of zeroed-out counters rather than as an error.
+type orderRow struct {
+	Drink             string  `json:"drink"`
+	OrderOK           bool    `json:"order_ok"`
+	OperatorCancelled bool    `json:"operator_cancelled"`
+	FailedStep        string  `json:"failed_step"`
+	Decaf             bool    `json:"decaf"`
+	DurationMs        float64 `json:"duration_ms"`
+}
+
 // sendDailySummary posts a Slack digest of every order recorded so far today,
 // where "today" starts at midnight in the timezone named in the command
 // ({"timezone": "America/New_York"}) and defaults to the host's timezone.
@@ -32,8 +50,8 @@ const dailySummaryTimeout = 60 * time.Second
 // ponytail: a failure here is only a returned error — the job manager logs it
 // and records it in the job's history, but nothing reaches Slack. Silence in
 // the channel therefore means "no digest ran" as well as "no orders". The
-// always-posted no-orders line below is what keeps that distinguishable by eye;
-// if it stops being enough, post the error to Slack too.
+// always-posted no-orders line is what keeps that distinguishable by eye; if it
+// stops being enough, post the error to Slack too.
 func (s *beanjaminCoffee) sendDailySummary(ctx context.Context, arg any) (map[string]any, error) {
 	if s.slackNotifier == nil {
 		return nil, fmt.Errorf("send_daily_summary requires slack_notifier_name to be configured")
@@ -53,7 +71,7 @@ func (s *beanjaminCoffee) sendDailySummary(ctx context.Context, arg any) (map[st
 	now := time.Now().In(loc)
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 
-	rows, err := s.QueryTabularDataForResource(ctx, s.cfg.OrderSensorName,
+	raw, err := s.QueryTabularDataForResource(ctx, s.cfg.OrderSensorName,
 		&module.QueryTabularDataOptions{
 			TimeBack:         now.Sub(dayStart),
 			AdditionalStages: dailySummaryStages(),
@@ -62,20 +80,23 @@ func (s *beanjaminCoffee) sendDailySummary(ctx context.Context, arg any) (map[st
 		return nil, fmt.Errorf("querying today's orders from %q: %w", s.cfg.OrderSensorName, err)
 	}
 
-	sum := summarizeOrders(rows)
-	blocks := dailySummaryBlocks(sum, dayStart, now, s.machineLogsURL)
+	sum := summarizeOrders(decodeOrderRows(raw, s.logger))
+	body, err := renderDailySummary(sum)
+	if err != nil {
+		return nil, err
+	}
 
 	s.logger.Infof("daily summary: %d orders between %s and %s (%s)",
-		sum.attempted, dayStart.Format(time.Kitchen), now.Format(time.Kitchen), loc)
+		sum.Attempted, dayStart.Format(time.Kitchen), now.Format(time.Kitchen), loc)
 
 	if _, err := s.slackNotifier.DoCommand(ctx, map[string]any{
 		"command": "send",
 		"text":    dailySummaryText(sum, now),
-		"blocks":  blocks,
+		"blocks":  dailySummaryBlocks(body, dayStart, now),
 	}); err != nil {
 		return nil, fmt.Errorf("sending daily summary to slack: %w", err)
 	}
-	return map[string]any{"orders": float64(sum.attempted), "sent": true}, nil
+	return map[string]any{"orders": float64(sum.Attempted), "sent": true}, nil
 }
 
 // summaryLocation resolves the timezone the business day is measured in. The
@@ -99,108 +120,190 @@ func summaryLocation(arg any) (*time.Location, error) {
 	return loc, nil
 }
 
-// dailySummaryStages projects the order-sensor fields flat. The raw tabular
-// document nests the reading under data.readings (which is why this has to be
-// MQL — SQL can't resolve that path), and flattening it here keeps the
-// aggregation below working on a plain map.
+// dailySummaryStages projects the orderRow fields flat, one $project entry per
+// json tag. The raw tabular document nests the reading under data.readings,
+// which is also why this has to be MQL — SQL can't resolve that path.
 func dailySummaryStages() []map[string]any {
-	return []map[string]any{
-		{"$project": map[string]any{
-			"_id":                0,
-			"drink":              "$data.readings.drink",
-			"order_ok":           "$data.readings.order_ok",
-			"operator_cancelled": "$data.readings.operator_cancelled",
-			"failed_step":        "$data.readings.failed_step",
-			"decaf":              "$data.readings.decaf",
-			"duration_ms":        "$data.readings.duration_ms",
-		}},
+	project := map[string]any{"_id": 0}
+	for field := range reflect.TypeFor[orderRow]().Fields() {
+		tag := field.Tag.Get("json")
+		project[tag] = "$data.readings." + tag
 	}
+	return []map[string]any{{"$project": project}}
 }
 
-// daySummary is one day's orders reduced to what the digest prints.
+// decodeOrderRows converts the query's untyped documents into orderRows through
+// a JSON round-trip, so the struct tags do the field mapping. A row that won't
+// decode is dropped with a warning rather than failing the digest: one odd
+// reading shouldn't cost the whole day's numbers.
+func decodeOrderRows(raw []map[string]any, logger logging.Logger) []orderRow {
+	rows := make([]orderRow, 0, len(raw))
+	for _, doc := range raw {
+		encoded, err := json.Marshal(doc)
+		if err != nil {
+			logger.Warnf("daily summary: skipping an unencodable order reading: %v", err)
+			continue
+		}
+		var row orderRow
+		if err := json.Unmarshal(encoded, &row); err != nil {
+			logger.Warnf("daily summary: skipping an unreadable order reading: %v", err)
+			continue
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// nameCount is one entry of a ranked breakdown, ordered for display.
+type nameCount struct {
+	Name  string
+	Count int
+}
+
+// daySummary is one day's orders reduced to what the digest prints. Its fields
+// are exported because the message template reads them directly.
 type daySummary struct {
-	attempted   int
-	succeeded   int
-	faulted     int
-	cancelled   int
-	decaf       int
-	drinks      map[string]int
-	failedSteps map[string]int
+	Attempted   int
+	Succeeded   int
+	Faulted     int
+	Cancelled   int
+	Decaf       int
+	Drinks      []nameCount
+	FailedSteps []nameCount
+
 	// brewTotal sums successful orders only: a fault that died at "Grinding"
 	// would otherwise drag the average toward zero and read as a speed-up.
 	brewTotal time.Duration
 }
 
-func (d daySummary) successRate() float64 {
-	if d.attempted == 0 {
+func (d daySummary) SuccessRate() float64 {
+	if d.Attempted == 0 {
 		return 0
 	}
-	return float64(d.succeeded) / float64(d.attempted) * 100
+	return float64(d.Succeeded) / float64(d.Attempted) * 100
 }
 
-func (d daySummary) avgBrew() time.Duration {
-	if d.succeeded == 0 {
+func (d daySummary) AvgBrew() time.Duration {
+	if d.Succeeded == 0 {
 		return 0
 	}
-	return (d.brewTotal / time.Duration(d.succeeded)).Round(time.Second)
+	return (d.brewTotal / time.Duration(d.Succeeded)).Round(time.Second)
 }
 
-// summarizeOrders reduces the projected query rows. Kept a pure function over
-// plain maps so the whole aggregation is testable without a cloud connection.
-func summarizeOrders(rows []map[string]any) daySummary {
-	sum := daySummary{
-		drinks:      map[string]int{},
-		failedSteps: map[string]int{},
-	}
+func (d daySummary) TotalBrew() time.Duration {
+	return d.brewTotal.Round(time.Second)
+}
+
+// summarizeOrders reduces the day's readings. Kept a pure function over typed
+// rows so the whole aggregation is testable without a cloud connection.
+func summarizeOrders(rows []orderRow) daySummary {
+	sum := daySummary{}
+	drinks := map[string]int{}
+	failedSteps := map[string]int{}
+
 	for _, row := range rows {
-		sum.attempted++
-		drink, _ := row["drink"].(string)
+		sum.Attempted++
+		drink := row.Drink
 		if drink == "" {
 			drink = "unknown"
 		}
-		sum.drinks[drink]++
-		if decaf, _ := row["decaf"].(bool); decaf {
-			sum.decaf++
+		drinks[drink]++
+		if row.Decaf {
+			sum.Decaf++
 		}
 
-		if ok, _ := row["order_ok"].(bool); ok {
-			sum.succeeded++
-			if ms, valid := numericReading(row["duration_ms"]); valid {
-				sum.brewTotal += time.Duration(ms) * time.Millisecond
-			}
-			continue
-		}
+		switch {
+		case row.OrderOK:
+			sum.Succeeded++
+			sum.brewTotal += time.Duration(row.DurationMs) * time.Millisecond
 		// An operator stopping a run is not a fault; counting the two together
 		// would make a busy day of manual cancels look like failing hardware.
-		if cancelled, _ := row["operator_cancelled"].(bool); cancelled {
-			sum.cancelled++
-			continue
+		case row.OperatorCancelled:
+			sum.Cancelled++
+		default:
+			sum.Faulted++
+			step := row.FailedStep
+			if step == "" {
+				step = "an unknown step"
+			}
+			failedSteps[step]++
 		}
-		sum.faulted++
-		step, _ := row["failed_step"].(string)
-		if step == "" {
-			step = "an unknown step"
-		}
-		sum.failedSteps[step]++
 	}
+
+	sum.Drinks = ranked(drinks)
+	sum.FailedSteps = ranked(failedSteps)
 	return sum
 }
 
-// dailySummaryText is the plain-text fallback Slack shows in notifications and
-// when Block Kit can't render.
+// ranked orders a count map most-frequent-first, breaking ties by name so the
+// same day always renders identically.
+func ranked(counts map[string]int) []nameCount {
+	out := make([]nameCount, 0, len(counts))
+	for name, count := range counts {
+		out = append(out, nameCount{Name: name, Count: count})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// dailySummaryTmpl renders the digest body as Slack mrkdwn. The whole message
+// layout lives here as text rather than as nested Block Kit maps, so the copy
+// can be read and edited as the document it is.
+var dailySummaryTmpl = template.Must(template.New("daily-summary").Parse(
+	`{{- if eq .Attempted 0 -}}
+No orders today.
+{{- else -}}
+*{{ .Attempted }} orders* · {{ .Succeeded }} succeeded ({{ printf "%.0f" .SuccessRate }}%) · {{ .Faulted }} faulted · {{ .Cancelled }} cancelled by an operator
+{{ if gt .Succeeded 0 }}Average brew {{ .AvgBrew }}, {{ .TotalBrew }} of brewing in total.
+{{ end }}
+*Drinks*{{ if gt .Decaf 0 }} _({{ .Decaf }} decaf)_{{ end }}
+{{ range .Drinks }}• {{ .Name }} — {{ .Count }}
+{{ end }}
+{{- if .FailedSteps }}
+*Faults by step*
+{{ range .FailedSteps }}• {{ .Name }} — {{ .Count }}
+{{ end }}
+{{- end -}}
+{{- end -}}`))
+
+// renderDailySummary renders the template into the message body. An error here
+// means the template itself is broken, which is a bug rather than a bad day of
+// data, so it fails the whole digest rather than posting something half-formed.
+func renderDailySummary(sum daySummary) (string, error) {
+	var b strings.Builder
+	if err := dailySummaryTmpl.Execute(&b, sum); err != nil {
+		return "", fmt.Errorf("rendering the daily summary: %w", err)
+	}
+	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// dailySummaryText is the short line Slack shows in notifications and in the
+// channel list. It stays a Sprintf rather than a second template: a push
+// notification has room for one sentence, and the layout that earned a template
+// is the body, not this.
 func dailySummaryText(sum daySummary, day time.Time) string {
-	if sum.attempted == 0 {
+	if sum.Attempted == 0 {
 		return fmt.Sprintf(":coffee: No orders on %s.", day.Format("Mon, Jan 2"))
 	}
 	return fmt.Sprintf(":coffee: %s: %d orders, %d succeeded, %d faulted, %d cancelled (%.0f%% success).",
-		day.Format("Mon, Jan 2"), sum.attempted, sum.succeeded, sum.faulted, sum.cancelled, sum.successRate())
+		day.Format("Mon, Jan 2"), sum.Attempted, sum.Succeeded, sum.Faulted, sum.Cancelled, sum.SuccessRate())
 }
 
-// dailySummaryBlocks renders the digest as Block Kit. Returned as []any of
-// map[string]any so it serializes through the structpb-backed DoCommand wire
-// format, which rejects []map[string]any as a list value.
-func dailySummaryBlocks(sum daySummary, dayStart, now time.Time, machineLogsURL string) []any {
-	blocks := []any{
+// dailySummaryBlocks wraps the rendered body in Block Kit: a header, the body,
+// and a footer naming the window. Returned as []any of map[string]any so it
+// serializes through the structpb-backed DoCommand wire format, which rejects
+// []map[string]any as a list value.
+func dailySummaryBlocks(body string, dayStart, now time.Time) []any {
+	// The window is the visible check on the timezone: if the job's CRON_TZ and
+	// the command's timezone drift apart, the wrong hours show up here rather
+	// than going unnoticed.
+	window := fmt.Sprintf("%s – %s", dayStart.Format("3:04 PM"), now.Format("3:04 PM MST"))
+	return []any{
 		map[string]any{
 			"type": "header",
 			"text": map[string]any{
@@ -209,77 +312,13 @@ func dailySummaryBlocks(sum daySummary, dayStart, now time.Time, machineLogsURL 
 				"emoji": true,
 			},
 		},
-	}
-
-	if sum.attempted == 0 {
-		blocks = append(blocks, map[string]any{
+		map[string]any{
 			"type": "section",
-			"text": map[string]any{"type": "mrkdwn", "text": "No orders today."},
-		})
-		return append(blocks, dailySummaryFooter(dayStart, now, machineLogsURL))
+			"text": map[string]any{"type": "mrkdwn", "text": body},
+		},
+		map[string]any{
+			"type":     "context",
+			"elements": []any{map[string]any{"type": "mrkdwn", "text": window}},
+		},
 	}
-
-	fields := []any{
-		slackField("*Orders:*", fmt.Sprintf("%d", sum.attempted)),
-		slackField("*Succeeded:*", fmt.Sprintf("%d (%.0f%%)", sum.succeeded, sum.successRate())),
-		slackField("*Faulted:*", fmt.Sprintf("%d", sum.faulted)),
-		slackField("*Cancelled by operator:*", fmt.Sprintf("%d", sum.cancelled)),
-	}
-	if sum.succeeded > 0 {
-		fields = append(fields,
-			slackField("*Avg brew:*", sum.avgBrew().String()),
-			slackField("*Total brewing:*", sum.brewTotal.Round(time.Second).String()))
-	}
-	if sum.decaf > 0 {
-		fields = append(fields, slackField("*Decaf:*", fmt.Sprintf("%d", sum.decaf)))
-	}
-	blocks = append(blocks, map[string]any{"type": "section", "fields": fields})
-
-	blocks = append(blocks, map[string]any{
-		"type": "section",
-		"text": map[string]any{"type": "mrkdwn", "text": "*Drinks*\n" + rankedCounts(sum.drinks)},
-	})
-
-	if len(sum.failedSteps) > 0 {
-		blocks = append(blocks, map[string]any{
-			"type": "section",
-			"text": map[string]any{"type": "mrkdwn", "text": "*Faults by step*\n" + rankedCounts(sum.failedSteps)},
-		})
-	}
-
-	return append(blocks, dailySummaryFooter(dayStart, now, machineLogsURL))
-}
-
-// dailySummaryFooter prints the window the numbers actually cover. It is the
-// check on the timezone: if the job's CRON_TZ and the command's timezone drift
-// apart, the wrong hours show up here rather than going unnoticed.
-func dailySummaryFooter(dayStart, now time.Time, machineLogsURL string) map[string]any {
-	footer := fmt.Sprintf("%s – %s", dayStart.Format("3:04 PM"), now.Format("3:04 PM MST"))
-	if machineLogsURL != "" {
-		footer += fmt.Sprintf(" · <%s|machine logs>", machineLogsURL)
-	}
-	return map[string]any{
-		"type":     "context",
-		"elements": []any{map[string]any{"type": "mrkdwn", "text": footer}},
-	}
-}
-
-// rankedCounts renders a count map as Slack bullets, most frequent first with
-// ties broken by name so the same day always renders identically.
-func rankedCounts(counts map[string]int) string {
-	keys := make([]string, 0, len(counts))
-	for k := range counts {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if counts[keys[i]] != counts[keys[j]] {
-			return counts[keys[i]] > counts[keys[j]]
-		}
-		return keys[i] < keys[j]
-	})
-	lines := make([]string, len(keys))
-	for i, k := range keys {
-		lines[i] = fmt.Sprintf("• %s — %d", k, counts[k])
-	}
-	return strings.Join(lines, "\n")
 }

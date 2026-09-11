@@ -4,132 +4,143 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go.viam.com/rdk/logging"
 )
 
-// row builds one projected query row the way dailySummaryStages shapes it.
-func row(drink string, ok, cancelled, decaf bool, failedStep string, durationMs float64) map[string]any {
-	return map[string]any{
-		"drink":              drink,
-		"order_ok":           ok,
-		"operator_cancelled": cancelled,
-		"decaf":              decaf,
-		"failed_step":        failedStep,
-		"duration_ms":        durationMs,
-	}
-}
-
 func TestSummarizeOrders(t *testing.T) {
-	rows := []map[string]any{
-		row("espresso", true, false, false, "", 120000),
-		row("espresso", true, false, true, "", 140000),
-		row("iced_latte", true, false, false, "", 220000),
+	rows := []orderRow{
+		{Drink: "espresso", OrderOK: true, DurationMs: 120000},
+		{Drink: "espresso", OrderOK: true, Decaf: true, DurationMs: 140000},
+		{Drink: "iced_latte", OrderOK: true, DurationMs: 220000},
 		// A genuine fault, and an operator cancel that must not be counted as one.
-		row("espresso", false, false, false, stepLockingPortafilter, 30000),
-		row("lungo", false, true, false, stepGrinding, 5000),
+		{Drink: "espresso", FailedStep: stepLockingPortafilter, DurationMs: 30000},
+		{Drink: "lungo", OperatorCancelled: true, FailedStep: stepGrinding, DurationMs: 5000},
 	}
 
 	sum := summarizeOrders(rows)
 
-	if sum.attempted != 5 {
-		t.Errorf("attempted = %d, want 5", sum.attempted)
+	for _, tc := range []struct {
+		name      string
+		got, want int
+	}{
+		{"attempted", sum.Attempted, 5},
+		{"succeeded", sum.Succeeded, 3},
+		{"faulted", sum.Faulted, 1},
+		{"cancelled", sum.Cancelled, 1},
+		{"decaf", sum.Decaf, 1},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %d, want %d", tc.name, tc.got, tc.want)
+		}
 	}
-	if sum.succeeded != 3 {
-		t.Errorf("succeeded = %d, want 3", sum.succeeded)
-	}
-	if sum.faulted != 1 {
-		t.Errorf("faulted = %d, want 1", sum.faulted)
-	}
-	if sum.cancelled != 1 {
-		t.Errorf("cancelled = %d, want 1", sum.cancelled)
-	}
-	if sum.decaf != 1 {
-		t.Errorf("decaf = %d, want 1", sum.decaf)
-	}
-	if got, want := sum.drinks["espresso"], 3; got != want {
-		t.Errorf("drinks[espresso] = %d, want %d", got, want)
-	}
-	// An operator cancel contributes a drink but no failed step.
-	if got, want := len(sum.failedSteps), 1; got != want {
-		t.Errorf("failedSteps has %d entries, want %d: %v", got, want, sum.failedSteps)
-	}
-	if got := sum.failedSteps[stepLockingPortafilter]; got != 1 {
-		t.Errorf("failedSteps[%q] = %d, want 1", stepLockingPortafilter, got)
+
+	// An operator cancel contributes a drink but no failed step, even though the
+	// reading carries the step it was stopped at.
+	if len(sum.FailedSteps) != 1 || sum.FailedSteps[0] != (nameCount{stepLockingPortafilter, 1}) {
+		t.Errorf("FailedSteps = %v, want one %q entry", sum.FailedSteps, stepLockingPortafilter)
 	}
 
 	// Only successful orders contribute to brew time: 120+140+220 = 480s over 3.
-	if want := 480 * time.Second; sum.brewTotal != want {
-		t.Errorf("brewTotal = %v, want %v", sum.brewTotal, want)
+	if want := 480 * time.Second; sum.TotalBrew() != want {
+		t.Errorf("TotalBrew() = %v, want %v", sum.TotalBrew(), want)
 	}
-	if want := 160 * time.Second; sum.avgBrew() != want {
-		t.Errorf("avgBrew() = %v, want %v", sum.avgBrew(), want)
+	if want := 160 * time.Second; sum.AvgBrew() != want {
+		t.Errorf("AvgBrew() = %v, want %v", sum.AvgBrew(), want)
 	}
-	if got, want := sum.successRate(), 60.0; got != want {
-		t.Errorf("successRate() = %v, want %v", got, want)
+	if got, want := sum.SuccessRate(), 60.0; got != want {
+		t.Errorf("SuccessRate() = %v, want %v", got, want)
 	}
 }
 
 func TestSummarizeOrdersEmpty(t *testing.T) {
 	sum := summarizeOrders(nil)
-	if sum.attempted != 0 {
-		t.Errorf("attempted = %d, want 0", sum.attempted)
+	if sum.Attempted != 0 {
+		t.Errorf("Attempted = %d, want 0", sum.Attempted)
 	}
 	// Both must be division-safe on a day with no orders.
-	if got := sum.successRate(); got != 0 {
-		t.Errorf("successRate() = %v, want 0", got)
+	if got := sum.SuccessRate(); got != 0 {
+		t.Errorf("SuccessRate() = %v, want 0", got)
 	}
-	if got := sum.avgBrew(); got != 0 {
-		t.Errorf("avgBrew() = %v, want 0", got)
-	}
-}
-
-// A reading that arrives without the fields we expect must not panic or be
-// silently miscounted: an absent order_ok is not a success.
-func TestSummarizeOrdersMissingFields(t *testing.T) {
-	sum := summarizeOrders([]map[string]any{{}})
-	if sum.attempted != 1 {
-		t.Errorf("attempted = %d, want 1", sum.attempted)
-	}
-	if sum.succeeded != 0 {
-		t.Errorf("succeeded = %d, want 0", sum.succeeded)
-	}
-	if sum.faulted != 1 {
-		t.Errorf("faulted = %d, want 1", sum.faulted)
-	}
-	if got := sum.drinks["unknown"]; got != 1 {
-		t.Errorf("drinks[unknown] = %d, want 1", got)
-	}
-	if got := sum.failedSteps["an unknown step"]; got != 1 {
-		t.Errorf("failedSteps[an unknown step] = %d, want 1", got)
+	if got := sum.AvgBrew(); got != 0 {
+		t.Errorf("AvgBrew() = %v, want 0", got)
 	}
 }
 
-// duration_ms crosses the wire as a float64 but may arrive as another numeric
-// type; numericReading absorbs that, and a non-numeric value must be skipped
-// rather than counted as zero-length brew.
-func TestSummarizeOrdersDurationTypes(t *testing.T) {
-	rows := []map[string]any{
-		{"drink": "espresso", "order_ok": true, "duration_ms": float64(60000)},
-		{"drink": "espresso", "order_ok": true, "duration_ms": int64(30000)},
-		{"drink": "espresso", "order_ok": true, "duration_ms": "not a number"},
+// A reading whose fields are all absent must not be silently counted as a
+// success, and must still be attributable in the breakdowns.
+func TestSummarizeOrdersZeroRow(t *testing.T) {
+	sum := summarizeOrders([]orderRow{{}})
+	if sum.Attempted != 1 || sum.Succeeded != 0 || sum.Faulted != 1 {
+		t.Errorf("attempted/succeeded/faulted = %d/%d/%d, want 1/0/1",
+			sum.Attempted, sum.Succeeded, sum.Faulted)
 	}
-	sum := summarizeOrders(rows)
-	if sum.succeeded != 3 {
-		t.Errorf("succeeded = %d, want 3", sum.succeeded)
+	if len(sum.Drinks) != 1 || sum.Drinks[0].Name != "unknown" {
+		t.Errorf("Drinks = %v, want one \"unknown\" entry", sum.Drinks)
 	}
-	if want := 90 * time.Second; sum.brewTotal != want {
-		t.Errorf("brewTotal = %v, want %v", sum.brewTotal, want)
+	if len(sum.FailedSteps) != 1 || sum.FailedSteps[0].Name != "an unknown step" {
+		t.Errorf("FailedSteps = %v, want one \"an unknown step\" entry", sum.FailedSteps)
 	}
 }
 
-func TestRankedCounts(t *testing.T) {
+func TestRanked(t *testing.T) {
 	// Ties break by name so the same day always renders identically.
-	got := rankedCounts(map[string]int{"lungo": 2, "espresso": 5, "americano": 2})
-	want := "• espresso — 5\n• americano — 2\n• lungo — 2"
-	if got != want {
-		t.Errorf("rankedCounts() =\n%s\nwant\n%s", got, want)
+	got := ranked(map[string]int{"lungo": 2, "espresso": 5, "americano": 2})
+	want := []nameCount{{"espresso", 5}, {"americano", 2}, {"lungo", 2}}
+	if len(got) != len(want) {
+		t.Fatalf("ranked() = %v, want %v", got, want)
 	}
-	if got := rankedCounts(map[string]int{}); got != "" {
-		t.Errorf("rankedCounts(empty) = %q, want empty", got)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ranked()[%d] = %v, want %v", i, got[i], want[i])
+		}
+	}
+	if got := ranked(map[string]int{}); len(got) != 0 {
+		t.Errorf("ranked(empty) = %v, want empty", got)
+	}
+}
+
+// The projection must name exactly the fields orderRow decodes; a drift here is
+// the bug that would show up as a day of silently-zero counters.
+func TestDailySummaryStagesMatchOrderRow(t *testing.T) {
+	stages := dailySummaryStages()
+	if len(stages) != 1 {
+		t.Fatalf("got %d stages, want 1", len(stages))
+	}
+	project, ok := stages[0]["$project"].(map[string]any)
+	if !ok {
+		t.Fatalf("stage is not a $project: %#v", stages[0])
+	}
+	for _, field := range []string{"drink", "order_ok", "operator_cancelled", "failed_step", "decaf", "duration_ms"} {
+		want := "$data.readings." + field
+		if got := project[field]; got != want {
+			t.Errorf("$project[%q] = %v, want %q", field, got, want)
+		}
+	}
+	// _id plus the six projected fields; an extra key means a tag went missing.
+	if len(project) != 7 {
+		t.Errorf("$project has %d keys, want 7: %#v", len(project), project)
+	}
+}
+
+func TestDecodeOrderRows(t *testing.T) {
+	logger := logging.NewTestLogger(t)
+	raw := []map[string]any{
+		{"drink": "espresso", "order_ok": true, "duration_ms": float64(60000)},
+		// duration_ms arriving as an integer from BSON must still decode.
+		{"drink": "lungo", "order_ok": true, "duration_ms": int64(30000)},
+		// A structurally wrong reading is dropped rather than failing the digest.
+		{"drink": "espresso", "order_ok": "yes please"},
+	}
+	rows := decodeOrderRows(raw, logger)
+	if len(rows) != 2 {
+		t.Fatalf("decoded %d rows, want 2: %#v", len(rows), rows)
+	}
+	if rows[0].Drink != "espresso" || rows[0].DurationMs != 60000 {
+		t.Errorf("rows[0] = %#v", rows[0])
+	}
+	if rows[1].DurationMs != 30000 {
+		t.Errorf("rows[1].DurationMs = %v, want 30000", rows[1].DurationMs)
 	}
 }
 
@@ -159,6 +170,65 @@ func TestSummaryLocation(t *testing.T) {
 	}
 }
 
+// Pins the rendered body exactly. The template's whitespace control is the
+// fiddly part, and nothing else would catch a stray blank line.
+func TestRenderDailySummary(t *testing.T) {
+	sum := summarizeOrders([]orderRow{
+		{Drink: "espresso", OrderOK: true, DurationMs: 120000},
+		{Drink: "espresso", OrderOK: true, Decaf: true, DurationMs: 140000},
+		{Drink: "iced_latte", OrderOK: true, DurationMs: 220000},
+		{Drink: "espresso", FailedStep: stepLockingPortafilter},
+		{Drink: "lungo", OperatorCancelled: true},
+	})
+	got, err := renderDailySummary(sum)
+	if err != nil {
+		t.Fatalf("renderDailySummary: %v", err)
+	}
+	want := strings.Join([]string{
+		"*5 orders* · 3 succeeded (60%) · 1 faulted · 1 cancelled by an operator",
+		"Average brew 2m40s, 8m0s of brewing in total.",
+		"",
+		"*Drinks* _(1 decaf)_",
+		"• espresso — 3",
+		"• iced_latte — 1",
+		"• lungo — 1",
+		"",
+		"*Faults by step*",
+		"• " + stepLockingPortafilter + " — 1",
+	}, "\n")
+	if got != want {
+		t.Errorf("renderDailySummary() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestRenderDailySummaryNoOrders(t *testing.T) {
+	got, err := renderDailySummary(summarizeOrders(nil))
+	if err != nil {
+		t.Fatalf("renderDailySummary: %v", err)
+	}
+	if got != "No orders today." {
+		t.Errorf("renderDailySummary() = %q, want %q", got, "No orders today.")
+	}
+	if !strings.Contains(dailySummaryText(summarizeOrders(nil), time.Now()), "No orders") {
+		t.Error("fallback text does not say there were no orders")
+	}
+}
+
+// A day with no faults must not render an empty "Faults by step" heading.
+func TestRenderDailySummaryNoFaults(t *testing.T) {
+	sum := summarizeOrders([]orderRow{{Drink: "espresso", OrderOK: true, DurationMs: 60000}})
+	got, err := renderDailySummary(sum)
+	if err != nil {
+		t.Fatalf("renderDailySummary: %v", err)
+	}
+	if strings.Contains(got, "Faults by step") {
+		t.Errorf("rendered a faults section with no faults:\n%s", got)
+	}
+	if strings.Contains(got, "decaf") {
+		t.Errorf("rendered a decaf note with no decaf orders:\n%s", got)
+	}
+}
+
 func TestDailySummaryBlocks(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {
@@ -167,15 +237,9 @@ func TestDailySummaryBlocks(t *testing.T) {
 	dayStart := time.Date(2026, 9, 11, 0, 0, 0, 0, loc)
 	now := time.Date(2026, 9, 11, 17, 30, 0, 0, loc)
 
-	sum := summarizeOrders([]map[string]any{
-		row("espresso", true, false, false, "", 120000),
-		row("lungo", false, false, false, stepGrinding, 4000),
-	})
-	blocks := dailySummaryBlocks(sum, dayStart, now, "https://app.viam.com/machine/abc/logs")
-
-	// header, stats, drinks, faults, footer
-	if len(blocks) != 5 {
-		t.Fatalf("got %d blocks, want 5: %#v", len(blocks), blocks)
+	blocks := dailySummaryBlocks("body text", dayStart, now)
+	if len(blocks) != 3 {
+		t.Fatalf("got %d blocks, want 3: %#v", len(blocks), blocks)
 	}
 	// structpb rejects []map[string]any as a list value, so every block must be
 	// a map[string]any inside an []any.
@@ -185,26 +249,10 @@ func TestDailySummaryBlocks(t *testing.T) {
 		}
 	}
 
-	footer := blocks[len(blocks)-1].(map[string]any)
-	elems := footer["elements"].([]any)
-	text := elems[0].(map[string]any)["text"].(string)
+	footer := blocks[2].(map[string]any)
+	text := footer["elements"].([]any)[0].(map[string]any)["text"].(string)
 	// The window is the visible check on a CRON_TZ/timezone mismatch.
 	if !strings.Contains(text, "12:00 AM") || !strings.Contains(text, "5:30 PM") {
 		t.Errorf("footer %q does not show the 12:00 AM – 5:30 PM window", text)
-	}
-	if !strings.Contains(text, "machine logs") {
-		t.Errorf("footer %q is missing the machine logs link", text)
-	}
-}
-
-func TestDailySummaryBlocksNoOrders(t *testing.T) {
-	now := time.Now()
-	blocks := dailySummaryBlocks(summarizeOrders(nil), now, now, "")
-	// header, "No orders today.", footer — no empty drinks or faults sections.
-	if len(blocks) != 3 {
-		t.Fatalf("got %d blocks, want 3: %#v", len(blocks), blocks)
-	}
-	if !strings.Contains(dailySummaryText(summarizeOrders(nil), now), "No orders") {
-		t.Error("fallback text does not say there were no orders")
 	}
 }
