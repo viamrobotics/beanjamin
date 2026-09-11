@@ -17,7 +17,6 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-	"text/template"
 	"time"
 
 	"go.viam.com/rdk/logging"
@@ -81,22 +80,18 @@ func (s *beanjaminCoffee) sendDailySummary(ctx context.Context, arg any) (map[st
 	}
 
 	sum := summarizeOrders(decodeOrderRows(raw, s.logger))
-	body, err := renderDailySummary(sum)
-	if err != nil {
-		return nil, err
-	}
 
 	s.logger.Infof("daily summary: %d orders between %s and %s (%s)",
-		sum.Attempted, dayStart.Format(time.Kitchen), now.Format(time.Kitchen), loc)
+		sum.attempted, dayStart.Format(time.Kitchen), now.Format(time.Kitchen), loc)
 
 	if _, err := s.slackNotifier.DoCommand(ctx, map[string]any{
 		"command": "send",
 		"text":    dailySummaryText(sum, now),
-		"blocks":  dailySummaryBlocks(body, dayStart, now),
+		"blocks":  dailySummaryBlocks(sum, dayStart, now),
 	}); err != nil {
 		return nil, fmt.Errorf("sending daily summary to slack: %w", err)
 	}
-	return map[string]any{"orders": float64(sum.Attempted), "sent": true}, nil
+	return map[string]any{"orders": float64(sum.attempted), "sent": true}, nil
 }
 
 // summaryLocation resolves the timezone the business day is measured in. The
@@ -154,156 +149,89 @@ func decodeOrderRows(raw []map[string]any, logger logging.Logger) []orderRow {
 	return rows
 }
 
-// nameCount is one entry of a ranked breakdown, ordered for display.
-type nameCount struct {
-	Name  string
-	Count int
-}
-
-// daySummary is one day's orders reduced to what the digest prints. Its fields
-// are exported because the message template reads them directly.
+// daySummary is one day's orders reduced to what the digest prints.
 type daySummary struct {
-	Attempted   int
-	Succeeded   int
-	Faulted     int
-	Cancelled   int
-	Decaf       int
-	Drinks      []nameCount
-	FailedSteps []nameCount
-
+	attempted   int
+	succeeded   int
+	faulted     int
+	cancelled   int
+	decaf       int
+	drinks      map[string]int
+	failedSteps map[string]int
 	// brewTotal sums successful orders only: a fault that died at "Grinding"
 	// would otherwise drag the average toward zero and read as a speed-up.
 	brewTotal time.Duration
 }
 
-func (d daySummary) SuccessRate() float64 {
-	if d.Attempted == 0 {
+func (d daySummary) successRate() float64 {
+	if d.attempted == 0 {
 		return 0
 	}
-	return float64(d.Succeeded) / float64(d.Attempted) * 100
+	return float64(d.succeeded) / float64(d.attempted) * 100
 }
 
-func (d daySummary) AvgBrew() time.Duration {
-	if d.Succeeded == 0 {
+func (d daySummary) avgBrew() time.Duration {
+	if d.succeeded == 0 {
 		return 0
 	}
-	return (d.brewTotal / time.Duration(d.Succeeded)).Round(time.Second)
-}
-
-func (d daySummary) TotalBrew() time.Duration {
-	return d.brewTotal.Round(time.Second)
+	return (d.brewTotal / time.Duration(d.succeeded)).Round(time.Second)
 }
 
 // summarizeOrders reduces the day's readings. Kept a pure function over typed
 // rows so the whole aggregation is testable without a cloud connection.
 func summarizeOrders(rows []orderRow) daySummary {
-	sum := daySummary{}
-	drinks := map[string]int{}
-	failedSteps := map[string]int{}
-
+	sum := daySummary{
+		drinks:      map[string]int{},
+		failedSteps: map[string]int{},
+	}
 	for _, row := range rows {
-		sum.Attempted++
+		sum.attempted++
 		drink := row.Drink
 		if drink == "" {
 			drink = "unknown"
 		}
-		drinks[drink]++
+		sum.drinks[drink]++
 		if row.Decaf {
-			sum.Decaf++
+			sum.decaf++
 		}
 
 		switch {
 		case row.OrderOK:
-			sum.Succeeded++
+			sum.succeeded++
 			sum.brewTotal += time.Duration(row.DurationMs) * time.Millisecond
 		// An operator stopping a run is not a fault; counting the two together
 		// would make a busy day of manual cancels look like failing hardware.
 		case row.OperatorCancelled:
-			sum.Cancelled++
+			sum.cancelled++
 		default:
-			sum.Faulted++
+			sum.faulted++
 			step := row.FailedStep
 			if step == "" {
 				step = "an unknown step"
 			}
-			failedSteps[step]++
+			sum.failedSteps[step]++
 		}
 	}
-
-	sum.Drinks = ranked(drinks)
-	sum.FailedSteps = ranked(failedSteps)
 	return sum
 }
 
-// ranked orders a count map most-frequent-first, breaking ties by name so the
-// same day always renders identically.
-func ranked(counts map[string]int) []nameCount {
-	out := make([]nameCount, 0, len(counts))
-	for name, count := range counts {
-		out = append(out, nameCount{Name: name, Count: count})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Count != out[j].Count {
-			return out[i].Count > out[j].Count
-		}
-		return out[i].Name < out[j].Name
-	})
-	return out
-}
-
-// dailySummaryTmpl renders the digest body as Slack mrkdwn. The whole message
-// layout lives here as text rather than as nested Block Kit maps, so the copy
-// can be read and edited as the document it is.
-var dailySummaryTmpl = template.Must(template.New("daily-summary").Parse(
-	`{{- if eq .Attempted 0 -}}
-No orders today.
-{{- else -}}
-*{{ .Attempted }} orders* · {{ .Succeeded }} succeeded ({{ printf "%.0f" .SuccessRate }}%) · {{ .Faulted }} faulted · {{ .Cancelled }} cancelled by an operator
-{{ if gt .Succeeded 0 }}Average brew {{ .AvgBrew }}, {{ .TotalBrew }} of brewing in total.
-{{ end }}
-*Drinks*{{ if gt .Decaf 0 }} _({{ .Decaf }} decaf)_{{ end }}
-{{ range .Drinks }}• {{ .Name }} — {{ .Count }}
-{{ end }}
-{{- if .FailedSteps }}
-*Faults by step*
-{{ range .FailedSteps }}• {{ .Name }} — {{ .Count }}
-{{ end }}
-{{- end -}}
-{{- end -}}`))
-
-// renderDailySummary renders the template into the message body. An error here
-// means the template itself is broken, which is a bug rather than a bad day of
-// data, so it fails the whole digest rather than posting something half-formed.
-func renderDailySummary(sum daySummary) (string, error) {
-	var b strings.Builder
-	if err := dailySummaryTmpl.Execute(&b, sum); err != nil {
-		return "", fmt.Errorf("rendering the daily summary: %w", err)
-	}
-	return strings.TrimRight(b.String(), "\n"), nil
-}
-
 // dailySummaryText is the short line Slack shows in notifications and in the
-// channel list. It stays a Sprintf rather than a second template: a push
-// notification has room for one sentence, and the layout that earned a template
-// is the body, not this.
+// channel list, and the fallback when Block Kit can't render.
 func dailySummaryText(sum daySummary, day time.Time) string {
-	if sum.Attempted == 0 {
+	if sum.attempted == 0 {
 		return fmt.Sprintf(":coffee: No orders on %s.", day.Format("Mon, Jan 2"))
 	}
 	return fmt.Sprintf(":coffee: %s: %d orders, %d succeeded, %d faulted, %d cancelled (%.0f%% success).",
-		day.Format("Mon, Jan 2"), sum.Attempted, sum.Succeeded, sum.Faulted, sum.Cancelled, sum.SuccessRate())
+		day.Format("Mon, Jan 2"), sum.attempted, sum.succeeded, sum.faulted, sum.cancelled, sum.successRate())
 }
 
-// dailySummaryBlocks wraps the rendered body in Block Kit: a header, the body,
-// and a footer naming the window. Returned as []any of map[string]any so it
-// serializes through the structpb-backed DoCommand wire format, which rejects
-// []map[string]any as a list value.
-func dailySummaryBlocks(body string, dayStart, now time.Time) []any {
-	// The window is the visible check on the timezone: if the job's CRON_TZ and
-	// the command's timezone drift apart, the wrong hours show up here rather
-	// than going unnoticed.
-	window := fmt.Sprintf("%s – %s", dayStart.Format("3:04 PM"), now.Format("3:04 PM MST"))
-	return []any{
+// dailySummaryBlocks renders the digest as Block Kit: a header, the stats as a
+// two-column field grid, the breakdowns, and a footer naming the window.
+// Returned as []any of map[string]any so it serializes through the
+// structpb-backed DoCommand wire format, which rejects []map[string]any as a
+// list value.
+func dailySummaryBlocks(sum daySummary, dayStart, now time.Time) []any {
+	blocks := []any{
 		map[string]any{
 			"type": "header",
 			"text": map[string]any{
@@ -312,13 +240,76 @@ func dailySummaryBlocks(body string, dayStart, now time.Time) []any {
 				"emoji": true,
 			},
 		},
-		map[string]any{
-			"type": "section",
-			"text": map[string]any{"type": "mrkdwn", "text": body},
-		},
-		map[string]any{
-			"type":     "context",
-			"elements": []any{map[string]any{"type": "mrkdwn", "text": window}},
-		},
 	}
+
+	if sum.attempted == 0 {
+		blocks = append(blocks, map[string]any{
+			"type": "section",
+			"text": map[string]any{"type": "mrkdwn", "text": "No orders today."},
+		})
+		return append(blocks, dailySummaryFooter(dayStart, now))
+	}
+
+	fields := []any{
+		slackField("*Orders:*", fmt.Sprintf("%d", sum.attempted)),
+		slackField("*Succeeded:*", fmt.Sprintf("%d (%.0f%%)", sum.succeeded, sum.successRate())),
+		slackField("*Faulted:*", fmt.Sprintf("%d", sum.faulted)),
+		slackField("*Cancelled by operator:*", fmt.Sprintf("%d", sum.cancelled)),
+	}
+	if sum.succeeded > 0 {
+		fields = append(fields,
+			slackField("*Avg brew:*", sum.avgBrew().String()),
+			slackField("*Total brewing:*", sum.brewTotal.Round(time.Second).String()))
+	}
+	if sum.decaf > 0 {
+		fields = append(fields, slackField("*Decaf:*", fmt.Sprintf("%d", sum.decaf)))
+	}
+	blocks = append(blocks, map[string]any{"type": "section", "fields": fields})
+
+	blocks = append(blocks, map[string]any{
+		"type": "section",
+		"text": map[string]any{"type": "mrkdwn", "text": "*Drinks*\n" + rankedCounts(sum.drinks)},
+	})
+
+	if len(sum.failedSteps) > 0 {
+		blocks = append(blocks, map[string]any{
+			"type": "section",
+			"text": map[string]any{"type": "mrkdwn", "text": "*Faults by step*\n" + rankedCounts(sum.failedSteps)},
+		})
+	}
+
+	return append(blocks, dailySummaryFooter(dayStart, now))
+}
+
+// dailySummaryFooter prints the window the numbers actually cover. It is the
+// check on the timezone: if the job's CRON_TZ and the command's timezone drift
+// apart, the wrong hours show up here rather than going unnoticed.
+func dailySummaryFooter(dayStart, now time.Time) map[string]any {
+	return map[string]any{
+		"type": "context",
+		"elements": []any{map[string]any{
+			"type": "mrkdwn",
+			"text": fmt.Sprintf("%s – %s", dayStart.Format("3:04 PM"), now.Format("3:04 PM MST")),
+		}},
+	}
+}
+
+// rankedCounts renders a count map as Slack bullets, most frequent first with
+// ties broken by name so the same day always renders identically.
+func rankedCounts(counts map[string]int) string {
+	keys := make([]string, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if counts[keys[i]] != counts[keys[j]] {
+			return counts[keys[i]] > counts[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	lines := make([]string, len(keys))
+	for i, k := range keys {
+		lines[i] = fmt.Sprintf("• %s — %d", k, counts[k])
+	}
+	return strings.Join(lines, "\n")
 }
