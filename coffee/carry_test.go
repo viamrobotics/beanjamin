@@ -250,3 +250,47 @@ func TestCarryGoalForMoveFrame_UndoesHeldItemRotation(t *testing.T) {
 		t.Errorf("grip-point landed at %v, want the authored pose %v", got, authored)
 	}
 }
+
+// The default spacing decides how many shaped goals a carry gets. A 600mm
+// traverse — roughly the serving-area placement — is broken into 8 segments, so
+// consecutive goals sit 75mm apart and the unconstrained span between any two is
+// half what it was.
+func TestComputeLevelCarryWaypoints_DefaultSpacing(t *testing.T) {
+	start := spatialmath.NewPose(r3.Vector{}, levelOrientation)
+	end := spatialmath.NewPose(r3.Vector{X: 600}, levelOrientation)
+
+	poses := computeLevelCarryWaypoints(start, end, defaultCarryWaypointSpacingMm)
+	if len(poses) != 8 {
+		t.Fatalf("got %d waypoints over 600mm, want 8", len(poses))
+	}
+	for i, p := range poses {
+		if want := 75.0 * float64(i+1); math.Abs(p.Point().X-want) > 1e-6 {
+			t.Errorf("waypoint %d at X=%g, want %g", i, p.Point().X, want)
+		}
+	}
+}
+
+// The carry's path orientation bound has to survive whatever buildConstraints
+// produced — including the nil it returns when there is nothing else to carry.
+func TestWithNoSpillOrientationConstraint(t *testing.T) {
+	got := withNoSpillOrientationConstraint(buildConstraints(nil, nil))
+	if got == nil {
+		t.Fatalf("expected constraints to be allocated when buildConstraints returns nil")
+	}
+	if len(got.OrientationConstraint) != 1 {
+		t.Fatalf("got %d orientation constraints, want 1", len(got.OrientationConstraint))
+	}
+	if deg := got.OrientationConstraint[0].OrientationToleranceDegs; deg != noSpillOrientationToleranceDegs {
+		t.Errorf("tolerance = %g, want %g", deg, noSpillOrientationToleranceDegs)
+	}
+
+	// The allowed collisions the carry injects must not be dropped.
+	acs := []AllowedCollision{{Frame1: heldItemFrameName, Frame2: componentClaws}}
+	got = withNoSpillOrientationConstraint(buildConstraints(nil, acs))
+	if len(got.OrientationConstraint) != 1 {
+		t.Fatalf("got %d orientation constraints, want 1", len(got.OrientationConstraint))
+	}
+	if len(got.CollisionSpecification) != 1 || len(got.CollisionSpecification[0].Allows) != 1 {
+		t.Errorf("allowed collisions were dropped: %+v", got.CollisionSpecification)
+	}
+}

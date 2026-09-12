@@ -890,9 +890,35 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 // defaultCarryWaypointSpacingMm is the straight-line spacing between the
 // waypoints inserted along a no-spill carry move (see carryHeldLevel). The
 // level goal cloud is only enforced at the waypoints, so between two goals the
-// trajectory can bow past the leeway; 150 mm keeps consecutive goals close
-// enough that the planner has little room to tilt the held drink between them.
-const defaultCarryWaypointSpacingMm = 150.0
+// trajectory is free to bow past its leeway. 75 mm halves how far the planner
+// can travel between two shaped goals; noSpillOrientationToleranceDegs bounds
+// what it may do in the gaps that remain.
+const defaultCarryWaypointSpacingMm = 75.0
+
+// noSpillOrientationToleranceDegs caps how far the carried container's
+// orientation may stray *between* waypoints. noSpillGoalCloud shapes only the
+// goals, and denser waypoints shorten but never close the unconstrained spans
+// between them; an OrientationConstraint is checked along the whole path.
+//
+// RDK scores a candidate as free while every orientation-vector component stays
+// between the segment's two endpoint orientations, and otherwise measures the
+// deviation from whichever endpoint is nearer. So this is the ceiling on an
+// excursion *off* the segment's own interpolation — not a bound on the commanded
+// rotation, which on a long carry sweeps far more than this about the
+// container's vertical axis.
+const noSpillOrientationToleranceDegs = 45.0
+
+// withNoSpillOrientationConstraint adds the carry's path orientation bound,
+// allocating the Constraints when the caller has none (no linear constraint and
+// no allowed collisions, so buildConstraints returned nil).
+func withNoSpillOrientationConstraint(constraints *motionplan.Constraints) *motionplan.Constraints {
+	if constraints == nil {
+		constraints = &motionplan.Constraints{}
+	}
+	constraints.OrientationConstraint = append(constraints.OrientationConstraint,
+		motionplan.OrientationConstraint{OrientationToleranceDegs: noSpillOrientationToleranceDegs})
+	return constraints
+}
 
 // noSpillGoalCloud loosens the goal at each intermediate carry waypoint so IK
 // has room to solve while still keeping the held container close to level. A
@@ -1004,7 +1030,9 @@ func carryGoalForMoveFrame(
 // left nothing cached) it falls back to the gripper frame and that conversion is
 // a no-op.
 //
-// Each goal carries noSpillGoalCloud to loosen the orientation; held-item
+// Each goal carries noSpillGoalCloud to loosen the orientation, and the whole
+// path carries noSpillOrientationToleranceDegs so the trajectory cannot bow away
+// from the container's orientation between goals; held-item
 // self-collisions are injected so the tracked geometry still routes around
 // obstacles, and any caller-supplied allowedCollisions are merged in alongside
 // them. moveOpts, when non-nil, sets the execution speed (otherwise the arm's
@@ -1040,9 +1068,9 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, al
 	}
 
 	waypoints := computeLevelCarryWaypoints(startPose, destPose, defaultCarryWaypointSpacingMm)
-	logger.Infof("no-spill carry: moving %q through %d waypoint(s) over %.0fmm (cloud: tilt±%.2f, twist±%.0f°, buffer: %.1fmm)",
+	logger.Infof("no-spill carry: moving %q through %d waypoint(s) over %.0fmm (cloud: tilt±%.2f, twist±%.0f°, path±%.0f°, buffer: %.1fmm)",
 		moveFrame, len(waypoints), destPose.Point().Sub(startPose.Point()).Norm(), noSpillGoalCloud.OX, noSpillGoalCloud.Theta,
-		freeMoveCollisionBufferMM)
+		noSpillOrientationToleranceDegs, freeMoveCollisionBufferMM)
 
 	goals := make([]*armplanning.PlanState, 0, len(waypoints))
 	for i, pose := range waypoints {
@@ -1062,7 +1090,8 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, al
 		))
 	}
 
-	constraints := buildConstraints(nil, s.filterFakeModeCollisions(s.appendHeldItemCollisions(allowedCollisions)))
+	constraints := withNoSpillOrientationConstraint(
+		buildConstraints(nil, s.filterFakeModeCollisions(s.appendHeldItemCollisions(allowedCollisions))))
 
 	req := &armplanning.PlanRequest{
 		FrameSystem:    fs,
