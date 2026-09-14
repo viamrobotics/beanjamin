@@ -20,6 +20,7 @@ import (
 	"go.viam.com/rdk/components/sensor"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/module"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot/framesystem"
@@ -43,6 +44,12 @@ func init() {
 
 type beanjaminCoffee struct {
 	resource.AlwaysRebuild
+	// Supplies QueryTabularDataForResource, which reads this machine's own
+	// synced tabular data back out of the cloud (daily_summary.go). It
+	// authenticates from the VIAM_API_KEY/VIAM_API_KEY_ID env vars, which
+	// viam-server only injects when the machine config carries an api-key auth
+	// handler — without one the query fails at call time rather than here.
+	module.ResourceDataConsumer
 
 	name                   resource.Name
 	logger                 logging.Logger

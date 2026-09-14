@@ -492,6 +492,14 @@ Returns `{"sent": true, "peer_response": {...}}` where `peer_response` is whatev
 
 In normal operation this fires automatically: when a `fulfillment: "delivery"` order's drink lands in the serving area, the coffee service sends the peer a `delivery_request` with the shape above — `order_id`/`order_timestamp` (RFC3339 enqueue time) from the order, `customer_email` (required for delivery orders, so always non-empty here), `cup_type` — the container label, `"glass"` for iced drinks and `"cup"` for everything else (same labels the cup-pickup pipeline uses) — and `pickup_position` the 0-based serving-area slot the drink was placed in. The send is deliberately synchronous: the service waits (up to 10s) for the bot's `{"received": true}` acknowledgment before the drink-ready announcement, so an unconfirmed handoff is logged rather than assumed. Failures never fail the order — the drink is already in the serving area. The channel is otherwise one-way: the coffee machine observes its own serving slots by camera rather than waiting for delivery progress reports.
 
+**`send_daily_summary`** - Post a Slack digest of the orders from the last 24 hours. Normally fired on a schedule by viam-server's job manager (see "Daily order summary in Slack" below); calling it by hand is how you test the digest off-schedule. Requires both `slack_notifier_name` and `order_sensor_name`.
+
+```json
+{"send_daily_summary": true}
+```
+
+The command takes no options — the window is a rolling 24 hours ending now, and timestamps render in the host's timezone. Returns `{"sent": true, "orders": N}`.
+
 **`reset_world`** - Recover the service to a clean idle state from anywhere. In order: cancels any running sequence (waiting for it to actually stop), clears the queue (pending + recently completed), rebuilds the cached frame system from the framesystem service (discarding mid-cycle mutations like a portafilter frame reparented to world by `lock_portafilter`), forgets that the fridge door is standing open, and releases the cancel-induced queue pause. Safe to call from any state — each step is skipped when not applicable. Does not move the arm — if you want to re-home, run `execute_action` afterward.
 
 > ⚠️ `reset_world` asserts that the physical world matches the configured frame system. It is the only thing that clears the recorded fridge-door angle, so **shut the door by hand before running it** — otherwise the model believes the panel is closed while it stands open, and the next plan will route the arm straight through it.
@@ -564,6 +572,42 @@ Because a purge is the one arm motion nobody requested, it announces itself thro
 The arm never presses POWER — per the manual, pressing POWER while the machine is in POWER SAVE turns it *off*. The consequence is that this cannot recover a machine that is genuinely powered down: if Auto Start does not fire, or someone switches the machine off, every order that day will brew cold and be recorded as a success. Detecting that needs a machine-state sensor, which is not part of this feature.
 
 Water from each purge goes to the drip tray and is counted in the `drip_tray_brews` usage-sensor field, so empty the tray on the counter rather than on brew count alone.
+### Daily order summary in Slack
+
+Once `slack_notifier_name` and `order_sensor_name` are both configured, `send_daily_summary` posts a Block Kit digest of the last 24 hours of orders to the same channel the failure alerts go to: how many were attempted, succeeded, faulted and cancelled by an operator, the success rate, average and total brew time, a per-drink breakdown with the decaf count, and — when anything failed — a tally of which steps faulted and how often. A quiet 24 hours still posts a short "No orders in the last 24 hours" line, which is what keeps a quiet channel distinguishable from a broken digest.
+
+The window is a rolling 24 hours ending when the digest runs, not a calendar day. Run the job once a day and consecutive digests tile exactly: every order is reported once, evening orders included, and none is counted twice. A calendar-day window would instead have stopped at the moment the digest fired and silently dropped anything brewed after it.
+
+When `usage_sensor_name` is also configured the digest adds a **current streak** — the machine's run of consecutive successful orders, read live from the sensor's `successful_consecutive_orders` counter. It is deliberately not a windowed figure: any fault or operator cancel resets it whenever it happens, so it describes the machine right now and can span days. The field is omitted entirely when no usage sensor is wired in or the read fails, rather than shown as `0`, which would read as a streak that had just broken.
+
+Average brew time is currently a single number across every drink. An iced latte's fridge trip makes it much slower than an espresso, so the drink mix moves that average more than the machine's condition does — read it as a rough signal until it is broken down per drink.
+
+The numbers do not come from anything the service keeps in memory. They are read back out of the cloud tabular store that the order sensor syncs into, using `QueryTabularDataForResource` from the RDK's `module` package, so a module restart or reconfigure inside the window loses nothing. **This requires data capture to be enabled and syncing on the order-sensor component** — without it the digest is honestly empty rather than wrong.
+
+**Scheduling lives in the machine config, not in this module.** Add a `jobs` entry so viam-server's job manager calls the command on a cron; changing the hour is then a config edit rather than a module rebuild and redeploy:
+
+```json
+"jobs": [
+  {
+    "name": "daily-order-summary",
+    "schedule": "CRON_TZ=America/New_York 30 17 * * *",
+    "resource": "coffee",
+    "method": "DoCommand",
+    "command": { "send_daily_summary": true }
+  }
+]
+```
+
+> ⚠️ **`CRON_TZ=` is the only timezone that matters here, and it is not optional.** The job manager builds its scheduler without a location, so a bare `"30 17 * * *"` fires at 17:30 in whatever timezone the *host* is set to — four hours off from New York, and silently so. Omit it only if the host's own timezone is already the one you want. The digest prints the window it covered in its footer (`Sun 5:30 PM – Mon 5:30 PM EDT`), which is where a wrong firing time shows up.
+
+**Fire it daily.** The 24-hour window only tiles against a daily schedule. Restricting the cron to weekdays with `1-5` leaves a gap — Monday's digest reaches back to Sunday evening, so everything brewed Friday evening through Sunday afternoon is never reported by any run. Keep `* * *` even if the machine only gets used on weekdays; a quiet weekend costs two "No orders" lines.
+
+`method` must be `DoCommand` — the job manager has a fast path for it that calls the service directly instead of going through gRPC reflection.
+
+One consequence worth knowing: a job that fails is only a log line plus an entry in the job's history; nothing is posted to Slack, so a broken digest looks the same as a channel nobody used. The "No orders in the last 24 hours" heartbeat is the cheap check against that.
+
+**Prerequisite:** the query authenticates from the `VIAM_API_KEY` / `VIAM_API_KEY_ID` environment variables, which viam-server only injects into modules when the machine config carries an api-key auth handler. Without one, the digest fails at call time with an auth error while everything else about the service keeps working.
+
 ### Pose reference
 
 Which poses the service can reach, and which frame each moves. The frame is the switch's `component_name`; the table records what those switches are expected to carry.
