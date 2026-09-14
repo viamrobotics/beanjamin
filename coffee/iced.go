@@ -53,6 +53,8 @@ func (s *beanjaminCoffee) prepIcedGlass(ctx, cancelCtx context.Context, withMilk
 	if err := s.fetchGlass(ctx, cancelCtx); err != nil {
 		return err
 	}
+	// A glass was pulled off the shelf; count it now so a later fault still credits real use.
+	s.incrementSensorReading(ctx, s.usageSensor, "latte glasses", "latte_glasses_used", 1)
 	// 2. Carry the glass to the ice machine and dispense ice.
 	if err := s.dispenseIce(ctx, cancelCtx); err != nil {
 		return err

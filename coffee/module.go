@@ -109,7 +109,8 @@ type beanjaminCoffee struct {
 	// Optional usage sensor updated during the brew lifecycle (sensor_usage.go).
 	// nil when usage_sensor_name is unset, in which case every update is a
 	// no-op. Holds all counters keyed by regular_grinds, decaf_grinds, usage,
-	// cleanings, and successful_consecutive_orders.
+	// cleanings, espresso_cups_used, latte_glasses_used, and
+	// successful_consecutive_orders.
 	usageSensor sensor.Sensor
 	// machineActivity is when water last ran through the espresso machine, driving
 	// the keep-alive loop (keepalive.go). nil when keepalive is unconfigured.
