@@ -149,17 +149,39 @@ func decodeOrderRows(raw []map[string]any, logger logging.Logger) []orderRow {
 	return rows
 }
 
-// daySummary is one day's orders reduced to what the digest prints.
+// drinkStats is one drink's share of the window. Timings are kept per drink
+// because the drinks are not comparable: an iced latte's fridge trip runs
+// minutes longer than an espresso, so one average across all of them tracks the
+// day's drink mix rather than the machine.
+type drinkStats struct {
+	ordered   int // every attempt, including faults and cancels
+	succeeded int
+	// brewTotal sums successful orders only: a fault that died at "Grinding"
+	// would otherwise drag the average toward zero and read as a speed-up.
+	brewTotal time.Duration
+}
+
+// avgBrew is the mean time for this drink. ok is false when nothing succeeded,
+// so the caller prints no timing rather than a zero.
+func (d drinkStats) avgBrew() (time.Duration, bool) {
+	if d.succeeded == 0 {
+		return 0, false
+	}
+	return (d.brewTotal / time.Duration(d.succeeded)).Round(time.Second), true
+}
+
+// daySummary is one window's orders reduced to what the digest prints.
 type daySummary struct {
 	attempted   int
 	succeeded   int
 	faulted     int
 	cancelled   int
 	decaf       int
-	drinks      map[string]int
+	drinks      map[string]drinkStats
 	failedSteps map[string]int
-	// brewTotal sums successful orders only: a fault that died at "Grinding"
-	// would otherwise drag the average toward zero and read as a speed-up.
+	// brewTotal is the machine's total time brewing, summed across drinks. A
+	// sum stays meaningful across a mixed set in a way a mean does not — it is
+	// utilization, not a per-drink expectation.
 	brewTotal time.Duration
 }
 
@@ -170,18 +192,11 @@ func (d daySummary) successRate() float64 {
 	return float64(d.succeeded) / float64(d.attempted) * 100
 }
 
-func (d daySummary) avgBrew() time.Duration {
-	if d.succeeded == 0 {
-		return 0
-	}
-	return (d.brewTotal / time.Duration(d.succeeded)).Round(time.Second)
-}
-
 // summarizeOrders reduces the day's readings. Kept a pure function over typed
 // rows so the whole aggregation is testable without a cloud connection.
 func summarizeOrders(rows []orderRow) daySummary {
 	sum := daySummary{
-		drinks:      map[string]int{},
+		drinks:      map[string]drinkStats{},
 		failedSteps: map[string]int{},
 	}
 	for _, row := range rows {
@@ -190,7 +205,8 @@ func summarizeOrders(rows []orderRow) daySummary {
 		if drink == "" {
 			drink = "unknown"
 		}
-		sum.drinks[drink]++
+		stats := sum.drinks[drink]
+		stats.ordered++
 		if row.Decaf {
 			sum.decaf++
 		}
@@ -198,11 +214,10 @@ func summarizeOrders(rows []orderRow) daySummary {
 		switch {
 		case row.OrderOK:
 			sum.succeeded++
-			// TODO: average brew time across all drinks is only a rough signal —
-			// an iced latte's fridge trip makes it far longer than an espresso, so
-			// a day's drink mix moves this number more than the machine does.
-			// Break it down per drink (sum.drinks already keys by it).
-			sum.brewTotal += time.Duration(row.DurationMs) * time.Millisecond
+			brewed := time.Duration(row.DurationMs) * time.Millisecond
+			sum.brewTotal += brewed
+			stats.succeeded++
+			stats.brewTotal += brewed
 		// An operator stopping a run is not a fault; counting the two together
 		// would make a busy day of manual cancels look like failing hardware.
 		case row.OperatorCancelled:
@@ -215,6 +230,10 @@ func summarizeOrders(rows []orderRow) daySummary {
 			}
 			sum.failedSteps[step]++
 		}
+		// drinkStats is a value in the map, so the accumulated copy has to be
+		// written back — including on the fault and cancel paths, which still
+		// bumped `ordered`.
+		sum.drinks[drink] = stats
 	}
 	return sum
 }
@@ -261,10 +280,12 @@ func dailySummaryBlocks(sum daySummary, streak int, hasStreak bool, windowStart,
 		slackField("*Faulted:*", fmt.Sprintf("%d", sum.faulted)),
 		slackField("*Cancelled by operator:*", fmt.Sprintf("%d", sum.cancelled)),
 	}
+	// No cross-drink average here: the per-drink breakdown below carries the
+	// timings, because a mean over a mixed set tracks the drink mix rather than
+	// the machine. The total is a sum, which stays meaningful — it is how long
+	// the machine spent brewing.
 	if sum.succeeded > 0 {
-		fields = append(fields,
-			slackField("*Avg brew:*", sum.avgBrew().String()),
-			slackField("*Total brewing:*", sum.brewTotal.Round(time.Second).String()))
+		fields = append(fields, slackField("*Total brewing:*", sum.brewTotal.Round(time.Second).String()))
 	}
 	if sum.decaf > 0 {
 		fields = append(fields, slackField("*Decaf:*", fmt.Sprintf("%d", sum.decaf)))
@@ -276,7 +297,7 @@ func dailySummaryBlocks(sum daySummary, streak int, hasStreak bool, windowStart,
 
 	blocks = append(blocks, map[string]any{
 		"type": "section",
-		"text": map[string]any{"type": "mrkdwn", "text": "*Drinks*\n" + rankedCounts(sum.drinks)},
+		"text": map[string]any{"type": "mrkdwn", "text": "*Drinks*\n" + rankedDrinks(sum.drinks)},
 	})
 
 	if len(sum.failedSteps) > 0 {
@@ -302,22 +323,45 @@ func dailySummaryFooter(windowStart, now time.Time) map[string]any {
 	}
 }
 
-// rankedCounts renders a count map as Slack bullets, most frequent first with
-// ties broken by name so the same day always renders identically.
-func rankedCounts(counts map[string]int) string {
-	keys := make([]string, 0, len(counts))
-	for k := range counts {
+// rankedKeys orders a map's keys by count descending, breaking ties by name so
+// the same data always renders identically.
+func rankedKeys[V any](m map[string]V, count func(V) int) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		if counts[keys[i]] != counts[keys[j]] {
-			return counts[keys[i]] > counts[keys[j]]
+		ci, cj := count(m[keys[i]]), count(m[keys[j]])
+		if ci != cj {
+			return ci > cj
 		}
 		return keys[i] < keys[j]
 	})
+	return keys
+}
+
+// rankedCounts renders a count map as Slack bullets, most frequent first.
+func rankedCounts(counts map[string]int) string {
+	keys := rankedKeys(counts, func(n int) int { return n })
 	lines := make([]string, len(keys))
 	for i, k := range keys {
 		lines[i] = fmt.Sprintf("• %s — %d", k, counts[k])
+	}
+	return strings.Join(lines, "\n")
+}
+
+// rankedDrinks renders the per-drink breakdown, most ordered first, with each
+// drink's own mean brew time. A drink whose every attempt failed shows its count
+// without a timing rather than an invented zero.
+func rankedDrinks(drinks map[string]drinkStats) string {
+	keys := rankedKeys(drinks, func(d drinkStats) int { return d.ordered })
+	lines := make([]string, len(keys))
+	for i, k := range keys {
+		stats := drinks[k]
+		lines[i] = fmt.Sprintf("• %s — %d", k, stats.ordered)
+		if avg, ok := stats.avgBrew(); ok {
+			lines[i] += fmt.Sprintf(" _(avg %s)_", avg)
+		}
 	}
 	return strings.Join(lines, "\n")
 }
