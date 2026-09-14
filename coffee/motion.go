@@ -181,17 +181,28 @@ func plannerOptionsForConstraint(lc *StepLinearConstraint) *armplanning.PlannerO
 
 const defaultSlowMovementVelDegsPerSec = 25.0
 
-// slowMovementMoveOptions returns the MoveOptions used whenever a step carries
-// a LinearConstraint (or for pivot/circular moves) but no explicit per-step
-// MoveOptions. Velocity is configurable via Config.SlowMovementVelDegsPerSec.
+// Arm moves fall into three speeds. Most run at the arm's own DEFAULT speed
+// (no override) — an ordinary free traverse with an empty gripper, or a tamped
+// puck. SLOW (slowMoveOptions, below) is for the careful moves: a
+// constrained/contact step, a pivot or circular motion, and the spill- or
+// scatter-prone carries — the no-spill cup/glass carry, the milk bottle, and
+// loose grounds on the way to the tamper. POUR (pourMoveOptions) is the fast
+// tilt of a filled container over the cup/glass. An explicit Step.MoveOptions
+// overrides the default.
+//
+// slowMoveOptions is the config-facing StepMoveOptions (degrees), for attaching
+// the slow tier to a Step. Acceleration falls back to the arm's own when
+// SlowMovementAccDegsPerSec2 is unset. slowMovementMoveOptions is the arm.MoveOptions
+// (radians) form the execution paths apply directly.
+func (s *beanjaminCoffee) slowMoveOptions() *StepMoveOptions {
+	return &StepMoveOptions{
+		MaxVelDegsPerSec:  orDefault(s.cfg.SlowMovementVelDegsPerSec, defaultSlowMovementVelDegsPerSec),
+		MaxAccDegsPerSec2: s.cfg.SlowMovementAccDegsPerSec2,
+	}
+}
+
 func (s *beanjaminCoffee) slowMovementMoveOptions() *arm.MoveOptions {
-	velDegs := s.cfg.SlowMovementVelDegsPerSec
-	if velDegs <= 0 {
-		velDegs = defaultSlowMovementVelDegsPerSec
-	}
-	return &arm.MoveOptions{
-		MaxVelRads: velDegs * math.Pi / 180.0,
-	}
+	return buildMoveOptions(s.slowMoveOptions())
 }
 
 // moveToPose fetches a named pose and moves to it.
@@ -736,6 +747,8 @@ func (s *beanjaminCoffee) executePlan(ctx context.Context, plan motionplan.Plan,
 	if err != nil {
 		return err
 	}
+	// A constrained move with no explicit speed defaults to the slow tier; a free
+	// traverse keeps the arm's own default speed (nil).
 	opts := buildMoveOptions(moveOpts)
 	if opts == nil && lc != nil {
 		opts = s.slowMovementMoveOptions()
@@ -1250,7 +1263,12 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, al
 	if err != nil {
 		return err
 	}
-	return s.arm.MoveThroughJointPositions(ctx, positions, buildMoveOptions(moveOpts), nil)
+	// The level carry moves a filled container, so default to the slow tier.
+	opts := buildMoveOptions(moveOpts)
+	if opts == nil {
+		opts = s.slowMovementMoveOptions()
+	}
+	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
 }
 
 // minPivotThetaRads is the smallest authored rotation an overshoot direction

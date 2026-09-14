@@ -149,7 +149,9 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 	// grasped high, so the level-carry pose cloud may simply be unplannable for
 	// it — revisit once the poses are calibrated and we know what the arm can
 	// actually hold.
-	approachStep := Step{PoseName: clawPoseMilkPourApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
+	// The bottle is full and open here; carry it at the slow tier so it doesn't
+	// slosh (this free-plans, otherwise the arm's default speed).
+	approachStep := Step{PoseName: clawPoseMilkPourApproach, PoseSwitch: s.clawsSw, Pause: shortPause, MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}
@@ -212,7 +214,8 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 		centroid.X, centroid.Y, centroid.Z)
 
 	// Free-plan back to the fridge; see the TODO in pourMilk on the level carry.
-	if err := s.moveToRawPose(ctx, approachPD, nil, nil, nil); err != nil {
+	// The bottle still holds milk, so carry it at the slow tier, not the default.
+	if err := s.moveToRawPose(ctx, approachPD, nil, nil, s.slowMoveOptions()); err != nil {
 		return fmt.Errorf("return_milk: approach the shelf: %w", err)
 	}
 
