@@ -205,14 +205,14 @@ func TestDailySummaryBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadLocation: %v", err)
 	}
-	dayStart := time.Date(2026, 9, 11, 0, 0, 0, 0, loc)
-	now := time.Date(2026, 9, 11, 17, 30, 0, 0, loc)
+	now := time.Date(2026, 9, 14, 17, 30, 0, 0, loc) // a Monday
+	windowStart := now.Add(-dailySummaryWindow)
 
 	sum := summarizeOrders([]orderRow{
 		{Drink: "espresso", OrderOK: true, Decaf: true, DurationMs: 120000},
 		{Drink: "lungo", FailedStep: stepGrinding},
 	})
-	blocks := dailySummaryBlocks(sum, 12, true, dayStart, now)
+	blocks := dailySummaryBlocks(sum, 12, true, windowStart, now)
 
 	// header, stats grid, drinks, faults, footer
 	if len(blocks) != 5 {
@@ -240,9 +240,21 @@ func TestDailySummaryBlocks(t *testing.T) {
 
 	footer := blocks[4].(map[string]any)
 	text := footer["elements"].([]any)[0].(map[string]any)["text"].(string)
-	// The window is the visible check on a CRON_TZ/timezone mismatch.
-	if !strings.Contains(text, "12:00 AM") || !strings.Contains(text, "5:30 PM") {
-		t.Errorf("footer %q does not show the 12:00 AM – 5:30 PM window", text)
+	// Both ends carry their weekday, so a reader can see which days the window
+	// spans rather than guessing from two bare clock times.
+	if want := "Sun 5:30 PM – Mon 5:30 PM EDT"; text != want {
+		t.Errorf("footer = %q, want %q", text, want)
+	}
+}
+
+// Consecutive digests must tile: the window a digest covers has to start
+// exactly where the previous run's ended, or orders are dropped or counted
+// twice.
+func TestDailySummaryWindowTiles(t *testing.T) {
+	run := time.Date(2026, 9, 14, 17, 30, 0, 0, time.UTC)
+	previous := run.Add(-24 * time.Hour)
+	if got := run.Add(-dailySummaryWindow); !got.Equal(previous) {
+		t.Errorf("window starts at %v, want the previous daily run at %v", got, previous)
 	}
 }
 
@@ -276,7 +288,7 @@ func TestDailySummaryBlocksNoOrders(t *testing.T) {
 	if len(blocks) != 3 {
 		t.Fatalf("got %d blocks, want 3: %#v", len(blocks), blocks)
 	}
-	if !strings.Contains(dailySummaryText(summarizeOrders(nil), now), "No orders") {
+	if !strings.Contains(dailySummaryText(summarizeOrders(nil)), "No orders") {
 		t.Error("fallback text does not say there were no orders")
 	}
 }

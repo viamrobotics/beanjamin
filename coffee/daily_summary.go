@@ -25,6 +25,13 @@ import (
 // it returns.
 const dailySummaryTimeout = 60 * time.Second
 
+// dailySummaryWindow is how far back each digest reaches. A rolling window
+// matched to the firing interval is what makes consecutive digests tile: run
+// daily and every order is reported exactly once, with no gap for evening
+// orders and no order counted twice. A calendar-day window would instead end at
+// the moment the digest runs and silently drop anything brewed after it.
+const dailySummaryWindow = 24 * time.Hour
+
 // orderRow is one order-sensor reading, projected flat out of the tabular
 // document. The json tags are the single source of truth for the field names:
 // dailySummaryStages builds its $project from them by reflection, so a renamed
@@ -65,11 +72,11 @@ func (s *beanjaminCoffee) sendDailySummary(ctx context.Context, arg any) (map[st
 	defer cancel()
 
 	now := time.Now().In(loc)
-	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	windowStart := now.Add(-dailySummaryWindow)
 
 	raw, err := s.QueryTabularDataForResource(ctx, s.cfg.OrderSensorName,
 		&module.QueryTabularDataOptions{
-			TimeBack:         now.Sub(dayStart),
+			TimeBack:         dailySummaryWindow,
 			AdditionalStages: dailySummaryStages(),
 		})
 	if err != nil {
@@ -80,12 +87,12 @@ func (s *beanjaminCoffee) sendDailySummary(ctx context.Context, arg any) (map[st
 	streak, hasStreak := s.consecutiveSuccesses(ctx)
 
 	s.logger.Infof("daily summary: %d orders between %s and %s (%s)",
-		sum.attempted, dayStart.Format(time.Kitchen), now.Format(time.Kitchen), loc)
+		sum.attempted, windowStart.Format(time.RFC3339), now.Format(time.RFC3339), loc)
 
 	if _, err := s.slackNotifier.DoCommand(ctx, map[string]any{
 		"command": "send",
-		"text":    dailySummaryText(sum, now),
-		"blocks":  dailySummaryBlocks(sum, streak, hasStreak, dayStart, now),
+		"text":    dailySummaryText(sum),
+		"blocks":  dailySummaryBlocks(sum, streak, hasStreak, windowStart, now),
 	}); err != nil {
 		return nil, fmt.Errorf("sending daily summary to slack: %w", err)
 	}
@@ -97,11 +104,11 @@ type dailySummaryArgs struct {
 	Timezone string `json:"timezone"`
 }
 
-// summaryLocation resolves the timezone the business day is measured in. The
-// host's zone is the fallback because a machine sitting in the office is
-// normally set to the office's zone — but the digest always prints the window it
-// used, so a mismatch with the job's CRON_TZ is visible in the message itself
-// rather than silently slicing the day at the wrong hour.
+// summaryLocation resolves the timezone the digest's timestamps are rendered
+// in, defaulting to the host's. It does not affect which orders are counted —
+// the window is a rolling 24 hours either way — so a wrong value here only
+// mislabels the times in the footer; it can no longer slice the wrong set of
+// orders. Worth setting anyway on a host left configured to UTC.
 func summaryLocation(arg any) (*time.Location, error) {
 	// A hand-fired {"send_daily_summary": true} carries no options at all.
 	doc, ok := arg.(map[string]any)
@@ -257,12 +264,12 @@ func summarizeOrders(rows []orderRow) daySummary {
 
 // dailySummaryText is the short line Slack shows in notifications and in the
 // channel list, and the fallback when Block Kit can't render.
-func dailySummaryText(sum daySummary, day time.Time) string {
+func dailySummaryText(sum daySummary) string {
 	if sum.attempted == 0 {
-		return fmt.Sprintf(":coffee: No orders on %s.", day.Format("Mon, Jan 2"))
+		return ":coffee: No orders in the last 24 hours."
 	}
-	return fmt.Sprintf(":coffee: %s: %d orders, %d succeeded, %d faulted, %d cancelled (%.0f%% success).",
-		day.Format("Mon, Jan 2"), sum.attempted, sum.succeeded, sum.faulted, sum.cancelled, sum.successRate())
+	return fmt.Sprintf(":coffee: Last 24 hours: %d orders, %d succeeded, %d faulted, %d cancelled (%.0f%% success).",
+		sum.attempted, sum.succeeded, sum.faulted, sum.cancelled, sum.successRate())
 }
 
 // dailySummaryBlocks renders the digest as Block Kit: a header, the stats as a
@@ -271,13 +278,13 @@ func dailySummaryText(sum daySummary, day time.Time) string {
 // structpb-backed DoCommand wire format, which rejects []map[string]any as a
 // list value. streak is the machine's current run of successful orders, shown
 // only when hasStreak (see consecutiveSuccesses).
-func dailySummaryBlocks(sum daySummary, streak int, hasStreak bool, dayStart, now time.Time) []any {
+func dailySummaryBlocks(sum daySummary, streak int, hasStreak bool, windowStart, now time.Time) []any {
 	blocks := []any{
 		map[string]any{
 			"type": "header",
 			"text": map[string]any{
 				"type":  "plain_text",
-				"text":  ":coffee: Orders for " + now.Format("Monday, January 2"),
+				"text":  ":coffee: Orders in the last 24 hours",
 				"emoji": true,
 			},
 		},
@@ -286,9 +293,9 @@ func dailySummaryBlocks(sum daySummary, streak int, hasStreak bool, dayStart, no
 	if sum.attempted == 0 {
 		blocks = append(blocks, map[string]any{
 			"type": "section",
-			"text": map[string]any{"type": "mrkdwn", "text": "No orders today."},
+			"text": map[string]any{"type": "mrkdwn", "text": "No orders in the last 24 hours."},
 		})
-		return append(blocks, dailySummaryFooter(dayStart, now))
+		return append(blocks, dailySummaryFooter(windowStart, now))
 	}
 
 	fields := []any{
@@ -322,18 +329,18 @@ func dailySummaryBlocks(sum daySummary, streak int, hasStreak bool, dayStart, no
 		})
 	}
 
-	return append(blocks, dailySummaryFooter(dayStart, now))
+	return append(blocks, dailySummaryFooter(windowStart, now))
 }
 
-// dailySummaryFooter prints the window the numbers actually cover. It is the
-// check on the timezone: if the job's CRON_TZ and the command's timezone drift
-// apart, the wrong hours show up here rather than going unnoticed.
-func dailySummaryFooter(dayStart, now time.Time) map[string]any {
+// dailySummaryFooter prints the window the numbers actually cover. The window
+// spans two dates, so both ends carry their weekday — a reader checking whether
+// Saturday's orders were reported needs to see which days are in it.
+func dailySummaryFooter(windowStart, now time.Time) map[string]any {
 	return map[string]any{
 		"type": "context",
 		"elements": []any{map[string]any{
 			"type": "mrkdwn",
-			"text": fmt.Sprintf("%s – %s", dayStart.Format("3:04 PM"), now.Format("3:04 PM MST")),
+			"text": fmt.Sprintf("%s – %s", windowStart.Format("Mon 3:04 PM"), now.Format("Mon 3:04 PM MST")),
 		}},
 	}
 }
