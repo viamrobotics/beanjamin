@@ -325,8 +325,11 @@ func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.C
 			_, err := s.placeFullCupOnShelf(ctx, cancelCtx)
 			return err
 		},
+		// Manual placement assumes the vessel is full: an operator stepping by hand
+		// could be holding either, and treating a filled cup as empty is the
+		// expensive mistake.
 		"place_held": func(ctx, cancelCtx context.Context) error { // place held vessel in serving area
-			_, err := s.placeHeldInServingArea(ctx, cancelCtx)
+			_, err := s.placeHeldInServingArea(ctx, cancelCtx, heldFilled)
 			return err
 		},
 		"serve_iced_coffee": func(ctx, cancelCtx context.Context) error { // full sequence end-to-end

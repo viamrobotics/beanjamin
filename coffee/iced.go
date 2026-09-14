@@ -86,8 +86,10 @@ func (s *beanjaminCoffee) finishIced(ctx, cancelCtx context.Context, withMilk bo
 	if err := s.pourEspresso(ctx, cancelCtx); err != nil {
 		return -1, err
 	}
-	// 7. Place the now-empty espresso cup in the serving area (round-robin).
-	if _, err := s.placeHeldInServingArea(ctx, cancelCtx); err != nil {
+	// 7. Place the now-empty espresso cup in the serving area (round-robin). The
+	//    pour left it empty, so it skips the no-spill level carry — there is
+	//    nothing left in it to slosh.
+	if _, err := s.placeHeldInServingArea(ctx, cancelCtx, heldEmpty); err != nil {
 		return -1, err
 	}
 
@@ -95,8 +97,9 @@ func (s *beanjaminCoffee) finishIced(ctx, cancelCtx context.Context, withMilk bo
 	if err := s.grabStagedGlass(ctx, cancelCtx); err != nil {
 		return -1, err
 	}
-	// 9. Place the iced glass in the serving area (next round-robin slot).
-	return s.placeHeldInServingArea(ctx, cancelCtx)
+	// 9. Place the iced glass in the serving area (next round-robin slot). This is
+	//    the drink itself — full, so it keeps the no-spill carry.
+	return s.placeHeldInServingArea(ctx, cancelCtx, heldFilled)
 }
 
 // brewAndPrepIce pokes the brew button, runs prepIcedGlass while the machine

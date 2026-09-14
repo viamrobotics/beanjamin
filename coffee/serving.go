@@ -84,7 +84,26 @@ func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) (i
 	if err := s.grabBrewedCupFromMachine(ctx, cancelCtx); err != nil {
 		return -1, err
 	}
-	return s.placeHeldInServingArea(ctx, cancelCtx)
+	return s.placeHeldInServingArea(ctx, cancelCtx, heldFilled)
+}
+
+// heldContents says whether the container being placed still holds liquid. It
+// decides only how the traverse to the shelf is planned — a filled container
+// routes through the no-spill level carry, an empty one free-plans straight to
+// the slot. Held-item tracking, collisions and the descent are identical either
+// way.
+type heldContents int
+
+const (
+	heldFilled heldContents = iota
+	heldEmpty
+)
+
+// usesNoSpillCarry reports whether a placement traverse routes through the level
+// carry (carryHeldLevel) rather than free-planning straight to the slot: only a
+// filled container, and only when no_spill_carry is configured.
+func (s *beanjaminCoffee) usesNoSpillCarry(contents heldContents) bool {
+	return s.cfg.NoSpillCarry && contents == heldFilled
 }
 
 // placeHeldInServingArea drops the item currently held by the gripper into the
@@ -95,7 +114,7 @@ func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) (i
 // counter to the slot after it, so the next placement starts there. The caller
 // must already be holding the item; shared by placeFullCupOnShelf (cups) and
 // serveIcedCoffee (the empty espresso cup and the iced glass).
-func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context) (int, error) {
+func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context, contents heldContents) (int, error) {
 	logger := s.activeOrderLogger()
 	if s.gripper == nil {
 		return -1, fmt.Errorf("place_in_serving_area: no gripper configured")
@@ -112,7 +131,7 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context)
 	for off := 0; off < n; off++ {
 		idx := slotIndex(start+uint64(off), n)
 		logger.Infof("place_in_serving_area: trying slot %d/%d", idx+1, n)
-		err := s.tryDropCupInSlot(ctx, slots[idx], shelfTopZ)
+		err := s.tryDropCupInSlot(ctx, slots[idx], shelfTopZ, contents)
 		if err == nil {
 			// Next placement starts at the slot after the one just used.
 			s.servingAreaSlotCounter.Store(start + uint64(off) + 1)
@@ -154,7 +173,9 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context)
 //     caller can try the next slot.
 //   - anything else → an execution error, or any failure after the cup was
 //     released; bubble up (do not try another slot with an empty gripper).
-func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vector, shelfTopZ float64) error {
+func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vector, shelfTopZ float64,
+	contents heldContents,
+) error {
 	logger := s.activeOrderLogger()
 	dropAnchor := r3.Vector{
 		X: tileWorld.X,
@@ -170,13 +191,14 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 		tileWorld.X, tileWorld.Y, dropPose, approachPose)
 
 	// 1. Carry the held cup to the approach pose above the slot. With
-	// no_spill_carry set, step through level-pinned waypoints (carryHeldLevel)
-	// so the drink doesn't slosh on the long traverse; otherwise free-plan
-	// straight there. Both wrap planning failures in errMotionPlanning, so on
-	// failure the arm has not moved and the cup is still held — the caller can
-	// try the next slot.
+	// no_spill_carry set, a *filled* container steps through level-pinned
+	// waypoints (carryHeldLevel) so the drink doesn't slosh on the long traverse;
+	// an empty one has nothing to spill and free-plans straight there, which is
+	// both quicker and easier to plan. Both wrap planning failures in
+	// errMotionPlanning, so on failure the arm has not moved and the cup is still
+	// held — the caller can try the next slot.
 	carry := func() error { return s.moveToRawPose(ctx, approachPD, nil, nil, nil) }
-	if s.cfg.NoSpillCarry {
+	if s.usesNoSpillCarry(contents) {
 		carry = func() error { return s.carryHeldLevel(ctx, approachPD, nil, nil) }
 	}
 	if err := carry(); err != nil {
