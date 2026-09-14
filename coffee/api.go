@@ -173,8 +173,8 @@ var coffeeCommands = []commandDef{
 	}},
 	// Normally fired by a cron entry in the machine config's "jobs" block
 	// (see README); safe to invoke by hand to test the digest off-schedule.
-	{key: "send_daily_summary", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
-		return s.sendDailySummary(ctx, cmd["send_daily_summary"])
+	{key: "send_daily_summary", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
+		return s.sendDailySummary(ctx)
 	}},
 	{key: "run_cup_flow", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
 		count, err := parseCupFlowCount(cmd["run_cup_flow"])

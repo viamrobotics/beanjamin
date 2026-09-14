@@ -174,32 +174,6 @@ func TestConsecutiveSuccesses(t *testing.T) {
 	}
 }
 
-func TestSummaryLocation(t *testing.T) {
-	loc, err := summaryLocation(map[string]any{"timezone": "America/New_York"})
-	if err != nil {
-		t.Fatalf("summaryLocation returned error: %v", err)
-	}
-	if loc.String() != "America/New_York" {
-		t.Errorf("loc = %q, want America/New_York", loc)
-	}
-
-	// A bare `true` (a hand-fired command) and an omitted timezone both fall
-	// back to the host zone rather than erroring.
-	for _, arg := range []any{true, map[string]any{}, map[string]any{"timezone": "  "}} {
-		loc, err := summaryLocation(arg)
-		if err != nil {
-			t.Errorf("summaryLocation(%v) returned error: %v", arg, err)
-		}
-		if loc != time.Local {
-			t.Errorf("summaryLocation(%v) = %v, want host local", arg, loc)
-		}
-	}
-
-	if _, err := summaryLocation(map[string]any{"timezone": "Mars/Olympus_Mons"}); err == nil {
-		t.Error("summaryLocation accepted an invalid timezone, want error")
-	}
-}
-
 func TestDailySummaryBlocks(t *testing.T) {
 	loc, err := time.LoadLocation("America/New_York")
 	if err != nil {

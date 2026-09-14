@@ -495,10 +495,10 @@ In normal operation this fires automatically: when a `fulfillment: "delivery"` o
 **`send_daily_summary`** - Post a Slack digest of the orders from the last 24 hours. Normally fired on a schedule by viam-server's job manager (see "Daily order summary in Slack" below); calling it by hand is how you test the digest off-schedule. Requires both `slack_notifier_name` and `order_sensor_name`.
 
 ```json
-{"send_daily_summary": {"timezone": "America/New_York"}}
+{"send_daily_summary": true}
 ```
 
-`timezone` is an optional IANA name controlling only how the digest's timestamps are **rendered** — the window is a rolling 24 hours regardless, so a wrong value mislabels the footer but can never change which orders are counted. It defaults to the host's timezone, so it is only worth setting on a host left configured to UTC (`{"send_daily_summary": true}` is a valid hand-fired call). Returns `{"sent": true, "orders": N}`.
+The command takes no options — the window is a rolling 24 hours ending now, and timestamps render in the host's timezone. Returns `{"sent": true, "orders": N}`.
 
 **`reset_world`** - Recover the service to a clean idle state from anywhere. In order: cancels any running sequence (waiting for it to actually stop), clears the queue (pending + recently completed), rebuilds the cached frame system from the framesystem service (discarding mid-cycle mutations like a portafilter frame reparented to world by `lock_portafilter`), forgets that the fridge door is standing open, and releases the cancel-induced queue pause. Safe to call from any state — each step is skipped when not applicable. Does not move the arm — if you want to re-home, run `execute_action` afterward.
 
@@ -593,12 +593,12 @@ The numbers do not come from anything the service keeps in memory. They are read
     "schedule": "CRON_TZ=America/New_York 30 17 * * *",
     "resource": "coffee",
     "method": "DoCommand",
-    "command": { "send_daily_summary": { "timezone": "America/New_York" } }
+    "command": { "send_daily_summary": true }
   }
 ]
 ```
 
-> ⚠️ **The `CRON_TZ=` prefix is not optional.** The job manager builds its scheduler without a location, so a bare `"30 17 * * *"` fires at 17:30 in the *host's* timezone — four hours off from New York, and silently so. The digest prints the window it actually covered in its footer (`Sun 5:30 PM – Mon 5:30 PM EDT`), which is where a wrong firing time shows up.
+> ⚠️ **`CRON_TZ=` is the only timezone that matters here, and it is not optional.** The job manager builds its scheduler without a location, so a bare `"30 17 * * *"` fires at 17:30 in whatever timezone the *host* is set to — four hours off from New York, and silently so. Omit it only if the host's own timezone is already the one you want. The digest prints the window it covered in its footer (`Sun 5:30 PM – Mon 5:30 PM EDT`), which is where a wrong firing time shows up.
 
 **Fire it daily.** The 24-hour window only tiles against a daily schedule. Restricting the cron to weekdays with `1-5` leaves a gap — Monday's digest reaches back to Sunday evening, so everything brewed Friday evening through Sunday afternoon is never reported by any run. Keep `* * *` even if the machine only gets used on weekdays; a quiet weekend costs two "No orders" lines.
 

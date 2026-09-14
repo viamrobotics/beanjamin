@@ -46,16 +46,16 @@ type orderRow struct {
 	DurationMs        float64 `json:"duration_ms"`
 }
 
-// sendDailySummary posts a Slack digest of every order recorded so far today,
-// where "today" starts at midnight in the timezone named in the command
-// ({"timezone": "America/New_York"}) and defaults to the host's timezone.
+// sendDailySummary posts a Slack digest of every order from the last 24 hours.
+// Timestamps render in the host's timezone; the window itself is timezone-free,
+// so the digest takes no arguments.
 //
 // ponytail: a failure here is only a returned error — the job manager logs it
 // and records it in the job's history, but nothing reaches Slack. Silence in
 // the channel therefore means "no digest ran" as well as "no orders". The
 // always-posted no-orders line is what keeps that distinguishable by eye; if it
 // stops being enough, post the error to Slack too.
-func (s *beanjaminCoffee) sendDailySummary(ctx context.Context, arg any) (map[string]any, error) {
+func (s *beanjaminCoffee) sendDailySummary(ctx context.Context) (map[string]any, error) {
 	if s.slackNotifier == nil {
 		return nil, fmt.Errorf("send_daily_summary requires slack_notifier_name to be configured")
 	}
@@ -63,15 +63,10 @@ func (s *beanjaminCoffee) sendDailySummary(ctx context.Context, arg any) (map[st
 		return nil, fmt.Errorf("send_daily_summary requires order_sensor_name to be configured (it names the component the digest queries)")
 	}
 
-	loc, err := summaryLocation(arg)
-	if err != nil {
-		return nil, err
-	}
-
 	ctx, cancel := context.WithTimeout(ctx, dailySummaryTimeout)
 	defer cancel()
 
-	now := time.Now().In(loc)
+	now := time.Now()
 	windowStart := now.Add(-dailySummaryWindow)
 
 	raw, err := s.QueryTabularDataForResource(ctx, s.cfg.OrderSensorName,
@@ -86,8 +81,8 @@ func (s *beanjaminCoffee) sendDailySummary(ctx context.Context, arg any) (map[st
 	sum := summarizeOrders(decodeOrderRows(raw, s.logger))
 	streak, hasStreak := s.consecutiveSuccesses(ctx)
 
-	s.logger.Infof("daily summary: %d orders between %s and %s (%s)",
-		sum.attempted, windowStart.Format(time.RFC3339), now.Format(time.RFC3339), loc)
+	s.logger.Infof("daily summary: %d orders between %s and %s",
+		sum.attempted, windowStart.Format(time.RFC3339), now.Format(time.RFC3339))
 
 	if _, err := s.slackNotifier.DoCommand(ctx, map[string]any{
 		"command": "send",
@@ -97,49 +92,6 @@ func (s *beanjaminCoffee) sendDailySummary(ctx context.Context, arg any) (map[st
 		return nil, fmt.Errorf("sending daily summary to slack: %w", err)
 	}
 	return map[string]any{"orders": float64(sum.attempted), "sent": true}, nil
-}
-
-// dailySummaryArgs is the send_daily_summary command payload.
-type dailySummaryArgs struct {
-	Timezone string `json:"timezone"`
-}
-
-// summaryLocation resolves the timezone the digest's timestamps are rendered
-// in, defaulting to the host's. It does not affect which orders are counted —
-// the window is a rolling 24 hours either way — so a wrong value here only
-// mislabels the times in the footer; it can no longer slice the wrong set of
-// orders. Worth setting anyway on a host left configured to UTC.
-func summaryLocation(arg any) (*time.Location, error) {
-	// A hand-fired {"send_daily_summary": true} carries no options at all.
-	doc, ok := arg.(map[string]any)
-	if !ok {
-		return time.Local, nil
-	}
-	args, err := decodeInto[dailySummaryArgs](doc)
-	if err != nil {
-		return nil, fmt.Errorf("send_daily_summary arguments: %w", err)
-	}
-	if strings.TrimSpace(args.Timezone) == "" {
-		return time.Local, nil
-	}
-	loc, err := time.LoadLocation(args.Timezone)
-	if err != nil {
-		return nil, fmt.Errorf("timezone %q: %w", args.Timezone, err)
-	}
-	return loc, nil
-}
-
-// decodeInto converts an untyped map — a DoCommand payload, or one document off
-// the tabular query — into T through a JSON round-trip, so the struct tags do
-// the field mapping instead of a chain of type assertions.
-func decodeInto[T any](doc map[string]any) (T, error) {
-	var out T
-	encoded, err := json.Marshal(doc)
-	if err != nil {
-		return out, err
-	}
-	err = json.Unmarshal(encoded, &out)
-	return out, err
 }
 
 // consecutiveSuccesses reads the machine's successful-order streak off the usage
@@ -182,8 +134,13 @@ func dailySummaryStages() []map[string]any {
 func decodeOrderRows(raw []map[string]any, logger logging.Logger) []orderRow {
 	rows := make([]orderRow, 0, len(raw))
 	for _, doc := range raw {
-		row, err := decodeInto[orderRow](doc)
+		encoded, err := json.Marshal(doc)
 		if err != nil {
+			logger.Warnf("daily summary: skipping an unencodable order reading: %v", err)
+			continue
+		}
+		var row orderRow
+		if err := json.Unmarshal(encoded, &row); err != nil {
 			logger.Warnf("daily summary: skipping an unreadable order reading: %v", err)
 			continue
 		}
