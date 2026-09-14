@@ -157,8 +157,9 @@ type beanjaminCoffee struct {
 	// at its authored shut transform, so this is the only record that survives a
 	// rebuild — resetFrameSystem re-applies it, keeping the modeled panel where
 	// the real one actually is instead of snapping it closed behind the arm's
-	// back. Cleared by reset_world, the operator's "the world is as configured"
-	// button. Mutated only on the motion sequence goroutine, like cachedFS.
+	// back. Cleared only by the two commands in which an operator asserts the
+	// world is as configured — reset_world and proceed — and never by a rebuild
+	// on its own. Mutated only on the motion sequence goroutine, like cachedFS.
 	doorOpenDegs float64
 }
 

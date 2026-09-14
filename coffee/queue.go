@@ -248,6 +248,14 @@ func (s *beanjaminCoffee) processQueue() {
 
 		// Drain orders one by one.
 		for {
+			// Honour a cancel-induced pause before every order, not just after
+			// the one that was cancelled: a cancel that interrupted a manual
+			// execute_action or a keepalive purge pauses the queue too, and that
+			// pause has to hold the next order back just the same.
+			if !s.waitForProceed() {
+				return
+			}
+
 			order, ok := s.queue.Peek()
 			if !ok {
 				s.logger.Debugf("queue empty, waiting for new orders")
@@ -278,23 +286,38 @@ func (s *beanjaminCoffee) processQueue() {
 			// pending. The completed copy in recent keeps its raw_step for
 			// debugging.
 			s.currentStep.Store("")
-
-			// If the operator cancelled the running order, pause so no new
-			// orders start until they explicitly send 'proceed'.
-			if s.paused.Swap(false) {
-				orderLogger.Infof("order cancelled — queue paused, send 'proceed' to resume")
-				s.paused.Store(true)
-				select {
-				case <-s.queue.proceed:
-					orderLogger.Infof("received 'proceed', resuming queue processing")
-					s.paused.Store(false)
-				case <-s.queueStop:
-					s.paused.Store(false)
-					return
-				}
-			}
 		}
 	}
+}
+
+// waitForProceed blocks while an operator cancel has the queue paused, and
+// reports false when the service is shutting down.
+//
+// The paused flag is never cleared here. It is the single source of truth that
+// proceedQueue, resetWorld, Status and the keepalive loop all read, so only the
+// command granting the resume may clear it: a consumer that cleared it on the
+// way into the wait would be invisible to a proceed arriving in that window,
+// which would then report "queue was not paused", send no signal, and leave
+// this goroutine parked with nothing left that can ever wake it — the queue
+// silently stops making drinks while Status still reports it idle and unpaused.
+//
+// The wakeup is re-checked rather than trusted, so a signal parked while
+// nothing was waiting cannot release a later pause nobody asked to release.
+func (s *beanjaminCoffee) waitForProceed() bool {
+	if !s.paused.Load() {
+		return true
+	}
+	logger := s.activeOrderLogger()
+	logger.Infof("queue paused by a cancel — send 'proceed' to resume")
+	for s.paused.Load() {
+		select {
+		case <-s.queue.proceed:
+		case <-s.queueStop:
+			return false
+		}
+	}
+	logger.Infof("received 'proceed', resuming queue processing")
+	return true
 }
 
 // safeExecuteOrder wraps executeQueuedOrder with panic recovery so that a

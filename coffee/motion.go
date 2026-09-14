@@ -387,8 +387,9 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 //
 // The fridge door is the exception: a rebuild puts the panel back at its authored
 // shut transform, but rebuilding a model does not close a real door, so the
-// recorded doorOpenDegs is re-applied afterward. Only reset_world clears that
-// record, because only an operator can assert the door is actually shut.
+// recorded doorOpenDegs is re-applied afterward. Clearing that record is an
+// operator's call, not a rebuild's — reset_world and proceed each clear it
+// before calling this, and both say so in their response.
 func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 	logger := s.activeOrderLogger()
 	fs, err := framesystem.NewFromService(ctx, s.fsSvc, nil)

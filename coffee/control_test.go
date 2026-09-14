@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/robot/framesystem"
+	"go.viam.com/rdk/spatialmath"
 	"go.viam.com/rdk/testutils/inject"
 )
 
@@ -244,18 +246,226 @@ func TestProceedOnRunningQueueParksNoSignal(t *testing.T) {
 	}
 }
 
-// TestProceedTwiceWhilePausedErrors: the resume signal is a cap-1 buffered
-// channel, so a second proceed with the slot still full (no consumer draining
-// it) reports that a resume is already pending.
-func TestProceedTwiceWhilePausedErrors(t *testing.T) {
+// TestProceedTwiceResumesOnce: the first proceed claims the pause, the second
+// finds none left. Only one of them may report resumed, or an operator
+// double-clicking would release a pause that a cancel between the two clicks
+// had just taken.
+func TestProceedTwiceResumesOnce(t *testing.T) {
 	s, _, _ := pausedCoffeeWithDirtyWorld(t, nil)
 	ctx := context.Background()
 
-	if _, err := s.proceedQueue(ctx); err != nil {
+	first, err := s.proceedQueue(ctx)
+	if err != nil {
 		t.Fatalf("first proceed: unexpected error %v", err)
 	}
-	if _, err := s.proceedQueue(ctx); err == nil {
-		t.Error("second proceed with the buffer full should error")
+	if first["resumed"] != true {
+		t.Errorf("first proceed resumed = %v, want true", first["resumed"])
+	}
+	second, err := s.proceedQueue(ctx)
+	if err != nil {
+		t.Fatalf("second proceed: unexpected error %v", err)
+	}
+	if second["resumed"] != false {
+		t.Errorf("second proceed resumed = %v, want false — the first one took the pause", second["resumed"])
+	}
+}
+
+// TestProceedClearsThePauseItself is the regression test for a queue that
+// silently stopped making drinks. The paused flag used to be cleared only by
+// the queue goroutine, so proceed reported success while the flag stayed set:
+// Status kept claiming the queue was paused, the keepalive loop kept declining
+// to purge, and the resume signal sat in the buffer waiting to release a pause
+// nobody had asked to release.
+func TestProceedClearsThePauseItself(t *testing.T) {
+	s, _, _ := pausedCoffeeWithDirtyWorld(t, nil)
+
+	if _, err := s.proceedQueue(context.Background()); err != nil {
+		t.Fatalf("proceed error: %v", err)
+	}
+	if s.paused.Load() {
+		t.Error("proceed must clear the paused flag, not leave it for the queue goroutine")
+	}
+}
+
+// TestCancelledManualActionPauseIsReleasable covers the pause nobody is waiting
+// on: cancelling an execute_action or a keepalive purge pauses the queue while
+// processQueue sits idle between orders, so no consumer is parked to take the
+// resume signal. proceed still has to be able to release it.
+func TestCancelledManualActionPauseIsReleasable(t *testing.T) {
+	s, _, _ := coffeeWithDirtyWorld(t, nil)
+	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
+
+	// A manual action holds the arm; the operator cancels it, then it unwinds.
+	s.running.Store(true)
+	if !s.signalCancel() {
+		t.Fatal("signalCancel should report the running sequence")
+	}
+	s.running.Store(false)
+
+	resp, err := s.proceedQueue(context.Background())
+	if err != nil {
+		t.Fatalf("proceed error: %v", err)
+	}
+	if resp["resumed"] != true {
+		t.Errorf("resumed = %v, want true — the cancel did pause the queue", resp["resumed"])
+	}
+	if s.paused.Load() {
+		t.Error("the queue must not stay paused after proceed released it")
+	}
+}
+
+// TestWaitForProceedHoldsTheQueueUntilProceed pins the consumer side: the flag
+// stays set for the whole wait, so a proceed arriving at any moment sees a
+// paused queue and grants the resume. Clearing it on the way in (the old
+// Swap(false) + Store(true)) opened a window where a concurrent proceed read an
+// unpaused queue, declined to signal, and parked this goroutine for good.
+func TestWaitForProceedHoldsTheQueueUntilProceed(t *testing.T) {
+	s, _, _ := pausedCoffeeWithDirtyWorld(t, nil)
+	s.queueStop = make(chan struct{})
+	t.Cleanup(func() { close(s.queueStop) })
+
+	resumed := make(chan bool, 1)
+	go func() { resumed <- s.waitForProceed() }()
+
+	// The consumer is parked; from a concurrent proceed's point of view the
+	// queue must still read paused.
+	select {
+	case <-resumed:
+		t.Fatal("waitForProceed returned while the queue was still paused")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if !s.paused.Load() {
+		t.Fatal("paused must stay set while a consumer waits — a proceed reading false would never signal")
+	}
+
+	if _, err := s.proceedQueue(context.Background()); err != nil {
+		t.Fatalf("proceed error: %v", err)
+	}
+	select {
+	case ok := <-resumed:
+		if !ok {
+			t.Error("waitForProceed reported shutdown, want a resume")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waitForProceed never woke up after proceed")
+	}
+}
+
+// TestWaitForProceedIgnoresAStaleSignal: a resume signal can be parked with no
+// consumer waiting (proceed after a cancelled manual action). It must not
+// release the next pause on arrival — that pause is a fresh cancel, and an
+// operator has to ask for that one too.
+func TestWaitForProceedIgnoresAStaleSignal(t *testing.T) {
+	s, _, _ := coffeeWithDirtyWorld(t, nil)
+	s.queueStop = make(chan struct{})
+	s.queue.proceed <- struct{}{} // parked by an earlier proceed
+
+	s.paused.Store(true)
+	resumed := make(chan bool, 1)
+	go func() { resumed <- s.waitForProceed() }()
+
+	select {
+	case <-resumed:
+		t.Fatal("a stale resume signal must not release a later pause")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(s.queueStop)
+	if ok := <-resumed; ok {
+		t.Error("waitForProceed should report shutdown once queueStop closes")
+	}
+}
+
+// coffeeWithFridge is coffeeWithDirtyWorld on a machine that has a fridge, so a
+// rebuild has a real door frame to land at its authored shut transform — the
+// only way to tell a cleared angle from one the rebuild put straight back.
+// Returns the authored shut pose of the door origin frame to compare against.
+func coffeeWithFridge(t *testing.T) (*beanjaminCoffee, spatialmath.Pose) {
+	t.Helper()
+	s, _, _ := coffeeWithDirtyWorld(t, nil)
+
+	doorLink := referenceframe.NewLinkInFrame(referenceframe.World,
+		spatialmath.NewPoseFromPoint(r3.Vector{X: 500}), frameFridgeDoor, nil)
+	fsSvc := inject.NewFrameSystemService("fs")
+	fsSvc.FrameSystemConfigFunc = func(context.Context) (*framesystem.Config, error) {
+		return &framesystem.Config{Parts: []*referenceframe.FrameSystemPart{{FrameConfig: doorLink}}}, nil
+	}
+	s.fsSvc = fsSvc
+
+	shut, err := framesystem.NewFromService(context.Background(), fsSvc, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := doorBasePose(shut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, base
+}
+
+// doorOriginPose reads the door origin frame's current transform out of the
+// service's cached frame system.
+func doorOriginPose(t *testing.T, s *beanjaminCoffee) spatialmath.Pose {
+	t.Helper()
+	pose, err := doorBasePose(s.cachedFS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pose
+}
+
+// TestProceedClearsTheFridgeDoorAngle: proceed is the operator saying the
+// machine has been put right, fridge included, so the recorded swing goes with
+// every other mid-cycle mutation and the rebuilt world has a shut door. The
+// angle must be cleared BEFORE the rebuild — cleared after, resetFrameSystem
+// would have already re-applied the swing to the frame system it just built.
+func TestProceedClearsTheFridgeDoorAngle(t *testing.T) {
+	s, shut := coffeeWithFridge(t)
+	s.doorOpenDegs = 90
+
+	resp, err := s.proceedQueue(context.Background())
+	if err != nil {
+		t.Fatalf("proceed error: %v", err)
+	}
+	if got, _ := resp["fridge_door_cleared_degs"].(float64); got != 90 {
+		t.Errorf("fridge_door_cleared_degs = %v, want 90", resp["fridge_door_cleared_degs"])
+	}
+	if s.doorOpenDegs != 0 {
+		t.Errorf("doorOpenDegs = %v, want 0 — proceed asserts the door is shut", s.doorOpenDegs)
+	}
+	if got := doorOriginPose(t, s); !spatialmath.PoseAlmostEqual(got, shut) {
+		t.Errorf("rebuilt door origin at %v, want the authored shut transform %v", got, shut)
+	}
+}
+
+// TestProceedRebuildFailureKeepsTheFridgeDoorAngle: a proceed that cannot
+// rebuild asserts nothing. cachedFS still holds the swung door, so the recorded
+// angle has to stay with it — dropped here, the next rebuild would quietly shut
+// a door this proceed never got to vouch for.
+func TestProceedRebuildFailureKeepsTheFridgeDoorAngle(t *testing.T) {
+	s, _, _ := coffeeWithDirtyWorld(t, errors.New("boom"))
+	s.doorOpenDegs = 90
+
+	if _, err := s.proceedQueue(context.Background()); err == nil {
+		t.Fatal("proceed should fail when the frame system can't be rebuilt")
+	}
+	if s.doorOpenDegs != 90 {
+		t.Errorf("doorOpenDegs = %v, want 90 — a failed proceed must not forget the door", s.doorOpenDegs)
+	}
+}
+
+// TestProceedOmitsTheFridgeFieldWhenShut keeps the field's presence meaningful:
+// it flags the assertion proceed just made about a door that was standing open,
+// so a door already shut must not report one.
+func TestProceedOmitsTheFridgeFieldWhenShut(t *testing.T) {
+	s, _ := coffeeWithFridge(t)
+
+	resp, err := s.proceedQueue(context.Background())
+	if err != nil {
+		t.Fatalf("proceed error: %v", err)
+	}
+	if _, ok := resp["fridge_door_cleared_degs"]; ok {
+		t.Errorf("fridge_door_cleared_degs = %v, want the field omitted for a door already shut", resp["fridge_door_cleared_degs"])
 	}
 }
 
