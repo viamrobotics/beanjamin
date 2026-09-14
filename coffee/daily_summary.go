@@ -248,8 +248,8 @@ func dailySummaryText(sum daySummary) string {
 		sum.attempted, sum.succeeded, sum.faulted, sum.cancelled, sum.successRate())
 }
 
-// dailySummaryBlocks renders the digest as Block Kit: a header, the stats as a
-// two-column field grid, the breakdowns, and a footer naming the window.
+// dailySummaryBlocks renders the digest as Block Kit: a header, a headline
+// stat line, the outcome table, the breakdowns, and a footer naming the window.
 // Returned as []any of map[string]any so it serializes through the
 // structpb-backed DoCommand wire format, which rejects []map[string]any as a
 // list value. streak is the machine's current run of successful orders, shown
@@ -274,51 +274,104 @@ func dailySummaryBlocks(sum daySummary, streak int, hasStreak bool, windowStart,
 		return append(blocks, dailySummaryFooter(windowStart, now))
 	}
 
-	fields := []any{
-		slackField("*Orders:*", fmt.Sprintf("%d", sum.attempted)),
-		slackField("*Succeeded:*", fmt.Sprintf("%d (%.0f%%)", sum.succeeded, sum.successRate())),
-		slackField("*Faulted:*", fmt.Sprintf("%d", sum.faulted)),
-		slackField("*Cancelled by operator:*", fmt.Sprintf("%d", sum.cancelled)),
-	}
-	// No cross-drink average here: the per-drink breakdown below carries the
-	// timings, because a mean over a mixed set tracks the drink mix rather than
-	// the machine. The total is a sum, which stays meaningful — it is how long
-	// the machine spent brewing.
-	if sum.succeeded > 0 {
-		fields = append(fields, slackField("*Total brewing:*", sum.brewTotal.Round(time.Second).String()))
-	}
-	if sum.decaf > 0 {
-		fields = append(fields, slackField("*Decaf:*", fmt.Sprintf("%d", sum.decaf)))
-	}
-	if hasStreak {
-		fields = append(fields, slackField("*Current streak:*", fmt.Sprintf("%d in a row", streak)))
-	}
-	blocks = append(blocks, map[string]any{"type": "section", "fields": fields})
+	blocks = append(blocks, mrkdwnSection(headlineStats(sum)))
+	blocks = append(blocks, mrkdwnSection(outcomeTable(sum)))
 
-	blocks = append(blocks, map[string]any{
-		"type": "section",
-		"text": map[string]any{"type": "mrkdwn", "text": "*Drinks*\n" + rankedDrinks(sum.drinks)},
-	})
+	if aside := asideStats(sum, streak, hasStreak); aside != "" {
+		blocks = append(blocks, mrkdwnSection(aside))
+	}
+
+	blocks = append(blocks, mrkdwnSection(":coffee: *Drinks*\n"+rankedDrinks(sum.drinks)))
 
 	if len(sum.failedSteps) > 0 {
-		blocks = append(blocks, map[string]any{
-			"type": "section",
-			"text": map[string]any{"type": "mrkdwn", "text": "*Faults by step*\n" + rankedCounts(sum.failedSteps)},
-		})
+		blocks = append(blocks, mrkdwnSection(":x: *Faults by step*\n"+rankedCounts(sum.failedSteps)))
 	}
 
 	return append(blocks, dailySummaryFooter(windowStart, now))
 }
 
-// dailySummaryFooter prints the window the numbers actually cover. The window
-// spans two dates, so both ends carry their weekday — a reader checking whether
-// Saturday's orders were reported needs to see which days are in it.
+// mrkdwnSection wraps mrkdwn text in a Block Kit section block.
+func mrkdwnSection(text string) map[string]any {
+	return map[string]any{
+		"type": "section",
+		"text": map[string]any{"type": "mrkdwn", "text": text},
+	}
+}
+
+// headlineStats is the one line that has to land at a glance in a notification
+// preview: how long the machine worked, how much of that landed, and how many
+// drinks came out. The emoji carry the meaning so the line survives being
+// skimmed, and the sections below repeat the same emoji for the same ideas.
+func headlineStats(sum daySummary) string {
+	orders := "orders"
+	if sum.attempted == 1 {
+		orders = "order"
+	}
+	return fmt.Sprintf(":clock3: %s brewing  ·  :white_check_mark: %d/%d succeeded  ·  :coffee: %d %s",
+		sum.brewTotal.Round(time.Second), sum.succeeded, sum.attempted, sum.attempted, orders)
+}
+
+// asideStats is the decaf count and the current streak, on one line when either
+// applies. Both are omitted rather than zeroed — a "0 in a row" reads as a
+// streak that just broke, and "0 decaf" is noise on a day nobody ordered one.
+func asideStats(sum daySummary, streak int, hasStreak bool) string {
+	var parts []string
+	if sum.decaf > 0 {
+		parts = append(parts, fmt.Sprintf(":sleeping: %d decaf", sum.decaf))
+	}
+	if hasStreak {
+		parts = append(parts, fmt.Sprintf(":fire: %d in a row", streak))
+	}
+	return strings.Join(parts, "  ·  ")
+}
+
+// outcomeTable renders the outcome counts as a fixed-width table inside a code
+// fence. Slack has no table block that renders reliably across clients, and a
+// code fence is the only place it honours column alignment. The cost is that
+// emoji do not render inside one, which is why they live on the line above.
+func outcomeTable(sum daySummary) string {
+	rows := []struct {
+		label string
+		count int
+	}{
+		{"Succeeded", sum.succeeded},
+		{"Faulted", sum.faulted},
+		{"Cancelled by operator", sum.cancelled},
+	}
+
+	width := 0
+	for _, r := range rows {
+		width = max(width, len(r.label))
+	}
+
+	var b strings.Builder
+	b.WriteString("```\n")
+	for _, r := range rows {
+		fmt.Fprintf(&b, "%-*s  %4d\n", width, r.label, r.count)
+	}
+	fmt.Fprintf(&b, "%s\n", strings.Repeat("─", width+6))
+	fmt.Fprintf(&b, "%-*s  %4d\n", width, "Total", sum.attempted)
+	b.WriteString("```")
+	return b.String()
+}
+
+// beanjaminAppURL is the customer-facing ordering app, linked from every digest
+// so the channel has a way to act on it rather than only read it. One URL for
+// the whole fleet, so it is a constant rather than a config field; if a second
+// deployment ever needs a different one, that is when it earns a knob.
+const beanjaminAppURL = "https://beanjamin_viam.viamapplications.com/"
+
+// dailySummaryFooter prints the window the numbers actually cover, and links the
+// ordering app. The window spans two dates, so both ends carry their weekday — a
+// reader checking whether Saturday's orders were reported needs to see which
+// days are in it.
 func dailySummaryFooter(windowStart, now time.Time) map[string]any {
 	return map[string]any{
 		"type": "context",
 		"elements": []any{map[string]any{
 			"type": "mrkdwn",
-			"text": fmt.Sprintf("%s – %s", windowStart.Format("Mon 3:04 PM"), now.Format("Mon 3:04 PM MST")),
+			"text": fmt.Sprintf(":clock3: %s – %s  ·  <%s|order a coffee>",
+				windowStart.Format("Mon 3:04 PM"), now.Format("Mon 3:04 PM MST"), beanjaminAppURL),
 		}},
 	}
 }

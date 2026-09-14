@@ -223,9 +223,9 @@ func TestDailySummaryBlocks(t *testing.T) {
 	})
 	blocks := dailySummaryBlocks(sum, 12, true, windowStart, now)
 
-	// header, stats grid, drinks, faults, footer
-	if len(blocks) != 5 {
-		t.Fatalf("got %d blocks, want 5: %#v", len(blocks), blocks)
+	// header, headline, table, aside, drinks, faults, footer
+	if len(blocks) != 7 {
+		t.Fatalf("got %d blocks, want 7: %#v", len(blocks), blocks)
 	}
 	// structpb rejects []map[string]any as a list value, so every block must be
 	// a map[string]any inside an []any.
@@ -235,26 +235,12 @@ func TestDailySummaryBlocks(t *testing.T) {
 		}
 	}
 
-	// The stats grid must be `fields`, not `text` — that is what makes Slack lay
-	// it out in two columns.
-	stats := blocks[1].(map[string]any)
-	fields, ok := stats["fields"].([]any)
-	if !ok {
-		t.Fatalf("stats block has no fields array: %#v", stats)
-	}
-	// 4 counters + total brewing + decaf + streak. No cross-drink average —
-	// the timings live in the per-drink breakdown.
-	if len(fields) != 7 {
-		t.Errorf("stats grid has %d fields, want 7: %#v", len(fields), fields)
-	}
-	for _, f := range fields {
-		if text := f.(map[string]any)["text"].(string); strings.Contains(text, "Avg brew") {
-			t.Errorf("grid still carries a cross-drink average: %q", text)
-		}
+	text := func(i int) string {
+		return blocks[i].(map[string]any)["text"].(map[string]any)["text"].(string)
 	}
 
-	// The drinks section carries the per-drink timing instead.
-	drinks := blocks[2].(map[string]any)["text"].(map[string]any)["text"].(string)
+	// The drinks section carries the per-drink timing.
+	drinks := text(4)
 	if !strings.Contains(drinks, "espresso — 1 _(avg 2m0s)_") {
 		t.Errorf("drinks section missing the per-drink average:\n%s", drinks)
 	}
@@ -263,12 +249,64 @@ func TestDailySummaryBlocks(t *testing.T) {
 		t.Errorf("drinks section should show lungo with no timing:\n%s", drinks)
 	}
 
-	footer := blocks[4].(map[string]any)
-	text := footer["elements"].([]any)[0].(map[string]any)["text"].(string)
+	footer := blocks[6].(map[string]any)["elements"].([]any)[0].(map[string]any)["text"].(string)
 	// Both ends carry their weekday, so a reader can see which days the window
 	// spans rather than guessing from two bare clock times.
-	if want := "Sun 5:30 PM – Mon 5:30 PM EDT"; text != want {
-		t.Errorf("footer = %q, want %q", text, want)
+	want := ":clock3: Sun 5:30 PM – Mon 5:30 PM EDT  ·  <" + beanjaminAppURL + "|order a coffee>"
+	if footer != want {
+		t.Errorf("footer = %q, want %q", footer, want)
+	}
+}
+
+// Pins the headline line, the table and the aside exactly. These are the parts
+// a reader takes at a glance, and column alignment in particular breaks
+// silently — it still renders, just crookedly.
+func TestDigestRendering(t *testing.T) {
+	sum := summarizeOrders([]orderRow{
+		{Drink: "espresso", OrderOK: true, DurationMs: 120000},
+		{Drink: "espresso", OrderOK: true, Decaf: true, DurationMs: 140000},
+		{Drink: "iced_latte", OrderOK: true, DurationMs: 220000},
+		{Drink: "espresso", FailedStep: stepLockingPortafilter},
+		{Drink: "lungo", OperatorCancelled: true},
+	})
+
+	if got, want := headlineStats(sum), ":clock3: 8m0s brewing  ·  :white_check_mark: 3/5 succeeded  ·  :coffee: 5 orders"; got != want {
+		t.Errorf("headlineStats() =\n%s\nwant\n%s", got, want)
+	}
+
+	wantTable := strings.Join([]string{
+		"```",
+		"Succeeded                 3",
+		"Faulted                   1",
+		"Cancelled by operator     1",
+		"───────────────────────────",
+		"Total                     5",
+		"```",
+	}, "\n")
+	if got := outcomeTable(sum); got != wantTable {
+		t.Errorf("outcomeTable() =\n%s\nwant\n%s", got, wantTable)
+	}
+
+	if got, want := asideStats(sum, 12, true), ":sleeping: 1 decaf  ·  :fire: 12 in a row"; got != want {
+		t.Errorf("asideStats() = %q, want %q", got, want)
+	}
+}
+
+// The aside disappears entirely when neither half applies, rather than leaving
+// an empty section block in the message.
+func TestAsideStatsOmitted(t *testing.T) {
+	sum := summarizeOrders([]orderRow{{Drink: "espresso", OrderOK: true, DurationMs: 60000}})
+	if got := asideStats(sum, 0, false); got != "" {
+		t.Errorf("asideStats() = %q, want empty", got)
+	}
+	if got, want := asideStats(sum, 4, true), ":fire: 4 in a row"; got != want {
+		t.Errorf("asideStats() = %q, want %q", got, want)
+	}
+
+	blocks := dailySummaryBlocks(sum, 0, false, time.Now(), time.Now())
+	// header, headline, table, drinks, footer — no aside, no faults.
+	if len(blocks) != 5 {
+		t.Errorf("got %d blocks, want 5 (no aside, no faults): %#v", len(blocks), blocks)
 	}
 }
 
@@ -280,29 +318,6 @@ func TestDailySummaryWindowTiles(t *testing.T) {
 	previous := run.Add(-24 * time.Hour)
 	if got := run.Add(-dailySummaryWindow); !got.Equal(previous) {
 		t.Errorf("window starts at %v, want the previous daily run at %v", got, previous)
-	}
-}
-
-// A day with no faults must not render an empty "Faults by step" section, and
-// the decaf and streak fields must be absent rather than zeroed — a "0 in a row"
-// would read as a streak that had just broken.
-func TestDailySummaryBlocksOmitsEmptySections(t *testing.T) {
-	now := time.Now()
-	sum := summarizeOrders([]orderRow{{Drink: "espresso", OrderOK: true, DurationMs: 60000}})
-	blocks := dailySummaryBlocks(sum, 0, false, now, now)
-	// header, stats, drinks, footer — no faults section.
-	if len(blocks) != 4 {
-		t.Errorf("got %d blocks, want 4 (no faults section): %#v", len(blocks), blocks)
-	}
-	fields := blocks[1].(map[string]any)["fields"].([]any)
-	// 4 counters + total brewing; no decaf and no streak.
-	if len(fields) != 5 {
-		t.Errorf("stats grid has %d fields, want 5 (no decaf, no streak): %#v", len(fields), fields)
-	}
-	for _, f := range fields {
-		if text := f.(map[string]any)["text"].(string); strings.Contains(text, "streak") {
-			t.Errorf("rendered a streak field with no usage sensor: %q", text)
-		}
 	}
 }
 
