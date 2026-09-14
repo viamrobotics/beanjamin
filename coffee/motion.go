@@ -951,26 +951,142 @@ var noSpillGoalCloud = &referenceframe.PoseCloud{
 	OX: 0.1, OY: 0.1, OZ: 0.05, Theta: 90,
 }
 
-// computeLevelCarryWaypoints returns the ordered goal poses for a straight-line
-// carry from startPose to endPose. Each waypoint is spaced at most spacingMm
-// apart along the line.
+// minCarrySweepRadiusMm is how far from the world Z axis both endpoints of a
+// carry must sit for the sweep to be used. Inside it an endpoint's azimuth is
+// numerical noise — and so is the arc derived from it — so the carry falls back
+// to the straight line. The arm is bolted well clear of its own base axis, so in
+// practice no carry endpoint comes near this.
+const minCarrySweepRadiusMm = 10.0
+
+// carryArcSamples is how finely the swept path is sampled into a polyline. A
+// conical helix has no closed-form arc length, so the polyline both measures the
+// path and locates the waypoints along it. 256 chords hold a 100° sweep at arm's
+// reach to well under a hundredth of a mm, which is what lets the spacing below
+// be a real bound rather than a nominal one.
+const carryArcSamples = 256
+
+// carrySweepPoint returns the point at fraction u along the cylindrical sweep
+// from start to end: radius, azimuth and height about the world Z axis each
+// interpolate independently. At u=0 and u=1 it reproduces the endpoints exactly.
+//
+// The azimuth takes the short way round, matching the slerp the orientation
+// takes, so position and orientation always travel the same direction.
+func carrySweepPoint(start, end r3.Vector, u float64) r3.Vector {
+	r0, r1 := math.Hypot(start.X, start.Y), math.Hypot(end.X, end.Y)
+	a0 := math.Atan2(start.Y, start.X)
+	// The addend keeps Mod's input positive, so the result lands in [-π, π).
+	da := math.Mod(math.Atan2(end.Y, end.X)-a0+3*math.Pi, 2*math.Pi) - math.Pi
+
+	r := r0 + (r1-r0)*u
+	a := a0 + da*u
+	return r3.Vector{X: r * math.Cos(a), Y: r * math.Sin(a), Z: start.Z + (end.Z-start.Z)*u}
+}
+
+// carrySweepArc samples the swept path into a polyline, returning the cumulative
+// distance travelled at each of the carryArcSamples+1 sample parameters. The last
+// entry is the path's total length.
+func carrySweepArc(start, end r3.Vector) []float64 {
+	cumulative := make([]float64, carryArcSamples+1)
+	prev := start
+	for i := 1; i <= carryArcSamples; i++ {
+		p := carrySweepPoint(start, end, float64(i)/carryArcSamples)
+		cumulative[i] = cumulative[i-1] + p.Sub(prev).Norm()
+		prev = p
+	}
+	return cumulative
+}
+
+// carrySweepFractions returns the parameters of `segments` waypoints spaced
+// evenly *by distance travelled* along the swept path, ending exactly at 1.
+//
+// Stepping the parameter evenly instead would not: the radius changes across a
+// carry, so equal azimuth increments cover unequal ground, and the widest steps
+// run over the spacing budget the caller asked for. Walking the sampled arc keeps
+// spacingMm an actual bound. On a straight carry the two agree, which is why the
+// fallback can step the parameter directly.
+func carrySweepFractions(cumulative []float64, segments int) []float64 {
+	total := cumulative[len(cumulative)-1]
+	fractions := make([]float64, 0, segments)
+	sample := 0
+	for k := 1; k <= segments; k++ {
+		if k == segments {
+			fractions = append(fractions, 1)
+			break
+		}
+		target := total * float64(k) / float64(segments)
+		for cumulative[sample+1] < target {
+			sample++
+		}
+		// Linear interpolation within the sample the target falls in.
+		within := 0.0
+		if span := cumulative[sample+1] - cumulative[sample]; span > 0 {
+			within = (target - cumulative[sample]) / span
+		}
+		fractions = append(fractions, (float64(sample)+within)/carryArcSamples)
+	}
+	return fractions
+}
+
+// computeLevelCarryWaypoints returns the ordered goal poses for a carry from
+// startPose to endPose, spaced at most spacingMm apart along the path.
+//
+// The container is swept around the world Z axis — the arm's own base axis —
+// rather than dragged along the chord between the endpoints. A straight line
+// between two points at similar reach cuts inward, toward the base and through
+// the machine the arm is standing at: the glass placement's chord passes 115 mm
+// nearer the axis than either of its own endpoints. Interpolating radius,
+// azimuth and height separately keeps the container between the two endpoint
+// radii for the whole traverse, at the cost of a few percent of path length.
+//
+// Orientation still slerps between the endpoint poses; only the position moves
+// onto the arc. The two stay in step because both take the short way round, and
+// because both are driven by the same distance-along-the-path parameter — which
+// on a straight carry is what the plain interpolation fraction already was.
+//
+// Equal azimuths make the sweep the straight line already (a radius-and-height
+// interpolation along one half-plane), so that case needs no special handling.
+// An endpoint on the Z axis does, since its azimuth is meaningless — see
+// minCarrySweepRadiusMm.
 func computeLevelCarryWaypoints(startPose, endPose spatialmath.Pose, spacingMm float64) []spatialmath.Pose {
 	startPt := startPose.Point()
 	endPt := endPose.Point()
-	delta := endPt.Sub(startPt)
-	dist := delta.Norm()
 
-	// Number of straight-line segments: at least 1, otherwise ceil(dist/spacing)
-	// so no segment exceeds spacingMm.
+	sweep := math.Hypot(startPt.X, startPt.Y) >= minCarrySweepRadiusMm &&
+		math.Hypot(endPt.X, endPt.Y) >= minCarrySweepRadiusMm
+
+	// Spacing is measured along whichever path the waypoints will actually follow,
+	// so "one every spacingMm" means the same thing either way.
+	var cumulative []float64
+	length := endPt.Sub(startPt).Norm()
+	if sweep {
+		cumulative = carrySweepArc(startPt, endPt)
+		length = cumulative[len(cumulative)-1]
+	}
+
+	// Number of segments: at least 1, otherwise ceil(length/spacing) so no segment
+	// exceeds spacingMm.
 	segments := 1
-	if spacingMm > 0 && dist > spacingMm {
-		segments = int(math.Ceil(dist / spacingMm))
+	if spacingMm > 0 && length > spacingMm {
+		segments = int(math.Ceil(length / spacingMm))
+	}
+
+	fractions := make([]float64, 0, segments)
+	if sweep {
+		fractions = carrySweepFractions(cumulative, segments)
+	} else {
+		for i := 1; i <= segments; i++ {
+			fractions = append(fractions, float64(i)/float64(segments))
+		}
 	}
 
 	poses := make([]spatialmath.Pose, 0, segments)
-	for i := 1; i <= segments; i++ {
-		t := float64(i) / float64(segments)
-		poses = append(poses, spatialmath.Interpolate(startPose, endPose, t))
+	for _, t := range fractions {
+		interpolated := spatialmath.Interpolate(startPose, endPose, t)
+		if !sweep {
+			poses = append(poses, interpolated)
+			continue
+		}
+		poses = append(poses, spatialmath.NewPose(carrySweepPoint(startPt, endPt, t), interpolated.Orientation()))
 	}
 	return poses
 }
@@ -1014,8 +1130,9 @@ func carryGoalForMoveFrame(
 }
 
 // carryHeldLevel carries the held container from its current pose to dest along
-// the straight line between them, stepping through waypoints (one per
-// defaultCarryWaypointSpacingMm). Each waypoint's pose is interpolated from the
+// a sweep around the arm's base axis, stepping through waypoints (one per
+// defaultCarryWaypointSpacingMm — see computeLevelCarryWaypoints for why the path
+// is not the straight line). Each waypoint's pose is interpolated from the
 // container's current (upright) pose to dest, so the orientation eases from
 // upright to the approach pose while a goal pose cloud keeps it close to level —
 // so the drink doesn't slosh.
