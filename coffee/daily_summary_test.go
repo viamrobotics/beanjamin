@@ -1,6 +1,7 @@
 package coffee
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -140,6 +141,39 @@ func TestDecodeOrderRows(t *testing.T) {
 	}
 }
 
+func TestConsecutiveSuccesses(t *testing.T) {
+	ctx := context.Background()
+
+	// No usage sensor configured: the digest omits the field rather than
+	// claiming a broken streak.
+	s, _ := newTestCoffee(t, nil)
+	if streak, ok := s.consecutiveSuccesses(ctx); ok {
+		t.Errorf("consecutiveSuccesses() = (%d, true) with no usage sensor, want ok=false", streak)
+	}
+
+	s.usageSensor = newFakeUsageSensor(map[string]any{
+		"successful_consecutive_orders": float64(12),
+		"regular_grinds":                float64(40),
+	})
+	streak, ok := s.consecutiveSuccesses(ctx)
+	if !ok || streak != 12 {
+		t.Errorf("consecutiveSuccesses() = (%d, %v), want (12, true)", streak, ok)
+	}
+
+	// A sensor that answers but has never recorded a streak reads as 0, which is
+	// a real value — the machine's last order failed.
+	s.usageSensor = newFakeUsageSensor(map[string]any{"regular_grinds": float64(40)})
+	if streak, ok := s.consecutiveSuccesses(ctx); !ok || streak != 0 {
+		t.Errorf("consecutiveSuccesses() = (%d, %v) for an absent key, want (0, true)", streak, ok)
+	}
+
+	// A non-numeric value is unreadable, not zero.
+	s.usageSensor = newFakeUsageSensor(map[string]any{"successful_consecutive_orders": "lots"})
+	if streak, ok := s.consecutiveSuccesses(ctx); ok {
+		t.Errorf("consecutiveSuccesses() = (%d, true) for a non-numeric value, want ok=false", streak)
+	}
+}
+
 func TestSummaryLocation(t *testing.T) {
 	loc, err := summaryLocation(map[string]any{"timezone": "America/New_York"})
 	if err != nil {
@@ -178,7 +212,7 @@ func TestDailySummaryBlocks(t *testing.T) {
 		{Drink: "espresso", OrderOK: true, Decaf: true, DurationMs: 120000},
 		{Drink: "lungo", FailedStep: stepGrinding},
 	})
-	blocks := dailySummaryBlocks(sum, dayStart, now)
+	blocks := dailySummaryBlocks(sum, 12, true, dayStart, now)
 
 	// header, stats grid, drinks, faults, footer
 	if len(blocks) != 5 {
@@ -199,9 +233,9 @@ func TestDailySummaryBlocks(t *testing.T) {
 	if !ok {
 		t.Fatalf("stats block has no fields array: %#v", stats)
 	}
-	// 4 counters + avg/total brew + decaf.
-	if len(fields) != 7 {
-		t.Errorf("stats grid has %d fields, want 7: %#v", len(fields), fields)
+	// 4 counters + avg/total brew + decaf + streak.
+	if len(fields) != 8 {
+		t.Errorf("stats grid has %d fields, want 8: %#v", len(fields), fields)
 	}
 
 	footer := blocks[4].(map[string]any)
@@ -212,26 +246,32 @@ func TestDailySummaryBlocks(t *testing.T) {
 	}
 }
 
-// A day with no faults must not render an empty "Faults by step" section, and a
-// day with no successes must not render a brew-time field.
+// A day with no faults must not render an empty "Faults by step" section, and
+// the decaf and streak fields must be absent rather than zeroed — a "0 in a row"
+// would read as a streak that had just broken.
 func TestDailySummaryBlocksOmitsEmptySections(t *testing.T) {
 	now := time.Now()
 	sum := summarizeOrders([]orderRow{{Drink: "espresso", OrderOK: true, DurationMs: 60000}})
-	blocks := dailySummaryBlocks(sum, now, now)
+	blocks := dailySummaryBlocks(sum, 0, false, now, now)
 	// header, stats, drinks, footer — no faults section.
 	if len(blocks) != 4 {
 		t.Errorf("got %d blocks, want 4 (no faults section): %#v", len(blocks), blocks)
 	}
 	fields := blocks[1].(map[string]any)["fields"].([]any)
-	// 4 counters + avg/total brew, no decaf field.
+	// 4 counters + avg/total brew; no decaf and no streak.
 	if len(fields) != 6 {
-		t.Errorf("stats grid has %d fields, want 6 (no decaf): %#v", len(fields), fields)
+		t.Errorf("stats grid has %d fields, want 6 (no decaf, no streak): %#v", len(fields), fields)
+	}
+	for _, f := range fields {
+		if text := f.(map[string]any)["text"].(string); strings.Contains(text, "streak") {
+			t.Errorf("rendered a streak field with no usage sensor: %q", text)
+		}
 	}
 }
 
 func TestDailySummaryBlocksNoOrders(t *testing.T) {
 	now := time.Now()
-	blocks := dailySummaryBlocks(summarizeOrders(nil), now, now)
+	blocks := dailySummaryBlocks(summarizeOrders(nil), 7, true, now, now)
 	// header, "No orders today.", footer — no empty grid or breakdowns.
 	if len(blocks) != 3 {
 		t.Fatalf("got %d blocks, want 3: %#v", len(blocks), blocks)

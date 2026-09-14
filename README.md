@@ -576,6 +576,10 @@ Water from each purge goes to the drip tray and is counted in the `drip_tray_bre
 
 Once `slack_notifier_name` and `order_sensor_name` are both configured, `send_daily_summary` posts a Block Kit digest of the day's orders to the same channel the failure alerts go to: how many were attempted, succeeded, faulted and cancelled by an operator, the success rate, average and total brew time, a per-drink breakdown with the decaf count, and — when anything failed — a tally of which steps faulted and how often. A day with no orders still posts a short "No orders today" line, which is what keeps a quiet channel distinguishable from a broken digest.
 
+When `usage_sensor_name` is also configured the digest adds a **current streak** — the machine's run of consecutive successful orders, read live from the sensor's `successful_consecutive_orders` counter. It is deliberately not a daily figure: any fault or operator cancel resets it whenever it happens, so it describes the machine right now and can span days. The field is omitted entirely when no usage sensor is wired in or the read fails, rather than shown as `0`, which would read as a streak that had just broken.
+
+Average brew time is currently a single number across every drink. An iced latte's fridge trip makes it much slower than an espresso, so a day's drink mix moves that average more than the machine's condition does — read it as a rough signal until it is broken down per drink.
+
 The numbers do not come from anything the service keeps in memory. They are read back out of the cloud tabular store that the order sensor syncs into, using `QueryTabularDataForResource` from the RDK's `module` package, so a module restart or reconfigure part-way through the day loses nothing. **This requires data capture to be enabled and syncing on the order-sensor component** — without it the digest is honestly empty rather than wrong.
 
 **Scheduling lives in the machine config, not in this module.** Add a `jobs` entry so viam-server's job manager calls the command on a cron; changing the hour is then a config edit rather than a module rebuild and redeploy:

@@ -3,12 +3,9 @@ package coffee
 // Daily order digest: a Slack summary of one business day's orders, read back
 // out of the cloud tabular store that the order sensor syncs into.
 //
-// Scheduling deliberately does not live here. viam-server's job manager
-// (robot/jobmanager) calls DoCommand({"send_daily_summary": {...}}) on a cron
-// set in the machine config, so changing the hour is a config edit rather than
-// a module redeploy. See README for the "jobs" entry — note in particular that
-// a schedule string without a CRON_TZ= prefix fires in the *host's* timezone,
-// not the one named here.
+// Scheduling lives in the machine config's "jobs" block, not here — see README.
+// A schedule string without a CRON_TZ= prefix fires in the host's timezone, not
+// the one this command is passed.
 
 import (
 	"context"
@@ -80,6 +77,7 @@ func (s *beanjaminCoffee) sendDailySummary(ctx context.Context, arg any) (map[st
 	}
 
 	sum := summarizeOrders(decodeOrderRows(raw, s.logger))
+	streak, hasStreak := s.consecutiveSuccesses(ctx)
 
 	s.logger.Infof("daily summary: %d orders between %s and %s (%s)",
 		sum.attempted, dayStart.Format(time.Kitchen), now.Format(time.Kitchen), loc)
@@ -87,7 +85,7 @@ func (s *beanjaminCoffee) sendDailySummary(ctx context.Context, arg any) (map[st
 	if _, err := s.slackNotifier.DoCommand(ctx, map[string]any{
 		"command": "send",
 		"text":    dailySummaryText(sum, now),
-		"blocks":  dailySummaryBlocks(sum, dayStart, now),
+		"blocks":  dailySummaryBlocks(sum, streak, hasStreak, dayStart, now),
 	}); err != nil {
 		return nil, fmt.Errorf("sending daily summary to slack: %w", err)
 	}
@@ -113,6 +111,27 @@ func summaryLocation(arg any) (*time.Location, error) {
 		return nil, fmt.Errorf("timezone %q: %w", name, err)
 	}
 	return loc, nil
+}
+
+// consecutiveSuccesses reads the machine's successful-order streak off the usage
+// sensor. This is a live counter rather than a property of the day — it is reset
+// by any fault or operator cancel whenever it happens — so the digest labels it
+// as the current streak. ok is false when no usage sensor is configured or the
+// read fails, in which case the field is omitted rather than printed as 0, which
+// would read as "the streak just broke".
+func (s *beanjaminCoffee) consecutiveSuccesses(ctx context.Context) (int, bool) {
+	if s.usageSensor == nil {
+		return 0, false
+	}
+	readings, ok := s.readSensorFields(ctx, s.usageSensor, "daily summary")
+	if !ok {
+		return 0, false
+	}
+	streak, ok := numericReading(readings["successful_consecutive_orders"])
+	if !ok {
+		return 0, false
+	}
+	return int(streak), true
 }
 
 // dailySummaryStages projects the orderRow fields flat, one $project entry per
@@ -198,6 +217,10 @@ func summarizeOrders(rows []orderRow) daySummary {
 		switch {
 		case row.OrderOK:
 			sum.succeeded++
+			// TODO: average brew time across all drinks is only a rough signal —
+			// an iced latte's fridge trip makes it far longer than an espresso, so
+			// a day's drink mix moves this number more than the machine does.
+			// Break it down per drink (sum.drinks already keys by it).
 			sum.brewTotal += time.Duration(row.DurationMs) * time.Millisecond
 		// An operator stopping a run is not a fault; counting the two together
 		// would make a busy day of manual cancels look like failing hardware.
@@ -229,8 +252,9 @@ func dailySummaryText(sum daySummary, day time.Time) string {
 // two-column field grid, the breakdowns, and a footer naming the window.
 // Returned as []any of map[string]any so it serializes through the
 // structpb-backed DoCommand wire format, which rejects []map[string]any as a
-// list value.
-func dailySummaryBlocks(sum daySummary, dayStart, now time.Time) []any {
+// list value. streak is the machine's current run of successful orders, shown
+// only when hasStreak (see consecutiveSuccesses).
+func dailySummaryBlocks(sum daySummary, streak int, hasStreak bool, dayStart, now time.Time) []any {
 	blocks := []any{
 		map[string]any{
 			"type": "header",
@@ -263,6 +287,9 @@ func dailySummaryBlocks(sum daySummary, dayStart, now time.Time) []any {
 	}
 	if sum.decaf > 0 {
 		fields = append(fields, slackField("*Decaf:*", fmt.Sprintf("%d", sum.decaf)))
+	}
+	if hasStreak {
+		fields = append(fields, slackField("*Current streak:*", fmt.Sprintf("%d in a row", streak)))
 	}
 	blocks = append(blocks, map[string]any{"type": "section", "fields": fields})
 
