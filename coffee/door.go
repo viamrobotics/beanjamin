@@ -224,7 +224,8 @@ func nearestTheta(actual []referenceframe.Input, positions [][]referenceframe.In
 // The modeled door is left where the sweep left it, and s.doorOpenDegs records
 // it. Snapping the model shut on the way out would be a lie: opening a door does
 // not close it, and every later plan would route the arm through a panel that is
-// really standing open. Only reset_world clears that record. The cost is that a
+// really standing open. Only an operator clears that record, via reset_world or
+// proceed, both of which assert the door has been shut by hand. The cost is that a
 // half-finished sweep leaves the model at the last angle actually reached, which
 // is the honest answer — the operator, not this function, knows where the door
 // ended up.

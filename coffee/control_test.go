@@ -376,9 +376,11 @@ func TestWaitForProceedIgnoresAStaleSignal(t *testing.T) {
 	}
 }
 
-// coffeeWithFridge is coffeeWithDirtyWorld on a machine that has a fridge, so
-// every rebuild has a door frame to re-apply the recorded angle to.
-func coffeeWithFridge(t *testing.T) *beanjaminCoffee {
+// coffeeWithFridge is coffeeWithDirtyWorld on a machine that has a fridge, so a
+// rebuild has a real door frame to land at its authored shut transform — the
+// only way to tell a cleared angle from one the rebuild put straight back.
+// Returns the authored shut pose of the door origin frame to compare against.
+func coffeeWithFridge(t *testing.T) (*beanjaminCoffee, spatialmath.Pose) {
 	t.Helper()
 	s, _, _ := coffeeWithDirtyWorld(t, nil)
 
@@ -389,40 +391,81 @@ func coffeeWithFridge(t *testing.T) *beanjaminCoffee {
 		return &framesystem.Config{Parts: []*referenceframe.FrameSystemPart{{FrameConfig: doorLink}}}, nil
 	}
 	s.fsSvc = fsSvc
-	return s
+
+	shut, err := framesystem.NewFromService(context.Background(), fsSvc, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := doorBasePose(shut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, base
 }
 
-// TestProceedReportsARetainedFridgeDoor: the rebuild deliberately keeps the
-// recorded door angle (rebuilding a model does not shut a real door), so the
-// response has to say so — otherwise frame_system_reset reads as a full reset
-// and the door left standing is invisible until a later plan routes through it.
-func TestProceedReportsARetainedFridgeDoor(t *testing.T) {
-	s := coffeeWithFridge(t)
+// doorOriginPose reads the door origin frame's current transform out of the
+// service's cached frame system.
+func doorOriginPose(t *testing.T, s *beanjaminCoffee) spatialmath.Pose {
+	t.Helper()
+	pose, err := doorBasePose(s.cachedFS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pose
+}
+
+// TestProceedClearsTheFridgeDoorAngle: proceed is the operator saying the
+// machine has been put right, fridge included, so the recorded swing goes with
+// every other mid-cycle mutation and the rebuilt world has a shut door. The
+// angle must be cleared BEFORE the rebuild — cleared after, resetFrameSystem
+// would have already re-applied the swing to the frame system it just built.
+func TestProceedClearsTheFridgeDoorAngle(t *testing.T) {
+	s, shut := coffeeWithFridge(t)
 	s.doorOpenDegs = 90
 
 	resp, err := s.proceedQueue(context.Background())
 	if err != nil {
 		t.Fatalf("proceed error: %v", err)
 	}
-	if got, _ := resp["fridge_door_open_degs"].(float64); got != 90 {
-		t.Errorf("fridge_door_open_degs = %v, want 90", resp["fridge_door_open_degs"])
+	if got, _ := resp["fridge_door_cleared_degs"].(float64); got != 90 {
+		t.Errorf("fridge_door_cleared_degs = %v, want 90", resp["fridge_door_cleared_degs"])
+	}
+	if s.doorOpenDegs != 0 {
+		t.Errorf("doorOpenDegs = %v, want 0 — proceed asserts the door is shut", s.doorOpenDegs)
+	}
+	if got := doorOriginPose(t, s); !spatialmath.PoseAlmostEqual(got, shut) {
+		t.Errorf("rebuilt door origin at %v, want the authored shut transform %v", got, shut)
+	}
+}
+
+// TestProceedRebuildFailureKeepsTheFridgeDoorAngle: a proceed that cannot
+// rebuild asserts nothing. cachedFS still holds the swung door, so the recorded
+// angle has to stay with it — dropped here, the next rebuild would quietly shut
+// a door this proceed never got to vouch for.
+func TestProceedRebuildFailureKeepsTheFridgeDoorAngle(t *testing.T) {
+	s, _, _ := coffeeWithDirtyWorld(t, errors.New("boom"))
+	s.doorOpenDegs = 90
+
+	if _, err := s.proceedQueue(context.Background()); err == nil {
+		t.Fatal("proceed should fail when the frame system can't be rebuilt")
 	}
 	if s.doorOpenDegs != 90 {
-		t.Errorf("doorOpenDegs = %v, want 90 — only reset_world clears it", s.doorOpenDegs)
+		t.Errorf("doorOpenDegs = %v, want 90 — a failed proceed must not forget the door", s.doorOpenDegs)
 	}
 }
 
 // TestProceedOmitsTheFridgeFieldWhenShut keeps the field's presence meaningful:
-// it flags a door left standing, so a shut door must not report one.
+// it flags the assertion proceed just made about a door that was standing open,
+// so a door already shut must not report one.
 func TestProceedOmitsTheFridgeFieldWhenShut(t *testing.T) {
-	s := coffeeWithFridge(t)
+	s, _ := coffeeWithFridge(t)
 
 	resp, err := s.proceedQueue(context.Background())
 	if err != nil {
 		t.Fatalf("proceed error: %v", err)
 	}
-	if _, ok := resp["fridge_door_open_degs"]; ok {
-		t.Errorf("fridge_door_open_degs = %v, want the field omitted for a shut door", resp["fridge_door_open_degs"])
+	if _, ok := resp["fridge_door_cleared_degs"]; ok {
+		t.Errorf("fridge_door_cleared_degs = %v, want the field omitted for a door already shut", resp["fridge_door_cleared_degs"])
 	}
 }
 

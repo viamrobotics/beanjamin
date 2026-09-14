@@ -460,7 +460,9 @@ Returns:
 
 The frame system is rebuilt from the framesystem service on every `proceed`, discarding whatever an interrupted order left mid-cycle — a filter frame reparented to world by `lock_portafilter`, a held-item geometry, a staged-glass obstacle. This is unconditional because a cancel is not the only thing that strands those mutations: an order that fails on its own never pauses the queue, and the next order's opportunistic refresh deliberately declines to rebuild while a held item or locked filter is recorded, so without a `proceed` the stale world is inherited by every order that follows the failure. If the rebuild fails, nothing resumes and a paused queue stays paused.
 
-The **recorded fridge-door angle is the one thing the rebuild does not clear**, because rebuilding a model does not shut a real door — only `reset_world` clears it, and only after you have shut the door by hand. When a `proceed` keeps an angle it says so: a warning in the logs, and a `fridge_door_open_degs` field in the response (absent when the door is shut). If you closed the door by hand, run `reset_world` rather than `proceed`, or the next plan will route the arm around a panel that is no longer there.
+The **recorded fridge-door angle is cleared too**, so the rebuilt world has a shut door like every other configured obstacle. `proceed` is the operator saying the machine has been put right by hand, and that includes the fridge. Rebuilding a model still cannot shut a real door — which is why a rebuild never clears the angle on its own, and every other one re-applies it — so this is an assertion you are making, not a check the service can run.
+
+> ⚠️ **Shut the fridge before sending `proceed`.** If the door is really still open, the model now claims it is closed and the next plan will route the arm straight through the panel. A `proceed` that forgets an angle says so: a warning in the logs, and a `fridge_door_cleared_degs` field in the response (absent when the door was already shut).
 
 The pause is only released if there is one — `proceed` on a running queue rebuilds the world and reports `resumed: false`. Releasing the pause *is* clearing the queue's paused flag, done by `proceed` itself: any cancel pauses the queue, including one that interrupts an `execute_action` or a keepalive purge with no order in flight, and such a pause has no order-queue goroutine waiting to hear about it. Two `proceed`s racing therefore resume once, and the second reports `resumed: false`. `proceed` refuses outright while a sequence is still running (including one that is unwinding from a cancel): the frame system cannot be swapped under a goroutine that is planning with it.
 
@@ -470,7 +472,7 @@ Because the rebuild forgets the modeled contents of the gripper without opening 
 {"proceed": true}
 ```
 
-Returns `{"status": "resumed", "resumed": true, "frame_system_reset": true}`, or `{"status": "reset", "resumed": false, "frame_system_reset": true}` when the queue was not paused. A `fridge_door_open_degs` field is added when the rebuild kept a door angle.
+Returns `{"status": "resumed", "resumed": true, "frame_system_reset": true}`, or `{"status": "reset", "resumed": false, "frame_system_reset": true}` when the queue was not paused. A `fridge_door_cleared_degs` field is added when the rebuild forgot a door angle.
 
 **`clear_queue`** - Remove all pending orders from the queue.
 
@@ -508,7 +510,7 @@ The command takes no options — the window is a rolling 24 hours ending now, an
 
 **`reset_world`** - Recover the service to a clean idle state from anywhere. In order: cancels any running sequence (waiting for it to actually stop), clears the queue (pending + recently completed), rebuilds the cached frame system from the framesystem service (discarding mid-cycle mutations like a portafilter frame reparented to world by `lock_portafilter`), forgets that the fridge door is standing open, and releases the cancel-induced queue pause. Safe to call from any state — each step is skipped when not applicable. Does not move the arm — if you want to re-home, run `execute_action` afterward.
 
-> ⚠️ `reset_world` asserts that the physical world matches the configured frame system. It is the only thing that clears the recorded fridge-door angle, so **shut the door by hand before running it** — otherwise the model believes the panel is closed while it stands open, and the next plan will route the arm straight through it.
+> ⚠️ `reset_world` asserts that the physical world matches the configured frame system. Like `proceed`, it clears the recorded fridge-door angle, so **shut the door by hand before running it** — otherwise the model believes the panel is closed while it stands open, and the next plan will route the arm straight through it.
 
 ```json
 {"reset_world": true}
@@ -534,7 +536,7 @@ Returns `{"status": "complete", "iterations": 5}`.
 
 **`execute_action: close_door`** - The reverse of `open_door`: grip the open door's handle and push the panel back shut, then release and retract. Same grasp derivation, `door_grasp_yaw_ratio` orientation tracking, per-step obstacle re-placement, and cancellation — only the target angle differs (0° instead of `door_open_angle_degs`). The yaw follows the travel direction, so a close unwinds exactly what the open wound up.
 
-**Where the modeled door lives between actions.** Both actions sweep from wherever the door currently stands to their target, and the service remembers the angle. The frame system rebuilds the door at its authored *shut* transform, so that recorded angle is re-applied after every rebuild — opening the fridge does not close it, and the panel must stay modeled where it physically is or later plans will route the arm through it. Only angles the arm actually reached are recorded, so an aborted sweep leaves the model at the door's real position rather than the intended one. `reset_world` is the only thing that clears the record; shut the door by hand before running it.
+**Where the modeled door lives between actions.** Both actions sweep from wherever the door currently stands to their target, and the service remembers the angle. The frame system rebuilds the door at its authored *shut* transform, so that recorded angle is re-applied after every rebuild — opening the fridge does not close it, and the panel must stay modeled where it physically is or later plans will route the arm through it. Only angles the arm actually reached are recorded, so an aborted sweep leaves the model at the door's real position rather than the intended one. The record is cleared only by the two commands in which an operator asserts the world is as configured — `proceed` and `reset_world` — so shut the door by hand before sending either.
 
 ```json
 {"execute_action": "close_door"}
@@ -556,7 +558,7 @@ Then the sequence rejoins the iced flow: re-grab the staged glass and place it i
 
 The door is opened once and closed once, so the fridge stands open for the pour — a few seconds of open door in exchange for halving the door sweeps, which are the slowest and most failure-prone part of the trip.
 
-**When a milk step fails.** The arm does not try to shut the door itself: it may still be holding the bottle, and a sweep needs the gripper for the handle. So the door is left where it stands, the model keeps recording that angle, and the error says so. Take the bottle out of the gripper if it is holding one and `rewind` to recover the arm, then shut the door by hand and run `reset_world` — it is the only command that clears the recorded angle. `rewind` and `proceed` both rebuild the frame system with the door still held open, which is correct while the door really is open and wrong the moment you have closed it by hand.
+**When a milk step fails.** The arm does not try to shut the door itself: it may still be holding the bottle, and a sweep needs the gripper for the handle. So the door is left where it stands, the model keeps recording that angle, and the error says so. Take the bottle out of the gripper if it is holding one and `rewind` to recover the arm — `rewind` rebuilds the frame system with the door still held open, which is correct, because it has not been shut. Then shut the door by hand and send `proceed`, which is what declares it shut again.
 
 **`action`** - Control the gripper. Supported values: `"open_gripper"`, `"close_gripper"`.
 

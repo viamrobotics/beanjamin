@@ -109,7 +109,7 @@ func (s *beanjaminCoffee) addMilk(ctx, cancelCtx context.Context) error {
 // angle it really is at, and the message tells the operator what to fix.
 func (s *beanjaminCoffee) milkStepErr(err error) error {
 	if s.doorOpenDegs != 0 {
-		return fmt.Errorf("add_milk: %w (the fridge door is standing open at %.0f° — take the bottle out of the gripper if it's holding one, rewind to recover the arm, then shut the door by hand and run reset_world: it is the only command that clears the recorded angle, and proceed will keep the door modeled open)", err, s.doorOpenDegs)
+		return fmt.Errorf("add_milk: %w (the fridge door is standing open at %.0f° — take the bottle out of the gripper if it's holding one, rewind to recover the arm, then shut the door by hand before sending proceed: proceed is what declares the door shut again)", err, s.doorOpenDegs)
 	}
 	return fmt.Errorf("add_milk: %w", err)
 }

@@ -25,12 +25,13 @@ import (
 // order after a failure would inherit the stale world. The running gate is
 // required because cachedFS may only be swapped while no sequence owns the arm.
 //
-// It does not clear the recorded fridge-door angle (only reset_world may assert
-// the door is shut), so the response reports the angle left standing rather than
-// letting frame_system_reset imply the fridge went back to shut with everything
-// else. It also forgets the gripper's modeled contents without opening the
-// gripper — an operator holding something manually wants rewind, which
-// physically lets go.
+// It clears the recorded fridge-door angle too: proceed is the operator saying
+// the machine has been put right, fridge included. A rebuild cannot shut a real
+// door, which is why no rebuild clears the angle on its own — the assertion is
+// the operator's, so the response reports the angle forgotten and a door left
+// standing is visible before the next plan routes through the panel. It also
+// forgets the gripper's modeled contents without opening the gripper — an
+// operator holding something manually wants rewind, which physically lets go.
 func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, error) {
 	if !s.running.CompareAndSwap(false, true) {
 		return nil, errors.New("proceed: a sequence is still running — wait for it to stop, or cancel it first")
@@ -40,21 +41,29 @@ func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, err
 	if s.heldItemAttached {
 		s.activeOrderLogger().Warn("proceed: forgetting a held item — if the gripper really is holding something, cancel and rewind instead so it lets go first")
 	}
-	// Read before the arm is handed back, alongside every other mutation flag:
-	// doorOpenDegs belongs to the motion goroutine and the running gate is what
-	// makes reading it here safe.
+	// Clear the recorded door angle before the rebuild, so resetFrameSystem has
+	// nothing to re-apply and the door lands at its authored shut transform with
+	// everything else. Ordering is load-bearing: cleared afterward, the rebuilt
+	// frame system would still be carrying the swing.
 	doorOpenDegs := s.doorOpenDegs
+	s.doorOpenDegs = 0
 	err := s.resetFrameSystem(ctx)
+	if err != nil {
+		// A failed proceed asserts nothing: cachedFS still holds the swung door,
+		// so the record has to keep matching it. Zeroed here, the next rebuild
+		// would quietly shut a door this proceed never got to vouch for.
+		s.doorOpenDegs = doorOpenDegs
+	}
 	s.running.Store(false)
 	if err != nil {
 		return nil, fmt.Errorf("proceed: %w", err)
 	}
-	// A rebuild does not shut a real door, so the angle is deliberately kept.
-	// Say so out loud: otherwise "frame system rebuilt" reads as a full reset
-	// and the retained fridge is invisible until a later plan routes through it.
+	// Same warning the held item gets, and for the same reason: proceed asserts
+	// the world is as configured, and the one thing it cannot check is whether
+	// the operator really did shut the door.
 	if doorOpenDegs != 0 {
-		s.logger.Warnf("proceed: the fridge door stays modeled open at %.0f° — a rebuild does not shut a real door. "+
-			"If you closed it by hand, run reset_world instead; that is the only command that clears the angle", doorOpenDegs)
+		s.logger.Warnf("proceed: forgetting a fridge door recorded open at %.0f° — if it is not actually shut, "+
+			"the next plan will route the arm straight through the panel", doorOpenDegs)
 	}
 
 	// Clearing the flag IS the resume, and it happens here rather than in the
@@ -71,17 +80,18 @@ func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, err
 	return proceedResponse("resumed", true, doorOpenDegs), nil
 }
 
-// proceedResponse renders a proceed result, carrying the fridge-door angle the
-// rebuild kept so an operator can see what "reset" did not cover. Omitted when
-// the door is shut, so the field's presence alone flags a door left standing.
-func proceedResponse(status string, resumed bool, doorOpenDegs float64) map[string]any {
+// proceedResponse renders a proceed result, reporting the fridge-door angle the
+// rebuild forgot so an operator can see that the model now claims a shut door.
+// Omitted when the door was already shut, so the field's presence alone flags
+// the assertion proceed just made about the physical world.
+func proceedResponse(status string, resumed bool, doorClearedDegs float64) map[string]any {
 	resp := map[string]any{
 		"status":             status,
 		"resumed":            resumed,
 		"frame_system_reset": true,
 	}
-	if doorOpenDegs != 0 {
-		resp["fridge_door_open_degs"] = doorOpenDegs
+	if doorClearedDegs != 0 {
+		resp["fridge_door_cleared_degs"] = doorClearedDegs
 	}
 	return resp
 }
@@ -133,9 +143,10 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 	// to run recovery against a state that no longer matches reality.
 	s.portafilterInMachine.Store(false)
 	s.portafilterHasGrounds.Store(false)
-	// Only an operator can assert the fridge door is physically shut, so this is
-	// the one place the recorded angle is cleared — every other rebuild re-applies
-	// it rather than pretending a door closed itself.
+	// Only an operator can assert the fridge door is physically shut, so clearing
+	// the recorded angle belongs to the commands that say so — this one and
+	// proceed. A rebuild on its own re-applies it rather than pretending a door
+	// closed itself.
 	s.doorOpenDegs = 0
 
 	if err := s.resetFrameSystem(ctx); err != nil {
