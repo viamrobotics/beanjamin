@@ -143,15 +143,16 @@ func TestDailySummaryStagesMatchOrderRow(t *testing.T) {
 	if !ok {
 		t.Fatalf("stage is not a $project: %#v", stages[0])
 	}
-	for _, field := range []string{"drink", "order_ok", "operator_cancelled", "failed_step", "decaf", "duration_ms"} {
+	fields := []string{"drink", "customer_name", "order_ok", "operator_cancelled", "failed_step", "decaf", "duration_ms"}
+	for _, field := range fields {
 		want := "$data.readings." + field
 		if got := project[field]; got != want {
 			t.Errorf("$project[%q] = %v, want %q", field, got, want)
 		}
 	}
-	// _id plus the six projected fields; a different count means a tag drifted.
-	if len(project) != 7 {
-		t.Errorf("$project has %d keys, want 7: %#v", len(project), project)
+	// _id plus the projected fields; a different count means a tag drifted.
+	if len(project) != len(fields)+1 {
+		t.Errorf("$project has %d keys, want %d: %#v", len(project), len(fields)+1, project)
 	}
 }
 
@@ -289,6 +290,61 @@ func TestDigestRendering(t *testing.T) {
 
 	if got, want := asideStats(sum, 12, true), ":sleeping: 1 decaf  ·  :fire: 12 in a row"; got != want {
 		t.Errorf("asideStats() = %q, want %q", got, want)
+	}
+}
+
+func TestTopCustomers(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		customers map[string]int
+		want      string
+	}{
+		{"nobody named", map[string]int{}, ""},
+		{"a clear winner", map[string]int{"Alice": 5, "Bob": 2}, "Alice — 5"},
+		{"one customer", map[string]int{"Alice": 1}, "Alice — 1"},
+		// A tie is the normal case on a quiet day, so everyone at the top is
+		// named rather than one of them picked arbitrarily.
+		{"a tie", map[string]int{"Bob": 3, "Alice": 3, "Carol": 1}, "Alice, Bob — 3 each"},
+		{"everyone tied", map[string]int{"Bob": 1, "Alice": 1}, "Alice, Bob — 1 each"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := topCustomers(tc.customers); got != tc.want {
+				t.Errorf("topCustomers() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Walk-ups who skip the name screen are left out of the leaderboard entirely.
+// The deliberate consequence is that the customer counts do not sum to the
+// order count.
+func TestSummarizeOrdersSkipsAnonymous(t *testing.T) {
+	sum := summarizeOrders([]orderRow{
+		{Drink: "espresso", CustomerName: "Alice", OrderOK: true, DurationMs: 60000},
+		{Drink: "espresso", CustomerName: "", OrderOK: true, DurationMs: 60000},
+		{Drink: "espresso", CustomerName: "   ", OrderOK: true, DurationMs: 60000},
+		// A faulted order still counts toward its customer's tally: they asked
+		// for a drink, and the machine failing is the machine's record.
+		{Drink: "lungo", CustomerName: "Alice", FailedStep: stepGrinding},
+	})
+
+	if sum.attempted != 4 {
+		t.Errorf("attempted = %d, want 4", sum.attempted)
+	}
+	if len(sum.customers) != 1 || sum.customers["Alice"] != 2 {
+		t.Errorf("customers = %v, want only Alice with 2", sum.customers)
+	}
+	if got, want := topCustomers(sum.customers), "Alice — 2"; got != want {
+		t.Errorf("topCustomers() = %q, want %q", got, want)
+	}
+}
+
+// A window of entirely anonymous orders shows no leaderboard at all rather than
+// an empty trophy.
+func TestAsideStatsAllAnonymous(t *testing.T) {
+	sum := summarizeOrders([]orderRow{{Drink: "espresso", OrderOK: true, DurationMs: 60000}})
+	if got := asideStats(sum, 0, false); got != "" {
+		t.Errorf("asideStats() = %q, want empty", got)
 	}
 }
 

@@ -591,7 +591,7 @@ Cancelled by operator     1
 ───────────────────────────
 Total                     8
 
-:sleeping: 1 decaf  ·  :fire: 12 in a row
+:trophy: Alice — 3  ·  :sleeping: 1 decaf  ·  :fire: 12 in a row
 
 :coffee: *Drinks*
 • espresso — 4 (avg 2m12s)
@@ -602,6 +602,8 @@ Total                     8
 
 :clock3: Sun 5:30 PM – Mon 5:30 PM EDT · order a coffee
 ```
+
+`:trophy:` names whoever ordered most. **Walk-ups who skip the name screen are left out of it entirely** — pooled under one "anonymous" label they would win most days and say nothing, so the leaderboard counts only named customers and consequently does not sum to the order total. Everyone tied at the top is named rather than one of them picked arbitrarily, since a two-order tie is the normal case on a quiet day. Every attempt counts toward a customer's tally whether or not the machine managed it: they asked for a drink, and the failure is the machine's record rather than theirs.
 
 The headline line carries the three numbers worth having in a notification preview, each with an emoji the sections below reuse for the same idea — `:clock3:` for time, `:coffee:` for drinks, `:x:` for faults. The outcome counts are a fixed-width table in a code fence: Slack has no table block that renders reliably across clients, and a code fence is the only place it honours column alignment. Emoji do not render inside one, which is why they sit on the line above rather than in the rows. Every digest links the [ordering app](https://beanjamin_viam.viamapplications.com/) in its footer.
 
