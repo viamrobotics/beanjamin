@@ -47,7 +47,10 @@ func (s *beanjaminCoffee) grind(ctx, cancelCtx context.Context, approachPose, ac
 
 func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
 	return s.runSteps(ctx, cancelCtx, "tamp_ground",
-		Step{PoseName: filterPoseTamperApproach, PoseSwitch: s.filterSw, Pause: shortPause},
+		// Carries loose, un-tamped grounds to the tamper: slow it so they don't
+		// scatter (this free-plans, otherwise the arm's default speed). Once tamped,
+		// the puck is compact, so the moves after this don't need it.
+		Step{PoseName: filterPoseTamperApproach, PoseSwitch: s.filterSw, Pause: shortPause, MoveOptions: s.slowMoveOptions()},
 		Step{PoseName: filterPoseTamperActivate, PoseSwitch: s.filterSw, Pause: 3000 * time.Millisecond, LinearConstraint: defaultApproachConstraint},
 		Step{PoseName: filterPoseTamperApproach, PoseSwitch: s.filterSw, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
 	)

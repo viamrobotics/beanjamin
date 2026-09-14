@@ -384,7 +384,7 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	}
 
 	logger.Infof("%s: executing %d concatenated waypoints", action, len(positions))
-	if err := s.arm.MoveThroughJointPositions(ctx, positions, s.slowMovementMoveOptions(), nil); err != nil {
+	if err := s.arm.MoveThroughJointPositions(ctx, positions, buildMoveOptions(s.slowMoveOptions()), nil); err != nil {
 		// One arm call no longer reports which waypoint it died on, so recover the
 		// angle from where the arm actually stopped rather than assuming the target.
 		// Both fs and doorOpenDegs have to land on it: fs is the cached frame system
