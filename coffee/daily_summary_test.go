@@ -30,11 +30,26 @@ func TestSummarizeOrders(t *testing.T) {
 		{"faulted", sum.faulted, 1},
 		{"cancelled", sum.cancelled, 1},
 		{"decaf", sum.decaf, 1},
-		{"drinks[espresso]", sum.drinks["espresso"], 3},
+		// espresso was ordered 3 times but only 2 of them succeeded.
+		{"drinks[espresso].ordered", sum.drinks["espresso"].ordered, 3},
+		{"drinks[espresso].succeeded", sum.drinks["espresso"].succeeded, 2},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %d, want %d", tc.name, tc.got, tc.want)
 		}
+	}
+
+	// Per-drink timings cover that drink's successes only. espresso: 120+140
+	// over 2; the failed espresso's 30s is excluded.
+	if avg, ok := sum.drinks["espresso"].avgBrew(); !ok || avg != 130*time.Second {
+		t.Errorf("espresso avgBrew() = (%v, %v), want (2m10s, true)", avg, ok)
+	}
+	if avg, ok := sum.drinks["iced_latte"].avgBrew(); !ok || avg != 220*time.Second {
+		t.Errorf("iced_latte avgBrew() = (%v, %v), want (3m40s, true)", avg, ok)
+	}
+	// lungo was only ever cancelled, so it has no timing at all rather than 0s.
+	if avg, ok := sum.drinks["lungo"].avgBrew(); ok {
+		t.Errorf("lungo avgBrew() = (%v, true), want ok=false", avg)
 	}
 
 	// An operator cancel contributes a drink but no failed step, even though the
@@ -43,12 +58,9 @@ func TestSummarizeOrders(t *testing.T) {
 		t.Errorf("failedSteps = %v, want one %q entry", sum.failedSteps, stepLockingPortafilter)
 	}
 
-	// Only successful orders contribute to brew time: 120+140+220 = 480s over 3.
+	// Only successful orders contribute to brew time: 120+140+220 = 480s.
 	if want := 480 * time.Second; sum.brewTotal != want {
 		t.Errorf("brewTotal = %v, want %v", sum.brewTotal, want)
-	}
-	if want := 160 * time.Second; sum.avgBrew() != want {
-		t.Errorf("avgBrew() = %v, want %v", sum.avgBrew(), want)
 	}
 	if got, want := sum.successRate(), 60.0; got != want {
 		t.Errorf("successRate() = %v, want %v", got, want)
@@ -60,12 +72,13 @@ func TestSummarizeOrdersEmpty(t *testing.T) {
 	if sum.attempted != 0 {
 		t.Errorf("attempted = %d, want 0", sum.attempted)
 	}
-	// Both must be division-safe on a day with no orders.
+	// Must be division-safe on a window with no orders.
 	if got := sum.successRate(); got != 0 {
 		t.Errorf("successRate() = %v, want 0", got)
 	}
-	if got := sum.avgBrew(); got != 0 {
-		t.Errorf("avgBrew() = %v, want 0", got)
+	// And so must a drink nothing was ever ordered of.
+	if avg, ok := sum.drinks["espresso"].avgBrew(); ok {
+		t.Errorf("avgBrew() on an absent drink = (%v, true), want ok=false", avg)
 	}
 }
 
@@ -77,7 +90,7 @@ func TestSummarizeOrdersZeroRow(t *testing.T) {
 		t.Errorf("attempted/succeeded/faulted = %d/%d/%d, want 1/0/1",
 			sum.attempted, sum.succeeded, sum.faulted)
 	}
-	if sum.drinks["unknown"] != 1 {
+	if sum.drinks["unknown"].ordered != 1 {
 		t.Errorf("drinks = %v, want one \"unknown\" entry", sum.drinks)
 	}
 	if sum.failedSteps["an unknown step"] != 1 {
@@ -94,6 +107,28 @@ func TestRankedCounts(t *testing.T) {
 	}
 	if got := rankedCounts(map[string]int{}); got != "" {
 		t.Errorf("rankedCounts(empty) = %q, want empty", got)
+	}
+}
+
+func TestRankedDrinks(t *testing.T) {
+	got := rankedDrinks(map[string]drinkStats{
+		// Ordered most, so it ranks first despite being the quickest.
+		"espresso": {ordered: 5, succeeded: 4, brewTotal: 8 * time.Minute},
+		// Ties with americano on count, so the name breaks it.
+		"lungo": {ordered: 2, succeeded: 2, brewTotal: 5 * time.Minute},
+		// Every attempt failed: a count, but no invented timing.
+		"americano": {ordered: 2},
+	})
+	want := strings.Join([]string{
+		"• espresso — 5 _(avg 2m0s)_",
+		"• americano — 2",
+		"• lungo — 2 _(avg 2m30s)_",
+	}, "\n")
+	if got != want {
+		t.Errorf("rankedDrinks() =\n%s\nwant\n%s", got, want)
+	}
+	if got := rankedDrinks(map[string]drinkStats{}); got != "" {
+		t.Errorf("rankedDrinks(empty) = %q, want empty", got)
 	}
 }
 
@@ -207,9 +242,25 @@ func TestDailySummaryBlocks(t *testing.T) {
 	if !ok {
 		t.Fatalf("stats block has no fields array: %#v", stats)
 	}
-	// 4 counters + avg/total brew + decaf + streak.
-	if len(fields) != 8 {
-		t.Errorf("stats grid has %d fields, want 8: %#v", len(fields), fields)
+	// 4 counters + total brewing + decaf + streak. No cross-drink average —
+	// the timings live in the per-drink breakdown.
+	if len(fields) != 7 {
+		t.Errorf("stats grid has %d fields, want 7: %#v", len(fields), fields)
+	}
+	for _, f := range fields {
+		if text := f.(map[string]any)["text"].(string); strings.Contains(text, "Avg brew") {
+			t.Errorf("grid still carries a cross-drink average: %q", text)
+		}
+	}
+
+	// The drinks section carries the per-drink timing instead.
+	drinks := blocks[2].(map[string]any)["text"].(map[string]any)["text"].(string)
+	if !strings.Contains(drinks, "espresso — 1 _(avg 2m0s)_") {
+		t.Errorf("drinks section missing the per-drink average:\n%s", drinks)
+	}
+	// The lungo attempt faulted, so it gets a count and no timing.
+	if !strings.Contains(drinks, "lungo — 1\n") && !strings.HasSuffix(drinks, "lungo — 1") {
+		t.Errorf("drinks section should show lungo with no timing:\n%s", drinks)
 	}
 
 	footer := blocks[4].(map[string]any)
@@ -244,9 +295,9 @@ func TestDailySummaryBlocksOmitsEmptySections(t *testing.T) {
 		t.Errorf("got %d blocks, want 4 (no faults section): %#v", len(blocks), blocks)
 	}
 	fields := blocks[1].(map[string]any)["fields"].([]any)
-	// 4 counters + avg/total brew; no decaf and no streak.
-	if len(fields) != 6 {
-		t.Errorf("stats grid has %d fields, want 6 (no decaf, no streak): %#v", len(fields), fields)
+	// 4 counters + total brewing; no decaf and no streak.
+	if len(fields) != 5 {
+		t.Errorf("stats grid has %d fields, want 5 (no decaf, no streak): %#v", len(fields), fields)
 	}
 	for _, f := range fields {
 		if text := f.(map[string]any)["text"].(string); strings.Contains(text, "streak") {
