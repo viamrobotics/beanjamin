@@ -512,6 +512,8 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 	if err := runPhase(stepPlacingCup, "placing_cup", "step 5/9: placing cup", s.setCupForCoffee); err != nil {
 		return err
 	}
+	// A cup was pulled off the stack; count it now so a later fault still credits real use.
+	s.incrementSensorReading(ctx, s.usageSensor, "espresso cups", "espresso_cups_used", 1)
 
 	// The separate-buttons machine doses itself, leaving the arm idle mid-pour,
 	// so iced drinks run the ice-side prep during the pour instead of after it.
