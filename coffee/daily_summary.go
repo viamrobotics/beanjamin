@@ -92,25 +92,47 @@ func (s *beanjaminCoffee) sendDailySummary(ctx context.Context, arg any) (map[st
 	return map[string]any{"orders": float64(sum.attempted), "sent": true}, nil
 }
 
+// dailySummaryArgs is the send_daily_summary command payload.
+type dailySummaryArgs struct {
+	Timezone string `json:"timezone"`
+}
+
 // summaryLocation resolves the timezone the business day is measured in. The
 // host's zone is the fallback because a machine sitting in the office is
 // normally set to the office's zone — but the digest always prints the window it
 // used, so a mismatch with the job's CRON_TZ is visible in the message itself
 // rather than silently slicing the day at the wrong hour.
 func summaryLocation(arg any) (*time.Location, error) {
-	m, ok := arg.(map[string]any)
+	// A hand-fired {"send_daily_summary": true} carries no options at all.
+	doc, ok := arg.(map[string]any)
 	if !ok {
 		return time.Local, nil
 	}
-	name, _ := m["timezone"].(string)
-	if strings.TrimSpace(name) == "" {
+	args, err := decodeInto[dailySummaryArgs](doc)
+	if err != nil {
+		return nil, fmt.Errorf("send_daily_summary arguments: %w", err)
+	}
+	if strings.TrimSpace(args.Timezone) == "" {
 		return time.Local, nil
 	}
-	loc, err := time.LoadLocation(name)
+	loc, err := time.LoadLocation(args.Timezone)
 	if err != nil {
-		return nil, fmt.Errorf("timezone %q: %w", name, err)
+		return nil, fmt.Errorf("timezone %q: %w", args.Timezone, err)
 	}
 	return loc, nil
+}
+
+// decodeInto converts an untyped map — a DoCommand payload, or one document off
+// the tabular query — into T through a JSON round-trip, so the struct tags do
+// the field mapping instead of a chain of type assertions.
+func decodeInto[T any](doc map[string]any) (T, error) {
+	var out T
+	encoded, err := json.Marshal(doc)
+	if err != nil {
+		return out, err
+	}
+	err = json.Unmarshal(encoded, &out)
+	return out, err
 }
 
 // consecutiveSuccesses reads the machine's successful-order streak off the usage
@@ -153,13 +175,8 @@ func dailySummaryStages() []map[string]any {
 func decodeOrderRows(raw []map[string]any, logger logging.Logger) []orderRow {
 	rows := make([]orderRow, 0, len(raw))
 	for _, doc := range raw {
-		encoded, err := json.Marshal(doc)
+		row, err := decodeInto[orderRow](doc)
 		if err != nil {
-			logger.Warnf("daily summary: skipping an unencodable order reading: %v", err)
-			continue
-		}
-		var row orderRow
-		if err := json.Unmarshal(encoded, &row); err != nil {
 			logger.Warnf("daily summary: skipping an unreadable order reading: %v", err)
 			continue
 		}
