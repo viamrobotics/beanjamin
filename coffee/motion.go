@@ -887,13 +887,14 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 	return nil
 }
 
-// defaultCarryWaypointSpacingMm is the straight-line spacing between the
-// waypoints inserted along a no-spill carry move (see carryHeldLevel). The
+// defaultCarryWaypointSpacingMm is the spacing between the waypoints inserted
+// along a no-spill carry move, measured along the path they actually follow (see
+// carryHeldLevel, and computeLevelCarryWaypoints for what that path is). The
 // level goal cloud is only enforced at the waypoints, so between two goals the
-// trajectory is free to bow past its leeway. 75 mm halves how far the planner
-// can travel between two shaped goals; noSpillOrientationToleranceDegs bounds
-// what it may do in the gaps that remain.
-const defaultCarryWaypointSpacingMm = 75.0
+// trajectory is free to bow past its leeway. 100 mm keeps consecutive goals close
+// enough that the planner has little room to tilt the held drink between them;
+// noSpillOrientationToleranceDegs bounds what it may do in the gaps that remain.
+const defaultCarryWaypointSpacingMm = 100.0
 
 // noSpillOrientationToleranceDegs caps how far the carried container's
 // orientation may stray *between* waypoints. noSpillGoalCloud shapes only the
@@ -906,7 +907,7 @@ const defaultCarryWaypointSpacingMm = 75.0
 // excursion *off* the segment's own interpolation — not a bound on the commanded
 // rotation, which on a long carry sweeps far more than this about the
 // container's vertical axis.
-const noSpillOrientationToleranceDegs = 45.0
+const noSpillOrientationToleranceDegs = 50.0
 
 // withNoSpillOrientationConstraint adds the carry's path orientation bound,
 // allocating the Constraints when the caller has none (no linear constraint and

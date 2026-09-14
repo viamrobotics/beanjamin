@@ -258,20 +258,19 @@ func TestCarryGoalForMoveFrame_UndoesHeldItemRotation(t *testing.T) {
 }
 
 // The default spacing decides how many shaped goals a carry gets. A 600mm
-// traverse — roughly the serving-area placement — is broken into 8 segments, so
-// consecutive goals sit 75mm apart and the unconstrained span between any two is
-// half what it was. Starts on the Z axis, so this measures the chord; a swept
-// carry counts the same way against its own arc length.
+// traverse — roughly the serving-area placement — is broken into 6 segments, so
+// consecutive goals sit 100mm apart. Starts on the Z axis, so this measures the
+// chord; a swept carry counts the same way against its own arc length.
 func TestComputeLevelCarryWaypoints_FallbackDefaultSpacing(t *testing.T) {
 	start := spatialmath.NewPose(r3.Vector{}, levelOrientation)
 	end := spatialmath.NewPose(r3.Vector{X: 600}, levelOrientation)
 
 	poses := computeLevelCarryWaypoints(start, end, defaultCarryWaypointSpacingMm)
-	if len(poses) != 8 {
-		t.Fatalf("got %d waypoints over 600mm, want 8", len(poses))
+	if len(poses) != 6 {
+		t.Fatalf("got %d waypoints over 600mm, want 6", len(poses))
 	}
 	for i, p := range poses {
-		if want := 75.0 * float64(i+1); math.Abs(p.Point().X-want) > 1e-6 {
+		if want := 100.0 * float64(i+1); math.Abs(p.Point().X-want) > 1e-6 {
 			t.Errorf("waypoint %d at X=%g, want %g", i, p.Point().X, want)
 		}
 	}
