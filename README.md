@@ -458,9 +458,11 @@ Returns:
 
 **`proceed`** - Re-sync the recorded world with the real one, and resume queue processing after a cancel-induced pause.
 
-The frame system is rebuilt from the framesystem service on every `proceed`, discarding whatever an interrupted order left mid-cycle — a filter frame reparented to world by `lock_portafilter`, a held-item geometry, a staged-glass obstacle. This is unconditional because a cancel is not the only thing that strands those mutations: an order that fails on its own never pauses the queue, and the next order's opportunistic refresh deliberately declines to rebuild while a held item or locked filter is recorded, so without a `proceed` the stale world is inherited by every order that follows the failure. The recorded fridge-door angle survives the rebuild (only `reset_world` clears that). If the rebuild fails, nothing resumes and a paused queue stays paused.
+The frame system is rebuilt from the framesystem service on every `proceed`, discarding whatever an interrupted order left mid-cycle — a filter frame reparented to world by `lock_portafilter`, a held-item geometry, a staged-glass obstacle. This is unconditional because a cancel is not the only thing that strands those mutations: an order that fails on its own never pauses the queue, and the next order's opportunistic refresh deliberately declines to rebuild while a held item or locked filter is recorded, so without a `proceed` the stale world is inherited by every order that follows the failure. If the rebuild fails, nothing resumes and a paused queue stays paused.
 
-The pause is only released if there is one — `proceed` on a running queue rebuilds the world and reports `resumed: false`, rather than parking a resume signal that the next cancel would swallow on arrival. `proceed` refuses outright while a sequence is still running (including one that is unwinding from a cancel): the frame system cannot be swapped under a goroutine that is planning with it.
+The **recorded fridge-door angle is the one thing the rebuild does not clear**, because rebuilding a model does not shut a real door — only `reset_world` clears it, and only after you have shut the door by hand. When a `proceed` keeps an angle it says so: a warning in the logs, and a `fridge_door_open_degs` field in the response (absent when the door is shut). If you closed the door by hand, run `reset_world` rather than `proceed`, or the next plan will route the arm around a panel that is no longer there.
+
+The pause is only released if there is one — `proceed` on a running queue rebuilds the world and reports `resumed: false`. Releasing the pause *is* clearing the queue's paused flag, done by `proceed` itself: any cancel pauses the queue, including one that interrupts an `execute_action` or a keepalive purge with no order in flight, and such a pause has no order-queue goroutine waiting to hear about it. Two `proceed`s racing therefore resume once, and the second reports `resumed: false`. `proceed` refuses outright while a sequence is still running (including one that is unwinding from a cancel): the frame system cannot be swapped under a goroutine that is planning with it.
 
 Because the rebuild forgets the modeled contents of the gripper without opening the gripper, `proceed` is the wrong command when the jaws really are holding something — a portafilter or cup a manually-stepped `execute_action` picked up. Use `cancel` then `rewind`, which physically lets go and homes the arm, and only then `proceed`. A `proceed` that forgets a held item logs a warning saying so.
 
@@ -468,7 +470,7 @@ Because the rebuild forgets the modeled contents of the gripper without opening 
 {"proceed": true}
 ```
 
-Returns `{"status": "resumed", "resumed": true, "frame_system_reset": true}`, or `{"status": "reset", "resumed": false, "frame_system_reset": true}` when the queue was not paused.
+Returns `{"status": "resumed", "resumed": true, "frame_system_reset": true}`, or `{"status": "reset", "resumed": false, "frame_system_reset": true}` when the queue was not paused. A `fridge_door_open_degs` field is added when the rebuild kept a door angle.
 
 **`clear_queue`** - Remove all pending orders from the queue.
 
@@ -554,7 +556,7 @@ Then the sequence rejoins the iced flow: re-grab the staged glass and place it i
 
 The door is opened once and closed once, so the fridge stands open for the pour — a few seconds of open door in exchange for halving the door sweeps, which are the slowest and most failure-prone part of the trip.
 
-**When a milk step fails.** The arm does not try to shut the door itself: it may still be holding the bottle, and a sweep needs the gripper for the handle. So the door is left where it stands, the model keeps recording that angle, and the error says so. Take the bottle out of the gripper if it is holding one, shut the door by hand, then `rewind` and `proceed` (or `reset_world`, which is also what clears the recorded door angle).
+**When a milk step fails.** The arm does not try to shut the door itself: it may still be holding the bottle, and a sweep needs the gripper for the handle. So the door is left where it stands, the model keeps recording that angle, and the error says so. Take the bottle out of the gripper if it is holding one and `rewind` to recover the arm, then shut the door by hand and run `reset_world` — it is the only command that clears the recorded angle. `rewind` and `proceed` both rebuild the frame system with the door still held open, which is correct while the door really is open and wrong the moment you have closed it by hand.
 
 **`action`** - Control the gripper. Supported values: `"open_gripper"`, `"close_gripper"`.
 

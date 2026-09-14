@@ -26,9 +26,11 @@ import (
 // required because cachedFS may only be swapped while no sequence owns the arm.
 //
 // It does not clear the recorded fridge-door angle (only reset_world may assert
-// the door is shut), and it forgets the gripper's modeled contents without
-// opening the gripper — an operator holding something manually wants rewind,
-// which physically lets go.
+// the door is shut), so the response reports the angle left standing rather than
+// letting frame_system_reset imply the fridge went back to shut with everything
+// else. It also forgets the gripper's modeled contents without opening the
+// gripper — an operator holding something manually wants rewind, which
+// physically lets go.
 func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, error) {
 	if !s.running.CompareAndSwap(false, true) {
 		return nil, errors.New("proceed: a sequence is still running — wait for it to stop, or cancel it first")
@@ -38,27 +40,63 @@ func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, err
 	if s.heldItemAttached {
 		s.activeOrderLogger().Warn("proceed: forgetting a held item — if the gripper really is holding something, cancel and rewind instead so it lets go first")
 	}
+	// Read before the arm is handed back, alongside every other mutation flag:
+	// doorOpenDegs belongs to the motion goroutine and the running gate is what
+	// makes reading it here safe.
+	doorOpenDegs := s.doorOpenDegs
 	err := s.resetFrameSystem(ctx)
 	s.running.Store(false)
 	if err != nil {
 		return nil, fmt.Errorf("proceed: %w", err)
 	}
-
-	// Only a paused queue has a consumer for the signal. Sending it regardless
-	// would park a token in the buffered slot that the next cancel-induced pause
-	// would consume the moment it arrived, resuming without an operator ever
-	// asking for it.
-	if !s.paused.Load() {
-		s.logger.Info("proceed: frame system rebuilt, queue was not paused")
-		return map[string]any{"status": "reset", "resumed": false, "frame_system_reset": true}, nil
+	// A rebuild does not shut a real door, so the angle is deliberately kept.
+	// Say so out loud: otherwise "frame system rebuilt" reads as a full reset
+	// and the retained fridge is invisible until a later plan routes through it.
+	if doorOpenDegs != 0 {
+		s.logger.Warnf("proceed: the fridge door stays modeled open at %.0f° — a rebuild does not shut a real door. "+
+			"If you closed it by hand, run reset_world instead; that is the only command that clears the angle", doorOpenDegs)
 	}
 
+	// Clearing the flag IS the resume, and it happens here rather than in the
+	// queue goroutine so that it lands exactly when the resume is granted.
+	// Compare-and-swap so two proceeds racing cannot both claim to have released
+	// a single pause.
+	if !s.paused.CompareAndSwap(true, false) {
+		s.logger.Info("proceed: frame system rebuilt, queue was not paused")
+		return proceedResponse("reset", false, doorOpenDegs), nil
+	}
+	wakeQueue(s.queue)
+
+	s.logger.Info("proceed: frame system rebuilt, queue resumed")
+	return proceedResponse("resumed", true, doorOpenDegs), nil
+}
+
+// proceedResponse renders a proceed result, carrying the fridge-door angle the
+// rebuild kept so an operator can see what "reset" did not cover. Omitted when
+// the door is shut, so the field's presence alone flags a door left standing.
+func proceedResponse(status string, resumed bool, doorOpenDegs float64) map[string]any {
+	resp := map[string]any{
+		"status":             status,
+		"resumed":            resumed,
+		"frame_system_reset": true,
+	}
+	if doorOpenDegs != 0 {
+		resp["fridge_door_open_degs"] = doorOpenDegs
+	}
+	return resp
+}
+
+// wakeQueue nudges a consumer parked in waitForProceed. The flag the caller has
+// just cleared is what actually releases the queue; this only saves a parked
+// goroutine from sleeping until the next order arrives, and is a no-op when
+// nothing is parked — a cancel that interrupted a manual action or a keepalive
+// purge pauses the queue with no consumer waiting. A token that goes unclaimed
+// is harmless: waitForProceed re-checks the flag after every wakeup rather than
+// treating one as permission to run.
+func wakeQueue(q *OrderQueue) {
 	select {
-	case s.queue.proceed <- struct{}{}:
-		s.logger.Info("proceed: frame system rebuilt, queue resumed")
-		return map[string]any{"status": "resumed", "resumed": true, "frame_system_reset": true}, nil
+	case q.proceed <- struct{}{}:
 	default:
-		return nil, errors.New("proceed: a resume is already pending")
 	}
 }
 
@@ -104,16 +142,9 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 		return nil, fmt.Errorf("reset_world: %w", err)
 	}
 
-	unpaused := false
-	if s.paused.Load() {
-		select {
-		case s.queue.proceed <- struct{}{}:
-		default:
-			// Buffered slot is full — a proceed signal is already pending and
-			// will be consumed by processQueue. Either way, the unpause was
-			// requested.
-		}
-		unpaused = true
+	unpaused := s.paused.CompareAndSwap(true, false)
+	if unpaused {
+		wakeQueue(s.queue)
 	}
 
 	s.logger.Infof("reset_world: cancelled=%v cleared=%d unpaused=%v frame_system_reset=true",
