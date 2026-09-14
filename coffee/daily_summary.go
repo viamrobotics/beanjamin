@@ -39,6 +39,7 @@ const dailySummaryWindow = 24 * time.Hour
 // as a day of zeroed-out counters rather than as an error.
 type orderRow struct {
 	Drink             string  `json:"drink"`
+	CustomerName      string  `json:"customer_name"`
 	OrderOK           bool    `json:"order_ok"`
 	OperatorCancelled bool    `json:"operator_cancelled"`
 	FailedStep        string  `json:"failed_step"`
@@ -179,6 +180,11 @@ type daySummary struct {
 	decaf       int
 	drinks      map[string]drinkStats
 	failedSteps map[string]int
+	// customers counts orders per named customer. Walk-ups who skip the name
+	// screen are left out entirely rather than pooled under one label: pooled,
+	// "anonymous" would win most days and say nothing. The consequence is that
+	// these counts do not sum to attempted, which is the honest trade.
+	customers map[string]int
 	// brewTotal is the machine's total time brewing, summed across drinks. A
 	// sum stays meaningful across a mixed set in a way a mean does not — it is
 	// utilization, not a per-drink expectation.
@@ -198,6 +204,7 @@ func summarizeOrders(rows []orderRow) daySummary {
 	sum := daySummary{
 		drinks:      map[string]drinkStats{},
 		failedSteps: map[string]int{},
+		customers:   map[string]int{},
 	}
 	for _, row := range rows {
 		sum.attempted++
@@ -209,6 +216,12 @@ func summarizeOrders(rows []orderRow) daySummary {
 		stats.ordered++
 		if row.Decaf {
 			sum.decaf++
+		}
+		// Every attempt counts toward a customer's tally, succeeded or not: they
+		// asked for a drink, and whether the machine managed it is the machine's
+		// record rather than theirs.
+		if name := strings.TrimSpace(row.CustomerName); name != "" {
+			sum.customers[name]++
 		}
 
 		switch {
@@ -316,6 +329,9 @@ func headlineStats(sum daySummary) string {
 // streak that just broke, and "0 decaf" is noise on a day nobody ordered one.
 func asideStats(sum daySummary, streak int, hasStreak bool) string {
 	var parts []string
+	if regulars := topCustomers(sum.customers); regulars != "" {
+		parts = append(parts, ":trophy: "+regulars)
+	}
 	if sum.decaf > 0 {
 		parts = append(parts, fmt.Sprintf(":sleeping: %d decaf", sum.decaf))
 	}
@@ -323,6 +339,32 @@ func asideStats(sum daySummary, streak int, hasStreak bool) string {
 		parts = append(parts, fmt.Sprintf(":fire: %d in a row", streak))
 	}
 	return strings.Join(parts, "  ·  ")
+}
+
+// topCustomers names whoever ordered most, listing everyone tied at the top
+// rather than picking one arbitrarily — on a quiet day a two-order tie is the
+// normal case, and silently dropping the other names would misreport it.
+// Returns "" when nobody named ordered at all.
+func topCustomers(customers map[string]int) string {
+	if len(customers) == 0 {
+		return ""
+	}
+	names := rankedKeys(customers, func(n int) int { return n })
+	top := customers[names[0]]
+
+	tied := names[:1]
+	for _, name := range names[1:] {
+		if customers[name] != top {
+			break
+		}
+		tied = append(tied, name)
+	}
+
+	// "2 orders each" only makes sense once there is someone to share it with.
+	if len(tied) > 1 {
+		return fmt.Sprintf("%s — %d each", strings.Join(tied, ", "), top)
+	}
+	return fmt.Sprintf("%s — %d", tied[0], top)
 }
 
 // outcomeTable renders the outcome counts as a fixed-width table inside a code
