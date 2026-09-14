@@ -477,107 +477,63 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 		return fmt.Errorf("normalize gripper before brew: %w", err)
 	}
 
-	s.setStep(stepGrinding)
-	isDecaf := isDecafDrink(drink)
-	if isDecaf {
-		logger.Infof("step 1/9: grinding decaf coffee")
-		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::grinding_decaf")
-		err := s.grindDecaf(ctx, cancelCtx)
-		stepSpan.End()
-		if err != nil {
+	// runPhase publishes the step label, logs the progress line and runs the
+	// phase in its own trace span. Keep the label and the "step N/9" line in
+	// sync: both surface to the UI, which collapses on the raw label.
+	runPhase := func(step, spanName, progress string, fn func(ctx, cancelCtx context.Context) error) error {
+		s.setStep(step)
+		logger.Info(progress)
+		phaseCtx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::"+spanName)
+		defer stepSpan.End()
+		return fn(phaseCtx, cancelCtx)
+	}
+
+	if isDecafDrink(drink) {
+		if err := runPhase(stepGrinding, "grinding_decaf", "step 1/9: grinding decaf coffee", s.grindDecaf); err != nil {
 			return err
 		}
 		s.incrementSensorReading(ctx, s.usageSensor, "decaf grinder", "decaf_grinds", 1)
 	} else {
-		logger.Infof("step 1/9: grinding coffee")
-		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::grinding")
-		err := s.grindCoffee(ctx, cancelCtx)
-		stepSpan.End()
-		if err != nil {
+		if err := runPhase(stepGrinding, "grinding", "step 1/9: grinding coffee", s.grindCoffee); err != nil {
 			return err
 		}
 		s.incrementSensorReading(ctx, s.usageSensor, "grinder", "regular_grinds", 1)
 	}
 
-	s.setStep(stepTamping)
-	logger.Infof("step 2/9: tamping ground")
-	{
-		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::tamping")
-		err := s.tampGround(ctx, cancelCtx)
-		stepSpan.End()
-		if err != nil {
-			return err
-		}
+	if err := runPhase(stepTamping, "tamping", "step 2/9: tamping ground", s.tampGround); err != nil {
+		return err
+	}
+	if err := runPhase(stepLockingPortafilter, "locking_portafilter", "step 3/9: locking portafilter", s.lockPortaFilter); err != nil {
+		return err
+	}
+	if err := runPhase(stepReleasingFilter, "releasing_filter", "step 4/9: releasing filter", s.releaseFilter); err != nil {
+		return err
+	}
+	if err := runPhase(stepPlacingCup, "placing_cup", "step 5/9: placing cup", s.setCupForCoffee); err != nil {
+		return err
 	}
 
-	s.setStep(stepLockingPortafilter)
-	logger.Infof("step 3/9: locking portafilter")
-	{
-		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::locking_portafilter")
-		err := s.lockPortaFilter(ctx, cancelCtx)
-		stepSpan.End()
-		if err != nil {
-			return err
-		}
-	}
-
-	s.setStep(stepReleasingFilter)
-	logger.Infof("step 4/9: releasing filter")
-	{
-		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::releasing_filter")
-		err := s.releaseFilter(ctx, cancelCtx)
-		stepSpan.End()
-		if err != nil {
-			return err
-		}
-	}
-
-	s.setStep(stepPlacingCup)
-	logger.Infof("step 5/9: placing cup")
-	{
-		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::placing_cup")
-		err := s.setCupForCoffee(ctx, cancelCtx)
-		stepSpan.End()
-		if err != nil {
-			return err
-		}
-	}
-
-	s.setStep(stepBrewing)
 	// The separate-buttons machine doses itself, leaving the arm idle mid-pour,
 	// so iced drinks run the ice-side prep during the pour instead of after it.
 	// The toggle machine holds the switch throughout, so it stays sequential.
 	overlapIce := isIcedDrink(drink) && s.cfg.HasSeparateBrewButtons
+	brewProgress := fmt.Sprintf("step 6/9: brewing %s", drink)
+	brewPhase := func(ctx, cancelCtx context.Context) error { return s.brew(ctx, cancelCtx, drink) }
 	if overlapIce {
-		logger.Infof("step 6/9: brewing %s while prepping the iced glass", drink)
-	} else {
-		logger.Infof("step 6/9: brewing %s", drink)
+		brewProgress += " while prepping the iced glass"
+		brewPhase = func(ctx, cancelCtx context.Context) error { return s.brewAndPrepIce(ctx, cancelCtx, drink) }
 	}
 	if err := s.say(ctx, pickAlmostReady()); err != nil {
 		logger.Warnf("failed to say almost-ready: %v", err)
 	}
-	{
-		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::brewing")
-		var err error
-		if overlapIce {
-			err = s.brewAndPrepIce(ctx, cancelCtx, drink)
-		} else {
-			err = s.brew(ctx, cancelCtx, drink)
-		}
-		stepSpan.End()
-		if err != nil {
-			return err
-		}
-		s.incrementSensorReading(ctx, s.usageSensor, "water", "usage", waterDelta(drink))
-		s.incrementSensorReading(ctx, s.usageSensor, "drip tray", "drip_tray_brews", 1)
+	if err := runPhase(stepBrewing, "brewing", brewProgress, brewPhase); err != nil {
+		return err
 	}
+	s.incrementSensorReading(ctx, s.usageSensor, "water", "usage", waterDelta(drink))
+	s.incrementSensorReading(ctx, s.usageSensor, "drip tray", "drip_tray_brews", 1)
 
-	s.setStep(stepServing)
-	logger.Infof("step 6b/9: serving cup")
-	{
-		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::serving")
-		var servedSlot int
-		var err error
+	var servedSlot int
+	serve := func(ctx, cancelCtx context.Context) (err error) {
 		switch {
 		case overlapIce:
 			// Glass already iced and staged during the brew; finish the rest.
@@ -587,62 +543,36 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 		default:
 			servedSlot, err = s.placeFullCupOnShelf(ctx, cancelCtx)
 		}
-		stepSpan.End()
-		if err != nil {
-			return err
+		return err
+	}
+	if err := runPhase(stepServing, "serving", "step 6b/9: serving cup", serve); err != nil {
+		return err
+	}
+	// Record where the drink physically landed so a delivery order can report it
+	// as the pickup_position.
+	order.PickupPosition = servedSlot
+	if order.Fulfillment == FulfillmentDelivery {
+		if err := s.readyForDelivery(ctx, order); err != nil {
+			logger.Warnf("failed to announce ready-for-delivery: %v", err)
 		}
-		// Record where the drink physically landed so a delivery order can
-		// report it as the pickup_position.
-		order.PickupPosition = servedSlot
-		if order.Fulfillment == FulfillmentDelivery {
-			if err := s.readyForDelivery(ctx, order); err != nil {
-				logger.Warnf("failed to announce ready-for-delivery: %v", err)
-			}
-		} else {
-			if err := s.sayAlways(ctx, pickDrinkReady(drink, customerName, batchIndex, batchSize)); err != nil {
-				logger.Warnf("failed to say drink-ready: %v", err)
-			}
-		}
+	} else if err := s.sayAlways(ctx, pickDrinkReady(drink, customerName, batchIndex, batchSize)); err != nil {
+		logger.Warnf("failed to say drink-ready: %v", err)
 	}
 
-	s.setStep(stepGrabbingFilter)
-	logger.Infof("step 7/9: grabbing filter")
-	{
-		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::grabbing_filter")
-		err := s.grabFilter(ctx, cancelCtx)
-		stepSpan.End()
-		if err != nil {
-			return err
-		}
+	if err := runPhase(stepGrabbingFilter, "grabbing_filter", "step 7/9: grabbing filter", s.grabFilter); err != nil {
+		return err
 	}
-
-	s.setStep(stepUnlockingPortafilter)
-	logger.Infof("step 8/9: unlocking portafilter")
-	{
-		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::unlocking_portafilter")
-		err := s.unlockPortaFilter(ctx, cancelCtx)
-		stepSpan.End()
-		if err != nil {
-			return err
-		}
+	if err := runPhase(stepUnlockingPortafilter, "unlocking_portafilter", "step 8/9: unlocking portafilter", s.unlockPortaFilter); err != nil {
+		return err
 	}
-
-	s.setStep(stepCleaning)
-	logger.Infof("post: cleaning portafilter")
-	{
-		ctx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::cleaning")
-		err := s.cleanPortafilter(ctx, cancelCtx)
-		stepSpan.End()
-		if err != nil {
-			return err
-		}
-		s.incrementSensorReading(ctx, s.usageSensor, "cleaner", "cleanings", 1)
+	if err := runPhase(stepCleaning, "cleaning", "post: cleaning portafilter", s.cleanPortafilter); err != nil {
+		return err
 	}
+	s.incrementSensorReading(ctx, s.usageSensor, "cleaner", "cleanings", 1)
 
 	s.setStep(stepFinishingUp)
 	logger.Infof("step 9/9: moving to home pose")
-	homeStep := Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw}
-	if err := s.executeStep(ctx, cancelCtx, homeStep); err != nil {
+	if err := s.executeStep(ctx, cancelCtx, Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw}); err != nil {
 		return err
 	}
 

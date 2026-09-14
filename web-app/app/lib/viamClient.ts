@@ -1,4 +1,5 @@
 // Types only — no runtime side effects
+import type { JsonValue } from "@bufbuild/protobuf";
 import type { ViamClient, RobotClient } from "@viamrobotics/sdk";
 import type { PoseValue } from "./calibration";
 
@@ -143,6 +144,24 @@ async function loadSDK() {
 
 const COFFEE_SERVICE_NAME = "coffee-lifecycle";
 const CUSTOMER_DETECTOR_SERVICE_NAME = "customer-detector";
+
+/**
+ * Issue a DoCommand against a generic service on the machine. The SDK is
+ * imported lazily (loadSDK), so every call has to build its client from the
+ * loaded module rather than holding one.
+ *
+ * The backend returns plain JSON maps, which the SDK types only as `unknown`;
+ * callers name the shape they expect via T.
+ */
+async function doCommand<T>(
+  conn: ViamConnection,
+  serviceName: string,
+  command: Record<string, JsonValue>,
+): Promise<T> {
+  const sdk = await loadSDK();
+  const svc = new sdk.GenericServiceClient(conn.robotClient, serviceName);
+  return (await svc.doCommand(command)) as unknown as T;
+}
 
 export async function connectToViam(partId: string): Promise<ViamConnection> {
   if (isDevMode()) {
@@ -322,8 +341,8 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
     conn.robotClient,
     COFFEE_SERVICE_NAME,
   );
-  const result = await coffeeService.getStatus();
-  return result as unknown as QueueStatus;
+  // getStatus, not doCommand — the queue is served off the service's Status().
+  return (await coffeeService.getStatus()) as unknown as QueueStatus;
 }
 
 export async function prepareOrder(
@@ -359,92 +378,65 @@ export async function prepareOrder(
     };
   }
 
-  const sdk = await loadSDK();
-  const coffeeService = new sdk.GenericServiceClient(
-    conn.robotClient,
-    COFFEE_SERVICE_NAME,
-  );
-
   const greeting = opts.pronunciation
     ? `One ${opts.drinkLabel} coming right up!`
     : undefined;
 
-  const result = await coffeeService.doCommand({
-    prepare_order: {
-      drink: opts.drink,
-      customer_name: opts.customerName,
-      ...(opts.customerEmail && { customer_email: opts.customerEmail }),
-      ...(greeting && { initial_greeting: greeting }),
-      ...(opts.fulfillment && { fulfillment: opts.fulfillment }),
+  const result = await doCommand<{ status: string }>(
+    conn,
+    COFFEE_SERVICE_NAME,
+    {
+      prepare_order: {
+        drink: opts.drink,
+        customer_name: opts.customerName,
+        ...(opts.customerEmail && { customer_email: opts.customerEmail }),
+        ...(greeting && { initial_greeting: greeting }),
+        ...(opts.fulfillment && { fulfillment: opts.fulfillment }),
+      },
     },
-  });
+  );
   console.log("[viamClient] prepareOrder result:", result);
-  return result as unknown as { status: string };
+  return result;
 }
 
 // --- Customer Detector ---
+
+export interface CustomerIdentification {
+  identified: boolean;
+  name?: string;
+  email?: string;
+  confidence?: number;
+  message?: string;
+}
 
 export async function registerCustomerFace(
   conn: ViamConnection,
   name: string,
   email: string,
 ): Promise<{ registered: string; name: string; image_path: string }> {
-  const sdk = await loadSDK();
-  const svc = new sdk.GenericServiceClient(
-    conn.robotClient,
-    CUSTOMER_DETECTOR_SERVICE_NAME,
-  );
-  const result = await svc.doCommand({
+  return doCommand(conn, CUSTOMER_DETECTOR_SERVICE_NAME, {
     register_customer: { name, email },
   });
-  return result as unknown as {
-    registered: string;
-    name: string;
-    image_path: string;
-  };
 }
 
 export async function finishRegistration(
   conn: ViamConnection,
   email: string,
 ): Promise<{ email: string; name: string; face_images: number }> {
-  const sdk = await loadSDK();
-  const svc = new sdk.GenericServiceClient(
-    conn.robotClient,
-    CUSTOMER_DETECTOR_SERVICE_NAME,
-  );
-  const result = await svc.doCommand({ finish_registration: email });
-  return result as unknown as {
-    email: string;
-    name: string;
-    face_images: number;
-  };
+  return doCommand(conn, CUSTOMER_DETECTOR_SERVICE_NAME, {
+    finish_registration: email,
+  });
 }
 
-export async function identifyCustomer(conn: ViamConnection): Promise<{
-  identified: boolean;
-  name?: string;
-  email?: string;
-  confidence?: number;
-  message?: string;
-}> {
+export async function identifyCustomer(
+  conn: ViamConnection,
+): Promise<CustomerIdentification> {
   if (isDevMode()) {
     return { identified: false, message: "dev mode" };
   }
-
-  const sdk = await loadSDK();
-  const svc = new sdk.GenericServiceClient(
-    conn.robotClient,
-    CUSTOMER_DETECTOR_SERVICE_NAME,
-  );
-  const result = await svc.doCommand({ identify_customer: true });
-  return result as unknown as {
-    identified: boolean;
-    name?: string;
-    email?: string;
-    confidence?: number;
-    message?: string;
-  };
+  return doCommand(conn, CUSTOMER_DETECTOR_SERVICE_NAME, {
+    identify_customer: true,
+  });
 }
 
 export async function getCustomerDetectorInfo(
@@ -455,14 +447,7 @@ export async function getCustomerDetectorInfo(
     // registration rather than stranding it on an empty camera stream.
     throw new Error("dev mode: customer detector unavailable");
   }
-
-  const sdk = await loadSDK();
-  const svc = new sdk.GenericServiceClient(
-    conn.robotClient,
-    CUSTOMER_DETECTOR_SERVICE_NAME,
-  );
-  const result = await svc.doCommand({ get_info: true });
-  return result as unknown as { camera_name: string };
+  return doCommand(conn, CUSTOMER_DETECTOR_SERVICE_NAME, { get_info: true });
 }
 
 // --- Live frame poses ---

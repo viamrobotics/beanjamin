@@ -425,64 +425,44 @@ type KeepAlive struct {
 	HoldSec float64 `json:"hold_sec,omitempty"`
 }
 
+// requireFields returns a field-required error for the first empty value in
+// pairs, which alternate config key and value. It keeps Validate's long runs of
+// presence checks readable as the lists of field names they really are.
+func requireFields(path string, pairs ...any) error {
+	for i := 0; i < len(pairs); i += 2 {
+		field := pairs[i].(string)
+		switch v := pairs[i+1].(type) {
+		case string:
+			if v == "" {
+				return resource.NewConfigValidationFieldRequiredError(path, field)
+			}
+		case *RelativePose:
+			if v == nil {
+				return resource.NewConfigValidationFieldRequiredError(path, field)
+			}
+		default:
+			return fmt.Errorf("%s: requireFields: unsupported type %T for %q", path, v, field)
+		}
+	}
+	return nil
+}
+
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
-	if cfg.PoseSwitcherName == "" {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "pose_switcher_name")
-	}
-	if cfg.ClawsPoseSwitcherName == "" {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "claws_pose_switcher_name")
-	}
-	if cfg.ArmName == "" {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "arm_name")
-	}
-	if cfg.GripperName == "" {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "gripper_name")
-	}
-	reqDeps := []string{cfg.PoseSwitcherName, cfg.ClawsPoseSwitcherName, framesystem.PublicServiceName.String(), arm.Named(cfg.ArmName).String(), gripper.Named(cfg.GripperName).String()}
-
-	var optDeps []string
-	if cfg.SpeechServiceName != "" {
-		optDeps = append(optDeps, generic.Named(cfg.SpeechServiceName).String())
-	}
-	if cfg.OrderSensorName != "" {
-		optDeps = append(optDeps, sensor.Named(cfg.OrderSensorName).String())
-	}
-	if cfg.UsageSensorName != "" {
-		optDeps = append(optDeps, sensor.Named(cfg.UsageSensorName).String())
-	}
-	if cfg.CamStorageMuxName != "" {
-		optDeps = append(optDeps, generic.Named(cfg.CamStorageMuxName).String())
-	}
-	if cfg.SlackNotifierName != "" {
-		optDeps = append(optDeps, generic.Named(cfg.SlackNotifierName).String())
-	}
-	if cfg.CustomerDetectorName != "" {
-		optDeps = append(optDeps, generic.Named(cfg.CustomerDetectorName).String())
-	}
-	if cfg.DeliveryHandlerName != "" {
-		optDeps = append(optDeps, generic.Named(cfg.DeliveryHandlerName).String())
-	}
-
-	if cfg.CupVisionServiceName == "" {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_vision_service_name")
-	}
-	if cfg.SrcCameraName == "" {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "src_camera_name")
-	}
-	if cfg.CameraObservePoseSwitcherName == "" {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "camera_observe_pose_switcher_name")
-	}
-	if cfg.CupApproachRelativePose == nil {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_approach_relative_pose")
-	}
-	if cfg.CupGrabRelativePose == nil {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "cup_grab_relative_pose")
-	}
-	if cfg.ServingApproachRelativePose == nil {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "serving_approach_relative_pose")
-	}
-	if cfg.ServingGrabRelativePose == nil {
-		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "serving_grab_relative_pose")
+	if err := requireFields(path,
+		"pose_switcher_name", cfg.PoseSwitcherName,
+		"claws_pose_switcher_name", cfg.ClawsPoseSwitcherName,
+		"arm_name", cfg.ArmName,
+		"gripper_name", cfg.GripperName,
+		// Cup pickup is always vision-driven, so its pipeline is required too.
+		"cup_vision_service_name", cfg.CupVisionServiceName,
+		"src_camera_name", cfg.SrcCameraName,
+		"camera_observe_pose_switcher_name", cfg.CameraObservePoseSwitcherName,
+		"cup_approach_relative_pose", cfg.CupApproachRelativePose,
+		"cup_grab_relative_pose", cfg.CupGrabRelativePose,
+		"serving_approach_relative_pose", cfg.ServingApproachRelativePose,
+		"serving_grab_relative_pose", cfg.ServingGrabRelativePose,
+	); err != nil {
+		return nil, nil, err
 	}
 	if cfg.CupPhotosPerVantage < 0 {
 		return nil, nil, fmt.Errorf("%s: cup_photos_per_vantage must be >= 0", path)
@@ -495,6 +475,26 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if err := cfg.CupDimensions.validate(path, "cup_dimensions"); err != nil {
 		return nil, nil, err
 	}
+
+	reqDeps := []string{cfg.PoseSwitcherName, cfg.ClawsPoseSwitcherName, framesystem.PublicServiceName.String(), arm.Named(cfg.ArmName).String(), gripper.Named(cfg.GripperName).String()}
+
+	var optDeps []string
+	for _, dep := range []struct {
+		name  string
+		named func(string) resource.Name
+	}{
+		{cfg.SpeechServiceName, generic.Named},
+		{cfg.OrderSensorName, sensor.Named},
+		{cfg.UsageSensorName, sensor.Named},
+		{cfg.CamStorageMuxName, generic.Named},
+		{cfg.SlackNotifierName, generic.Named},
+		{cfg.CustomerDetectorName, generic.Named},
+		{cfg.DeliveryHandlerName, generic.Named},
+	} {
+		if dep.name != "" {
+			optDeps = append(optDeps, dep.named(dep.name).String())
+		}
+	}
 	reqDeps = append(reqDeps,
 		vision.Named(cfg.CupVisionServiceName).String(),
 		camera.Named(cfg.SrcCameraName).String(),
@@ -502,25 +502,16 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	)
 
 	if cfg.CanServeIced {
-		if cfg.IceDispenseBoardName == "" {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "ice_board_name")
-		}
-		if cfg.IceDispensePinName == "" {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "ice_pin_name")
-		}
-		// Iced coffee fetches a glass via its own vision pipeline (the glass is
-		// always vision-detected, reusing the cup camera src_camera_name).
-		if cfg.GlassVisionServiceName == "" {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "glass_vision_service_name")
-		}
-		if cfg.GlassObservePoseSwitcherName == "" {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "glass_observe_pose_switcher_name")
-		}
-		if cfg.GlassApproachRelativePose == nil {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "glass_approach_relative_pose")
-		}
-		if cfg.GlassGrabRelativePose == nil {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "glass_grab_relative_pose")
+		// The glass is fetched by its own vision pipeline, reusing the cup camera.
+		if err := requireFields(path,
+			"ice_board_name", cfg.IceDispenseBoardName,
+			"ice_pin_name", cfg.IceDispensePinName,
+			"glass_vision_service_name", cfg.GlassVisionServiceName,
+			"glass_observe_pose_switcher_name", cfg.GlassObservePoseSwitcherName,
+			"glass_approach_relative_pose", cfg.GlassApproachRelativePose,
+			"glass_grab_relative_pose", cfg.GlassGrabRelativePose,
+		); err != nil {
+			return nil, nil, err
 		}
 		if err := cfg.GlassDimensions.validate(path, "glass_dimensions"); err != nil {
 			return nil, nil, err
@@ -541,17 +532,13 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		if cfg.DoorApproachRelativePose == nil {
 			return nil, nil, fmt.Errorf("%s: can_serve_iced_latte requires door_approach_relative_pose (the milk is fetched from behind the fridge door)", path)
 		}
-		if cfg.MilkVisionServiceName == "" {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "milk_vision_service_name")
-		}
-		if cfg.MilkObservePoseSwitcherName == "" {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "milk_observe_pose_switcher_name")
-		}
-		if cfg.MilkApproachRelativePose == nil {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "milk_approach_relative_pose")
-		}
-		if cfg.MilkGrabRelativePose == nil {
-			return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "milk_grab_relative_pose")
+		if err := requireFields(path,
+			"milk_vision_service_name", cfg.MilkVisionServiceName,
+			"milk_observe_pose_switcher_name", cfg.MilkObservePoseSwitcherName,
+			"milk_approach_relative_pose", cfg.MilkApproachRelativePose,
+			"milk_grab_relative_pose", cfg.MilkGrabRelativePose,
+		); err != nil {
+			return nil, nil, err
 		}
 		if err := cfg.MilkBottleDimensions.validate(path, "milk_bottle_dimensions"); err != nil {
 			return nil, nil, err

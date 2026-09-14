@@ -169,208 +169,158 @@ func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf
 	return NewCoffee(ctx, deps, rawConf.ResourceName(), conf, logger)
 }
 
+// switchDep resolves a pose switch by its configured name. configKey names the
+// config field in errors so a misconfiguration points at what to edit.
+func switchDep(deps resource.Dependencies, configKey, name string) (toggleswitch.Switch, error) {
+	res, ok := deps[toggleswitch.Named(name)]
+	if !ok {
+		return nil, fmt.Errorf("%s: switch %q not found in dependencies", configKey, name)
+	}
+	sw, ok := res.(toggleswitch.Switch)
+	if !ok {
+		return nil, fmt.Errorf("%s: resource %q is not a switch", configKey, name)
+	}
+	return sw, nil
+}
+
+// optionalGenericDep resolves an optional generic service. An unset name yields
+// (nil, nil) — the feature is simply off — but a name that is set and does not
+// resolve fails construction, so a typo surfaces at config time rather than as a
+// silently disabled feature.
+func optionalGenericDep(deps resource.Dependencies, logger logging.Logger, configKey, name, enables string) (generic.Service, error) {
+	if name == "" {
+		return nil, nil
+	}
+	svc, err := generic.FromProvider(deps, name)
+	if err != nil {
+		return nil, fmt.Errorf("%s %q: %w", configKey, name, err)
+	}
+	logger.Infof("%s %q connected%s", configKey, name, enables)
+	return svc, nil
+}
+
+// visionPickup resolves the vision service and observe-pose switch backing one
+// vision-driven pickup (cup, glass, or milk bottle). All three share the cup
+// camera, so only the per-target pair is resolved here.
+func visionPickup(deps resource.Dependencies, logger logging.Logger, label, visionName, switchName, cameraName string) (vision.Service, toggleswitch.Switch, error) {
+	vis, err := vision.FromProvider(deps, visionName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s vision service %q: %w", label, visionName, err)
+	}
+	sw, err := switchDep(deps, label+" observe switch", switchName)
+	if err != nil {
+		return nil, nil, err
+	}
+	logger.Infof("%s vision pickup (vision=%q, camera=%q, observe_switch=%q)", label, visionName, cameraName, switchName)
+	return vis, sw, nil
+}
+
 func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Name, conf *Config, logger logging.Logger) (resource.Resource, error) {
-	cancelCtx, cancelFunc := context.WithCancel(context.Background())
-
-	switchRes, ok := deps[toggleswitch.Named(conf.PoseSwitcherName)]
-	if !ok {
-		cancelFunc()
-		return nil, fmt.Errorf("switch %q not found in dependencies", conf.PoseSwitcherName)
+	filterSw, err := switchDep(deps, "pose_switcher_name", conf.PoseSwitcherName)
+	if err != nil {
+		return nil, err
 	}
-	filterSw, ok := switchRes.(toggleswitch.Switch)
-	if !ok {
-		cancelFunc()
-		return nil, fmt.Errorf("resource %q is not a switch", conf.PoseSwitcherName)
-	}
-
-	clawSwRes, ok := deps[toggleswitch.Named(conf.ClawsPoseSwitcherName)]
-	if !ok {
-		cancelFunc()
-		return nil, fmt.Errorf("claws switch %q not found in dependencies", conf.ClawsPoseSwitcherName)
-	}
-	clawSw, ok := clawSwRes.(toggleswitch.Switch)
-	if !ok {
-		cancelFunc()
-		return nil, fmt.Errorf("resource %q is not a switch", conf.ClawsPoseSwitcherName)
+	clawSw, err := switchDep(deps, "claws_pose_switcher_name", conf.ClawsPoseSwitcherName)
+	if err != nil {
+		return nil, err
 	}
 
 	armComp, err := arm.FromProvider(deps, conf.ArmName)
 	if err != nil {
-		cancelFunc()
 		return nil, fmt.Errorf("arm %q not found in dependencies: %w", conf.ArmName, err)
 	}
 
 	gripperComp, err := gripper.FromProvider(deps, conf.GripperName)
 	if err != nil {
-		cancelFunc()
 		return nil, fmt.Errorf("gripper %q not found in dependencies: %w", conf.GripperName, err)
 	}
 
 	fsSvc, err := framesystem.FromDependencies(deps)
 	if err != nil {
-		cancelFunc()
 		return nil, fmt.Errorf("frame system service not found in dependencies: %w", err)
 	}
 
 	cachedFS, err := framesystem.NewFromService(ctx, fsSvc, nil)
 	if err != nil {
-		cancelFunc()
 		return nil, fmt.Errorf("build initial frame system: %w", err)
 	}
 
 	if err := applyJointLimits(logger, cachedFS, conf.InputRangeOverride); err != nil {
-		cancelFunc()
 		return nil, fmt.Errorf("apply joint limits: %w", err)
 	}
 
-	// Cup pickup is always vision-driven.
-	cupVision, err := vision.FromProvider(deps, conf.CupVisionServiceName)
-	if err != nil {
-		cancelFunc()
-		return nil, fmt.Errorf("cup vision service %q: %w", conf.CupVisionServiceName, err)
-	}
+	// The camera backs every vision pickup, so it is checked once here.
 	if cachedFS.Frame(conf.SrcCameraName) == nil {
-		cancelFunc()
 		return nil, fmt.Errorf("src_camera_name %q not found in frame system — add the camera to the frame system fragment", conf.SrcCameraName)
 	}
-	cupCameraName := conf.SrcCameraName
 
-	observeSwRes, ok := deps[toggleswitch.Named(conf.CameraObservePoseSwitcherName)]
-	if !ok {
-		cancelFunc()
-		return nil, fmt.Errorf("camera observe switch %q not found in dependencies", conf.CameraObservePoseSwitcherName)
+	// Cup pickup is always vision-driven; the glass and milk pipelines mirror it
+	// behind their feature flags.
+	cupVision, cameraObserveSw, err := visionPickup(deps, logger, "cup",
+		conf.CupVisionServiceName, conf.CameraObservePoseSwitcherName, conf.SrcCameraName)
+	if err != nil {
+		return nil, err
 	}
-	cameraObserveSw, ok := observeSwRes.(toggleswitch.Switch)
-	if !ok {
-		cancelFunc()
-		return nil, fmt.Errorf("resource %q is not a switch", conf.CameraObservePoseSwitcherName)
-	}
-	logger.Infof("cup vision pickup (vision=%q, camera=%q, observe_switch=%q)",
-		conf.CupVisionServiceName, conf.SrcCameraName, conf.CameraObservePoseSwitcherName)
 
-	// Iced coffee fetches a glass via its own vision pipeline (shares the cup
-	// camera resolved above).
 	var glassVision vision.Service
 	var glassObserveSw toggleswitch.Switch
 	if conf.CanServeIced {
-		glassVision, err = vision.FromProvider(deps, conf.GlassVisionServiceName)
-		if err != nil {
-			cancelFunc()
-			return nil, fmt.Errorf("glass vision service %q: %w", conf.GlassVisionServiceName, err)
+		if glassVision, glassObserveSw, err = visionPickup(deps, logger, "iced coffee glass",
+			conf.GlassVisionServiceName, conf.GlassObservePoseSwitcherName, conf.SrcCameraName); err != nil {
+			return nil, err
 		}
-
-		obsSwRes, ok := deps[toggleswitch.Named(conf.GlassObservePoseSwitcherName)]
-		if !ok {
-			cancelFunc()
-			return nil, fmt.Errorf("glass observe switch %q not found in dependencies", conf.GlassObservePoseSwitcherName)
-		}
-		glassObserveSw, ok = obsSwRes.(toggleswitch.Switch)
-		if !ok {
-			cancelFunc()
-			return nil, fmt.Errorf("resource %q is not a switch", conf.GlassObservePoseSwitcherName)
-		}
-		logger.Infof("iced coffee glass vision pickup (vision=%q, camera=%q, observe_switch=%q)",
-			conf.GlassVisionServiceName, conf.SrcCameraName, conf.GlassObservePoseSwitcherName)
 	}
 
-	// An iced latte additionally fetches a milk bottle from the fridge via its
-	// own vision pipeline (shares the cup camera resolved above).
 	var milkVision vision.Service
 	var milkObserveSw toggleswitch.Switch
 	if conf.CanServeIcedLatte {
-		milkVision, err = vision.FromProvider(deps, conf.MilkVisionServiceName)
-		if err != nil {
-			cancelFunc()
-			return nil, fmt.Errorf("milk vision service %q: %w", conf.MilkVisionServiceName, err)
+		if milkVision, milkObserveSw, err = visionPickup(deps, logger, "iced latte milk",
+			conf.MilkVisionServiceName, conf.MilkObservePoseSwitcherName, conf.SrcCameraName); err != nil {
+			return nil, err
 		}
-
-		milkSwRes, ok := deps[toggleswitch.Named(conf.MilkObservePoseSwitcherName)]
-		if !ok {
-			cancelFunc()
-			return nil, fmt.Errorf("milk observe switch %q not found in dependencies", conf.MilkObservePoseSwitcherName)
-		}
-		milkObserveSw, ok = milkSwRes.(toggleswitch.Switch)
-		if !ok {
-			cancelFunc()
-			return nil, fmt.Errorf("resource %q is not a switch", conf.MilkObservePoseSwitcherName)
-		}
-		logger.Infof("iced latte milk vision pickup (vision=%q, camera=%q, observe_switch=%q)",
-			conf.MilkVisionServiceName, conf.SrcCameraName, conf.MilkObservePoseSwitcherName)
 	}
 
+	// Speech is the one optional dependency a missing resource does not fail on:
+	// the service stays usable without a voice.
 	var speech resource.Resource
 	if conf.SpeechServiceName != "" {
-		speechRes, ok := deps[generic.Named(conf.SpeechServiceName)]
-		if ok {
+		if speechRes, ok := deps[generic.Named(conf.SpeechServiceName)]; ok {
 			speech = speechRes
-		}
-		if speech != nil {
 			logger.Infof("speech service %q connected", conf.SpeechServiceName)
 		} else {
 			logger.Warnf("speech service %q configured but not available", conf.SpeechServiceName)
 		}
 	}
 
-	var camStorage generic.Service
-	if conf.CamStorageMuxName != "" {
-		mux, err := generic.FromProvider(deps, conf.CamStorageMuxName)
-		if err != nil {
-			cancelFunc()
-			return nil, fmt.Errorf("cam_storage_mux_name %q: %w", conf.CamStorageMuxName, err)
-		}
-		camStorage = mux
-		logger.Infof("cam storage mux %q connected", conf.CamStorageMuxName)
+	camStorage, err := optionalGenericDep(deps, logger, "cam_storage_mux_name", conf.CamStorageMuxName, "")
+	if err != nil {
+		return nil, err
+	}
+	slackNotifier, err := optionalGenericDep(deps, logger, "slack_notifier_name", conf.SlackNotifierName, "")
+	if err != nil {
+		return nil, err
+	}
+	customerDetector, err := optionalGenericDep(deps, logger, "customer_detector_name", conf.CustomerDetectorName, " — order history recording enabled")
+	if err != nil {
+		return nil, err
+	}
+	deliveryHandler, err := optionalGenericDep(deps, logger, "delivery_handler_name", conf.DeliveryHandlerName, " — peer messaging enabled")
+	if err != nil {
+		return nil, err
 	}
 
 	var iceBoard board.Board
 	if conf.IceDispenseBoardName != "" {
-		b, err := board.FromProvider(deps, conf.IceDispenseBoardName)
-		if err != nil {
-			cancelFunc()
+		if iceBoard, err = board.FromProvider(deps, conf.IceDispenseBoardName); err != nil {
 			return nil, fmt.Errorf("ice_board_name %q: %w", conf.IceDispenseBoardName, err)
 		}
-		iceBoard = b
 		logger.Infof("ice board %q connected (pin %q)", conf.IceDispenseBoardName, conf.IceDispensePinName)
-	}
-
-	var slackNotifier generic.Service
-	if conf.SlackNotifierName != "" {
-		notifier, err := generic.FromProvider(deps, conf.SlackNotifierName)
-		if err != nil {
-			cancelFunc()
-			return nil, fmt.Errorf("slack_notifier_name %q: %w", conf.SlackNotifierName, err)
-		}
-		slackNotifier = notifier
-		logger.Infof("slack notifier %q connected", conf.SlackNotifierName)
-	}
-
-	var customerDetector generic.Service
-	if conf.CustomerDetectorName != "" {
-		detector, err := generic.FromProvider(deps, conf.CustomerDetectorName)
-		if err != nil {
-			cancelFunc()
-			return nil, fmt.Errorf("customer_detector_name %q: %w", conf.CustomerDetectorName, err)
-		}
-		customerDetector = detector
-		logger.Infof("customer detector %q connected — order history recording enabled", conf.CustomerDetectorName)
-	}
-
-	var deliveryHandler generic.Service
-	if conf.DeliveryHandlerName != "" {
-		handler, err := generic.FromProvider(deps, conf.DeliveryHandlerName)
-		if err != nil {
-			cancelFunc()
-			return nil, fmt.Errorf("delivery_handler_name %q: %w", conf.DeliveryHandlerName, err)
-		}
-		deliveryHandler = handler
-		logger.Infof("delivery handler %q connected — peer messaging enabled", conf.DeliveryHandlerName)
 	}
 
 	var pendingOrderClipsDir string
 	if conf.DataDir != "" {
 		pendingOrderClipsDir = filepath.Join(conf.DataDir, "pending-clips")
 		if err := os.MkdirAll(pendingOrderClipsDir, 0o755); err != nil {
-			cancelFunc()
 			return nil, fmt.Errorf("data_dir %q: %w", conf.DataDir, err)
 		}
 		logger.Infof("cam storage: pending-clip records will be written to %s", pendingOrderClipsDir)
@@ -383,30 +333,27 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		// Same component instance as elsewhere on the robot (not a copy).
 		sen, err := sensor.FromProvider(deps, conf.OrderSensorName)
 		if err != nil {
-			cancelFunc()
 			return nil, fmt.Errorf("order sensor %q: %w", conf.OrderSensorName, err)
 		}
 		s, ok := sen.(orderSensorSink)
 		if !ok {
-			cancelFunc()
 			return nil, fmt.Errorf("resource %q must be model viam:beanjamin:order-sensor", conf.OrderSensorName)
 		}
 		sink = s
 		logger.Infof("order sensor %q connected", conf.OrderSensorName)
 	}
 
-	// Optional usage sensor. Resolve to the same component instance on the
-	// robot; a configured-but-unresolvable name fails construction to surface
-	// misconfiguration early (an unset name simply stays nil).
 	var usageSensor sensor.Sensor
 	if conf.UsageSensorName != "" {
-		usageSensor, err = sensor.FromProvider(deps, conf.UsageSensorName)
-		if err != nil {
-			cancelFunc()
+		if usageSensor, err = sensor.FromProvider(deps, conf.UsageSensorName); err != nil {
 			return nil, fmt.Errorf("usage_sensor_name %q: %w", conf.UsageSensorName, err)
 		}
 		logger.Infof("usage sensor %q connected", conf.UsageSensorName)
 	}
+
+	// Created last: every failure above returns before there is a context to
+	// cancel, so only the two checks below have to tear it down.
+	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 
 	s := &beanjaminCoffee{
 		name:                 name,
@@ -437,7 +384,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		orderSensorSink:      sink,
 		usageSensor:          usageSensor,
 		cupVision:            cupVision,
-		cupCameraName:        cupCameraName,
+		cupCameraName:        conf.SrcCameraName,
 		glassVision:          glassVision,
 		glassObserveSw:       glassObserveSw,
 		milkVision:           milkVision,

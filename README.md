@@ -214,6 +214,7 @@ When `keepalive` is configured, the **filter** pose switcher must additionally c
   "grind_time_sec": 7.5,
   "slow_movement_vel_degs_per_sec": 25,
   "portafilter_shake_sec": 2.5,
+  "lock_overshoot_degs": 3,
   "save_motion_requests_dir": "/tmp/motion-requests",
   "order_sensor_name": "order-events",
   "cam_storage_mux_name": "video-store-mux",
@@ -273,6 +274,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `gripper_open_timeout_sec` | float  | No       | How long the portafilter handoff waits for the jaws to actually read open before giving up (default: 3). `release_filter` and `grab_filter` both open the jaws and then travel along the filter handle at claw clearance, so moving while the jaws are still closing drags the filter against the bayonet on the way out or strikes the handle on the way in. Rather than sleeping a fixed interval, both poll the real jaw position every 500ms until it clears `gripper_hold_max_pos` and fail with a "gripper did not open" error at this timeout. Raise it on a build whose jaws travel slowly — clamp force and jaw range both lengthen the open stroke. |
 | `slow_movement_vel_degs_per_sec` | float | No    | Max joint velocity (degrees/sec) used when a step has a `LinearConstraint` without explicit `MoveOptions`, as well as for pivot and circular motions. Raise carefully — precision and contact steps rely on this (default: 25). |
 | `portafilter_shake_sec`    | float  | No       | Duration in seconds of each circular shake during `unlock_portafilter`, to dislodge a stuck puck. The arm shakes twice, once at `coffee_shake` and once at `coffee_shake_left`, returning to `coffee_in` in between so both shakes run the same move out of the group head. A puck stuck on either side of the basket then gets worked from both. When set, requires both poses in the filter pose switcher; author them to lean opposite ways and keep the tilted filter clear of the group head. Defaults to 0, which skips the shakes and the travel to those poses: the arm withdraws straight from `coffee_in` to `coffee_approach`. |
+| `lock_overshoot_degs`      | float  | No       | Extra rotation applied to the `coffee_locked_final` lock pivot, unwound back onto the authored angle within the same planned trajectory. The claws slip on the portafilter handle once the bayonet is under load, so the arm has to over-rotate for the filter to seat; the unwind re-zeroes the grip, since a seated filter out-holds the claws and the handle slides back through them. Defaults to 0 (no overshoot) — tune it on the machine. |
 | `save_motion_requests_dir` | string | No       | Directory to save debugging payloads. Each plan writes a single request+response JSON (RDK's `WriteRequestAndResponseToFile`; readable back with `ReadRequestAndResponseFromFile`, and the response is absent when planning failed), nested under `tag=<order-id>/tag=step_<step>/tag=motion_<move\|pivot\|circular\|carry>/tag=planning_<success\|failure>/`. When this directory is a Viam data-synced capture dir, the data manager reads those `tag=` segments and tags each uploaded file, so plans are searchable on the data page by order, step, motion type, and planning outcome — and a failed order's Slack notification deep-links to that order's plan requests (which the reader can narrow to `planning_failure` or a specific step). Also writes a `visualization_snapshot_<timestamp>_<cup\|glass>.pb.gz` motion-tools snapshot on each cup/glass observation: the whole frame system resolved at the joint configuration the arm held when the photo was taken, plus every detection's point cloud (as captured, anchored at the camera's world pose) and the world-frame bounding box the grasp was derived from. Drag the file onto a motion-tools visualizer to replay the observation — the `visualization_snapshot` prefix is what its drag-and-drop loader keys off. |
 | `order_sensor_name`        | string | No       | Name of a `viam:beanjamin:order-sensor` sensor to notify when each order attempt completes (must appear in **depends_on**). |
 | `usage_sensor_name`        | string | No       | Name of a single sensor whose per-key counters are updated through the brew lifecycle: `regular_grinds`, `decaf_grinds`, `usage`, `cleanings`, `ice_dispenses`, `drip_tray_brews`, and `successful_consecutive_orders`. See "Usage sensor" below. |
@@ -620,7 +622,7 @@ Which poses the service can reach, and which frame each moves. The frame is the 
 | `decaf_grinder_approach`, `decaf_grinder_activate` | decaf grind | `can_serve_decaf` |
 | `tamper_approach`, `tamper_activate` | tamp | always |
 | `coffee_approach`, `coffee_in`, `coffee_locked_final` | lock the portafilter | always |
-| `coffee_shake` | dislodge a stuck puck while unlocking | `portafilter_shake_sec > 0` |
+| `coffee_shake`, `coffee_shake_left` | dislodge a stuck puck while unlocking (the two lean opposite ways) | `portafilter_shake_sec > 0` |
 | `close_to_cleaning`, `approach_to_cleaning_scrapper`, `cleaning_scrapper_active`, `approach_to_cleaning_brush`, `cleaning_brush_active` | clean | always — `rewind` recovery cleans too |
 | `purge_approach`, `purge_press` | hold the 1 CUP button to keep the machine at brew temperature | `keepalive` is configured |
 | `home` | end of cycle | always |
@@ -634,6 +636,10 @@ Which poses the service can reach, and which frame each moves. The frame is the 
 | `espresso_button_approach`/`_press`, `lungo_button_approach`/`_press` | poke the per-shot buttons | `has_separate_brew_buttons: true` |
 | `cup_under_machine_approach`, `cup_ready_for_coffee` | place and retrieve the cup | always |
 | `ice_machine_approach`, `ice_machine_dispense`, `staging_approach`, `staging`, `pour_approach`, `pour` | iced coffee | `can_serve_iced` |
+| `milk_pour_approach`, `milk_pour` | pour milk into the staged glass | `can_serve_iced_latte` |
+
+The milk bottle needs no authored pickup or return poses: it is vision-detected
+inside the fridge and set back down at the centroid it was grasped at.
 
 **`cam` frame** — the observe switches
 
@@ -641,6 +647,7 @@ Which poses the service can reach, and which frame each moves. The frame is the 
 | ---- | ------ | ------------- |
 | `cup_observe` | `camera_observe_pose_switcher_name` | always |
 | `glass_observe` | `glass_observe_pose_switcher_name` | `can_serve_iced` |
+| `milk_observe` | `milk_observe_pose_switcher_name` | `can_serve_iced_latte` |
 
 Both observe switches sweep **every** pose they carry, so additional vantages alongside these are used even though only these are required.
 
@@ -1088,19 +1095,13 @@ make orders LIMIT=20
 ```
 
 Rows are in brew order, oldest first, so `#` reads as the sequence the machine
-actually ran — which is what you want when looking for a run of failures. An
-order that isn't `order_ok` is split into **FAILED** (a genuine fault) and
-**CANCELLED** (an operator stopped it), since the two mean very different things
-when reading a bad afternoon. A `—` customer is an order placed outside the
-kiosk, which has no name attached.
+actually ran. An order that isn't `order_ok` is split into **FAILED** (a genuine
+fault) and **CANCELLED** (an operator stopped it). A `—` customer is an order
+placed outside the kiosk, which has no name attached. Sub-second durations are
+printed in milliseconds rather than rounded to `0s`, since the instant failures
+are usually the interesting ones.
 
-Durations below a second are printed in milliseconds rather than rounded to
-`0s`: an order that died in 126ms and one that ran a full second are very
-different diagnostics, and the instant ones are usually the interesting
-failures.
-
-The order ID is a column rather than an option, because it is what makes a row
-actionable — copy one straight into `fetch-order`:
+Copy an order ID straight into `fetch-order`:
 
 ```bash
 make orders LIMIT=50 ORDERS_FLAGS="--errors"
@@ -1146,19 +1147,16 @@ plans / 80 MB, and the directories are gitignored:
 ```
 
 The timestamp is the machine's **local** clock, not UTC, so these names do not
-line up directly with the UTC times in the `order-events` sensor readings.
+line up directly with the UTC times in the `order-events` sensor readings. The
+leading index makes alphabetical order execution order, so the directory reads
+top-to-bottom as the order's motion history.
 
-The leading index and the timestamp both make alphabetical order the order the
-plans were executed in, so the directory reads top-to-bottom as the order's
-motion history — which is what you want when hunting the plan that preceded a
-failure.
-
-Each file still round-trips through RDK's `ReadRequestAndResponseFromFile`. Note
-that means **two concatenated JSON documents** per file — the request
-(`frame_system`, `goals`, `start_state`, `obstacles_in_world_frame`,
-`constraints`, `planner_options`) followed by the response (`path`,
-`trajectory`), which is absent when planning failed. Plain `jq .` fails on them
-with "Extra data"; use `jq -s` to read the pair as an array.
+Each file round-trips through RDK's `ReadRequestAndResponseFromFile`, which means
+**two concatenated JSON documents** per file — the request (`frame_system`,
+`goals`, `start_state`, `obstacles_in_world_frame`, `constraints`,
+`planner_options`) followed by the response (`path`, `trajectory`), absent when
+planning failed. Plain `jq .` fails on them with "Extra data"; use `jq -s` to
+read the pair as an array.
 
 Add `WITH_VIDEO=1` for the camera clips, pass other flags through
 `FETCH_FLAGS`, or call the CLI directly:

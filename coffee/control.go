@@ -17,22 +17,18 @@ import (
 // left the queue paused, releases the pause so processQueue starts the next
 // order.
 //
-// The rebuild is unconditional because every idle state can hold mid-cycle
-// mutations — a filter frame reparented to world, a held cup geometry, a staged
-// glass obstacle — that no longer describe the machine an operator has since
-// tidied up by hand or with a rewind. A cancel leaves them behind, and so does
-// an order that fails on its own: that path never pauses the queue, and
-// refreshFrameSystemIfClean declines to rebuild for the next order precisely
-// because those mutations are present, so a stale world would otherwise be
-// inherited by every order that follows the failure. cachedFS may only be
-// swapped while no sequence owns the arm, hence the running gate; once the
-// signal lands the queue goroutine may start planning immediately.
+// The rebuild is unconditional: any idle state can hold mid-cycle mutations (a
+// reparented filter frame, a held cup geometry, a staged glass) that no longer
+// describe a machine an operator has since tidied up. An order that fails on its
+// own leaves them behind without pausing the queue, and refreshFrameSystemIfClean
+// declines to rebuild precisely because they are present — so without this every
+// order after a failure would inherit the stale world. The running gate is
+// required because cachedFS may only be swapped while no sequence owns the arm.
 //
-// Two things the rebuild does not do. The recorded fridge-door angle survives
-// it — only reset_world can assert the door is shut. And it drops the modeled
-// contents of the gripper without opening the gripper, so an operator who has
-// manually stepped execute_action into a held portafilter or cup wants rewind,
-// which physically lets go, rather than proceed.
+// It does not clear the recorded fridge-door angle (only reset_world may assert
+// the door is shut), and it forgets the gripper's modeled contents without
+// opening the gripper — an operator holding something manually wants rewind,
+// which physically lets go.
 func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, error) {
 	if !s.running.CompareAndSwap(false, true) {
 		return nil, errors.New("proceed: a sequence is still running — wait for it to stop, or cancel it first")
@@ -258,7 +254,20 @@ func (s *beanjaminCoffee) rewind(ctx context.Context) (map[string]any, error) {
 		return nil, fmt.Errorf("rewind: %w", err)
 	}
 
-	recovered := false
+	// Both recovery paths end the same way.
+	cleanAndHome := func() error {
+		s.setStep(stepCleaning)
+		if err := s.cleanPortafilter(ctx, cancelCtx); err != nil {
+			return fmt.Errorf("recovery clean_portafilter: %w", err)
+		}
+		s.setStep(stepFinishingUp)
+		if err := s.executeStep(ctx, cancelCtx, Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw}); err != nil {
+			return fmt.Errorf("recovery home: %w", err)
+		}
+		return nil
+	}
+
+	recovered := true
 	switch {
 	case s.portafilterInMachine.Load():
 		logger.Infof("rewind: portafilter is in the machine — running recovery (grab → unlock → clean → home)")
@@ -270,30 +279,18 @@ func (s *beanjaminCoffee) rewind(ctx context.Context) (map[string]any, error) {
 		if err := s.unlockPortaFilter(ctx, cancelCtx); err != nil {
 			return nil, fmt.Errorf("rewind: recovery unlock_portafilter: %w", err)
 		}
-		s.setStep(stepCleaning)
-		if err := s.cleanPortafilter(ctx, cancelCtx); err != nil {
-			return nil, fmt.Errorf("rewind: recovery clean_portafilter: %w", err)
-		}
-		s.setStep(stepFinishingUp)
-		homeStep := Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw}
-		if err := s.executeStep(ctx, cancelCtx, homeStep); err != nil {
-			return nil, fmt.Errorf("rewind: recovery home: %w", err)
+		if err := cleanAndHome(); err != nil {
+			return nil, fmt.Errorf("rewind: %w", err)
 		}
 		s.portafilterInMachine.Store(false)
-		recovered = true
 	case s.portafilterHasGrounds.Load():
 		logger.Infof("rewind: portafilter has grounds — running recovery (clean → home)")
-		s.setStep(stepCleaning)
-		if err := s.cleanPortafilter(ctx, cancelCtx); err != nil {
-			return nil, fmt.Errorf("rewind: recovery clean_portafilter: %w", err)
-		}
-		s.setStep(stepFinishingUp)
-		homeStep := Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw}
-		if err := s.executeStep(ctx, cancelCtx, homeStep); err != nil {
-			return nil, fmt.Errorf("rewind: recovery home: %w", err)
+		if err := cleanAndHome(); err != nil {
+			return nil, fmt.Errorf("rewind: %w", err)
 		}
 		// cleanPortafilter already cleared portafilterHasGrounds on success.
-		recovered = true
+	default:
+		recovered = false
 	}
 
 	if err := s.resetFrameSystem(ctx); err != nil {

@@ -36,6 +36,74 @@ var defaultApproachConstraint = &StepLinearConstraint{
 	OrientationToleranceDegs: 2,
 }
 
+// mergedCancelContext derives a context cancelled by either ctx or the shared
+// cancelCtx, so an operator cancel interrupts planning and execution alike. The
+// returned func must be deferred.
+func mergedCancelContext(ctx, cancelCtx context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(cancelCtx, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
+}
+
+// planMotion plans req, persisting the request/response pair under label for
+// offline debugging.
+//
+// Planning failures are wrapped in errMotionPlanning: a plan that never ran
+// leaves the arm where it stood, which is what lets callers with a recovery path
+// (dynamic pickup falling back to another candidate, placeHeldInServingArea
+// trying the next slot) tell them apart from execution errors via errors.Is.
+func (s *beanjaminCoffee) planMotion(ctx context.Context, req *armplanning.PlanRequest, label string) (motionplan.Plan, error) {
+	plan, _, err := armplanning.PlanMotion(ctx, s.activeOrderLogger(), req)
+	s.savePlanRequestAndResponse(req, plan, label, err)
+	if err != nil {
+		return nil, fmt.Errorf("%w (%s): %w", errMotionPlanning, label, err)
+	}
+	return plan, nil
+}
+
+// armInputs extracts a plan's joint waypoints for the arm frame — not the
+// end-effector component name the goal poses are commanded against.
+func (s *beanjaminCoffee) armInputs(plan motionplan.Plan, label string) ([][]referenceframe.Input, error) {
+	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
+	if err != nil {
+		return nil, fmt.Errorf("get frame inputs from %s plan: %w", label, err)
+	}
+	return positions, nil
+}
+
+// planTrajectory plans req and returns the arm joint waypoints to execute.
+func (s *beanjaminCoffee) planTrajectory(ctx context.Context, req *armplanning.PlanRequest, label string) ([][]referenceframe.Input, error) {
+	plan, err := s.planMotion(ctx, req, label)
+	if err != nil {
+		return nil, err
+	}
+	return s.armInputs(plan, label)
+}
+
+// worldGoals turns poses authored in refFrame into plan states commanding
+// componentName, each transformed into the world frame.
+func worldGoals(
+	fs *referenceframe.FrameSystem,
+	inputs *referenceframe.LinearInputs,
+	refFrame, componentName string,
+	poses []spatialmath.Pose,
+) ([]*armplanning.PlanState, error) {
+	goals := make([]*armplanning.PlanState, 0, len(poses))
+	for _, pose := range poses {
+		tf, err := fs.Transform(inputs, referenceframe.NewPoseInFrame(refFrame, pose), referenceframe.World)
+		if err != nil {
+			return nil, fmt.Errorf("transform waypoint to world: %w", err)
+		}
+		goals = append(goals, armplanning.NewPlanState(
+			referenceframe.FrameSystemPoses{componentName: tf.(*referenceframe.PoseInFrame)}, nil,
+		))
+	}
+	return goals, nil
+}
+
 // freeMoveCollisionBufferMM is the clearance the planner must keep between any
 // two geometries that did not begin the motion in collision. It applies to free
 // traverses — both the ordinary direct plans and the no-spill level carry — but
@@ -79,11 +147,8 @@ func (s *beanjaminCoffee) slowMovementMoveOptions() *arm.MoveOptions {
 
 // moveToPose fetches a named pose and moves to it.
 func (s *beanjaminCoffee) moveToPose(ctx, cancelCtx context.Context, step Step) error {
-	// Merge both contexts so cancellation from either stops planning and execution.
-	ctx, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(cancelCtx, func() { cancel() })
-	defer stop()
-	defer cancel()
+	ctx, done := mergedCancelContext(ctx, cancelCtx)
+	defer done()
 
 	pd, err := s.fetchPose(ctx, step.PoseSwitch, step.PoseName)
 	if err != nil {
@@ -613,21 +678,14 @@ func (s *beanjaminCoffee) planToRawPose(
 		Constraints:    constraints,
 		PlannerOptions: plannerOpts,
 	}
-	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
-	s.savePlanRequestAndResponse(req, plan, "move", err)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errMotionPlanning, err)
-	}
-	return plan, nil
+	return s.planMotion(ctx, req, "move")
 }
 
 // executePlan sends a planned trajectory to the arm.
 func (s *beanjaminCoffee) executePlan(ctx context.Context, plan motionplan.Plan, lc *StepLinearConstraint, moveOpts *StepMoveOptions) error {
-	// Extract joint positions for the arm frame (not the end-effector component
-	// name used for the goal pose) and send to arm.
-	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
+	positions, err := s.armInputs(plan, "move")
 	if err != nil {
-		return fmt.Errorf("get frame inputs from plan: %w", err)
+		return err
 	}
 	opts := buildMoveOptions(moveOpts)
 	if opts == nil && lc != nil {
@@ -639,7 +697,7 @@ func (s *beanjaminCoffee) executePlan(ctx context.Context, plan motionplan.Plan,
 // planEndArmInputs returns the arm's joint configuration at the end of a plan's
 // trajectory. Errors on an empty trajectory.
 func (s *beanjaminCoffee) planEndArmInputs(plan motionplan.Plan) ([]referenceframe.Input, error) {
-	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
+	positions, err := s.armInputs(plan, "move")
 	if err != nil {
 		return nil, err
 	}
@@ -665,11 +723,8 @@ func (s *beanjaminCoffee) withArmInputs(base referenceframe.FrameSystemInputs, a
 // in one MoveThroughJointPositions call.
 func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step) error {
 	logger := s.activeOrderLogger()
-	// Merge both contexts so cancellation from either stops planning and execution.
-	ctx, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(cancelCtx, func() { cancel() })
-	defer stop()
-	defer cancel()
+	ctx, done := mergedCancelContext(ctx, cancelCtx)
+	defer done()
 
 	startPD, err := s.fetchPose(ctx, step.PoseSwitch, step.PivotFromPose)
 	if err != nil {
@@ -746,40 +801,21 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	logger.Infof("pivot %q → %q: %d waypoints (%.1f°/step, %.1f° overshoot)",
 		step.PivotFromPose, step.PoseName, len(poses), step.PivotDegreesPerStep, step.PivotExtraDegrees)
 
-	goals := make([]*armplanning.PlanState, 0, len(poses))
-	for _, pose := range poses {
-		pif := referenceframe.NewPoseInFrame(startPD.refFrame, pose)
-		tf, err := fs.Transform(linearInputs, pif, referenceframe.World)
-		if err != nil {
-			return fmt.Errorf("transform pivot waypoint to world: %w", err)
-		}
-		goalPose := tf.(*referenceframe.PoseInFrame)
-		goals = append(goals, armplanning.NewPlanState(
-			referenceframe.FrameSystemPoses{startPD.componentName: goalPose}, nil,
-		))
+	goals, err := worldGoals(fs, linearInputs, startPD.refFrame, startPD.componentName, poses)
+	if err != nil {
+		return err
 	}
 
-	// Build constraints.
-	constraints := buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.appendHeldItemCollisions(step.AllowedCollisions)))
-
-	// Plan all waypoints in a single call.
-	req := &armplanning.PlanRequest{
+	// Every waypoint is planned in a single call and run as one trajectory, so
+	// the arm never stops partway through the arc.
+	positions, err := s.planTrajectory(ctx, &armplanning.PlanRequest{
 		FrameSystem: fs,
 		Goals:       goals,
 		StartState:  armplanning.NewPlanState(nil, fsInputs),
-		Constraints: constraints,
-	}
-	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
-	s.savePlanRequestAndResponse(req, plan, "pivot", err)
+		Constraints: buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.appendHeldItemCollisions(step.AllowedCollisions))),
+	}, "pivot")
 	if err != nil {
-		return fmt.Errorf("plan pivot motion: %w", err)
-	}
-
-	// Execute the full trajectory in one call — extract joint positions for the
-	// arm frame, not the end-effector component name used for goal poses.
-	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
-	if err != nil {
-		return fmt.Errorf("get frame inputs from pivot plan: %w", err)
+		return err
 	}
 	opts := buildMoveOptions(step.MoveOptions)
 	if opts == nil {
@@ -808,11 +844,8 @@ func computeCircularPoses(centerPose spatialmath.Pose, radiusMm float64, pointsP
 // until the configured duration is exceeded.
 func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, step Step) error {
 	logger := s.activeOrderLogger()
-	// Merge both contexts so cancellation from either stops planning and execution.
-	ctx, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(cancelCtx, func() { cancel() })
-	defer stop()
-	defer cancel()
+	ctx, done := mergedCancelContext(ctx, cancelCtx)
+	defer done()
 
 	centerPD, err := s.fetchPose(ctx, step.PoseSwitch, step.PoseName)
 	if err != nil {
@@ -834,37 +867,19 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 	}
 	linearInputs := fsInputs.ToLinearInputs()
 
-	// Build goal states for one revolution.
-	goals := make([]*armplanning.PlanState, 0, len(poses))
-	for _, pose := range poses {
-		pif := referenceframe.NewPoseInFrame(centerPD.refFrame, pose)
-		tf, err := fs.Transform(linearInputs, pif, referenceframe.World)
-		if err != nil {
-			return fmt.Errorf("transform circular waypoint to world: %w", err)
-		}
-		goalPose := tf.(*referenceframe.PoseInFrame)
-		goals = append(goals, armplanning.NewPlanState(
-			referenceframe.FrameSystemPoses{centerPD.componentName: goalPose}, nil,
-		))
+	// One revolution is planned once and replayed until the duration is up.
+	goals, err := worldGoals(fs, linearInputs, centerPD.refFrame, centerPD.componentName, poses)
+	if err != nil {
+		return err
 	}
-
-	constraints := buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.appendHeldItemCollisions(step.AllowedCollisions)))
-
-	req := &armplanning.PlanRequest{
+	positions, err := s.planTrajectory(ctx, &armplanning.PlanRequest{
 		FrameSystem: fs,
 		Goals:       goals,
 		StartState:  armplanning.NewPlanState(nil, fsInputs),
-		Constraints: constraints,
-	}
-	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
-	s.savePlanRequestAndResponse(req, plan, "circular", err)
+		Constraints: buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.appendHeldItemCollisions(step.AllowedCollisions))),
+	}, "circular")
 	if err != nil {
-		return fmt.Errorf("plan circular motion: %w", err)
-	}
-
-	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
-	if err != nil {
-		return fmt.Errorf("get frame inputs from circular plan: %w", err)
+		return err
 	}
 
 	// Execute revolutions until the duration is exceeded.
@@ -896,17 +911,13 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 // noSpillOrientationToleranceDegs bounds what it may do in the gaps that remain.
 const defaultCarryWaypointSpacingMm = 100.0
 
-// noSpillOrientationToleranceDegs caps how far the carried container's
-// orientation may stray *between* waypoints. noSpillGoalCloud shapes only the
-// goals, and denser waypoints shorten but never close the unconstrained spans
-// between them; an OrientationConstraint is checked along the whole path.
+// noSpillOrientationToleranceDegs caps the carried container's orientation
+// *between* waypoints: noSpillGoalCloud shapes only the goals, and denser
+// waypoints shorten but never close the unconstrained spans between them.
 //
-// RDK scores a candidate as free while every orientation-vector component stays
-// between the segment's two endpoint orientations, and otherwise measures the
-// deviation from whichever endpoint is nearer. So this is the ceiling on an
-// excursion *off* the segment's own interpolation — not a bound on the commanded
-// rotation, which on a long carry sweeps far more than this about the
-// container's vertical axis.
+// RDK measures deviation from the segment's own endpoint-to-endpoint
+// interpolation, so this bounds the excursion off that path — not the commanded
+// rotation, which on a long carry sweeps far more about the container's axis.
 const noSpillOrientationToleranceDegs = 50.0
 
 // withNoSpillOrientationConstraint adds the carry's path orientation bound,
@@ -921,34 +932,25 @@ func withNoSpillOrientationConstraint(constraints *motionplan.Constraints) *moti
 	return constraints
 }
 
-// noSpillGoalCloud loosens the goal at each intermediate carry waypoint so IK
-// has room to solve while still keeping the held container close to level. A
-// PoseCloud only ever relaxes a goal — a candidate inside the cloud scores as a
-// perfect match, otherwise the standard weighted metric applies.
+// noSpillGoalCloud relaxes the goal at each intermediate carry waypoint so IK
+// has room to solve while the held container stays close to level. The final
+// waypoint is pinned exactly (see carryHeldLevel), so this applies only to
+// in-transit goals.
 //
-// Position and orientation are treated very differently on purpose. Translational
-// slack (X/Y/Z, mm) can't tip the drink, so it is opened up generously to give
-// the planner reach; only the orientation leeways guard against sloshing, so they
-// stay tight — OX/OY allow a small tilt of the container's axis, Theta a wider
-// twist about it. The final waypoint (the true destination) is pinned exactly with
-// no cloud (see carryHeldLevel), so this slack only ever applies to the
-// intermediate, in-transit goals.
+// Translation is generous because slack in X/Y/Z can't tip a drink; only the
+// orientation leeways guard against sloshing.
 //
-// Every leeway is measured in the commanded frame's own axes — PoseInCloud tests
-// the pose between goal and candidate — so which physical degree of freedom each
-// one opens depends on how that frame is oriented. The split above holds because
-// carryHeldLevel commands the held-item frame, whose +Z is the container's
-// vertical axis (heldItemFramePose). With nothing tracked it falls back to
-// grip-point, whose +Z is the tool axis: there Theta is a roll that tips a
-// container held crosswise, so the leeways stop meaning what they say. Tune on
-// hardware before changing them.
+// Leeways are measured in the commanded frame's own axes, so this is only
+// correct because carryHeldLevel commands the held-item frame, whose +Z is the
+// container's vertical axis (heldItemFramePose). Untracked it falls back to
+// grip-point, whose +Z is the tool axis — there Theta is a roll that tips a
+// container held crosswise. Tune on hardware before changing.
 var noSpillGoalCloud = &referenceframe.PoseCloud{
 	X: 100, Y: 100, Z: 100,
-	// OX/OY of 0.1 cap the container axis's off-vertical tilt at arcsin(0.1)≈5.7°
-	// per axis (≈8.1° along the OX+OY diagonal, since the leeways apply
-	// independently), which sits well below a full cup's static spill angle. Theta
-	// stays wide because a twist about a symmetric cup's own axis can't spill it,
-	// and narrowing it only starves IK.
+	// OX/OY of 0.1 cap off-vertical tilt at arcsin(0.1)≈5.7° per axis (≈8.1°
+	// along the diagonal, as the leeways apply independently) — well below a full
+	// cup's static spill angle. Theta stays wide: a twist about a symmetric cup's
+	// own axis can't spill it, and narrowing it only starves IK.
 	OX: 0.1, OY: 0.1, OZ: 0.05, Theta: 90,
 }
 
@@ -1032,22 +1034,16 @@ func carrySweepFractions(cumulative []float64, segments int) []float64 {
 // startPose to endPose, spaced at most spacingMm apart along the path.
 //
 // The container is swept around the world Z axis — the arm's own base axis —
-// rather than dragged along the chord between the endpoints. A straight line
-// between two points at similar reach cuts inward, toward the base and through
-// the machine the arm is standing at: the glass placement's chord passes 115 mm
-// nearer the axis than either of its own endpoints. Interpolating radius,
-// azimuth and height separately keeps the container between the two endpoint
-// radii for the whole traverse, at the cost of a few percent of path length.
+// rather than dragged along the chord between the endpoints, which would cut
+// inward through the machine the arm stands at (the glass placement's chord
+// passes 115 mm nearer the axis than either endpoint). Interpolating radius,
+// azimuth and height separately holds the container between the two endpoint
+// radii, at the cost of a few percent of path length.
 //
-// Orientation still slerps between the endpoint poses; only the position moves
-// onto the arc. The two stay in step because both take the short way round, and
-// because both are driven by the same distance-along-the-path parameter — which
-// on a straight carry is what the plain interpolation fraction already was.
-//
-// Equal azimuths make the sweep the straight line already (a radius-and-height
-// interpolation along one half-plane), so that case needs no special handling.
-// An endpoint on the Z axis does, since its azimuth is meaningless — see
-// minCarrySweepRadiusMm.
+// Orientation still slerps between the endpoints; both it and the position take
+// the short way round and share one distance-along-path parameter, so they stay
+// in step. Equal azimuths degenerate the sweep into the straight line on their
+// own; an endpoint on the Z axis does not — see minCarrySweepRadiusMm.
 func computeLevelCarryWaypoints(startPose, endPose spatialmath.Pose, spacingMm float64) []spatialmath.Pose {
 	startPt := startPose.Point()
 	endPt := endPose.Point()
@@ -1092,19 +1088,15 @@ func computeLevelCarryWaypoints(startPose, endPose spatialmath.Pose, spacingMm f
 	return poses
 }
 
-// carryGoalForMoveFrame converts dest — a pose authored for dest.componentName,
-// whatever component the pose switch is configured to command — into the world
-// pose moveFrame must reach for that component to land on dest.
+// carryGoalForMoveFrame converts dest — a pose authored for dest.componentName —
+// into the world pose moveFrame must reach for that component to land on dest.
+// Returns dest's world pose unchanged when moveFrame is the authored component.
 //
 // The two frames are rigidly linked but neither coincident nor co-oriented:
-// held-item hangs off the claws, which sit short of the grip point along the tool
-// axis, and it is rotated onto the container's axes (heldItemFramePose).
-// Commanding the container straight at a grip-point goal would leave the gripper
-// past it and mis-rotated — the offset alone is enough to trip executePivot's
-// start-position check on the step that follows the carry. Composing the full
-// relative pose lands the authored component exactly on dest whatever the
-// held-item frame's orientation. Returns dest's world pose unchanged when the
-// moving frame is the authored component itself.
+// held-item hangs off the claws, short of the grip point along the tool axis and
+// rotated onto the container's axes (heldItemFramePose). Commanding the container
+// straight at a grip-point goal leaves the gripper past it and mis-rotated — the
+// offset alone trips executePivot's start-position check on the following step.
 func carryGoalForMoveFrame(
 	fs *referenceframe.FrameSystem,
 	inputs *referenceframe.LinearInputs,
@@ -1131,31 +1123,19 @@ func carryGoalForMoveFrame(
 }
 
 // carryHeldLevel carries the held container from its current pose to dest along
-// a sweep around the arm's base axis, stepping through waypoints (one per
-// defaultCarryWaypointSpacingMm — see computeLevelCarryWaypoints for why the path
-// is not the straight line). Each waypoint's pose is interpolated from the
-// container's current (upright) pose to dest, so the orientation eases from
-// upright to the approach pose while a goal pose cloud keeps it close to level —
-// so the drink doesn't slosh.
+// a sweep around the arm's base axis (see computeLevelCarryWaypoints for why the
+// path is not the straight line), stepping through waypoints one per
+// defaultCarryWaypointSpacingMm. Each waypoint interpolates from the container's
+// current upright pose to dest, so the orientation eases onto the approach while
+// noSpillGoalCloud keeps it near level and noSpillOrientationToleranceDegs stops
+// the trajectory bowing away between goals — so the drink doesn't slosh.
 //
-// The goals command the held-item frame (the container) rather than the gripper,
-// so the upright goal and the relaxing pose cloud stay expressed about the
-// container itself: that frame's +Z is the container's vertical axis
-// (heldItemFramePose), which is what makes noSpillGoalCloud's tilt leeways bound
-// the drink's tilt. That frame hangs off the claws and is neither coincident nor
+// The goals command the held-item frame rather than the gripper, because
+// noSpillGoalCloud's tilt leeways only bound the drink's tilt when expressed
+// about the container's own axis. That frame is neither coincident nor
 // co-oriented with the one dest is authored for, so dest is converted into it
-// (carryGoalForMoveFrame) before planning. When no item is attached (tracking off, or a static pickup
-// left nothing cached) it falls back to the gripper frame and that conversion is
-// a no-op.
-//
-// Each goal carries noSpillGoalCloud to loosen the orientation, and the whole
-// path carries noSpillOrientationToleranceDegs so the trajectory cannot bow away
-// from the container's orientation between goals; held-item
-// self-collisions are injected so the tracked geometry still routes around
-// obstacles, and any caller-supplied allowedCollisions are merged in alongside
-// them. moveOpts, when non-nil, sets the execution speed (otherwise the arm's
-// default). Planning failures are wrapped in errMotionPlanning so
-// placeHeldInServingArea can fall through to the next slot.
+// (carryGoalForMoveFrame); with nothing attached it falls back to the gripper
+// frame and the conversion is a no-op.
 func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
 	logger := s.activeOrderLogger()
 	fs, fsInputs, err := s.currentInputs(ctx)
@@ -1211,22 +1191,15 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, al
 	constraints := withNoSpillOrientationConstraint(
 		buildConstraints(nil, s.filterFakeModeCollisions(s.appendHeldItemCollisions(allowedCollisions))))
 
-	req := &armplanning.PlanRequest{
+	positions, err := s.planTrajectory(ctx, &armplanning.PlanRequest{
 		FrameSystem:    fs,
 		Goals:          goals,
 		StartState:     armplanning.NewPlanState(nil, fsInputs),
 		Constraints:    constraints,
 		PlannerOptions: freeMovePlannerOptions(),
-	}
-	plan, _, err := armplanning.PlanMotion(ctx, logger, req)
-	s.savePlanRequestAndResponse(req, plan, "carry", err)
+	}, "carry")
 	if err != nil {
-		return fmt.Errorf("%w: %w", errMotionPlanning, err)
-	}
-
-	positions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
-	if err != nil {
-		return fmt.Errorf("get frame inputs from carry plan: %w", err)
+		return err
 	}
 	return s.arm.MoveThroughJointPositions(ctx, positions, buildMoveOptions(moveOpts), nil)
 }
