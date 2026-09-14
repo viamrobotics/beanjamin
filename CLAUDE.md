@@ -6,10 +6,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `viam:beanjamin` is a Viam module that automates a Viam OK-1 arm to prepare espresso. The repo ships two deployables:
 
-- A Go **Viam module** (`cmd/module/main.go`) registering seven models — see `meta.json` and `README.md` for the full list and per-model configuration docs. The headline model is `viam:beanjamin:coffee` (generic service) which orchestrates the full brew cycle.
+- A Go **Viam module** (`cmd/module/main.go`) registering six models — see `meta.json` and `README.md` for the full list and per-model configuration docs. The headline model is `viam:beanjamin:coffee` (generic service) which orchestrates the full brew cycle.
 - A Next.js **web app** (`web-app/`) that exposes the customer-facing ordering UI and talks to the machine via `@viamrobotics/sdk`. Packaged as its own Viam module via `web-app-module`.
+- A **CLI** (`cmd/cli/`) for reading a machine's brew history off the data page — `make orders` and `make fetch-order`, documented in the README's Development section.
 
-Each model lives in its own package. The coffee service is `coffee/` (`package coffee`), whose files split by concern — lifecycle and command API (`module.go`, `config.go`, `api.go`, `control.go`), the brew cycle and serving (`espresso.go`, `brew_steps.go`, `serving.go`, `iced.go`, `queue.go`, `troubleshooting.go`), motion planning (`motion.go`, `held_geometry.go`, `collisions.go`, `joints.go`), vision-driven pickup and serving-area placement (`cup_pickup.go`, `served_shelf.go`, `gripper_state.go`), and peripheral integrations (`greetings.go`, `cam_storage.go`, `slack_notify.go`, `sensor_usage.go`, `order_sensor.go` — the order-sensor model is bundled here because it shares the coffee `Order` type). The remaining models are sibling packages: `maintenancesensor/`, `customerdetector/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`. There is no top-level Go package; `cmd/module/main.go` registers every model.
+Each model lives in its own package. The coffee service is `coffee/` (`package coffee`), whose files split by concern:
+
+| Concern | Files |
+| --- | --- |
+| Lifecycle and command API | `module.go`, `config.go`, `api.go`, `control.go` |
+| Brew cycle | `espresso.go`, `brew_steps.go`, `queue.go`, `troubleshooting.go` |
+| Serving and drink variants | `serving.go`, `served_shelf.go`, `iced.go`, `milk.go`, `door.go` |
+| Motion planning | `motion.go`, `held_geometry.go`, `collisions.go`, `joints.go`, `resting_surface.go` |
+| Vision-driven pickup | `cup_pickup.go`, `gripper_state.go`, `detection_snapshot.go` |
+| Peripheral integrations | `greetings.go`, `cam_storage.go`, `slack_notify.go`, `sensor_usage.go`, `order_sensor.go`, `delivery_messaging.go`, `fault_alert.go`, `keepalive.go` |
+
+The order-sensor model is bundled in `coffee/` because it shares the coffee `Order` type. The remaining models are sibling packages: `maintenancesensor/`, `customerdetector/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`. There is no top-level Go package; `cmd/module/main.go` registers every model.
 
 ## Common commands
 
@@ -50,7 +62,7 @@ Build the bundled web-app Viam module from repo root: `make web-app-module` (run
 
 1. `DoCommand{"prepare_order": ...}` enqueues an `Order` into `OrderQueue` (`coffee/queue.go`).
 2. A background queue consumer (`beanjaminCoffee.processQueue`) pops one order at a time and invokes `prepareDrink`.
-3. `prepareDrink` advances through 9 steps; each step sets a label via `setStep(...)` that's visible through `get_queue` and the order sensor. Steps are implemented as small methods (`grindCoffee`, `tampGround`, `brew`, `cleanPortafilter`, etc. in `coffee/brew_steps.go`) that each execute a list of `Step` structs through `executeStep` (`coffee/espresso.go`), which drives the motion layer in `coffee/motion.go`.
+3. `prepareDrink` advances through 9 phases, each run by its `runPhase` closure, which publishes the step label (visible through `get_queue` and the order sensor) and opens a trace span. The phases are small methods (`grindCoffee`, `tampGround`, `brew`, `cleanPortafilter`, etc. in `coffee/brew_steps.go`) that each execute a list of `Step` structs through `executeStep` (`coffee/espresso.go`), which drives the motion layer in `coffee/motion.go`.
 4. On completion/failure, the order is moved to `recent` for `RecentDisplayDuration` (15s) so the UI can render "Ready!" without diffing polls.
 5. A single reading per attempt is pushed to the optional order-sensor sink, and an async clip save is requested on the optional `cam_storage_mux_name` video-store multiplexer.
 
@@ -58,7 +70,9 @@ Build the bundled web-app Viam module from repo root: `make web-app-module` (run
 
 ### Motion layer
 
-`coffee/motion.go` wraps Viam's motion-planning APIs. Poses are resolved through `multi-poses-execution-switch` components (one for the filter, one for the claws, configured via `pose_switcher_name` / `claws_pose_switcher_name`). Each `Step` declares a pose name, optional linear constraint, optional circular motion (used for grinding/cleaning), and optional allowed collisions for contact phases. `save_motion_requests_dir`, if set, dumps motion-request JSON per plan for offline debugging. Motion planning also attempts to stream the frame system to a locally-running motion-tools viz server (v2, `localhost:3030`) before each plan; if none is running, viz self-disables after a few consecutive draw failures.
+`coffee/motion.go` wraps Viam's motion-planning APIs. Poses are resolved through `multi-poses-execution-switch` components (one for the filter, one for the claws, configured via `pose_switcher_name` / `claws_pose_switcher_name`). Each `Step` declares a pose name, optional linear constraint, optional circular motion (used for grinding/cleaning), and optional allowed collisions for contact phases.
+
+Every plan goes through `planMotion` (which also persists the request/response pair and tags planning failures with `errMotionPlanning`) and, for the paths that execute straight away, `planTrajectory`. Put anything that must apply to all four motion kinds — direct move, pivot, circular, no-spill carry — there rather than in the individual callers. `save_motion_requests_dir`, if set, dumps motion-request JSON per plan for offline debugging. Motion planning also attempts to stream the frame system to a locally-running motion-tools viz server (v2, `localhost:3030`) before each plan; if none is running, viz self-disables after a few consecutive draw failures.
 
 ### Config pattern
 
