@@ -576,7 +576,34 @@ The arm never presses POWER — per the manual, pressing POWER while the machine
 Water from each purge goes to the drip tray and is counted in the `drip_tray_brews` usage-sensor field, so empty the tray on the counter rather than on brew count alone.
 ### Daily order summary in Slack
 
-Once `slack_notifier_name` and `order_sensor_name` are both configured, `send_daily_summary` posts a Block Kit digest of the last 24 hours of orders to the same channel the failure alerts go to: how many were attempted, succeeded, faulted and cancelled by an operator, the success rate, average and total brew time, a per-drink breakdown with the decaf count, and — when anything failed — a tally of which steps faulted and how often. A quiet 24 hours still posts a short "No orders in the last 24 hours" line, which is what keeps a quiet channel distinguishable from a broken digest.
+Once `slack_notifier_name` and `order_sensor_name` are both configured, `send_daily_summary` posts a Block Kit digest of the last 24 hours of orders to the same channel the failure alerts go to. A quiet 24 hours still posts a short "No orders in the last 24 hours" line, which is what keeps a quiet channel distinguishable from a broken digest.
+
+The message reads:
+
+```
+:coffee: Orders in the last 24 hours
+
+:clock3: 17m20s brewing  ·  :white_check_mark: 6/8 succeeded  ·  :coffee: 8 orders
+
+Succeeded                 6
+Faulted                   1
+Cancelled by operator     1
+───────────────────────────
+Total                     8
+
+:sleeping: 1 decaf  ·  :fire: 12 in a row
+
+:coffee: *Drinks*
+• espresso — 4 (avg 2m12s)
+• iced_latte — 2 (avg 4m10s)
+
+:x: *Faults by step*
+• Locking portafilter — 1
+
+:clock3: Sun 5:30 PM – Mon 5:30 PM EDT · order a coffee
+```
+
+The headline line carries the three numbers worth having in a notification preview, each with an emoji the sections below reuse for the same idea — `:clock3:` for time, `:coffee:` for drinks, `:x:` for faults. The outcome counts are a fixed-width table in a code fence: Slack has no table block that renders reliably across clients, and a code fence is the only place it honours column alignment. Emoji do not render inside one, which is why they sit on the line above rather than in the rows. Every digest links the [ordering app](https://beanjamin_viam.viamapplications.com/) in its footer.
 
 The window is a rolling 24 hours ending when the digest runs, not a calendar day. Run the job once a day and consecutive digests tile exactly: every order is reported once, evening orders included, and none is counted twice. A calendar-day window would instead have stopped at the moment the digest fired and silently dropped anything brewed after it.
 
