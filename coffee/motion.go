@@ -48,19 +48,68 @@ func mergedCancelContext(ctx, cancelCtx context.Context) (context.Context, func(
 	}
 }
 
-// planMotion plans req, persisting the request/response pair under label for
-// offline debugging.
+// motionPlanTimeout bounds a single planning attempt. armplanning's own default
+// is 300s, long enough that an operator cannot tell a plan that will never
+// succeed from one still searching, and long enough to hold the brew cycle open
+// past the point where the drink is worth serving. Every plan here runs against
+// a fixed cell whose reachable poses solve in well under a second, so overrunning
+// this means the pose is unreachable from where the arm stands, not that the
+// planner needs longer.
+const motionPlanTimeout = 15 * time.Second
+
+// withPlanTimeout bounds opts by motionPlanTimeout, substituting armplanning's
+// own defaults when the caller passed none — the same options PlanMotion would
+// have filled in, minus its 300s timeout.
+func withPlanTimeout(opts *armplanning.PlannerOptions) *armplanning.PlannerOptions {
+	if opts == nil {
+		opts = armplanning.NewBasicPlannerOptions()
+	}
+	opts.Timeout = motionPlanTimeout.Seconds()
+	return opts
+}
+
+// incompletePlanErr reports a plan covering only a prefix of the requested goals.
+// armplanning returns one of those with a *nil* error when its deadline expires
+// between goals, so without this check a timed-out multi-waypoint plan (pivot,
+// circular, no-spill carry) would execute as though complete and stop the arm
+// short of the pose the next step assumes it reached.
+func incompletePlanErr(meta *armplanning.PlanMeta, goals int) error {
+	if meta == nil || meta.GoalsProcessed >= goals {
+		return nil
+	}
+	return fmt.Errorf("planner solved %d of %d goals before the %s timeout",
+		meta.GoalsProcessed, goals, motionPlanTimeout)
+}
+
+// planDuration renders how long a plan took, for logs and error messages that
+// have to distinguish "gave up at the timeout" from "failed immediately".
+func planDuration(meta *armplanning.PlanMeta) time.Duration {
+	if meta == nil {
+		return 0
+	}
+	return meta.Duration.Round(time.Millisecond)
+}
+
+// planMotion plans req under motionPlanTimeout, persisting the request/response
+// pair under label for offline debugging.
 //
 // Planning failures are wrapped in errMotionPlanning: a plan that never ran
 // leaves the arm where it stood, which is what lets callers with a recovery path
 // (dynamic pickup falling back to another candidate, placeHeldInServingArea
 // trying the next slot) tell them apart from execution errors via errors.Is.
 func (s *beanjaminCoffee) planMotion(ctx context.Context, req *armplanning.PlanRequest, label string) (motionplan.Plan, error) {
-	plan, _, err := armplanning.PlanMotion(ctx, s.activeOrderLogger(), req)
+	logger := s.activeOrderLogger()
+	req.PlannerOptions = withPlanTimeout(req.PlannerOptions)
+
+	plan, meta, err := armplanning.PlanMotion(ctx, logger, req)
+	if err == nil {
+		err = incompletePlanErr(meta, len(req.Goals))
+	}
 	s.savePlanRequestAndResponse(req, plan, label, err)
 	if err != nil {
-		return nil, fmt.Errorf("%w (%s): %w", errMotionPlanning, label, err)
+		return nil, fmt.Errorf("%w (%s, after %s): %w", errMotionPlanning, label, planDuration(meta), err)
 	}
+	logger.Infof("planned %s in %s", label, planDuration(meta))
 	return plan, nil
 }
 
@@ -919,7 +968,7 @@ const defaultCarryWaypointSpacingMm = 100.0
 // RDK measures deviation from the segment's own endpoint-to-endpoint
 // interpolation, so this bounds the excursion off that path — not the commanded
 // rotation, which on a long carry sweeps far more about the container's axis.
-const noSpillOrientationToleranceDegs = 50.0
+const noSpillOrientationToleranceDegs = 60.0
 
 // withNoSpillOrientationConstraint adds the carry's path orientation bound,
 // allocating the Constraints when the caller has none (no linear constraint and
