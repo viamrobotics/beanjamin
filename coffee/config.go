@@ -53,7 +53,7 @@ type Step struct {
 	PivotExtraDegrees float64 `json:"pivot_extra_degrees,omitempty"`
 
 	// NoSpill routes this step's move through the level carry (carryHeldLevel)
-	// rather than a direct plan
+	// rather than a direct plan.
 	NoSpill bool `json:"no_spill,omitempty"`
 
 	// PoseSwitch is the switch this step's pose is read from (fetchPose).
