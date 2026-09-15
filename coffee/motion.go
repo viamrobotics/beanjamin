@@ -968,7 +968,7 @@ const defaultCarryWaypointSpacingMm = 100.0
 // RDK measures deviation from the segment's own endpoint-to-endpoint
 // interpolation, so this bounds the excursion off that path — not the commanded
 // rotation, which on a long carry sweeps far more about the container's axis.
-const noSpillOrientationToleranceDegs = 50.0
+const noSpillOrientationToleranceDegs = 60.0
 
 // withNoSpillOrientationConstraint adds the carry's path orientation bound,
 // allocating the Constraints when the caller has none (no linear constraint and
