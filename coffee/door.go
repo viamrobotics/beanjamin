@@ -365,8 +365,7 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 			StartState:  armplanning.NewPlanState(nil, planInputs),
 			Constraints: buildConstraints(nil, collisions),
 		}
-		plan, _, err := armplanning.PlanMotion(ctx, logger, req)
-		s.savePlanRequestAndResponse(req, plan, action, err)
+		plan, err := s.planMotion(ctx, req, action)
 		if err != nil {
 			return fmt.Errorf("plan %s step θ=%.0f: %w", action, theta, err)
 		}

@@ -354,6 +354,11 @@ func (s *multiPosesExecutionSwitch) SetPosition(ctx context.Context, position ui
 	return s.goToPosition(ctx, position)
 }
 
+// motionPlanTimeoutSec caps how long the motion service may search for a path to
+// the requested pose. Its default is 300s, which leaves a switch that was asked
+// for an unreachable pose looking indistinguishable from one still planning.
+const motionPlanTimeoutSec = 15.0
+
 // goToPosition moves the component to the pose at the given index.
 func (s *multiPosesExecutionSwitch) goToPosition(ctx context.Context, position uint32) error {
 	if !s.executing.CompareAndSwap(false, true) {
@@ -374,6 +379,7 @@ func (s *multiPosesExecutionSwitch) goToPosition(ctx context.Context, position u
 	_, err := s.motion.Move(ctx, motion.MoveReq{
 		ComponentName: s.cfg.ComponentName,
 		Destination:   destination,
+		Extra:         map[string]any{"timeout": motionPlanTimeoutSec},
 	})
 	if err != nil {
 		return fmt.Errorf("failed to move to pose %q: %w", s.poseNames[position], err)

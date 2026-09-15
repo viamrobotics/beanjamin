@@ -1108,6 +1108,22 @@ Once you've found the right poses, add them to your `multi-poses-execution-switc
 
 The web app's calibration view at `?view=calibrate` lists which poses belong to which frame on a given machine, and which of them are set by hand rather than derived from another pose. It also polls the live `filter` / `grip-point` / `cam` positions off the running machine and offers each as a copyable pose, so the jog-read-paste loop doesn't need the CLI. The pose list comes from a manifest generated from the machines' live app config — regenerate it with `make web-app-manifest` whenever a pose is added, removed, renamed, or re-baselined.
 
+### Motion planning timeout
+
+Every plan the coffee service makes — direct move, pivot, circular, no-spill
+carry, and each step of the fridge-door sweep — is capped at **15 seconds**
+(`motionPlanTimeout` in `coffee/motion.go`), as is each
+`multi-poses-execution-switch` `SetPosition` move. RDK's own default is 300s,
+which makes a plan that will never succeed indistinguishable from one still
+searching, and holds the brew cycle open long past the point where the drink is
+worth serving.
+
+A plan that overruns fails with `motion planning failed (<label>, after
+<duration>)`, and every successful plan logs `planned <label> in <duration>`, so
+the logs say which it was. A timeout is almost always an unreachable goal rather
+than a planner that needed longer; if a legitimately hard plan starts hitting the
+cap, raise the constant rather than working around it per call site.
+
 ### List recent orders
 
 `order_sensor_name` writes one reading per order attempt, which makes the recent
