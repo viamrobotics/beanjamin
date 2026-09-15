@@ -24,11 +24,4 @@ func TestPickupGetters(t *testing.T) {
 	if got := pickupMaxAttempts(7); got != 7 {
 		t.Errorf("pickupMaxAttempts(7) = %d, want 7", got)
 	}
-
-	// photos-per-vantage: anything below 1 clamps to 1.
-	for in, want := range map[int]int{0: 1, 1: 1, 4: 4} {
-		if got := pickupPhotosPerVantage(in); got != want {
-			t.Errorf("pickupPhotosPerVantage(%d) = %d, want %d", in, got, want)
-		}
-	}
 }

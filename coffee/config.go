@@ -164,7 +164,6 @@ type Config struct {
 	SrcCameraName                 string        `json:"src_camera_name,omitempty"`
 	CupApproachRelativePose       *RelativePose `json:"cup_approach_relative_pose,omitempty"`
 	CupGrabRelativePose           *RelativePose `json:"cup_grab_relative_pose,omitempty"`
-	CupPhotosPerVantage           int           `json:"cup_photos_per_vantage,omitempty"`
 	CameraObservePoseSwitcherName string        `json:"camera_observe_pose_switcher_name,omitempty"`
 	// CupPickupMaxAttempts caps how many full observe-and-grab attempts
 	// pickCupDynamic will make per order. Each attempt re-detects, then
@@ -204,18 +203,6 @@ type Config struct {
 	// used for both the hot cup and the iced glass. Both are required.
 	ServingApproachRelativePose *RelativePose `json:"serving_approach_relative_pose,omitempty"`
 	ServingGrabRelativePose     *RelativePose `json:"serving_grab_relative_pose,omitempty"`
-
-	// NoSpillCarry, when true, carries a filled container along a straight line
-	// broken into waypoints (one every defaultCarryWaypointSpacingMm) instead of
-	// free-planning straight to the goal. Each intermediate waypoint commands the
-	// held-item (container) frame with a goal pose cloud that keeps it close to
-	// level so the drink doesn't slosh; the final waypoint is pinned exactly (see
-	// carryHeldLevel in motion.go). It applies to every free traverse of a filled
-	// container: the serving-area placement (placeFullCupOnShelf and the iced
-	// glass), carrying the ice-filled glass to staging, and carrying the espresso
-	// cup to the pour position. Off by default (those moves free-plan straight to
-	// the goal pose).
-	NoSpillCarry bool `json:"no_spill_carry,omitempty"`
 
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
 
@@ -349,12 +336,6 @@ func pickupMaxAttempts(configured int) int {
 	return orDefault(configured, defaultCupPickupMaxAttempts)
 }
 
-// pickupPhotosPerVantage returns the number of vision frames to capture at each
-// observation pose, defaulting to 1.
-func pickupPhotosPerVantage(configured int) int {
-	return orDefault(configured, 1)
-}
-
 // RelativePose is a 6-DoF offset (translation in millimeters + orientation as
 // OrientationVectorDegrees) composed onto a runtime point. Used for
 // cup_approach_relative_pose and cup_grab_relative_pose under dynamic cup
@@ -463,9 +444,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		"serving_grab_relative_pose", cfg.ServingGrabRelativePose,
 	); err != nil {
 		return nil, nil, err
-	}
-	if cfg.CupPhotosPerVantage < 0 {
-		return nil, nil, fmt.Errorf("%s: cup_photos_per_vantage must be >= 0", path)
 	}
 	if cfg.CupPickupMaxAttempts < 0 {
 		return nil, nil, fmt.Errorf("%s: cup_pickup_max_attempts must be >= 0", path)

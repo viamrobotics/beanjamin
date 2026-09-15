@@ -99,13 +99,6 @@ const (
 	heldEmpty
 )
 
-// usesNoSpillCarry reports whether a placement traverse routes through the level
-// carry (carryHeldLevel) rather than free-planning straight to the slot: only a
-// filled container, and only when no_spill_carry is configured.
-func (s *beanjaminCoffee) usesNoSpillCarry(contents heldContents) bool {
-	return s.cfg.NoSpillCarry && contents == heldFilled
-}
-
 // placeHeldInServingArea drops the item currently held by the gripper into the
 // serving area: it walks the serving-area slots in round-robin order starting
 // from servingAreaSlotCounter and drops the item in the first slot it can reach
@@ -190,15 +183,14 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 	logger.Infof("shelf placement: slot (x=%.1f, y=%.1f) drop_pose=%v approach_pose=%v",
 		tileWorld.X, tileWorld.Y, dropPose, approachPose)
 
-	// 1. Carry the held cup to the approach pose above the slot. With
-	// no_spill_carry set, a *filled* container steps through level-pinned
-	// waypoints (carryHeldLevel) so the drink doesn't slosh on the long traverse;
-	// an empty one has nothing to spill and free-plans straight there, which is
-	// both quicker and easier to plan. Both wrap planning failures in
-	// errMotionPlanning, so on failure the arm has not moved and the cup is still
-	// held — the caller can try the next slot.
+	// 1. Carry the held cup to the approach pose above the slot. A *filled*
+	// container steps through level-pinned waypoints (carryHeldLevel) so the drink
+	// doesn't slosh on the long traverse; an empty one has nothing to spill and
+	// free-plans straight there, which is both quicker and easier to plan. Both
+	// wrap planning failures in errMotionPlanning, so on failure the arm has not
+	// moved and the cup is still held — the caller can try the next slot.
 	carry := func() error { return s.moveToRawPose(ctx, approachPD, nil, nil, nil) }
-	if s.usesNoSpillCarry(contents) {
+	if contents == heldFilled {
 		carry = func() error { return s.carryHeldLevel(ctx, approachPD, nil, nil) }
 	}
 	if err := carry(); err != nil {
