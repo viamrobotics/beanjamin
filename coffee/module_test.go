@@ -132,15 +132,6 @@ func TestValidate_RequiresServingGrabRelativePose(t *testing.T) {
 	}
 }
 
-func TestValidate_RejectsNegativePhotosPerVantage(t *testing.T) {
-	cfg := validBaseConfig()
-	cfg.CupPhotosPerVantage = -1
-	_, _, err := cfg.Validate("")
-	if err == nil || !strings.Contains(err.Error(), "cup_photos_per_vantage") {
-		t.Fatalf("expected cup_photos_per_vantage error, got %v", err)
-	}
-}
-
 func TestValidate_RejectsNegativeMaxAttempts(t *testing.T) {
 	cfg := validBaseConfig()
 	cfg.CupPickupMaxAttempts = -1

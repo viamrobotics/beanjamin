@@ -38,7 +38,6 @@ import (
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/services/vision"
 	"go.viam.com/rdk/spatialmath"
-	viz "go.viam.com/rdk/vision"
 )
 
 // Pickup item labels — used for logs/spans/errors and as the cache key for
@@ -223,7 +222,6 @@ type pickupTarget struct {
 	observeHomePose  string               // recovery pose name on observeSw
 	approachRel      *RelativePose        // gripper offset for the pre-grab pose
 	grabRel          *RelativePose        // gripper offset for the grab pose
-	photosPerVantage int                  // vision frames per observe pose
 	maxAttempts      int                  // full observe-and-grab attempts
 	dims             *ContainerDimensions // known container size the held-item box is built from
 	noItemSpeak      string               // spoken on "nothing detected" before a retry wait
@@ -242,7 +240,6 @@ func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 		observeHomePose:  camPoseCupObserve,
 		approachRel:      s.cfg.CupApproachRelativePose,
 		grabRel:          s.cfg.CupGrabRelativePose,
-		photosPerVantage: pickupPhotosPerVantage(s.cfg.CupPhotosPerVantage),
 		maxAttempts:      pickupMaxAttempts(s.cfg.CupPickupMaxAttempts),
 		dims:             s.cfg.CupDimensions,
 		noItemSpeak:      "I don't see a cup yet — please place one on the shelf. Trying again in 15 seconds.",
@@ -253,9 +250,8 @@ func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 
 // glassPickupTarget describes dynamic iced-coffee glass pickup: its own vision
 // service and observe switch, the shared camera, and grasp offsets tuned for the
-// taller glass. The photos-per-vantage and max-attempts knobs are shared with
-// cup pickup (cup_photos_per_vantage / cup_pickup_max_attempts) — they are
-// item-agnostic operational settings.
+// taller glass. The max-attempts knob is shared with cup pickup
+// (cup_pickup_max_attempts) — it is an item-agnostic operational setting.
 func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 	return &pickupTarget{
 		label:            pickupLabelGlass,
@@ -265,7 +261,6 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 		observeHomePose:  glassPoseObserve,
 		approachRel:      s.cfg.GlassApproachRelativePose,
 		grabRel:          s.cfg.GlassGrabRelativePose,
-		photosPerVantage: pickupPhotosPerVantage(s.cfg.CupPhotosPerVantage),
 		maxAttempts:      pickupMaxAttempts(s.cfg.CupPickupMaxAttempts),
 		dims:             s.cfg.GlassDimensions,
 		noItemSpeak:      "I don't see a glass yet — please place one on the top shelf. Trying again in 15 seconds.",
@@ -275,27 +270,21 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 	}
 }
 
-// observeVantage captures t.photosPerVantage vision frames at the arm's current
-// pose, accumulates every detection from all of them, and lifts each into world
-// coordinates. Returns the pickup candidates (world-frame centroid + geometry).
-// Returns a nil slice with no error when no frame produced a detection, so the
-// sweep can move on to the next observe pose.
+// observeVantage captures one vision frame at the arm's current pose and lifts
+// each detection into world coordinates. Returns the pickup candidates
+// (world-frame centroid + geometry). Returns a nil slice with no error when the
+// frame produced no detection, so the sweep can move on to the next observe pose.
 func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) ([]pickupCandidate, error) {
 	logger := s.activeOrderLogger()
-	photosToTake := t.photosPerVantage
 
-	var objects []*viz.Object
-	for photo := 1; photo <= photosToTake; photo++ {
-		// Pass an empty camera name so the vision service falls back to its own
-		// configured default camera. t.cameraName is still used below to
-		// transform detection centroids from the camera frame into world coords.
-		objs, err := t.vision.GetObjectPointClouds(ctx, "", nil)
-		if err != nil {
-			return nil, fmt.Errorf("detect: %w", err)
-		}
-		logger.Infof("dynamic %s pickup: vision photo %d/%d, found %d detections", t.label, photo, photosToTake, len(objs))
-		objects = append(objects, objs...)
+	// Pass an empty camera name so the vision service falls back to its own
+	// configured default camera. t.cameraName is still used below to transform
+	// detection centroids from the camera frame into world coords.
+	objects, err := t.vision.GetObjectPointClouds(ctx, "", nil)
+	if err != nil {
+		return nil, fmt.Errorf("detect: %w", err)
 	}
+	logger.Infof("dynamic %s pickup: found %d detections", t.label, len(objects))
 	if len(objects) == 0 {
 		return nil, nil
 	}

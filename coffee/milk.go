@@ -35,9 +35,8 @@ const milkAreaShieldFrameName = "fridge"
 
 // milkPickupTarget describes dynamic milk-bottle pickup: its own vision service
 // and observe switch (whose vantages look into the open fridge), and grasp
-// offsets tuned for the bottle. The photos-per-vantage and max-attempts knobs
-// are shared with cup pickup (cup_photos_per_vantage / cup_pickup_max_attempts)
-// — they are item-agnostic operational settings.
+// offsets tuned for the bottle. The max-attempts knob is shared with cup pickup
+// (cup_pickup_max_attempts) — it is an item-agnostic operational setting.
 func (s *beanjaminCoffee) milkPickupTarget() *pickupTarget {
 	return &pickupTarget{
 		label:            pickupLabelMilk,
@@ -47,7 +46,6 @@ func (s *beanjaminCoffee) milkPickupTarget() *pickupTarget {
 		observeHomePose:  milkPoseObserve,
 		approachRel:      s.cfg.MilkApproachRelativePose,
 		grabRel:          s.cfg.MilkGrabRelativePose,
-		photosPerVantage: pickupPhotosPerVantage(s.cfg.CupPhotosPerVantage),
 		maxAttempts:      pickupMaxAttempts(s.cfg.CupPickupMaxAttempts),
 		dims:             s.cfg.MilkBottleDimensions,
 		noItemSpeak:      "I can't see the milk in the fridge — could you put the bottle back on its shelf? Trying again in 15 seconds.",
@@ -147,10 +145,10 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 		return err
 	}
 	// TODO: the carry to the pour position and the carry back to the fridge both
-	// free-plan, where a full cup would be carried level (no_spill_carry). The
-	// bottle is tall and grasped high, so the level-carry pose cloud may simply be
-	// unplannable for it — revisit once the poses are calibrated and we know what
-	// the arm can actually hold.
+	// free-plan, where a full cup would be carried level. The bottle is tall and
+	// grasped high, so the level-carry pose cloud may simply be unplannable for
+	// it — revisit once the poses are calibrated and we know what the arm can
+	// actually hold.
 	approachStep := Step{PoseName: clawPoseMilkPourApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
