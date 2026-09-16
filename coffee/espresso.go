@@ -9,6 +9,7 @@ import (
 	"github.com/golang/geo/r3"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/module/trace"
+	"go.viam.com/rdk/motionplan"
 )
 
 const (
@@ -632,6 +633,15 @@ func (s *beanjaminCoffee) pipelineRun(steps []Step) int {
 }
 
 func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step) error {
+	return s.executeStepWithPlan(ctx, cancelCtx, step, nil)
+}
+
+// executeStepWithPlan is executeStep with the step's move already planned —
+// computed ahead by runStepsPipelined while the previous move was executing. A
+// nil plan is the ordinary path: plan on arrival, as executeStep always has.
+// Everything else about the step — span, cancellation, logging, pause — is the
+// same either way, which is the point of routing both through here.
+func (s *beanjaminCoffee) executeStepWithPlan(ctx, cancelCtx context.Context, step Step, plan motionplan.Plan) error {
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::executeStep::"+step.PoseName)
 	defer span.End()
@@ -656,7 +666,7 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 		}
 	} else {
 		logger.Infof("moving to %q", step.PoseName)
-		if err := s.moveToPose(ctx, cancelCtx, step); err != nil {
+		if err := s.moveToPose(ctx, cancelCtx, step, plan); err != nil {
 			return err
 		}
 	}

@@ -1,6 +1,9 @@
 package coffee
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestStepPipelineable locks down which steps may have their plan computed
 // ahead of time, while the previous plan is still executing. Pivots, circular
@@ -120,5 +123,28 @@ func TestPipelineRunPartitionsCleanPortafilter(t *testing.T) {
 	}
 	if hidden != 5 {
 		t.Errorf("plans hidden behind execution = %d, want 5", hidden)
+	}
+}
+
+// TestPlanStepMoveRefusesNonPipelineable guards the one way this could go quietly
+// wrong: planStepMove builds a direct plan, so handing it a step that needs a
+// different motion — above all a NoSpill carry, which would lose its orientation
+// bound and slosh the drink — must fail rather than plan the wrong thing.
+func TestPlanStepMoveRefusesNonPipelineable(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{}}
+	for _, step := range []Step{
+		{PoseName: "serving", NoSpill: true},
+		{PoseName: "locked_final", PivotFromPose: "coffee_in"},
+		{PoseName: "grinder", CircularRadiusMm: 3},
+	} {
+		// A nil pose switch would make fetchPose fail too, so the refusal has to
+		// come first for this to prove anything.
+		_, err := s.planStepMove(t.Context(), nil, nil, step)
+		if err == nil {
+			t.Fatalf("planStepMove(%+v) succeeded, want refusal", step)
+		}
+		if !strings.Contains(err.Error(), "planned on arrival") {
+			t.Errorf("planStepMove(%+v) = %v, want the on-arrival refusal", step, err)
+		}
 	}
 }

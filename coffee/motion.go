@@ -15,7 +15,6 @@ import (
 	"github.com/golang/geo/r3"
 	viz "github.com/viam-labs/motion-tools/client/api"
 	"go.viam.com/rdk/logging"
-	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/motionplan"
 	"go.viam.com/rdk/motionplan/armplanning"
 	"go.viam.com/rdk/referenceframe"
@@ -207,9 +206,21 @@ func (s *beanjaminCoffee) slowMoveOptions() *StepMoveOptions {
 }
 
 // moveToPose fetches a named pose and moves to it.
-func (s *beanjaminCoffee) moveToPose(ctx, cancelCtx context.Context, step Step) error {
+//
+// A non-nil plan is one already computed for this step while the previous move
+// was still executing (runStepsPipelined); it is executed as-is, skipping the
+// fetch-and-plan this would otherwise do on arrival. Only steps stepPipelineable
+// accepts are ever handed one, so the branches below stay reachable for the rest.
+func (s *beanjaminCoffee) moveToPose(ctx, cancelCtx context.Context, step Step, plan motionplan.Plan) error {
 	ctx, done := mergedCancelContext(ctx, cancelCtx)
 	defer done()
+
+	if plan != nil {
+		if err := s.executePlan(ctx, plan, step.LinearConstraint, step.MoveOptions); err != nil {
+			return fmt.Errorf("move to %q failed: %w", step.PoseName, err)
+		}
+		return nil
+	}
 
 	pd, err := s.fetchPose(ctx, step.PoseSwitch, step.PoseName)
 	if err != nil {
@@ -821,6 +832,14 @@ func (s *beanjaminCoffee) planStepMove(
 	startInputs referenceframe.FrameSystemInputs,
 	step Step,
 ) (motionplan.Plan, error) {
+	// This builds a direct plan, which is the wrong motion for every step
+	// stepPipelineable rejects — most dangerously a NoSpill carry, which would
+	// silently lose its orientation bound and slosh the drink. Refuse rather than
+	// plan the wrong thing if stepPipelineable is ever widened without widening
+	// this.
+	if !s.stepPipelineable(step) {
+		return nil, fmt.Errorf("plan move to %q: step must be planned on arrival, not ahead", step.PoseName)
+	}
 	pd, err := s.fetchPose(ctx, step.PoseSwitch, step.PoseName)
 	if err != nil {
 		return nil, err
@@ -839,19 +858,22 @@ type pipelinedPlan struct {
 }
 
 // runStepsPipelined executes a run of pipelineable steps, overlapping each
-// move's execution with the planning of the next. The first step is planned
-// from the arm's actual configuration; every subsequent step is planned from the
+// move's execution with the planning of the next. The first step is planned from
+// the arm's actual configuration; every subsequent step is planned from the
 // previous plan's end configuration while that plan executes — the same chaining
 // planToRawPose already documents for tryGrab, but concurrent, so planning
 // latency hides inside execution time instead of stalling the arm between moves.
 //
+// Each step still runs through executeStep, which owns the trace span, the
+// cancellation checks and the pause exactly as it does on the sequential path.
+// The only thing being pipelined is where the step's plan came from. The pause
+// runs before the look-ahead is collected, so planning overlaps the dwell too.
+//
 // Planning only reads the frame system and never touches the arm, and only one
 // plan is ever in flight, so nothing here races the running trajectory (or
-// planMotion's own request dump, which is sequential for the same reason).
-//
-// A plan-ahead failure never interrupts a move already underway: the in-flight
-// execution and the step's pause finish first, leaving the arm exactly where the
-// sequential path would have left it, and the planning error surfaces afterwards.
+// planMotion's own request dump, which is sequential for the same reason). A
+// look-ahead that is still running when a move fails is abandoned, not waited
+// on: the deferred cancel stops it and its buffered channel lets it exit.
 //
 // The one real difference from planning on arrival: a pipelined plan starts at
 // the previous plan's NOMINAL end, not at where the arm physically settled, so
@@ -861,35 +883,31 @@ type pipelinedPlan struct {
 // exactly why the steps that work against something — the portafilter in the
 // bayonet, a full cup — are held out by stepPipelineable instead.
 func (s *beanjaminCoffee) runStepsPipelined(ctx, cancelCtx context.Context, steps []Step) error {
-	logger := s.activeOrderLogger()
-	ctx, done := mergedCancelContext(ctx, cancelCtx)
-	defer done()
+	if len(steps) == 0 {
+		return nil
+	}
+	// Planning runs under its own context so a look-ahead stops the moment an
+	// operator cancels, and is abandoned rather than waited on when the sequence
+	// returns early against a step that will now never execute.
+	planCtx, stopPlanning := mergedCancelContext(ctx, cancelCtx)
+	defer stopPlanning()
 
 	// The frame system is captured once for the whole run. Nothing inside a step
 	// sequence re-parents a frame or attaches held geometry — lockFilterFrame,
 	// attachHeldGeometry and the staged-glass obstacle all happen between
 	// sequences — so every step plans against the same world, and only the arm's
 	// configuration advances. That is exactly what withArmInputs substitutes.
-	fs, fsInputs, err := s.currentInputs(ctx)
+	fs, fsInputs, err := s.currentInputs(planCtx)
 	if err != nil {
 		return err
 	}
-	plan, err := s.planStepMove(ctx, fs, fsInputs, steps[0])
+	plan, err := s.planStepMove(planCtx, fs, fsInputs, steps[0])
 	if err != nil {
 		return err
 	}
 
 	for i, step := range steps {
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("cancelled before %q: %w", step.PoseName, err)
-		}
-		stepCtx, span := trace.StartSpan(ctx, "beanjamin::executeStep::"+step.PoseName)
-		logger.Infof("moving to %q", step.PoseName)
-
-		// Hand the next step to a planner goroutine before committing this move
-		// to the arm. The channel is buffered so an early return here never
-		// leaks it: the deferred done() cancels stepCtx, the planner unblocks on
-		// its send, and the goroutine exits.
+		// Hand the next step to a planner before committing this move to the arm.
 		var ahead chan pipelinedPlan
 		if i+1 < len(steps) {
 			ahead = make(chan pipelinedPlan, 1)
@@ -899,29 +917,16 @@ func (s *beanjaminCoffee) runStepsPipelined(ctx, cancelCtx context.Context, step
 					ahead <- pipelinedPlan{err: err}
 					return
 				}
-				p, err := s.planStepMove(stepCtx, fs, s.withArmInputs(fsInputs, end), next)
+				p, err := s.planStepMove(planCtx, fs, s.withArmInputs(fsInputs, end), next)
 				ahead <- pipelinedPlan{plan: p, err: err}
 			}(plan, steps[i+1])
 		}
 
-		execErr := s.executePlan(stepCtx, plan, step.LinearConstraint, step.MoveOptions)
-		span.End()
-		if execErr != nil {
-			return fmt.Errorf("move to %q failed: %w", step.PoseName, execErr)
-		}
-
-		// The pause runs before the plan-ahead is collected, so planning overlaps
-		// the dwell as well as the move.
-		if step.Pause > 0 {
-			logger.Infof("pausing %s after %q", step.Pause, step.PoseName)
-			select {
-			case <-time.After(step.Pause):
-			case <-ctx.Done():
-				return fmt.Errorf("cancelled during pause after %q: %w", step.PoseName, ctx.Err())
-			}
+		if err := s.executeStepWithPlan(ctx, cancelCtx, step, plan); err != nil {
+			return err
 		}
 		if ahead == nil {
-			break
+			return nil
 		}
 		result := <-ahead
 		if result.err != nil {
