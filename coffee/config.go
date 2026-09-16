@@ -88,17 +88,18 @@ type Config struct {
 	// BrewTimeSec / LungoBrewTimeSec are the toggle hold duration, or — under
 	// has_separate_brew_buttons — how long to wait out a machine-controlled
 	// pour, in which case they must be >= its actual pour or the arm reaches
-	// in mid-stream. ButtonPressHoldSec applies only to the button machine.
-	BrewTimeSec                float64 `json:"brew_time_sec,omitempty"`
-	LungoBrewTimeSec           float64 `json:"lungo_brew_time_sec,omitempty"`
-	ButtonPressHoldSec         float64 `json:"button_press_hold_sec,omitempty"`
-	GrindTimeSec               float64 `json:"grind_time_sec,omitempty"`
-	GripperHoldMinPos          float64 `json:"gripper_hold_min_pos,omitempty"`
-	GripperHoldMaxPos          float64 `json:"gripper_hold_max_pos,omitempty"`
-	GripperOpenTimeoutSec      float64 `json:"gripper_open_timeout_sec,omitempty"`
-	SlowMovementVelDegsPerSec  float64 `json:"slow_movement_vel_degs_per_sec,omitempty"`
-	SlowMovementAccDegsPerSec2 float64 `json:"slow_movement_acc_degs_per_sec2,omitempty"`
-	PortafilterShakeSec        float64 `json:"portafilter_shake_sec,omitempty"`
+	// in mid-stream. ButtonPressHoldSec applies only to the button machine; a
+	// pointer so an explicit 0 (no dwell) is distinguishable from unset.
+	BrewTimeSec                float64  `json:"brew_time_sec,omitempty"`
+	LungoBrewTimeSec           float64  `json:"lungo_brew_time_sec,omitempty"`
+	ButtonPressHoldSec         *float64 `json:"button_press_hold_sec,omitempty"`
+	GrindTimeSec               float64  `json:"grind_time_sec,omitempty"`
+	GripperHoldMinPos          float64  `json:"gripper_hold_min_pos,omitempty"`
+	GripperHoldMaxPos          float64  `json:"gripper_hold_max_pos,omitempty"`
+	GripperOpenTimeoutSec      float64  `json:"gripper_open_timeout_sec,omitempty"`
+	SlowMovementVelDegsPerSec  float64  `json:"slow_movement_vel_degs_per_sec,omitempty"`
+	SlowMovementAccDegsPerSec2 float64  `json:"slow_movement_acc_degs_per_sec2,omitempty"`
+	PortafilterShakeSec        float64  `json:"portafilter_shake_sec,omitempty"`
 	// LockOvershootDegs over-rotates the portafilter lock pivot so the filter
 	// still reaches the authored angle after the claws slip on its handle under
 	// bayonet load, then unwinds back onto it (Step.PivotExtraDegrees).

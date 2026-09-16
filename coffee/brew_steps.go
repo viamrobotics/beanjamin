@@ -304,7 +304,11 @@ func (s *beanjaminCoffee) grindDurationSec() float64 {
 // switch needs real contact time to register, and how much varies with button
 // travel and how the claw is shimmed — hence the config knob.
 func (s *beanjaminCoffee) buttonPressHold() time.Duration {
-	return time.Duration(orDefault(s.cfg.ButtonPressHoldSec, defaultButtonPressHoldSec) * float64(time.Second))
+	sec := defaultButtonPressHoldSec
+	if s.cfg.ButtonPressHoldSec != nil {
+		sec = *s.cfg.ButtonPressHoldSec
+	}
+	return time.Duration(sec * float64(time.Second))
 }
 
 // drinkBrewTime returns how long to wait for the machine to finish pouring the
