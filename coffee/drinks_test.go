@@ -82,8 +82,8 @@ func TestGrindAndIceDurations(t *testing.T) {
 	if got := def.milkPourDwell(); got != time.Duration(defaultMilkPourSec*float64(time.Second)) {
 		t.Errorf("default milkPourDwell = %v, want %vs", got, defaultMilkPourSec)
 	}
-	if got := def.buttonPressHold(); got != 500*time.Millisecond {
-		t.Errorf("default buttonPressHold = %v, want 500ms", got)
+	if got := def.buttonPressHold(); got != 0 {
+		t.Errorf("unconfigured buttonPressHold = %v, want 0 (forwarded as-is, no default)", got)
 	}
 
 	if got := def.pourMoveOptions().MaxVelDegsPerSec; got != defaultPourVelDegsPerSec {
@@ -93,19 +93,12 @@ func TestGrindAndIceDurations(t *testing.T) {
 		t.Errorf("default pour acceleration = %v, want 0 (arm default)", got)
 	}
 
-	buttonHoldSec := 1.25
-	set := &beanjaminCoffee{cfg: &Config{GrindTimeSec: 3, IceDispenseSec: 9, MilkPourSec: 6.5, PourVelDegsPerSec: 42, PourAccDegsPerSec2: 300, ButtonPressHoldSec: &buttonHoldSec}}
+	set := &beanjaminCoffee{cfg: &Config{GrindTimeSec: 3, IceDispenseSec: 9, MilkPourSec: 6.5, PourVelDegsPerSec: 42, PourAccDegsPerSec2: 300, ButtonPressHoldSec: 1.25}}
 	if got := set.grindDurationSec(); got != 3 {
 		t.Errorf("configured grindDurationSec = %v, want 3", got)
 	}
 	if got := set.buttonPressHold(); got != 1250*time.Millisecond {
 		t.Errorf("configured buttonPressHold = %v, want 1.25s", got)
-	}
-
-	zeroHoldSec := 0.0
-	zero := &beanjaminCoffee{cfg: &Config{ButtonPressHoldSec: &zeroHoldSec}}
-	if got := zero.buttonPressHold(); got != 0 {
-		t.Errorf("explicit zero buttonPressHold = %v, want 0", got)
 	}
 	if got := set.iceDispenseSec(); got != 9 {
 		t.Errorf("configured iceDispenseSec = %v, want 9", got)

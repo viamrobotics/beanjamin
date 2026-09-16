@@ -586,9 +586,6 @@ const (
 	defaultEspressoBrewTime = 8 * time.Second
 	defaultLungoBrewTime    = 15 * time.Second
 	defaultGrindTimeSec     = 7.5
-	// defaultButtonPressHoldSec is the claw dwell on a brew button when
-	// button_press_hold_sec is unset.
-	defaultButtonPressHoldSec = 0.5
 	// defaultIceDispenseSec is how long the ice pin is held HIGH when
 	// ice_dispense_sec is unset.
 	defaultIceDispenseSec = 5.0
