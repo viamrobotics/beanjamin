@@ -596,13 +596,39 @@ const (
 
 // runSteps executes each step in order, wrapping the first failure with label
 // (e.g. "tamp_ground") so the caller's error identifies the failed phase.
+//
+// Contiguous runs of pipelineable steps go through runStepsPipelined, which
+// plans each next move while the previous one is still executing. The steps that
+// must observe the arm before planning — pivots, circular motions, the no-spill
+// carry (stepPipelineable) — break the run and execute on their own, so the arm
+// is standing still and settled by the time they are planned. Sequencing and the
+// arm's path are identical either way; only the idle gaps between moves close.
 func (s *beanjaminCoffee) runSteps(ctx, cancelCtx context.Context, label string, steps ...Step) error {
-	for _, step := range steps {
-		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+	for len(steps) > 0 {
+		if n := s.pipelineRun(steps); n > 0 {
+			if err := s.runStepsPipelined(ctx, cancelCtx, steps[:n]); err != nil {
+				return fmt.Errorf("%s: %w", label, err)
+			}
+			steps = steps[n:]
+			continue
+		}
+		if err := s.executeStep(ctx, cancelCtx, steps[0]); err != nil {
 			return fmt.Errorf("%s: %w", label, err)
 		}
+		steps = steps[1:]
 	}
 	return nil
+}
+
+// pipelineRun returns the length of the maximal run of pipelineable steps at the
+// front of steps — 0 when it begins with one that must observe the arm before
+// planning, which runSteps then executes on its own.
+func (s *beanjaminCoffee) pipelineRun(steps []Step) int {
+	n := 0
+	for n < len(steps) && s.stepPipelineable(steps[n]) {
+		n++
+	}
+	return n
 }
 
 func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step) error {
