@@ -449,6 +449,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.CupPickupMaxAttempts < 0 {
 		return nil, nil, fmt.Errorf("%s: cup_pickup_max_attempts must be >= 0", path)
 	}
+	if cfg.ButtonPressHoldSec < 0 {
+		return nil, nil, fmt.Errorf("%s: button_press_hold_sec must be >= 0", path)
+	}
 	// The picked-up cup is always tracked as a held item, and its geometry is
 	// modeled from these dimensions, so they must be configured.
 	if err := cfg.CupDimensions.validate(path, "cup_dimensions"); err != nil {

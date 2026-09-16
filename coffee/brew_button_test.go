@@ -11,7 +11,7 @@ import "testing"
 // through the machine's front face and the claw hits the machine. Only the two
 // short linear moves, which genuinely sit inside that obstacle, may allow it.
 func TestBrewButtonStepsCollisionScope(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{}}
+	s := &beanjaminCoffee{cfg: &Config{ButtonPressHoldSec: 0.5}}
 	steps := s.brewButtonSteps("espresso_button_approach", "espresso_button_press")
 
 	if len(steps) != 3 {

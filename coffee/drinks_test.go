@@ -82,8 +82,8 @@ func TestGrindAndIceDurations(t *testing.T) {
 	if got := def.milkPourDwell(); got != time.Duration(defaultMilkPourSec*float64(time.Second)) {
 		t.Errorf("default milkPourDwell = %v, want %vs", got, defaultMilkPourSec)
 	}
-	if got := def.buttonPressHold(); got != 500*time.Millisecond {
-		t.Errorf("default buttonPressHold = %v, want 500ms", got)
+	if got := def.buttonPressHold(); got != 0 {
+		t.Errorf("unconfigured buttonPressHold = %v, want 0 (forwarded as-is, no default)", got)
 	}
 
 	if got := def.pourMoveOptions().MaxVelDegsPerSec; got != defaultPourVelDegsPerSec {
