@@ -3,6 +3,7 @@ package coffee
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,48 +14,67 @@ var (
 	testChores = []string{"Cleaning the ice maker", "Cleaning the table", "Tightening the claws"}
 )
 
-// Over one full cycle every person draws every chore exactly once and takes
-// the same number of free weeks. This is the property the whole design rests
-// on, so it is checked exhaustively rather than by example.
+// Over one full cycle every person draws every chore exactly once. This is the
+// property the design rests on, so it is checked exhaustively.
 func TestAssignChoresIsFairOverACycle(t *testing.T) {
-	n := len(testPeople)
-	seen := map[string]map[string]int{}
-	for _, p := range testPeople {
-		seen[p] = map[string]int{}
-	}
-
-	for week := 0; week < n; week++ {
-		for _, a := range assignChores(testPeople, testChores, week) {
-			seen[a.Person][a.Chore]++
-		}
-	}
-
-	freeWeeks := n - len(testChores)
-	for _, p := range testPeople {
-		for _, c := range testChores {
-			if seen[p][c] != 1 {
-				t.Errorf("%s did %q %d times in a cycle, want exactly 1", p, c, seen[p][c])
+	for _, tc := range []struct {
+		name   string
+		chores []string
+	}{
+		{"fewer chores than people", testChores},
+		{"one chore per person", testPeople},
+		{"more chores than people", append(append([]string{}, testChores...),
+			"Descaling", "Restocking cups", "Emptying the grounds", "Wiping the wand")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := len(testPeople)
+			seen := map[string]map[string]int{}
+			free := map[string]int{}
+			for _, p := range testPeople {
+				seen[p] = map[string]int{}
 			}
-		}
-		if seen[p][""] != freeWeeks {
-			t.Errorf("%s had %d free weeks, want %d", p, seen[p][""], freeWeeks)
-		}
+
+			for week := 0; week < n; week++ {
+				for _, a := range assignChores(testPeople, tc.chores, week) {
+					if len(a.Chores) == 0 {
+						free[a.Person]++
+					}
+					for _, c := range a.Chores {
+						seen[a.Person][c]++
+					}
+				}
+			}
+
+			for _, p := range testPeople {
+				for _, c := range tc.chores {
+					if seen[p][c] != 1 {
+						t.Errorf("%s did %q %d times in a cycle, want exactly 1", p, c, seen[p][c])
+					}
+				}
+			}
+			// Free weeks are the padding, and they fall on everyone equally.
+			want := free[testPeople[0]]
+			for _, p := range testPeople {
+				if free[p] != want {
+					t.Errorf("%s had %d free weeks, %s had %d — should be equal",
+						p, free[p], testPeople[0], want)
+				}
+			}
+		})
 	}
 }
 
-// Each week every chore is assigned to exactly one person and nobody holds
-// two — the message would be nonsense otherwise.
+// Each week every chore is assigned to exactly one person.
 func TestAssignChoresCoversEveryChoreOnce(t *testing.T) {
 	for week := -3; week < 20; week++ {
 		holders := map[string]string{}
 		for _, a := range assignChores(testPeople, testChores, week) {
-			if a.Chore == "" {
-				continue
+			for _, c := range a.Chores {
+				if prev, dup := holders[c]; dup {
+					t.Errorf("week %d: %q assigned to both %s and %s", week, c, prev, a.Person)
+				}
+				holders[c] = a.Person
 			}
-			if prev, dup := holders[a.Chore]; dup {
-				t.Errorf("week %d: %q assigned to both %s and %s", week, a.Chore, prev, a.Person)
-			}
-			holders[a.Chore] = a.Person
 		}
 		if len(holders) != len(testChores) {
 			t.Errorf("week %d: %d chores assigned, want %d", week, len(holders), len(testChores))
@@ -62,24 +82,45 @@ func TestAssignChoresCoversEveryChoreOnce(t *testing.T) {
 	}
 }
 
-// The wheel is a pure function of the week, so the same week always reads the
-// same, and consecutive weeks differ — a stuck wheel is the failure to catch.
+// More chores than people means the wheel goes round twice and somebody draws
+// two in the same week, rather than a chore going unassigned.
+func TestAssignChoresMoreChoresThanPeople(t *testing.T) {
+	people := []string{"A", "B", "C"}
+	chores := []string{"v", "w", "x", "y", "z"}
+
+	got := assignChores(people, chores, 0)
+	holders := map[string]string{}
+	doubled := 0
+	for _, a := range got {
+		if len(a.Chores) > 1 {
+			doubled++
+		}
+		for _, c := range a.Chores {
+			holders[c] = a.Person
+		}
+	}
+	if len(holders) != len(chores) {
+		t.Errorf("assigned %d of %d chores: %v", len(holders), len(chores), got)
+	}
+	if doubled != 2 {
+		t.Errorf("%d people drew two chores, want 2 (5 chores, 3 people)", doubled)
+	}
+}
+
+// The wheel is a pure function of the week: the same week reads the same, and
+// consecutive weeks differ. A stuck wheel is the failure to catch.
 func TestAssignChoresIsDeterministicAndAdvances(t *testing.T) {
-	a := assignChores(testPeople, testChores, 7)
-	b := assignChores(testPeople, testChores, 7)
-	for i := range a {
-		if a[i] != b[i] {
-			t.Fatalf("week 7 read twice disagrees: %v vs %v", a[i], b[i])
+	flat := func(as []choreAssignment) string {
+		var b strings.Builder
+		for _, a := range as {
+			fmt.Fprintf(&b, "%s=%s;", a.Person, strings.Join(a.Chores, ","))
 		}
+		return b.String()
 	}
-	c := assignChores(testPeople, testChores, 8)
-	same := true
-	for i := range a {
-		if a[i] != c[i] {
-			same = false
-		}
+	if a, b := flat(assignChores(testPeople, testChores, 7)), flat(assignChores(testPeople, testChores, 7)); a != b {
+		t.Fatalf("week 7 read twice disagrees:\n%s\n%s", a, b)
 	}
-	if same {
+	if a, c := flat(assignChores(testPeople, testChores, 7)), flat(assignChores(testPeople, testChores, 8)); a == c {
 		t.Error("week 7 and week 8 produced the same assignment; the wheel did not turn")
 	}
 }
@@ -92,8 +133,8 @@ func TestAssignChoresHandlesNegativeWeek(t *testing.T) {
 		t.Fatalf("got %d assignments, want %d", len(got), len(testPeople))
 	}
 	// -1 mod 6 is 5, so person 0 gets slot 1, person 1 slot 2, etc.
-	if got[0].Chore != testChores[1] {
-		t.Errorf("week -1: %s got %q, want %q", got[0].Person, got[0].Chore, testChores[1])
+	if len(got[0].Chores) != 1 || got[0].Chores[0] != testChores[1] {
+		t.Errorf("week -1: %s got %v, want %q", got[0].Person, got[0].Chores, testChores[1])
 	}
 }
 
@@ -248,7 +289,7 @@ func TestChoreWheelConfigValidate(t *testing.T) {
 		{"ok fully assigned", ChoreWheelConfig{People: []string{"A", "B"}, Chores: []string{"x", "y"}}, false},
 		{"one person", ChoreWheelConfig{People: []string{"A"}, Chores: []string{"x"}}, true},
 		{"no chores", ChoreWheelConfig{People: []string{"A", "B"}}, true},
-		{"more chores than people", ChoreWheelConfig{People: []string{"A", "B"}, Chores: []string{"x", "y", "z"}}, true},
+		{"more chores than people", ChoreWheelConfig{People: []string{"A", "B"}, Chores: []string{"x", "y", "z"}}, false},
 		{"duplicate person", ChoreWheelConfig{People: []string{"A", "A"}, Chores: []string{"x"}}, true},
 		{"blank chore", ChoreWheelConfig{People: []string{"A", "B"}, Chores: []string{" "}}, true},
 	} {

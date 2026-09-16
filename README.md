@@ -685,9 +685,9 @@ The message reads:
 • free week — Daniel, Cheuk, Ale
 ```
 
-**Fewer chores than people leaves free weeks.** Six people and three chores means three are off each week; add a fourth chore and it becomes two. There must be at least as many people as chores, or a chore would sit unassigned every week — `Validate` says so at config time rather than on Monday morning.
+**Any number of chores works.** Fewer chores than people leaves free weeks — six people and three chores means three are off each week. More chores than people sends the wheel round again, so some people draw two that week. Either way every chore is assigned every week.
 
-**The rotation is a function of the calendar, not of state.** Person *i* gets slot `(i − week) mod n`, where the slots are the chores in order followed by the free weeks, and `week` counts Mondays since a fixed epoch. So over one cycle — one week per person — everyone does every chore exactly once and takes the same number of free weeks, and there is nothing to persist: a module restart, a redeploy, or running the command twice in one morning all read the same wheel. The cost is that the order is predictable to anyone who works it out; the benefit is that nobody can draw the ice maker three weeks running.
+**The rotation is a function of the calendar, not of state.** Person *i* draws slot `(i − week) mod n` and every *n*-th slot after it, where the slots are the chores padded with free weeks to a whole number of turns, and `week` counts Mondays since a fixed epoch. So over one cycle — one week per person — everyone does every chore exactly once and takes the same number of free weeks, and there is nothing to persist: a module restart, a redeploy, or running the command twice in one morning all read the same wheel. The cost is that the order is predictable to anyone who works it out; the benefit is that nobody can draw the ice maker three weeks running.
 
 **The roster order is the wheel.** `people` is the order around the disc and the order in the message. Reordering it, or inserting someone in the middle, reshuffles who has what this week — append new people at the end. Removing someone shortens the cycle and likewise reshuffles.
 

@@ -139,9 +139,8 @@ type Config struct {
 	// cancels alike. Unset disables notifications.
 	SlackNotifierName string `json:"slack_notifier_name,omitempty"`
 
-	// ChoreWheel configures the weekly maintenance rota posted by the
-	// send_weekly_chores command (coffee/chore_wheel.go). Requires
-	// slack_notifier_name. Unset disables the command.
+	// ChoreWheel configures the weekly maintenance rota posted by
+	// send_weekly_chores. Requires slack_notifier_name; unset disables it.
 	ChoreWheel *ChoreWheelConfig `json:"chore_wheel,omitempty"`
 
 	// CustomerDetectorName: customer-detector that completed orders are credited
@@ -554,29 +553,24 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	return reqDeps, optDeps, nil
 }
 
-// ChoreWheelConfig is the roster and the chores for send_weekly_chores. People
-// are the wedges on the inner disc — their order is the order on the wheel and
-// in the message, so keep it stable. Chores are the outer ring; when there are
-// fewer chores than people the remaining slots are free weeks.
+// ChoreWheelConfig is the roster and the chores for send_weekly_chores. The
+// order of People is the order on the wheel and in the message, so keep it
+// stable.
 type ChoreWheelConfig struct {
 	People []string `json:"people"`
 	Chores []string `json:"chores"`
 }
 
-// validate rejects the shapes the rotation can't make sense of: a wheel with
-// one person has nothing to rotate, more chores than people leaves chores
-// unassigned every week, and a duplicated name would give one person two
-// wedges and silently double their share.
+// validate rejects the shapes the rotation can't make sense of: a wheel with one
+// person has nothing to rotate, and a duplicated name would give one person two
+// wedges and double their share. More chores than people is fine — the wheel
+// goes round again and some people draw two.
 func (c *ChoreWheelConfig) validate(path string) error {
 	if len(c.People) < 2 {
 		return fmt.Errorf("%s: chore_wheel.people needs at least 2 names", path)
 	}
 	if len(c.Chores) == 0 {
 		return fmt.Errorf("%s: chore_wheel.chores needs at least 1 chore", path)
-	}
-	if len(c.Chores) > len(c.People) {
-		return fmt.Errorf("%s: chore_wheel has %d chores for %d people; a chore would go unassigned every week",
-			path, len(c.Chores), len(c.People))
 	}
 	for field, list := range map[string][]string{"people": c.People, "chores": c.Chores} {
 		seen := map[string]bool{}
