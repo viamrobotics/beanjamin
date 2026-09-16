@@ -88,9 +88,10 @@ func choreWheelText(assignments []choreAssignment, weekOf time.Time) string {
 }
 
 // choreWheelBlocks lays the assignment out as Block Kit: a header with the
-// week, one line per chore, free weeks grouped on a final line, and a context
-// footer explaining the cadence so nobody has to ask how it works.
-func choreWheelBlocks(assignments []choreAssignment, weekOf time.Time, cycleLen int) []any {
+// week, then one line per chore with the free weeks grouped on a final line.
+// Just the assignment — how the rotation works is documented in the README, not
+// repeated in every week's message.
+func choreWheelBlocks(assignments []choreAssignment, weekOf time.Time) []any {
 	var lines, free []string
 	for _, a := range assignments {
 		if a.Chore == "" {
@@ -113,13 +114,6 @@ func choreWheelBlocks(assignments []choreAssignment, weekOf time.Time, cycleLen 
 			},
 		},
 		mrkdwnSection(strings.Join(lines, "\n")),
-		map[string]any{
-			"type": "context",
-			"elements": []any{map[string]any{
-				"type": "mrkdwn",
-				"text": fmt.Sprintf("The wheel turns one notch a week · everyone does every chore once per %d-week cycle · react :white_check_mark: when yours is done", cycleLen),
-			}},
-		},
 	}
 }
 
@@ -146,7 +140,7 @@ func postChoreWheel(ctx context.Context, sender slackSender, cfg *ChoreWheelConf
 	if _, err := sender.DoCommand(ctx, map[string]any{
 		"command": "send",
 		"text":    choreWheelText(assignments, weekOf),
-		"blocks":  choreWheelBlocks(assignments, weekOf, len(cfg.People)),
+		"blocks":  choreWheelBlocks(assignments, weekOf),
 	}); err != nil {
 		return nil, fmt.Errorf("sending chore wheel to slack: %w", err)
 	}

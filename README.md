@@ -683,8 +683,6 @@ The message reads:
 • Cleaning the table — Nicolas P
 • Tightening the claws — Julie
 • free week — Daniel, Cheuk, Ale
-
-The wheel turns one notch a week · everyone does every chore once per 6-week cycle · react ✅ when yours is done
 ```
 
 **Fewer chores than people leaves free weeks.** Six people and three chores means three are off each week; add a fourth chore and it becomes two. There must be at least as many people as chores, or a chore would sit unassigned every week — `Validate` says so at config time rather than on Monday morning.

@@ -169,8 +169,8 @@ func TestPostChoreWheelRendersAndReports(t *testing.T) {
 	}
 
 	blocks, _ := msg["blocks"].([]any)
-	if len(blocks) != 3 {
-		t.Fatalf("got %d blocks, want header, section, context", len(blocks))
+	if len(blocks) != 2 {
+		t.Fatalf("got %d blocks, want header and section", len(blocks))
 	}
 	section := blocks[1].(map[string]any)["text"].(map[string]any)["text"].(string)
 	if !strings.Contains(section, "_free week_") {
