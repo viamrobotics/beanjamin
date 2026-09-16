@@ -179,7 +179,10 @@ func plannerOptionsForConstraint(lc *StepLinearConstraint) *armplanning.PlannerO
 	return freeMovePlannerOptions()
 }
 
-const defaultSlowMovementVelDegsPerSec = 25.0
+const (
+	defaultSlowMovementVelDegsPerSec  = 25.0
+	defaultSlowMovementAccDegsPerSec2 = 25.0
+)
 
 // Arm moves fall into three speeds. Most run at the arm's own DEFAULT speed
 // (no override) — an ordinary free traverse with an empty gripper, or a tamped
@@ -192,12 +195,13 @@ const defaultSlowMovementVelDegsPerSec = 25.0
 //
 // slowMoveOptions is the config-facing StepMoveOptions (degrees) for the slow
 // tier, attached to a Step or converted with buildMoveOptions at an execution
-// site. Acceleration falls back to the arm's own when SlowMovementAccDegsPerSec2
-// is unset.
+// site. Velocity and acceleration fall back to their defaults when unset — the
+// acceleration to a gentle value below the arm's own, since a hard acceleration
+// can slosh a full cup even at a low top speed.
 func (s *beanjaminCoffee) slowMoveOptions() *StepMoveOptions {
 	return &StepMoveOptions{
 		MaxVelDegsPerSec:  orDefault(s.cfg.SlowMovementVelDegsPerSec, defaultSlowMovementVelDegsPerSec),
-		MaxAccDegsPerSec2: s.cfg.SlowMovementAccDegsPerSec2,
+		MaxAccDegsPerSec2: orDefault(s.cfg.SlowMovementAccDegsPerSec2, defaultSlowMovementAccDegsPerSec2),
 	}
 }
 
