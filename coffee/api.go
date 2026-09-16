@@ -176,6 +176,11 @@ var coffeeCommands = []commandDef{
 	{key: "send_daily_summary", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.sendDailySummary(ctx)
 	}},
+	// Likewise cron-fired (Mondays); `true` posts this week, an object with
+	// "date": "YYYY-MM-DD" previews another week without waiting for it.
+	{key: "send_weekly_chores", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
+		return s.sendWeeklyChores(ctx, cmd["send_weekly_chores"])
+	}},
 	{key: "run_cup_flow", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
 		count, err := parseCupFlowCount(cmd["run_cup_flow"])
 		if err != nil {
@@ -208,7 +213,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]any) (ma
 		}
 	}
 
-	err := fmt.Errorf("unknown command, supported commands: cancel, rewind, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action, send_delivery_message, send_daily_summary")
+	err := fmt.Errorf("unknown command, supported commands: cancel, rewind, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action, send_delivery_message, send_daily_summary, send_weekly_chores")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }
