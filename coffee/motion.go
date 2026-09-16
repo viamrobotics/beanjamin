@@ -71,8 +71,8 @@ func withPlanTimeout(opts *armplanning.PlannerOptions) *armplanning.PlannerOptio
 // incompletePlanErr reports a plan covering only a prefix of the requested goals.
 // armplanning returns one of those with a *nil* error when its deadline expires
 // between goals, so without this check a timed-out multi-waypoint plan (pivot,
-// circular, no-spill carry) would execute as though complete and stop the arm
-// short of the pose the next step assumes it reached.
+// circular) would execute as though complete and stop the arm short of the pose
+// the next step assumes it reached.
 func incompletePlanErr(meta *armplanning.PlanMeta, goals int) error {
 	if meta == nil || meta.GoalsProcessed >= goals {
 		return nil
@@ -211,9 +211,9 @@ func (s *beanjaminCoffee) moveToPose(ctx, cancelCtx context.Context, step Step) 
 		return err
 	}
 	// A filled-container traverse (NoSpill) routes through the level carry so the
-	// drink doesn't slosh. The carry supplies its own straight-line waypoints in
-	// place of a LinearConstraint, but still honors the step's AllowedCollisions
-	// and MoveOptions. For every ordinary step, plan straight to the pose.
+	// drink doesn't slosh. The carry adds an orientation constraint in place of a
+	// LinearConstraint, but still honors the step's AllowedCollisions and
+	// MoveOptions. For every ordinary step, plan straight to the pose.
 	if step.NoSpill {
 		if err := s.carryHeldLevel(ctx, pd, step.AllowedCollisions, step.MoveOptions); err != nil {
 			return fmt.Errorf("no-spill carry to %q failed: %w", step.PoseName, err)
@@ -960,23 +960,16 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 	return nil
 }
 
-// defaultCarryWaypointSpacingMm is the spacing between the waypoints inserted
-// along a no-spill carry move, measured along the path they actually follow (see
-// carryHeldLevel, and computeLevelCarryWaypoints for what that path is). The
-// level goal cloud is only enforced at the waypoints, so between two goals the
-// trajectory is free to bow past its leeway. 100 mm keeps consecutive goals close
-// enough that the planner has little room to tilt the held drink between them;
-// noSpillOrientationToleranceDegs bounds what it may do in the gaps that remain.
-const defaultCarryWaypointSpacingMm = 100.0
-
-// noSpillOrientationToleranceDegs caps the carried container's orientation
-// *between* waypoints: noSpillGoalCloud shapes only the goals, and denser
-// waypoints shorten but never close the unconstrained spans between them.
+// noSpillOrientationToleranceDegs caps how far the carried container's
+// orientation may stray from the slerp between the carry's start and its goal.
+// RDK checks this along the whole path as a tube of this width around that
+// direct reorientation, so a single start-to-goal segment is enough to hold the
+// drink near level for the entire traverse.
 //
-// RDK measures deviation from the segment's own endpoint-to-endpoint
-// interpolation, so this bounds the excursion off that path — not the commanded
-// rotation, which on a long carry sweeps far more about the container's axis.
-const noSpillOrientationToleranceDegs = 60.0
+// The bound is on the excursion off the slerp, not on the commanded rotation:
+// both endpoints are upright container poses, so the slerp itself stays level
+// and 20° leaves the drink well inside a full cup's static spill angle.
+const noSpillOrientationToleranceDegs = 20.0
 
 // withNoSpillOrientationConstraint adds the carry's path orientation bound,
 // allocating the Constraints when the caller has none (no linear constraint and
@@ -988,162 +981,6 @@ func withNoSpillOrientationConstraint(constraints *motionplan.Constraints) *moti
 	constraints.OrientationConstraint = append(constraints.OrientationConstraint,
 		motionplan.OrientationConstraint{OrientationToleranceDegs: noSpillOrientationToleranceDegs})
 	return constraints
-}
-
-// noSpillGoalCloud relaxes the goal at each intermediate carry waypoint so IK
-// has room to solve while the held container stays close to level. The final
-// waypoint is pinned exactly (see carryHeldLevel), so this applies only to
-// in-transit goals.
-//
-// Translation is generous because slack in X/Y/Z can't tip a drink; only the
-// orientation leeways guard against sloshing.
-//
-// Leeways are measured in the commanded frame's own axes, so this is only
-// correct because carryHeldLevel commands the held-item frame, whose +Z is the
-// container's vertical axis (heldItemFramePose). Untracked it falls back to
-// grip-point, whose +Z is the tool axis — there Theta is a roll that tips a
-// container held crosswise. Tune on hardware before changing.
-var noSpillGoalCloud = &referenceframe.PoseCloud{
-	X: 100, Y: 100, Z: 100,
-	// OX/OY of 0.1 cap off-vertical tilt at arcsin(0.1)≈5.7° per axis (≈8.1°
-	// along the diagonal, as the leeways apply independently) — well below a full
-	// cup's static spill angle. Theta stays wide: a twist about a symmetric cup's
-	// own axis can't spill it, and narrowing it only starves IK.
-	OX: 0.1, OY: 0.1, OZ: 0.05, Theta: 90,
-}
-
-// minCarrySweepRadiusMm is how far from the world Z axis both endpoints of a
-// carry must sit for the sweep to be used. Inside it an endpoint's azimuth is
-// numerical noise — and so is the arc derived from it — so the carry falls back
-// to the straight line. The arm is bolted well clear of its own base axis, so in
-// practice no carry endpoint comes near this.
-const minCarrySweepRadiusMm = 10.0
-
-// carryArcSamples is how finely the swept path is sampled into a polyline. A
-// conical helix has no closed-form arc length, so the polyline both measures the
-// path and locates the waypoints along it. 256 chords hold a 100° sweep at arm's
-// reach to well under a hundredth of a mm, which is what lets the spacing below
-// be a real bound rather than a nominal one.
-const carryArcSamples = 256
-
-// carrySweepPoint returns the point at fraction u along the cylindrical sweep
-// from start to end: radius, azimuth and height about the world Z axis each
-// interpolate independently. At u=0 and u=1 it reproduces the endpoints exactly.
-//
-// The azimuth takes the short way round, matching the slerp the orientation
-// takes, so position and orientation always travel the same direction.
-func carrySweepPoint(start, end r3.Vector, u float64) r3.Vector {
-	r0, r1 := math.Hypot(start.X, start.Y), math.Hypot(end.X, end.Y)
-	a0 := math.Atan2(start.Y, start.X)
-	// The addend keeps Mod's input positive, so the result lands in [-π, π).
-	da := math.Mod(math.Atan2(end.Y, end.X)-a0+3*math.Pi, 2*math.Pi) - math.Pi
-
-	r := r0 + (r1-r0)*u
-	a := a0 + da*u
-	return r3.Vector{X: r * math.Cos(a), Y: r * math.Sin(a), Z: start.Z + (end.Z-start.Z)*u}
-}
-
-// carrySweepArc samples the swept path into a polyline, returning the cumulative
-// distance travelled at each of the carryArcSamples+1 sample parameters. The last
-// entry is the path's total length.
-func carrySweepArc(start, end r3.Vector) []float64 {
-	cumulative := make([]float64, carryArcSamples+1)
-	prev := start
-	for i := 1; i <= carryArcSamples; i++ {
-		p := carrySweepPoint(start, end, float64(i)/carryArcSamples)
-		cumulative[i] = cumulative[i-1] + p.Sub(prev).Norm()
-		prev = p
-	}
-	return cumulative
-}
-
-// carrySweepFractions returns the parameters of `segments` waypoints spaced
-// evenly *by distance travelled* along the swept path, ending exactly at 1.
-//
-// Stepping the parameter evenly instead would not: the radius changes across a
-// carry, so equal azimuth increments cover unequal ground, and the widest steps
-// run over the spacing budget the caller asked for. Walking the sampled arc keeps
-// spacingMm an actual bound. On a straight carry the two agree, which is why the
-// fallback can step the parameter directly.
-func carrySweepFractions(cumulative []float64, segments int) []float64 {
-	total := cumulative[len(cumulative)-1]
-	fractions := make([]float64, 0, segments)
-	sample := 0
-	for k := 1; k <= segments; k++ {
-		if k == segments {
-			fractions = append(fractions, 1)
-			break
-		}
-		target := total * float64(k) / float64(segments)
-		for cumulative[sample+1] < target {
-			sample++
-		}
-		// Linear interpolation within the sample the target falls in.
-		within := 0.0
-		if span := cumulative[sample+1] - cumulative[sample]; span > 0 {
-			within = (target - cumulative[sample]) / span
-		}
-		fractions = append(fractions, (float64(sample)+within)/carryArcSamples)
-	}
-	return fractions
-}
-
-// computeLevelCarryWaypoints returns the ordered goal poses for a carry from
-// startPose to endPose, spaced at most spacingMm apart along the path.
-//
-// The container is swept around the world Z axis — the arm's own base axis —
-// rather than dragged along the chord between the endpoints, which would cut
-// inward through the machine the arm stands at (the glass placement's chord
-// passes 115 mm nearer the axis than either endpoint). Interpolating radius,
-// azimuth and height separately holds the container between the two endpoint
-// radii, at the cost of a few percent of path length.
-//
-// Orientation still slerps between the endpoints; both it and the position take
-// the short way round and share one distance-along-path parameter, so they stay
-// in step. Equal azimuths degenerate the sweep into the straight line on their
-// own; an endpoint on the Z axis does not — see minCarrySweepRadiusMm.
-func computeLevelCarryWaypoints(startPose, endPose spatialmath.Pose, spacingMm float64) []spatialmath.Pose {
-	startPt := startPose.Point()
-	endPt := endPose.Point()
-
-	sweep := math.Hypot(startPt.X, startPt.Y) >= minCarrySweepRadiusMm &&
-		math.Hypot(endPt.X, endPt.Y) >= minCarrySweepRadiusMm
-
-	// Spacing is measured along whichever path the waypoints will actually follow,
-	// so "one every spacingMm" means the same thing either way.
-	var cumulative []float64
-	length := endPt.Sub(startPt).Norm()
-	if sweep {
-		cumulative = carrySweepArc(startPt, endPt)
-		length = cumulative[len(cumulative)-1]
-	}
-
-	// Number of segments: at least 1, otherwise ceil(length/spacing) so no segment
-	// exceeds spacingMm.
-	segments := 1
-	if spacingMm > 0 && length > spacingMm {
-		segments = int(math.Ceil(length / spacingMm))
-	}
-
-	fractions := make([]float64, 0, segments)
-	if sweep {
-		fractions = carrySweepFractions(cumulative, segments)
-	} else {
-		for i := 1; i <= segments; i++ {
-			fractions = append(fractions, float64(i)/float64(segments))
-		}
-	}
-
-	poses := make([]spatialmath.Pose, 0, segments)
-	for _, t := range fractions {
-		interpolated := spatialmath.Interpolate(startPose, endPose, t)
-		if !sweep {
-			poses = append(poses, interpolated)
-			continue
-		}
-		poses = append(poses, spatialmath.NewPose(carrySweepPoint(startPt, endPt, t), interpolated.Orientation()))
-	}
-	return poses
 }
 
 // carryGoalForMoveFrame converts dest — a pose authored for dest.componentName —
@@ -1180,18 +1017,15 @@ func carryGoalForMoveFrame(
 	return spatialmath.Compose(destPose, offTF.(*referenceframe.PoseInFrame).Pose()), nil
 }
 
-// carryHeldLevel carries the held container from its current pose to dest along
-// a sweep around the arm's base axis (see computeLevelCarryWaypoints for why the
-// path is not the straight line), stepping through waypoints one per
-// defaultCarryWaypointSpacingMm. Each waypoint interpolates from the container's
-// current upright pose to dest, so the orientation eases onto the approach while
-// noSpillGoalCloud keeps it near level and noSpillOrientationToleranceDegs stops
-// the trajectory bowing away between goals — so the drink doesn't slosh.
+// carryHeldLevel carries the held container from its current pose to dest,
+// free-planning the path but holding the container's orientation within
+// noSpillOrientationToleranceDegs of the direct start-to-goal reorientation for
+// the whole traverse — so the drink doesn't slosh.
 //
-// The goals command the held-item frame rather than the gripper, because
-// noSpillGoalCloud's tilt leeways only bound the drink's tilt when expressed
-// about the container's own axis. That frame is neither coincident nor
-// co-oriented with the one dest is authored for, so dest is converted into it
+// The goal commands the held-item frame rather than the gripper, because the
+// orientation bound only bounds the drink's tilt when expressed about the
+// container's own axis. That frame is neither coincident nor co-oriented with
+// the one dest is authored for, so dest is converted into it
 // (carryGoalForMoveFrame); with nothing attached it falls back to the gripper
 // frame and the conversion is a no-op.
 func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
@@ -1223,35 +1057,20 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, al
 		return err
 	}
 
-	waypoints := computeLevelCarryWaypoints(startPose, destPose, defaultCarryWaypointSpacingMm)
-	logger.Infof("no-spill carry: moving %q through %d waypoint(s) over %.0fmm (cloud: tilt±%.2f, twist±%.0f°, path±%.0f°, buffer: %.1fmm)",
-		moveFrame, len(waypoints), destPose.Point().Sub(startPose.Point()).Norm(), noSpillGoalCloud.OX, noSpillGoalCloud.Theta,
+	logger.Infof("no-spill carry: moving %q over %.0fmm (path±%.0f°, buffer: %.1fmm)",
+		moveFrame, destPose.Point().Sub(startPose.Point()).Norm(),
 		noSpillOrientationToleranceDegs, freeMoveCollisionBufferMM)
 
-	goals := make([]*armplanning.PlanState, 0, len(waypoints))
-	for i, pose := range waypoints {
-		// Intermediate waypoints carry the goal cloud so IK has room while the
-		// container stays close to level; the final waypoint is the true target, so
-		// pin it exactly (no cloud). The step that follows the carry — a linear
-		// descent into the slot or the pour pivot — starts from this pose and assumes
-		// the arm actually reached it.
-		var pif *referenceframe.PoseInFrame
-		if i == len(waypoints)-1 {
-			pif = referenceframe.NewPoseInFrame(referenceframe.World, pose)
-		} else {
-			pif = referenceframe.NewPoseInFrameWithGoalCloud(referenceframe.World, pose, noSpillGoalCloud)
-		}
-		goals = append(goals, armplanning.NewPlanState(
-			referenceframe.FrameSystemPoses{moveFrame: pif}, nil,
-		))
-	}
+	goal := armplanning.NewPlanState(referenceframe.FrameSystemPoses{
+		moveFrame: referenceframe.NewPoseInFrame(referenceframe.World, destPose),
+	}, nil)
 
 	constraints := withNoSpillOrientationConstraint(
 		buildConstraints(nil, s.filterFakeModeCollisions(s.appendHeldItemCollisions(allowedCollisions))))
 
 	positions, err := s.planTrajectory(ctx, &armplanning.PlanRequest{
 		FrameSystem:    fs,
-		Goals:          goals,
+		Goals:          []*armplanning.PlanState{goal},
 		StartState:     armplanning.NewPlanState(nil, fsInputs),
 		Constraints:    constraints,
 		PlannerOptions: freeMovePlannerOptions(),

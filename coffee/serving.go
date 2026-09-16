@@ -184,9 +184,9 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vec
 		tileWorld.X, tileWorld.Y, dropPose, approachPose)
 
 	// 1. Carry the held cup to the approach pose above the slot. A *filled*
-	// container steps through level-pinned waypoints (carryHeldLevel) so the drink
-	// doesn't slosh on the long traverse; an empty one has nothing to spill and
-	// free-plans straight there, which is both quicker and easier to plan. Both
+	// container is carried with its orientation held near level (carryHeldLevel)
+	// so the drink doesn't slosh on the long traverse; an empty one has nothing to
+	// spill and plans unconstrained, which is easier to plan. Both
 	// wrap planning failures in errMotionPlanning, so on failure the arm has not
 	// moved and the cup is still held — the caller can try the next slot.
 	carry := func() error { return s.moveToRawPose(ctx, approachPD, nil, nil, nil) }

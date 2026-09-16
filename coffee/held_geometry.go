@@ -11,8 +11,9 @@ package coffee
 // The frame is attached rotated (heldItemFramePose) so its own +Z is the
 // container's vertical axis rather than the gripper's tool axis. No collision
 // geometry depends on that rotation, but the no-spill carry commands this frame
-// by name, and a pose cloud's leeways are measured in the commanded frame's own
-// axes (see noSpillGoalCloud in motion.go).
+// by name, and its orientation bound only bounds the drink's tilt when measured
+// about the container's own axis (see noSpillOrientationToleranceDegs in
+// motion.go).
 //
 // The geometry is attached on grab (attachDetectedGeometry for a fresh vision
 // detection, reattachGeometry when re-grabbing an item whose geometry was already
@@ -156,9 +157,8 @@ func (s *beanjaminCoffee) configuredCupBox(fs *referenceframe.FrameSystem, fsInp
 // container box world-axis-aligned with its height on Z, so this makes the
 // frame's +Z the container's vertical axis: upright in the world at the moment of
 // the grab, and tilting with the container afterwards as the wrist moves.
-// carryHeldLevel depends on that — the no-spill pose cloud's tilt leeways only
-// bound the drink's tilt if the frame they are measured against is the
-// container's own.
+// carryHeldLevel depends on that — the no-spill orientation bound only bounds
+// the drink's tilt if the frame it is measured against is the container's own.
 //
 // The geometry stays in gripper-local coordinates and is deliberately not
 // re-expressed in the rotated frame. RDK attaches a frame's geometry at the
@@ -167,9 +167,9 @@ func (s *beanjaminCoffee) configuredCupBox(fs *referenceframe.FrameSystem, fsInp
 // so this rotation cannot move the collision box; it only changes the pose the
 // frame system reports for — and the planner drives — the held-item frame.
 //
-// The translation stays zero so the frame origin remains the gripper's. A pure
-// rotation leaves every carry waypoint at the same physical pose, since
-// computeLevelCarryWaypoints interpolates about the frame origin.
+// The translation stays zero so the frame origin remains the gripper's, so the
+// rotation changes only the orientation the carry is planned against, never the
+// point it drives to.
 func heldItemFramePose(gripperLocal spatialmath.Geometry) spatialmath.Pose {
 	return spatialmath.NewPoseFromOrientation(gripperLocal.Pose().Orientation())
 }
