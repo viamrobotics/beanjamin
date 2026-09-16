@@ -598,12 +598,9 @@ const (
 // runSteps executes each step in order, wrapping the first failure with label
 // (e.g. "tamp_ground") so the caller's error identifies the failed phase.
 //
-// Contiguous runs of pipelineable steps go through runStepsPipelined, which
-// plans each next move while the previous one is still executing. The steps that
-// must observe the arm before planning — pivots, circular motions, the no-spill
-// carry (stepPipelineable) — break the run and execute on their own, so the arm
-// is standing still and settled by the time they are planned. Sequencing and the
-// arm's path are identical either way; only the idle gaps between moves close.
+// Runs of pipelineable steps go through runStepsPipelined, which plans each move
+// while the previous one executes. Steps that need the arm's live pose execute on
+// their own. The arm's path is the same either way; only the idle gaps close.
 func (s *beanjaminCoffee) runSteps(ctx, cancelCtx context.Context, label string, steps ...Step) error {
 	for len(steps) > 0 {
 		if n := s.pipelineRun(steps); n > 0 {
@@ -621,9 +618,8 @@ func (s *beanjaminCoffee) runSteps(ctx, cancelCtx context.Context, label string,
 	return nil
 }
 
-// pipelineRun returns the length of the maximal run of pipelineable steps at the
-// front of steps — 0 when it begins with one that must observe the arm before
-// planning, which runSteps then executes on its own.
+// pipelineRun returns how many steps at the front of steps can be pipelined.
+// Zero means the first step needs the arm's live pose.
 func (s *beanjaminCoffee) pipelineRun(steps []Step) int {
 	n := 0
 	for n < len(steps) && s.stepPipelineable(steps[n]) {
@@ -636,11 +632,9 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 	return s.executeStepWithPlan(ctx, cancelCtx, step, nil)
 }
 
-// executeStepWithPlan is executeStep with the step's move already planned —
-// computed ahead by runStepsPipelined while the previous move was executing. A
-// nil plan is the ordinary path: plan on arrival, as executeStep always has.
-// Everything else about the step — span, cancellation, logging, pause — is the
-// same either way, which is the point of routing both through here.
+// executeStepWithPlan is executeStep with the move already planned. A nil plan
+// means plan on arrival. Both paths share this body so the step behaves the same
+// either way.
 func (s *beanjaminCoffee) executeStepWithPlan(ctx, cancelCtx context.Context, step Step, plan motionplan.Plan) error {
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::executeStep::"+step.PoseName)

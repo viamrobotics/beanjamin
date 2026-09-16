@@ -205,12 +205,8 @@ func (s *beanjaminCoffee) slowMoveOptions() *StepMoveOptions {
 	}
 }
 
-// moveToPose fetches a named pose and moves to it.
-//
-// A non-nil plan is one already computed for this step while the previous move
-// was still executing (runStepsPipelined); it is executed as-is, skipping the
-// fetch-and-plan this would otherwise do on arrival. Only steps stepPipelineable
-// accepts are ever handed one, so the branches below stay reachable for the rest.
+// moveToPose fetches a named pose and moves to it. A non-nil plan was computed
+// ahead by runStepsPipelined and is executed as-is; nil plans on arrival.
 func (s *beanjaminCoffee) moveToPose(ctx, cancelCtx context.Context, step Step, plan motionplan.Plan) error {
 	ctx, done := mergedCancelContext(ctx, cancelCtx)
 	defer done()
@@ -792,30 +788,12 @@ func (s *beanjaminCoffee) withArmInputs(base referenceframe.FrameSystemInputs, a
 	return out
 }
 
-// stepPipelineable reports whether a step's motion can be planned before the arm
-// arrives at its start — from a prior plan's end configuration rather than from
-// the arm's live position.
+// stepPipelineable reports whether a step can be planned before the arm reaches
+// its start position.
 //
-// Three kinds of step must observe the arm itself, so none of them can be
-// planned ahead:
-//
-//   - A pivot seeds its arc from where the arm ACTUALLY is and refuses to run
-//     when that is more than pivotStartToleranceMm off the pivot point
-//     (executePivot). The check exists because the portafilter is engaged in the
-//     bayonet while the rotation happens, and it is worthless against a
-//     predicted configuration.
-//   - A circular motion builds its revolution against the live inputs the same way.
-//   - The no-spill carry bounds the drink's tilt about the container's start
-//     orientation (carryHeldLevel). Since the carry was simplified to a single
-//     orientation-constrained goal that orientation is a pure function of the
-//     start inputs, so this one is pipelineable in the mechanical sense — but it
-//     is measured on a full cup, and settling error between a plan's end and
-//     where the arm really stops would feed straight into the tilt bound. It
-//     keeps reading the arm.
-//
-// Everything else is a plain move, with or without a linear constraint, that
-// planToRawPose derives entirely from its start inputs — so it can be planned
-// while the previous plan is still executing.
+// Pivots and circular motions plan from the arm's live pose, and the no-spill
+// carry bounds a full cup's tilt about it, so all three wait for the arm to
+// arrive. Plain moves plan from their start inputs alone.
 func (s *beanjaminCoffee) stepPipelineable(step Step) bool {
 	if step.PivotFromPose != "" || step.CircularRadiusMm > 0 {
 		return false
@@ -823,20 +801,15 @@ func (s *beanjaminCoffee) stepPipelineable(step Step) bool {
 	return !step.NoSpill
 }
 
-// planStepMove resolves a step's pose and plans its move from startInputs
-// without touching the arm — the planning half of moveToPose, split out so it
-// can run against a predicted configuration.
+// planStepMove plans a step's move from startInputs without touching the arm.
 func (s *beanjaminCoffee) planStepMove(
 	ctx context.Context,
 	fs *referenceframe.FrameSystem,
 	startInputs referenceframe.FrameSystemInputs,
 	step Step,
 ) (motionplan.Plan, error) {
-	// This builds a direct plan, which is the wrong motion for every step
-	// stepPipelineable rejects — most dangerously a NoSpill carry, which would
-	// silently lose its orientation bound and slosh the drink. Refuse rather than
-	// plan the wrong thing if stepPipelineable is ever widened without widening
-	// this.
+	// This builds a direct plan. A NoSpill carry planned here would lose its
+	// orientation bound and spill, so refuse rather than plan the wrong motion.
 	if !s.stepPipelineable(step) {
 		return nil, fmt.Errorf("plan move to %q: step must be planned on arrival, not ahead", step.PoseName)
 	}
@@ -851,52 +824,34 @@ func (s *beanjaminCoffee) planStepMove(
 	return plan, nil
 }
 
-// pipelinedPlan carries a plan-ahead result back from the planning goroutine.
+// pipelinedPlan is a step's plan computed ahead of time, or the error that stopped it.
 type pipelinedPlan struct {
 	plan motionplan.Plan
 	err  error
 }
 
-// runStepsPipelined executes a run of pipelineable steps, overlapping each
-// move's execution with the planning of the next. The first step is planned from
-// the arm's actual configuration; every subsequent step is planned from the
-// previous plan's end configuration while that plan executes — the same chaining
-// planToRawPose already documents for tryGrab, but concurrent, so planning
-// latency hides inside execution time instead of stalling the arm between moves.
+// runStepsPipelined runs a sequence of pipelineable steps, planning each move
+// while the previous one executes. The first step plans from the arm's current
+// configuration; the rest plan from the previous plan's end.
 //
-// Each step still runs through executeStep, which owns the trace span, the
-// cancellation checks and the pause exactly as it does on the sequential path.
-// The only thing being pipelined is where the step's plan came from. The pause
-// runs before the look-ahead is collected, so planning overlaps the dwell too.
+// Steps still execute through executeStep, so spans, cancellation and pauses
+// behave as they do sequentially. Planning only reads the frame system and one
+// plan runs at a time, so it never races the moving arm.
 //
-// Planning only reads the frame system and never touches the arm, and only one
-// plan is ever in flight, so nothing here races the running trajectory (or
-// planMotion's own request dump, which is sequential for the same reason). A
-// look-ahead that is still running when a move fails is abandoned, not waited
-// on: the deferred cancel stops it and its buffered channel lets it exit.
-//
-// The one real difference from planning on arrival: a pipelined plan starts at
-// the previous plan's NOMINAL end, not at where the arm physically settled, so
-// its first waypoint can sit a servo tolerance away from the arm's actual
-// configuration and MoveThroughJointPositions closes that gap un-collision-
-// checked. Over the free-space moves this runs on, that gap is noise. It is
-// exactly why the steps that work against something — the portafilter in the
-// bayonet, a full cup — are held out by stepPipelineable instead.
+// A pipelined plan starts at the previous plan's nominal end rather than where
+// the arm settled, so its first waypoint may be a servo tolerance off. That is
+// negligible on free-space moves, which is why steps that touch something are
+// excluded.
 func (s *beanjaminCoffee) runStepsPipelined(ctx, cancelCtx context.Context, steps []Step) error {
 	if len(steps) == 0 {
 		return nil
 	}
-	// Planning runs under its own context so a look-ahead stops the moment an
-	// operator cancels, and is abandoned rather than waited on when the sequence
-	// returns early against a step that will now never execute.
+	// Stop planning as soon as the sequence returns or an operator cancels.
 	planCtx, stopPlanning := mergedCancelContext(ctx, cancelCtx)
 	defer stopPlanning()
 
-	// The frame system is captured once for the whole run. Nothing inside a step
-	// sequence re-parents a frame or attaches held geometry — lockFilterFrame,
-	// attachHeldGeometry and the staged-glass obstacle all happen between
-	// sequences — so every step plans against the same world, and only the arm's
-	// configuration advances. That is exactly what withArmInputs substitutes.
+	// The frame system holds still for the whole run: nothing in a step sequence
+	// re-parents a frame or attaches geometry, so only the arm's inputs change.
 	fs, fsInputs, err := s.currentInputs(planCtx)
 	if err != nil {
 		return err
@@ -907,7 +862,7 @@ func (s *beanjaminCoffee) runStepsPipelined(ctx, cancelCtx context.Context, step
 	}
 
 	for i, step := range steps {
-		// Hand the next step to a planner before committing this move to the arm.
+		// Plan the next step while this one executes.
 		var ahead chan pipelinedPlan
 		if i+1 < len(steps) {
 			ahead = make(chan pipelinedPlan, 1)

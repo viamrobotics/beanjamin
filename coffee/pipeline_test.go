@@ -5,11 +5,8 @@ import (
 	"testing"
 )
 
-// TestStepPipelineable locks down which steps may have their plan computed
-// ahead of time, while the previous plan is still executing. Pivots, circular
-// motions, and the no-spill carry all read the arm's (or the held container's)
-// actual pose before planning, so they must break the pipeline; everything else
-// is a plain move that plans purely from its start inputs.
+// Pivots, circular motions and the no-spill carry read the arm's live pose, so
+// they cannot be planned ahead. Everything else can.
 func TestStepPipelineable(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{}}
 
@@ -37,10 +34,8 @@ func TestStepPipelineable(t *testing.T) {
 	}
 }
 
-// TestPipelineRun checks how runSteps carves a sequence into pipelined runs and
-// the standalone steps between them. The partition drives which moves overlap
-// their planning, so an off-by-one here would either pipeline a step that must
-// observe the arm or leave an idle gap that did not need to be there.
+// The partition decides which moves overlap their planning. An off-by-one would
+// either pipeline a step that needs the live pose or leave a needless idle gap.
 func TestPipelineRun(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{}}
 	move := func(name string) Step { return Step{PoseName: name} }
@@ -68,10 +63,8 @@ func TestPipelineRun(t *testing.T) {
 	}
 }
 
-// TestPipelineRunPartitionsCleanPortafilter walks the real clean_portafilter
-// sequence — the longest runSteps call in the brew cycle — to show the runs the
-// two scrubbing motions carve it into, and that every step lands in exactly one
-// of them.
+// clean_portafilter is the longest sequence in the brew cycle. Check how its two
+// scrubs split it, and that every step lands in exactly one run.
 func TestPipelineRunPartitionsCleanPortafilter(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{}}
 	steps := []Step{
@@ -126,10 +119,8 @@ func TestPipelineRunPartitionsCleanPortafilter(t *testing.T) {
 	}
 }
 
-// TestPlanStepMoveRefusesNonPipelineable guards the one way this could go quietly
-// wrong: planStepMove builds a direct plan, so handing it a step that needs a
-// different motion — above all a NoSpill carry, which would lose its orientation
-// bound and slosh the drink — must fail rather than plan the wrong thing.
+// planStepMove builds a direct plan. Given a step that needs a different motion —
+// above all a NoSpill carry — it must fail rather than plan the wrong one.
 func TestPlanStepMoveRefusesNonPipelineable(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{}}
 	for _, step := range []Step{
