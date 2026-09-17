@@ -176,17 +176,33 @@ function compareOrders(
   }
 }
 
-function VideoExpansion({ entry }: { entry: VideoEntry | undefined }) {
+function VideoExpansion({
+  entry,
+  expectedCount,
+}: {
+  entry: VideoEntry | undefined;
+  /** Known before the URLs are fetched, so the skeleton is the right size. */
+  expectedCount: number;
+}) {
   if (!entry || entry.state === "loading") {
-    return <p className="text-neutral-500 m-0">Loading video…</p>;
+    // Sized to the clips that are coming: the row opens at its final height
+    // instead of starting one line tall and jumping when they resolve.
+    return (
+      <div className="flex flex-wrap gap-3">
+        {Array.from({ length: Math.max(1, expectedCount) }, (_, i) => (
+          <div
+            key={i}
+            className="flex-1 basis-64 min-w-0 aspect-video rounded-md border border-neutral-200 bg-neutral-100 animate-pulse"
+          />
+        ))}
+      </div>
+    );
   }
   if (entry.state === "error") {
-    return <p className="text-red-500 m-0">Error: {entry.message}</p>;
+    return <p className="text-red-700 m-0">Error: {entry.message}</p>;
   }
   if (entry.items.length === 0) {
-    return (
-      <p className="text-neutral-500 m-0">No clip available yet.</p>
-    );
+    return <p className="text-neutral-500 m-0">No clip available yet.</p>;
   }
   return (
     <div className="flex flex-wrap gap-3">
@@ -195,8 +211,9 @@ function VideoExpansion({ entry }: { entry: VideoEntry | undefined }) {
           key={item.id}
           controls
           src={item.url}
-          // One camera per clip: side by side is how you compare them.
-          className="flex-1 basis-64 min-w-0 rounded-md border border-neutral-200"
+          // One camera per clip: side by side is how you compare them. The
+          // aspect box holds its place before metadata loads.
+          className="flex-1 basis-64 min-w-0 aspect-video rounded-md border border-neutral-200 bg-neutral-900"
         />
       ))}
     </div>
@@ -226,6 +243,18 @@ function OrderTable({
   );
 
   const sorted = [...orders].sort((a, b) => compareOrders(a, b, sort));
+
+  // Now that the page scrolls rather than the table, a row opened near the
+  // fold would put its clips below it. "nearest" is deliberate: a row already
+  // fully visible doesn't move.
+  const expandedRowRef = useRef<HTMLTableRowElement>(null);
+  useEffect(() => {
+    if (!expandedOrder) return;
+    expandedRowRef.current?.scrollIntoView({
+      block: "nearest",
+      behavior: "smooth",
+    });
+  }, [expandedOrder]);
 
   const toggleVideo = (order: OrderRecord) => {
     const orderId = order.orderId;
@@ -261,9 +290,11 @@ function OrderTable({
 
   return (
     <>
-      {/* Scrolls rather than paginating, so a whole day is one list. The
-          header sticks so the columns stay readable partway down. */}
-      <div className="max-h-[28rem] overflow-y-auto rounded-md border border-neutral-200 bg-white">
+      {/* The page scrolls, not this box: an expanded row carries three clips
+          and a plan panel, and nesting that inside its own scroller meant the
+          row and the list fought over the same few hundred pixels. The header
+          still sticks, now to the viewport. */}
+      <div className="rounded-md border border-neutral-200 bg-white">
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="text-left text-neutral-500">
@@ -353,11 +384,15 @@ function OrderTable({
                 rows.push(
                   <tr
                     key={`${rowKey}-video`}
+                    ref={expandedRowRef}
                     className="border-t border-neutral-200 bg-white"
                   >
                     <td colSpan={TABLE_COL_COUNT} className="px-2 py-3">
                       <div className="flex flex-col gap-3">
-                        <VideoExpansion entry={videoByOrder.get(o.orderId)} />
+                        <VideoExpansion
+                          entry={videoByOrder.get(o.orderId)}
+                          expectedCount={videoCountByOrder.get(o.orderId) ?? 0}
+                        />
                         <PlanPanel
                           orderId={o.orderId}
                           viamClient={viamClient}
