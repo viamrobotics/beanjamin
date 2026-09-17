@@ -284,6 +284,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `cam_storage_mux_name` | string | No   | Name of a [`viam:multiplexer:resource-multiplexer`](https://github.com/viam-modules/multiplexer) generic service whose dependencies are `viam:video:storage` stores; when set, saves a clip per order attempt (synchronous `save`) to all configured stores. |
 | `data_dir`                 | string | No       | Directory for persistent module data. When set alongside `cam_storage_mux_name`, a pending-clip record is written under `<data_dir>/pending-clips` when each order starts and removed only once that order's clip has been saved successfully — a save that fails (or never runs because the process died first) leaves the record in place. Use with a Viam scheduled job calling `cleanup_pending_clips` to recover clips for any order whose save was interrupted or failed. |
 | `slack_notifier_name`      | string | No       | Name of a [`viam:notifications:slack`](https://github.com/viam-modules/notifications) generic service. When set, the coffee service sends a best-effort Slack message on every non-successful order attempt (faults and operator cancels). See "Slack notifications" above. |
+| `chore_wheel`              | object | No       | Roster and chores for the weekly maintenance rota posted by `send_weekly_chores`: `{ "people": [...], "chores": [...] }`. Requires `slack_notifier_name`. See "Weekly chore wheel in Slack" below. |
 | `customer_detector_name`   | string | No       | Name of a `viam:beanjamin:customer-detector` service. When set, the coffee service credits each **successfully** completed order (when the `prepare_order` carried a `customer_email`) to that customer's order history via the detector's `record_order` DoCommand, powering "the usual". Setting the field automatically registers it as a dependency. Unset disables order-history recording. |
 | `delivery_handler_name`    | string | No       | Name of a generic service on a peer delivery machine, reached through a remote part (e.g. `"delivery-bot:mission-control"` after adding the peer machine as a remote named `delivery-bot` in app.viam.com). Setting the field automatically registers it as an (optional) dependency. When a `fulfillment: "delivery"` order's drink lands in the serving area, the coffee service sends that service a `delivery_request` DoCommand (see `send_delivery_message` below for the payload and the manual test hook). Unset disables outbound peer messaging; delivery orders then just announce and rely on pickup from the serving area. |
 | `input_range_override`     | object | No       | Narrows joint limits on named frames before motion planning. Outer key is the frame name (typically the arm); inner key is either the joint name or its stringified index (e.g. `"5"` for the last joint of a 6-DoF arm). Each value is `{ "min_degs": number, "max_degs": number }`. |
@@ -509,6 +510,20 @@ In normal operation this fires automatically: when a `fulfillment: "delivery"` o
 
 The command takes no options — the window is a rolling 24 hours ending now, and timestamps render in the host's timezone. Returns `{"sent": true, "orders": N}`.
 
+**`send_weekly_chores`** - Post this week's chore assignments to Slack. Normally fired every Monday by viam-server's job manager (see "Weekly chore wheel in Slack" below). Requires `chore_wheel` and `slack_notifier_name`.
+
+```
+{"send_weekly_chores": true}
+```
+
+Pass an object with a date to read the wheel for a different week — how you preview next Monday, or check what last Monday should have said — without waiting for it:
+
+```
+{"send_weekly_chores": {"date": "2026-10-05"}}
+```
+
+Returns `{"sent": true, "week": N, "<chore>": "<person>", ...}`.
+
 **`reset_world`** - Recover the service to a clean idle state from anywhere. In order: cancels any running sequence (waiting for it to actually stop), clears the queue (pending + recently completed), rebuilds the cached frame system from the framesystem service (discarding mid-cycle mutations like a portafilter frame reparented to world by `lock_portafilter`), forgets that the fridge door is standing open, and releases the cancel-induced queue pause. Safe to call from any state — each step is skipped when not applicable. Does not move the arm — if you want to re-home, run `execute_action` afterward.
 
 > ⚠️ `reset_world` asserts that the physical world matches the configured frame system. Like `proceed`, it clears the recorded fridge-door angle, so **shut the door by hand before running it** — otherwise the model believes the panel is closed while it stands open, and the next plan will route the arm straight through it.
@@ -645,6 +660,60 @@ The numbers do not come from anything the service keeps in memory. They are read
 One consequence worth knowing: a job that fails is only a log line plus an entry in the job's history; nothing is posted to Slack, so a broken digest looks the same as a channel nobody used. The "No orders in the last 24 hours" heartbeat is the cheap check against that.
 
 **Prerequisite:** the query authenticates from the `VIAM_API_KEY` / `VIAM_API_KEY_ID` environment variables, which viam-server only injects into modules when the machine config carries an api-key auth handler. Without one, the digest fails at call time with an auth error while everything else about the service keeps working.
+
+### Weekly chore wheel in Slack
+
+[#weekly-chore-wheel-in-slack](#weekly-chore-wheel-in-slack)
+
+The machine has upkeep that isn't the arm's job — the ice maker, the table, the claws — and `send_weekly_chores` posts who has which of it this week. It is the paper chore wheel: names on an inner disc, chores on an outer ring, turned one notch every Monday.
+
+```
+"chore_wheel": {
+  "people": ["Vijay", "Nicolas P", "Julie", "Daniel", "Cheuk", "Ale"],
+  "chores": [
+    "Cleaning the ice maker",
+    "Cleaning the table",
+    "Tightening the claws",
+    "Cleaning the cleaner brushes",
+    "Cleaning the milk bottle"
+  ]
+}
+```
+
+The message reads:
+
+```
+🎡 Chore wheel — week of Sep 21
+
+• Cleaning the ice maker — Nicolas P
+• Cleaning the table — Julie
+• Tightening the claws — Daniel
+• Cleaning the cleaner brushes — Cheuk
+• Cleaning the milk bottle — Ale
+• free week — Vijay
+```
+
+**Any number of chores works.** Fewer chores than people leaves free weeks — six people and five chores means one person is off each week. More chores than people sends the wheel round again, so some people draw two that week. Either way every chore is assigned every week.
+
+**The rotation is a function of the calendar, not of state.** Person *i* draws slot `(i − week) mod n` and every *n*-th slot after it, where the slots are the chores padded with free weeks to a whole number of turns, and `week` counts Mondays since a fixed epoch. So over one cycle — one week per person — everyone does every chore exactly once and takes the same number of free weeks, and there is nothing to persist: a module restart, a redeploy, or running the command twice in one morning all read the same wheel. The cost is that the order is predictable to anyone who works it out; the benefit is that nobody can draw the ice maker three weeks running.
+
+**The roster order is the wheel.** `people` is the order around the disc and the order in the message. Reordering it, or inserting someone in the middle, reshuffles who has what this week — append new people at the end. Removing someone shortens the cycle and likewise reshuffles.
+
+**Scheduling lives in the machine config**, exactly as for the daily digest:
+
+```
+"jobs": [
+  {
+    "name": "weekly-chore-wheel",
+    "schedule": "CRON_TZ=America/New_York 0 9 * * 1",
+    "resource": "coffee",
+    "method": "DoCommand",
+    "command": { "send_weekly_chores": true }
+  }
+]
+```
+
+The `CRON_TZ=` caveat from the digest applies here too, with one wrinkle of its own: the week number comes from the calendar *date* in the timezone the command runs in. A job firing at 9am New York and a hand-run at 9am London on the same Monday agree; a hand-run late Sunday evening in New York is still last week. Fire it on Mondays and none of this matters.
 
 ### Pose reference
 

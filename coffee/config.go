@@ -6,6 +6,7 @@ package coffee
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"go.viam.com/rdk/components/arm"
@@ -137,6 +138,10 @@ type Config struct {
 	// for every non-successful order attempt — genuine faults and operator
 	// cancels alike. Unset disables notifications.
 	SlackNotifierName string `json:"slack_notifier_name,omitempty"`
+
+	// ChoreWheel sets up the weekly chore rota posted by send_weekly_chores.
+	// Needs slack_notifier_name. Leave it out to turn the command off.
+	ChoreWheel *ChoreWheelConfig `json:"chore_wheel,omitempty"`
 
 	// CustomerDetectorName: customer-detector that completed orders are credited
 	// to, for "the usual". Unset disables recording.
@@ -539,5 +544,47 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		return nil, nil, err
 	}
 
+	if cfg.ChoreWheel != nil {
+		if cfg.SlackNotifierName == "" {
+			return nil, nil, fmt.Errorf("%s: chore_wheel requires slack_notifier_name (the wheel is posted through it)", path)
+		}
+		if err := cfg.ChoreWheel.validate(path); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	return reqDeps, optDeps, nil
+}
+
+// ChoreWheelConfig is the list of people and chores for send_weekly_chores. The
+// order of People is the order of the wheel, so keep it stable.
+type ChoreWheelConfig struct {
+	People []string `json:"people"`
+	Chores []string `json:"chores"`
+}
+
+// validate rejects lists the rotation cannot use. One person has nothing to
+// rotate, and a repeated name would give someone two slots and double their
+// share. More chores than people is fine; the list just wraps around.
+func (c *ChoreWheelConfig) validate(path string) error {
+	if len(c.People) < 2 {
+		return fmt.Errorf("%s: chore_wheel.people needs at least 2 names", path)
+	}
+	if len(c.Chores) == 0 {
+		return fmt.Errorf("%s: chore_wheel.chores needs at least 1 chore", path)
+	}
+	for field, list := range map[string][]string{"people": c.People, "chores": c.Chores} {
+		seen := map[string]bool{}
+		for _, v := range list {
+			v = strings.TrimSpace(v)
+			if v == "" {
+				return fmt.Errorf("%s: chore_wheel.%s contains an empty entry", path, field)
+			}
+			if seen[v] {
+				return fmt.Errorf("%s: chore_wheel.%s lists %q twice", path, field, v)
+			}
+			seen[v] = true
+		}
+	}
+	return nil
 }
