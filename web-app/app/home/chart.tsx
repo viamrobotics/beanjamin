@@ -337,7 +337,8 @@ export function OrdersChart({
   data: DailyOrderCount[];
   totals14d: RobotTotal[];
   onBarClick: (day: Date, row: RobotDayRow) => void;
-  selected: { dayMs: number; robotId: string } | null;
+  /** A null robotId selects the whole day group, as the today panel does. */
+  selected: { dayMs: number; robotId: string | null } | null;
 }) {
   const [hover, setHover] = useState<HoverInfo | null>(null);
 
@@ -464,7 +465,8 @@ export function OrdersChart({
                   selected !== null &&
                   row !== undefined &&
                   selected.dayMs === d.day.getTime() &&
-                  selected.robotId === row.robotId;
+                  (selected.robotId === null ||
+                    selected.robotId === row.robotId);
                 return (
                   <Bar
                     key={name}

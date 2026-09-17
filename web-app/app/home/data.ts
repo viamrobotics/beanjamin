@@ -35,12 +35,18 @@ export interface DailyOrderCount {
 
 export interface OrderRecord {
   orderId: string;
+  robotId: string;
   customerName: string;
   drink: string;
   startTime: Date;
   endTime: Date;
   durationMs: number;
   ok: boolean;
+  // An operator stopping the run is not a fault, and the two read very
+  // differently when scanning a day for things that went wrong.
+  cancelled: boolean;
+  failedStep: string;
+  decaf: boolean;
   errorMessage: string;
 }
 
@@ -50,6 +56,7 @@ export interface LeaderboardEntry {
 }
 
 export type Panel =
+  | { kind: "today" }
   | { kind: "day"; day: Date; robotId: string; robotName: string }
   | { kind: "errors" };
 
@@ -58,6 +65,7 @@ export type SortDir = "asc" | "desc";
 
 interface RawOrderRow {
   time_received: Date | string;
+  robot_id?: string;
   data?: {
     readings?: {
       order_id?: string;
@@ -67,6 +75,9 @@ interface RawOrderRow {
       end_time?: Date | string;
       duration_ms?: number;
       order_ok?: boolean;
+      operator_cancelled?: boolean;
+      failed_step?: string;
+      decaf?: boolean;
       error_message?: string;
     };
   };
@@ -108,33 +119,54 @@ function parseOrderResults(rows: RawOrderRow[]): OrderRecord[] {
     const x = r.data?.readings ?? {};
     return {
       orderId: x.order_id ?? "",
+      robotId: r.robot_id ?? "",
       customerName: x.customer_name ?? "",
       drink: x.drink ?? "",
       startTime: toDate(x.start_time),
       endTime: toDate(x.end_time),
       durationMs: x.duration_ms ?? 0,
       ok: x.order_ok ?? false,
+      cancelled: x.operator_cancelled ?? false,
+      failedStep: x.failed_step ?? "",
+      decaf: x.decaf ?? false,
       errorMessage: x.error_message ?? "",
     };
   });
 }
 
+export function startOfToday(): Date {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
 export function panelKey(p: Panel | null): string {
   if (!p) return "none";
+  if (p.kind === "today") return "today";
   if (p.kind === "errors") return "errors";
   return `day-${p.day.getTime()}-${p.robotId}`;
 }
 
 export function panelTitle(p: Panel): string {
-  return p.kind === "day"
-    ? `${p.robotName} · ${formatDay(p.day)}`
-    : "Errors · last 7 days";
+  switch (p.kind) {
+    case "today":
+      return "Today · all machines";
+    case "errors":
+      return "Errors · last 7 days";
+    case "day":
+      return `${p.robotName} · ${formatDay(p.day)}`;
+  }
 }
 
 export function panelEmptyMsg(p: Panel): string {
-  return p.kind === "errors"
-    ? "No errors in the last 7 days."
-    : "No orders for this day.";
+  switch (p.kind) {
+    case "today":
+      return "No orders yet today.";
+    case "errors":
+      return "No errors in the last 7 days.";
+    case "day":
+      return "No orders for this day.";
+  }
 }
 
 export async function listMachines(client: VIAM.ViamClient): Promise<Machine[]> {
@@ -337,9 +369,10 @@ export async function loadLeaderboard(
     .map((r) => ({ name: r.name as string, count: r.value }));
 }
 
+/** A null robotId spans every machine in the location. */
 export async function loadOrdersForDay(
   client: VIAM.ViamClient,
-  robotId: string,
+  robotId: string | null,
   day: Date
 ): Promise<OrderRecord[]> {
   const dayEnd = new Date(day.getTime() + 24 * 60 * 60 * 1000);
@@ -348,7 +381,7 @@ export async function loadOrdersForDay(
       $match: {
         location_id: LOCATION_ID,
         component_name: RESOURCE_NAME,
-        robot_id: robotId,
+        ...(robotId === null ? {} : { robot_id: robotId }),
         time_received: { $gte: day, $lt: dayEnd },
       },
     },
@@ -363,31 +396,28 @@ export interface OrderVideo {
   capturedAt: Date | null;
 }
 
-const VIDEO_TIME_BUFFER_MS = 5 * 60 * 1000;
-
-interface OrderTimeBounds {
-  orderId: string;
-  startTime: Date;
-  endTime: Date;
-}
-
-function buildVideoFilter(order: OrderTimeBounds): VIAM.dataApi.Filter {
-  const start = new Date(order.startTime.getTime() - VIDEO_TIME_BUFFER_MS);
-  const end = new Date(order.endTime.getTime() + VIDEO_TIME_BUFFER_MS);
-  return {
+// The order ID is not a video-only tag: coffee/motion.go's planRequestTagDir
+// tags every saved motion-plan JSON with it too, one file per planned motion,
+// so an order carries dozens of them against its handful of clips. Without a
+// mime-type filter those plan files come back as "videos" and render as broken
+// players. The clip tag is exact, so no capture-time window is needed.
+export function buildVideoFilter(orderIds: string[]): VIAM.dataApi.Filter {
+  return new VIAM.dataApi.Filter({
     locationIds: [LOCATION_ID],
-    tagsFilter: { tags: [order.orderId] },
-    startTime: start,
-    endTime: end,
-  } as unknown as VIAM.dataApi.Filter;
+    mimeType: ["video/mp4"],
+    tagsFilter: new VIAM.dataApi.TagsFilter({
+      type: VIAM.dataApi.TagsFilterType.MATCH_BY_OR,
+      tags: orderIds,
+    }),
+  });
 }
 
 export async function loadVideosForOrder(
   client: VIAM.ViamClient,
-  order: OrderTimeBounds
+  orderId: string
 ): Promise<OrderVideo[]> {
   const result = await client.dataClient.binaryDataByFilter(
-    buildVideoFilter(order),
+    buildVideoFilter([orderId]),
     100,
     undefined,
     undefined,
@@ -411,46 +441,21 @@ export async function getVideoSignedUrl(
   return client.dataClient.createBinaryDataSignedURL(binaryDataId);
 }
 
-export async function countVideosForOrder(
-  client: VIAM.ViamClient,
-  order: OrderTimeBounds
-): Promise<number> {
-  const result = await client.dataClient.binaryDataByFilter(
-    buildVideoFilter(order),
-    undefined,
-    undefined,
-    undefined,
-    false,
-    true,
-    false
-  );
-  return Number(result.count);
-}
+// One clip per camera per order, so a day's worth of orders fits well inside
+// this page; the tag match is exact, so nothing extra is counted.
+const VIDEO_COUNT_PAGE_SIZE = 500;
 
 export async function countVideosForOrders(
   client: VIAM.ViamClient,
-  orders: OrderTimeBounds[]
+  orderIds: string[]
 ): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
-  for (const o of orders) counts.set(o.orderId, 0);
-  if (orders.length === 0) return counts;
-
-  let minStart = orders[0].startTime.getTime();
-  let maxEnd = orders[0].endTime.getTime();
-  for (const o of orders) {
-    minStart = Math.min(minStart, o.startTime.getTime());
-    maxEnd = Math.max(maxEnd, o.endTime.getTime());
-  }
-  const filter = {
-    locationIds: [LOCATION_ID],
-    tagsFilter: { tags: orders.map((o) => o.orderId) },
-    startTime: new Date(minStart - VIDEO_TIME_BUFFER_MS),
-    endTime: new Date(maxEnd + VIDEO_TIME_BUFFER_MS),
-  } as unknown as VIAM.dataApi.Filter;
+  for (const id of orderIds) counts.set(id, 0);
+  if (orderIds.length === 0) return counts;
 
   const result = await client.dataClient.binaryDataByFilter(
-    filter,
-    500,
+    buildVideoFilter(orderIds),
+    VIDEO_COUNT_PAGE_SIZE,
     undefined,
     undefined,
     false,
