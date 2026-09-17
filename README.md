@@ -670,7 +670,13 @@ The machine has upkeep that isn't the arm's job — the ice maker, the table, th
 ```
 "chore_wheel": {
   "people": ["Vijay", "Nicolas P", "Julie", "Daniel", "Cheuk", "Ale"],
-  "chores": ["Cleaning the ice maker", "Cleaning the table", "Tightening the claws"]
+  "chores": [
+    "Cleaning the ice maker",
+    "Cleaning the table",
+    "Tightening the claws",
+    "Cleaning the cleaner brushes",
+    "Cleaning the milk bottle"
+  ]
 }
 ```
 
@@ -679,13 +685,15 @@ The message reads:
 ```
 🎡 Chore wheel — week of Sep 21
 
-• Cleaning the ice maker — Vijay
-• Cleaning the table — Nicolas P
-• Tightening the claws — Julie
-• free week — Daniel, Cheuk, Ale
+• Cleaning the ice maker — Nicolas P
+• Cleaning the table — Julie
+• Tightening the claws — Daniel
+• Cleaning the cleaner brushes — Cheuk
+• Cleaning the milk bottle — Ale
+• free week — Vijay
 ```
 
-**Any number of chores works.** Fewer chores than people leaves free weeks — six people and three chores means three are off each week. More chores than people sends the wheel round again, so some people draw two that week. Either way every chore is assigned every week.
+**Any number of chores works.** Fewer chores than people leaves free weeks — six people and five chores means one person is off each week. More chores than people sends the wheel round again, so some people draw two that week. Either way every chore is assigned every week.
 
 **The rotation is a function of the calendar, not of state.** Person *i* draws slot `(i − week) mod n` and every *n*-th slot after it, where the slots are the chores padded with free weeks to a whole number of turns, and `week` counts Mondays since a fixed epoch. So over one cycle — one week per person — everyone does every chore exactly once and takes the same number of free weeks, and there is nothing to persist: a module restart, a redeploy, or running the command twice in one morning all read the same wheel. The cost is that the order is predictable to anyone who works it out; the benefit is that nobody can draw the ice maker three weeks running.
 
