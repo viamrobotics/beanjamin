@@ -139,8 +139,8 @@ type Config struct {
 	// cancels alike. Unset disables notifications.
 	SlackNotifierName string `json:"slack_notifier_name,omitempty"`
 
-	// ChoreWheel configures the weekly maintenance rota posted by
-	// send_weekly_chores. Requires slack_notifier_name; unset disables it.
+	// ChoreWheel sets up the weekly chore rota posted by send_weekly_chores.
+	// Needs slack_notifier_name. Leave it out to turn the command off.
 	ChoreWheel *ChoreWheelConfig `json:"chore_wheel,omitempty"`
 
 	// CustomerDetectorName: customer-detector that completed orders are credited
@@ -553,18 +553,16 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	return reqDeps, optDeps, nil
 }
 
-// ChoreWheelConfig is the roster and the chores for send_weekly_chores. The
-// order of People is the order on the wheel and in the message, so keep it
-// stable.
+// ChoreWheelConfig is the list of people and chores for send_weekly_chores. The
+// order of People is the order of the wheel, so keep it stable.
 type ChoreWheelConfig struct {
 	People []string `json:"people"`
 	Chores []string `json:"chores"`
 }
 
-// validate rejects the shapes the rotation can't make sense of: a wheel with one
-// person has nothing to rotate, and a duplicated name would give one person two
-// wedges and double their share. More chores than people is fine — the wheel
-// goes round again and some people draw two.
+// validate rejects lists the rotation cannot use. One person has nothing to
+// rotate, and a repeated name would give someone two slots and double their
+// share. More chores than people is fine; the list just wraps around.
 func (c *ChoreWheelConfig) validate(path string) error {
 	if len(c.People) < 2 {
 		return fmt.Errorf("%s: chore_wheel.people needs at least 2 names", path)

@@ -1,14 +1,12 @@
 package coffee
 
-// Weekly chore wheel: one Slack message every Monday naming who has which
-// maintenance chore this week.
+// Weekly chore wheel: posts one Slack message every Monday saying who has which
+// chore this week.
 //
-// It is the paper chore wheel — names on an inner disc, chores on an outer ring
-// — turned one notch a week. The rotation is a pure function of the calendar, so
-// there is nothing to persist: restarts, redeploys and repeat runs all say the
-// same thing.
+// Who gets what is worked out from the date, so nothing is stored. Restarting
+// the module or running the command twice gives the same answer.
 //
-// Scheduling lives in the machine config's "jobs" block, not here. See README.
+// The schedule lives in the machine config under "jobs", not here. See README.
 
 import (
 	"context"
@@ -17,40 +15,40 @@ import (
 	"time"
 )
 
-// choreWheelTimeout caps the Slack send. Cron jobs are singletons, so a wedged
-// post would suppress every later firing.
+// choreWheelTimeout caps the Slack send. Only one cron job runs at a time, so a
+// stuck post would block every later one.
 const choreWheelTimeout = 15 * time.Second
 
-// choreWheelEpoch anchors the week counter. Any fixed Monday works; a Monday
-// keeps week boundaries where the job fires rather than mid-week.
+// choreWheelEpoch is the Monday the week count starts from. Any fixed Monday
+// works, but it has to be a Monday so weeks start when the job runs.
 var choreWheelEpoch = time.Date(2026, time.January, 5, 0, 0, 0, 0, time.UTC)
 
-// choreWheelWeek is the number of whole weeks since the epoch, counted from the
-// local calendar date so 9am Monday is the same week in any timezone.
+// choreWheelWeek returns how many weeks have passed since the epoch. It uses the
+// local calendar date, so 9am Monday is the same week in every timezone.
 func choreWheelWeek(now time.Time) int {
 	y, m, d := now.Date()
 	local := time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 	return int(local.Sub(choreWheelEpoch).Hours() / (24 * 7))
 }
 
-// choreAssignment is one person and the chores they drew. Chores is empty for a
-// free week.
+// choreAssignment is one person and the chores they got. Chores is empty if they
+// have a free week.
 type choreAssignment struct {
 	Person string
 	Chores []string
 }
 
-// assignChores turns the wheel `week` notches and reads it off. Person i draws
-// slot (i - week) mod n and every n-th slot after that, where the slots are the
-// chores padded with free weeks to a whole number of turns around the wheel.
+// assignChores works out who does what in the given week.
 //
-// Fewer chores than people means one turn: one slot each, and the people past
-// the last chore get a free week. More chores than people means the wheel goes
-// round again, so some people draw two. Either way each person sees every slot
-// exactly once over n weeks, so everyone does every chore once per cycle.
+// The chores go into a list of slots. If there are fewer chores than people, the
+// leftover slots are free weeks. If there are more, the list wraps around again
+// so some people get two.
 //
-// The order of people is the order on the wheel and in the message, so keep it
-// stable in config.
+// Person i takes slot (i - week) mod n, and every n-th slot after that. The
+// whole list shifts by one each week, so over n weeks everyone does every chore
+// once.
+//
+// The order of people is the order of the wheel, so keep it stable in config.
 func assignChores(people, chores []string, week int) []choreAssignment {
 	n := len(people)
 	turns := (len(chores) + n - 1) / n
@@ -62,7 +60,7 @@ func assignChores(people, chores []string, week int) []choreAssignment {
 
 	out := make([]choreAssignment, n)
 	for i, who := range people {
-		// Go's % keeps the dividend's sign, so normalise for negative weeks.
+		// Go's % can return a negative number, so add n to bring it back in range.
 		start := ((i-week)%n + n) % n
 		var drawn []string
 		for t := 0; t < turns; t++ {
@@ -75,8 +73,8 @@ func assignChores(people, chores []string, week int) []choreAssignment {
 	return out
 }
 
-// choreWheelText is the flat fallback Slack shows in notification previews. It
-// carries the whole assignment so a lock screen is enough to know your chore.
+// choreWheelText is the plain-text version Slack shows in notifications. It
+// lists everything, so you can read your chore off a lock screen.
 func choreWheelText(assignments []choreAssignment, weekOf time.Time) string {
 	var parts []string
 	for _, a := range assignments {
@@ -88,8 +86,8 @@ func choreWheelText(assignments []choreAssignment, weekOf time.Time) string {
 		weekOf.Format("Jan 2"), strings.Join(parts, "; "))
 }
 
-// choreWheelBlocks renders the assignment as Block Kit: a header, then one line
-// per chore with free weeks grouped on a final line.
+// choreWheelBlocks builds the Slack message: a heading, then one line per chore,
+// with anyone on a free week grouped on the last line.
 func choreWheelBlocks(assignments []choreAssignment, weekOf time.Time) []any {
 	var lines, free []string
 	for _, a := range assignments {
@@ -118,19 +116,20 @@ func choreWheelBlocks(assignments []choreAssignment, weekOf time.Time) []any {
 	}
 }
 
-// slackSender is the one notifier method the wheel needs, narrowed so the send
-// path can be tested without a real Slack service.
+// slackSender is the one method we need from the Slack service. Keeping it this
+// small lets the tests pass in a fake.
 type slackSender interface {
 	DoCommand(ctx context.Context, cmd map[string]any) (map[string]any, error)
 }
 
-// postChoreWheel computes the assignment for the week containing `now` and sends
-// it. The message is dated by that week's Monday, so a Tuesday re-run agrees.
+// postChoreWheel works out the assignment for the week containing now and sends
+// it to Slack. The message is dated by that week's Monday, so running it on a
+// Tuesday still shows the same date.
 func postChoreWheel(ctx context.Context, sender slackSender, cfg *ChoreWheelConfig, now time.Time) (map[string]any, error) {
 	week := choreWheelWeek(now)
 	assignments := assignChores(cfg.People, cfg.Chores, week)
 
-	// Back up to Monday. Weekday() is Sunday=0, so Sunday backs up 6 days.
+	// Step back to Monday. Weekday() counts Sunday as 0, so Sunday goes back 6.
 	back := (int(now.Weekday()) + 6) % 7
 	weekOf := now.AddDate(0, 0, -back)
 
@@ -151,8 +150,8 @@ func postChoreWheel(ctx context.Context, sender slackSender, cfg *ChoreWheelConf
 	return result, nil
 }
 
-// parseChoreWheelTime reads the DoCommand value: `true` means now, an object
-// with "date": "2026-09-21" reads the wheel for that day instead.
+// parseChoreWheelTime reads the command argument. true means now. An object like
+// {"date": "2026-09-21"} reads the wheel for that day instead.
 func parseChoreWheelTime(v any, now time.Time) (time.Time, error) {
 	switch x := v.(type) {
 	case bool:
@@ -176,8 +175,8 @@ func parseChoreWheelTime(v any, now time.Time) (time.Time, error) {
 	}
 }
 
-// sendWeeklyChores is the DoCommand entry point. Normally cron-fired from the
-// machine config's "jobs" block; safe to call by hand to post off-schedule.
+// sendWeeklyChores handles the send_weekly_chores command. A cron job normally
+// runs it, but you can also call it by hand.
 func (s *beanjaminCoffee) sendWeeklyChores(ctx context.Context, v any) (map[string]any, error) {
 	if s.cfg.ChoreWheel == nil {
 		return nil, fmt.Errorf("send_weekly_chores requires chore_wheel to be configured")

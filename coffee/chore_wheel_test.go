@@ -14,8 +14,8 @@ var (
 	testChores = []string{"Cleaning the ice maker", "Cleaning the table", "Tightening the claws"}
 )
 
-// Over one full cycle every person draws every chore exactly once. This is the
-// property the design rests on, so it is checked exhaustively.
+// Over a full cycle everyone should do every chore exactly once. This is the
+// main thing the design promises, so check it for a few different list sizes.
 func TestAssignChoresIsFairOverACycle(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -52,7 +52,7 @@ func TestAssignChoresIsFairOverACycle(t *testing.T) {
 					}
 				}
 			}
-			// Free weeks are the padding, and they fall on everyone equally.
+			// Free weeks should be shared out evenly too.
 			want := free[testPeople[0]]
 			for _, p := range testPeople {
 				if free[p] != want {
@@ -64,7 +64,7 @@ func TestAssignChoresIsFairOverACycle(t *testing.T) {
 	}
 }
 
-// Each week every chore is assigned to exactly one person.
+// Every chore should go to exactly one person each week.
 func TestAssignChoresCoversEveryChoreOnce(t *testing.T) {
 	for week := -3; week < 20; week++ {
 		holders := map[string]string{}
@@ -82,8 +82,8 @@ func TestAssignChoresCoversEveryChoreOnce(t *testing.T) {
 	}
 }
 
-// More chores than people means the wheel goes round twice and somebody draws
-// two in the same week, rather than a chore going unassigned.
+// With more chores than people, someone does two that week instead of a chore
+// being skipped.
 func TestAssignChoresMoreChoresThanPeople(t *testing.T) {
 	people := []string{"A", "B", "C"}
 	chores := []string{"v", "w", "x", "y", "z"}
@@ -107,8 +107,8 @@ func TestAssignChoresMoreChoresThanPeople(t *testing.T) {
 	}
 }
 
-// The wheel is a pure function of the week: the same week reads the same, and
-// consecutive weeks differ. A stuck wheel is the failure to catch.
+// The same week always gives the same answer, and the next week gives a
+// different one. A wheel that never turns is the bug to catch.
 func TestAssignChoresIsDeterministicAndAdvances(t *testing.T) {
 	flat := func(as []choreAssignment) string {
 		var b strings.Builder
@@ -125,8 +125,8 @@ func TestAssignChoresIsDeterministicAndAdvances(t *testing.T) {
 	}
 }
 
-// Negative weeks (a manual run dated before the epoch) must wrap rather than
-// index out of range — Go's % keeps the dividend's sign.
+// A date before the epoch gives a negative week. It should wrap around instead
+// of going out of range.
 func TestAssignChoresHandlesNegativeWeek(t *testing.T) {
 	got := assignChores(testPeople, testChores, -1)
 	if len(got) != len(testPeople) {
@@ -138,9 +138,8 @@ func TestAssignChoresHandlesNegativeWeek(t *testing.T) {
 	}
 }
 
-// The week number is taken from the local calendar date, so 9am on a Monday
-// anywhere in the world is the same week as 9am UTC that Monday, and Sunday
-// evening in New York does not tip over into UTC's Monday.
+// The week comes from the local date, so 9am Monday is the same week anywhere,
+// and Sunday night in New York does not count as the next week.
 func TestChoreWheelWeekUsesLocalDate(t *testing.T) {
 	ny, err := time.LoadLocation("America/New_York")
 	if err != nil {
@@ -153,8 +152,7 @@ func TestChoreWheelWeekUsesLocalDate(t *testing.T) {
 			choreWheelWeek(mondayNY), choreWheelWeek(mondayUTC))
 	}
 
-	// 11pm Sunday in New York is 03:00 Monday UTC. It belongs to the week
-	// that is ending, not the one starting.
+	// 11pm Sunday in New York is 3am Monday UTC, but it is still last week.
 	sundayNightNY := time.Date(2026, time.September, 20, 23, 0, 0, 0, ny)
 	if choreWheelWeek(sundayNightNY) != choreWheelWeek(mondayNY)-1 {
 		t.Errorf("Sunday 11pm NY is week %d, Monday 9am NY is week %d; want consecutive",
@@ -221,8 +219,8 @@ func TestPostChoreWheelRendersAndReports(t *testing.T) {
 		t.Errorf("section has %d lines, want %d chores + 1 free line", got, len(testChores)+1)
 	}
 
-	// The result echoes the assignment so a caller (or the job history) can
-	// see what was posted without reading Slack.
+	// The result repeats the assignment, so you can see what was posted without
+	// opening Slack.
 	if res["sent"] != true {
 		t.Errorf("result.sent = %v, want true", res["sent"])
 	}
@@ -233,8 +231,7 @@ func TestPostChoreWheelRendersAndReports(t *testing.T) {
 	}
 }
 
-// With as many chores as people, nobody is free and the free line is omitted
-// rather than printed empty.
+// With one chore each, nobody is free, so the free-week line should not appear.
 func TestPostChoreWheelNoFreeWeeks(t *testing.T) {
 	people := []string{"A", "B", "C"}
 	chores := []string{"x", "y", "z"}

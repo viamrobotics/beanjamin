@@ -176,8 +176,8 @@ var coffeeCommands = []commandDef{
 	{key: "send_daily_summary", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.sendDailySummary(ctx)
 	}},
-	// Likewise cron-fired (Mondays); `true` posts this week, an object with
-	// "date": "YYYY-MM-DD" previews another week without waiting for it.
+	// Fired by a cron job on Mondays. `true` posts the current week;
+	// {"date": "2026-10-05"} posts a different week instead.
 	{key: "send_weekly_chores", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
 		return s.sendWeeklyChores(ctx, cmd["send_weekly_chores"])
 	}},
