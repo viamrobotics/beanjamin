@@ -10,9 +10,10 @@ import {
   panelTitle,
   panelEmptyMsg,
   loadVideosForOrder,
-  getVideoSignedUrl,
+  getBinarySignedUrl,
   countVideosForOrders,
 } from "./data";
+import { PlanPanel } from "./plan-panel";
 import { drinkLabel } from "../order/drinks";
 
 const ORDER_COLUMNS = [
@@ -223,7 +224,7 @@ function OrderTable({
         const items = await Promise.all(
           videos.map(async (v) => ({
             id: v.binaryDataId,
-            url: await getVideoSignedUrl(viamClient, v.binaryDataId),
+            url: await getBinarySignedUrl(viamClient, v.binaryDataId),
             capturedAt: v.capturedAt,
           }))
         );
@@ -326,7 +327,13 @@ function OrderTable({
                     className="border-t border-neutral-200 bg-white"
                   >
                     <td colSpan={TABLE_COL_COUNT} className="px-2 py-3">
-                      <VideoExpansion entry={videoByOrder.get(o.orderId)} />
+                      <div className="flex flex-col gap-3">
+                        <VideoExpansion entry={videoByOrder.get(o.orderId)} />
+                        <PlanPanel
+                          orderId={o.orderId}
+                          viamClient={viamClient}
+                        />
+                      </div>
                     </td>
                   </tr>
                 );

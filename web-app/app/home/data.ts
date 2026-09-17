@@ -396,15 +396,21 @@ export interface OrderVideo {
   capturedAt: Date | null;
 }
 
-// The order ID is not a video-only tag: coffee/motion.go's planRequestTagDir
-// tags every saved motion-plan JSON with it too, one file per planned motion,
-// so an order carries dozens of them against its handful of clips. Without a
-// mime-type filter those plan files come back as "videos" and render as broken
-// players. The clip tag is exact, so no capture-time window is needed.
-export function buildVideoFilter(orderIds: string[]): VIAM.dataApi.Filter {
+export const VIDEO_MIME = "video/mp4";
+export const PLAN_MIME = "application/json";
+
+// An order's ID tags two very different payloads: its camera clips, and every
+// motion-plan JSON coffee/motion.go's planRequestTagDir saves (one file per
+// planned motion, dozens per order). Only the mime type separates them —
+// without it the clip list fills with plan files that render as broken video
+// players. The tag match is exact, so no capture-time window is needed.
+export function buildOrderFileFilter(
+  orderIds: string[],
+  mimeTypes: string[]
+): VIAM.dataApi.Filter {
   return new VIAM.dataApi.Filter({
     locationIds: [LOCATION_ID],
-    mimeType: ["video/mp4"],
+    mimeType: mimeTypes,
     tagsFilter: new VIAM.dataApi.TagsFilter({
       type: VIAM.dataApi.TagsFilterType.MATCH_BY_OR,
       tags: orderIds,
@@ -417,7 +423,7 @@ export async function loadVideosForOrder(
   orderId: string
 ): Promise<OrderVideo[]> {
   const result = await client.dataClient.binaryDataByFilter(
-    buildVideoFilter([orderId]),
+    buildOrderFileFilter([orderId], [VIDEO_MIME]),
     100,
     undefined,
     undefined,
@@ -434,7 +440,7 @@ export async function loadVideosForOrder(
     }));
 }
 
-export async function getVideoSignedUrl(
+export async function getBinarySignedUrl(
   client: VIAM.ViamClient,
   binaryDataId: string
 ): Promise<string> {
@@ -454,7 +460,7 @@ export async function countVideosForOrders(
   if (orderIds.length === 0) return counts;
 
   const result = await client.dataClient.binaryDataByFilter(
-    buildVideoFilter(orderIds),
+    buildOrderFileFilter(orderIds, [VIDEO_MIME]),
     VIDEO_COUNT_PAGE_SIZE,
     undefined,
     undefined,
@@ -487,4 +493,91 @@ export async function loadErrorsLast7Days(
     { $sort: { time_received: -1 } },
   ]);
   return parseOrderResults(results);
+}
+
+// --- Motion plan requests ---------------------------------------------------
+
+/**
+ * One saved motion-plan request/response pair. Everything here is read off the
+ * tags and filename that coffee/motion.go writes — see planRequestTagDir.
+ */
+export interface PlanRequestFile {
+  binaryDataId: string;
+  /** Basename, e.g. "20260917_094831.007_move.json". */
+  fileName: string;
+  /** Brew step the plan was issued under, or "" for one issued outside a step. */
+  step: string;
+  /** Motion kind: move, pivot, circular, carry, or a door action. */
+  motion: string;
+  ok: boolean;
+  /** Clock time from the filename stamp, e.g. "09:48:31.007". */
+  at: string;
+  /** 1-based position in the order's plan sequence. */
+  seq: number;
+}
+
+// Tag prefixes planRequestTagDir writes. Renaming one in Go empties this panel
+// with no compile error here, so they are named in that function's doc comment.
+const STEP_TAG_PREFIX = "step_";
+const MOTION_TAG_PREFIX = "motion_";
+const PLANNING_SUCCESS_TAG = "planning_success";
+
+// ponytail: single page, no cursor. An order runs tens of plans against this
+// ceiling; if one ever exceeds it the tail is silently dropped — page with
+// `result.last` if that becomes real.
+const PLAN_PAGE_SIZE = 1000;
+
+// savePlanRequestAndResponse names every file "20060102_150405.000_<label>.json".
+const PLAN_STAMP = /^\d{8}_(\d{2})(\d{2})(\d{2})\.(\d{3})_/;
+
+export function planTimeLabel(fileName: string): string {
+  const m = PLAN_STAMP.exec(fileName);
+  return m ? `${m[1]}:${m[2]}:${m[3]}.${m[4]}` : "";
+}
+
+/** "step_locking_portafilter" -> "Locking portafilter". */
+export function unslugStep(tag: string): string {
+  const words = tag.slice(STEP_TAG_PREFIX.length).replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+export async function loadPlanRequestsForOrder(
+  client: VIAM.ViamClient,
+  orderId: string
+): Promise<PlanRequestFile[]> {
+  const result = await client.dataClient.binaryDataByFilter(
+    buildOrderFileFilter([orderId], [PLAN_MIME]),
+    PLAN_PAGE_SIZE,
+    undefined,
+    undefined,
+    // Metadata only: the payloads are megabytes each and are only ever fetched
+    // one at a time, on a download click.
+    false,
+    false,
+    false
+  );
+
+  const files = result.data
+    .filter((d) => d.metadata?.binaryDataId)
+    .map((d) => {
+      const tags = d.metadata?.captureMetadata?.tags ?? [];
+      const stepTag = tags.find((t) => t.startsWith(STEP_TAG_PREFIX));
+      const motionTag = tags.find((t) => t.startsWith(MOTION_TAG_PREFIX));
+      const fileName = d.metadata!.fileName.split("/").pop() ?? "";
+      return {
+        binaryDataId: d.metadata!.binaryDataId,
+        fileName,
+        step: stepTag ? unslugStep(stepTag) : "",
+        motion: motionTag ? motionTag.slice(MOTION_TAG_PREFIX.length) : "",
+        ok: tags.includes(PLANNING_SUCCESS_TAG),
+        at: planTimeLabel(fileName),
+        seq: 0,
+      };
+    });
+
+  // The filename's zero-padded stamp sorts lexically into plan order, which
+  // beats cloud capture timestamps: the module wrote it at save time, and it
+  // survives however the data manager batches the sync.
+  files.sort((a, b) => a.fileName.localeCompare(b.fileName));
+  return files.map((f, i) => ({ ...f, seq: i + 1 }));
 }
