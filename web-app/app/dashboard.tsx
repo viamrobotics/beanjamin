@@ -25,6 +25,7 @@ import {
   loadOrdersForDay,
   loadErrorsLast7Days,
   loadRobotTotalsLastNDays,
+  startOfToday,
 } from "./home/data";
 import { OrdersChart } from "./home/chart";
 import { OrdersPanel } from "./home/orders-panel";
@@ -35,6 +36,7 @@ const PILL_BUTTON_BASE =
   "px-3 py-1.5 text-sm rounded-md border transition-colors";
 const PILL_NEUTRAL = `${PILL_BUTTON_BASE} border-neutral-200 bg-white text-neutral-900 hover:bg-neutral-100`;
 const PILL_DANGER_ACTIVE = `${PILL_BUTTON_BASE} border-red-500 bg-red-50 text-red-600 hover:bg-red-100`;
+const PILL_ACTIVE = `${PILL_BUTTON_BASE} border-neutral-900 bg-neutral-900 text-white hover:bg-neutral-800`;
 
 // A single transient getQueue RPC error shouldn't drop an otherwise-healthy
 // WebRTC channel — only tear down and re-dial after this many in a row.
@@ -56,7 +58,7 @@ export function Dashboard() {
   const [machineQueues, setMachineQueues] = useState<
     Map<string, MachineQueueState>
   >(new Map());
-  const [panel, setPanel] = useState<Panel | null>(null);
+  const [panel, setPanel] = useState<Panel | null>({ kind: "today" });
   const [panelOrders, setPanelOrders] = useState<OrderRecord[] | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [isLocalhost, setIsLocalhost] = useState(false);
@@ -229,6 +231,17 @@ export function Dashboard() {
         refreshAggregates();
         refreshQueues();
 
+        // The today panel renders open from the first paint, so its rows are
+        // fetched here rather than waiting for a click.
+        loadOrdersForDay(client, null, startOfToday())
+          .then((orders) => !cancelled && setPanelOrders(orders))
+          .catch((e) => {
+            console.error("failed to load today's orders:", e);
+            if (!cancelled) {
+              setPanelError(e instanceof Error ? e.message : String(e));
+            }
+          });
+
         queueInterval = setInterval(refreshQueues, 5000);
         machinesInterval = setInterval(refreshMachines, 15000);
         aggregatesInterval = setInterval(refreshAggregates, 30000);
@@ -305,6 +318,8 @@ export function Dashboard() {
       </div>
     );
 
+  const machineNameById = new Map(machines.map((m) => [m.id, m.name]));
+
   return (
     <div className="p-6 font-sans text-neutral-900">
       {devButton}
@@ -340,13 +355,14 @@ export function Dashboard() {
           ))}
       </ul>
 
-      <Leaderboard
-        customers={customerLeaderboard}
-        drinks={drinkLeaderboard}
-      />
-
-      <section className="mb-6">
-        <h2 className="text-xl font-semibold text-neutral-900 mb-3">Orders</h2>
+      {/* Chart and leaderboard share a row: the leaderboard is two short lists
+          and was costing a full screen of height on its own. */}
+      <div className="flex flex-col lg:flex-row gap-6 mb-6">
+      <section className="grow min-w-0">
+        <h2 className="text-xl font-semibold text-neutral-900">Orders</h2>
+        <p className="text-sm text-neutral-500 mb-3">
+          Click any bar to see that day&apos;s orders and videos.
+        </p>
         {orderCounts === null ? (
           <p className="text-neutral-500">Loading order counts…</p>
         ) : orderCounts.length === 0 ? (
@@ -359,7 +375,9 @@ export function Dashboard() {
               selected={
                 panel?.kind === "day"
                   ? { dayMs: panel.day.getTime(), robotId: panel.robotId }
-                  : null
+                  : panel?.kind === "today"
+                    ? { dayMs: startOfToday().getTime(), robotId: null }
+                    : null
               }
               onBarClick={(day, row) => {
                 if (!viamClient) return;
@@ -374,7 +392,20 @@ export function Dashboard() {
                 );
               }}
             />
-            <div className="mt-3">
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                onClick={() => {
+                  if (!viamClient) return;
+                  togglePanel({ kind: "today" }, () =>
+                    loadOrdersForDay(viamClient, null, startOfToday())
+                  );
+                }}
+                className={
+                  panel?.kind === "today" ? PILL_ACTIVE : PILL_NEUTRAL
+                }
+              >
+                Today · all machines
+              </button>
               <button
                 onClick={() => {
                   if (!viamClient) return;
@@ -389,19 +420,31 @@ export function Dashboard() {
                 ⚠ Expand errors - last 7 days
               </button>
             </div>
-            {panel && (
-              <OrdersPanel
-                key={panelKey(panel)}
-                panel={panel}
-                orders={panelOrders}
-                error={panelError}
-                onClose={closePanel}
-                viamClient={viamClient}
-              />
-            )}
           </>
         )}
       </section>
+
+        <div className="shrink-0 lg:w-80">
+          <Leaderboard
+            customers={customerLeaderboard}
+            drinks={drinkLeaderboard}
+          />
+        </div>
+      </div>
+
+      {/* Full width, and outside the chart's loading branch: today's orders
+          don't depend on the 7-day aggregate and shouldn't wait for it. */}
+      {panel && (
+        <OrdersPanel
+          key={panelKey(panel)}
+          panel={panel}
+          orders={panelOrders}
+          error={panelError}
+          onClose={closePanel}
+          viamClient={viamClient}
+          machineNameById={machineNameById}
+        />
+      )}
     </div>
   );
 }

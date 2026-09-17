@@ -35,12 +35,18 @@ export interface DailyOrderCount {
 
 export interface OrderRecord {
   orderId: string;
+  robotId: string;
   customerName: string;
   drink: string;
   startTime: Date;
   endTime: Date;
   durationMs: number;
   ok: boolean;
+  // An operator stopping the run is not a fault, and the two read very
+  // differently when scanning a day for things that went wrong.
+  cancelled: boolean;
+  failedStep: string;
+  decaf: boolean;
   errorMessage: string;
 }
 
@@ -50,6 +56,7 @@ export interface LeaderboardEntry {
 }
 
 export type Panel =
+  | { kind: "today" }
   | { kind: "day"; day: Date; robotId: string; robotName: string }
   | { kind: "errors" };
 
@@ -58,6 +65,7 @@ export type SortDir = "asc" | "desc";
 
 interface RawOrderRow {
   time_received: Date | string;
+  robot_id?: string;
   data?: {
     readings?: {
       order_id?: string;
@@ -67,6 +75,9 @@ interface RawOrderRow {
       end_time?: Date | string;
       duration_ms?: number;
       order_ok?: boolean;
+      operator_cancelled?: boolean;
+      failed_step?: string;
+      decaf?: boolean;
       error_message?: string;
     };
   };
@@ -108,33 +119,54 @@ function parseOrderResults(rows: RawOrderRow[]): OrderRecord[] {
     const x = r.data?.readings ?? {};
     return {
       orderId: x.order_id ?? "",
+      robotId: r.robot_id ?? "",
       customerName: x.customer_name ?? "",
       drink: x.drink ?? "",
       startTime: toDate(x.start_time),
       endTime: toDate(x.end_time),
       durationMs: x.duration_ms ?? 0,
       ok: x.order_ok ?? false,
+      cancelled: x.operator_cancelled ?? false,
+      failedStep: x.failed_step ?? "",
+      decaf: x.decaf ?? false,
       errorMessage: x.error_message ?? "",
     };
   });
 }
 
+export function startOfToday(): Date {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
 export function panelKey(p: Panel | null): string {
   if (!p) return "none";
+  if (p.kind === "today") return "today";
   if (p.kind === "errors") return "errors";
   return `day-${p.day.getTime()}-${p.robotId}`;
 }
 
 export function panelTitle(p: Panel): string {
-  return p.kind === "day"
-    ? `${p.robotName} · ${formatDay(p.day)}`
-    : "Errors · last 7 days";
+  switch (p.kind) {
+    case "today":
+      return "Today · all machines";
+    case "errors":
+      return "Errors · last 7 days";
+    case "day":
+      return `${p.robotName} · ${formatDay(p.day)}`;
+  }
 }
 
 export function panelEmptyMsg(p: Panel): string {
-  return p.kind === "errors"
-    ? "No errors in the last 7 days."
-    : "No orders for this day.";
+  switch (p.kind) {
+    case "today":
+      return "No orders yet today.";
+    case "errors":
+      return "No errors in the last 7 days.";
+    case "day":
+      return "No orders for this day.";
+  }
 }
 
 export async function listMachines(client: VIAM.ViamClient): Promise<Machine[]> {
@@ -337,9 +369,10 @@ export async function loadLeaderboard(
     .map((r) => ({ name: r.name as string, count: r.value }));
 }
 
+/** A null robotId spans every machine in the location. */
 export async function loadOrdersForDay(
   client: VIAM.ViamClient,
-  robotId: string,
+  robotId: string | null,
   day: Date
 ): Promise<OrderRecord[]> {
   const dayEnd = new Date(day.getTime() + 24 * 60 * 60 * 1000);
@@ -348,7 +381,7 @@ export async function loadOrdersForDay(
       $match: {
         location_id: LOCATION_ID,
         component_name: RESOURCE_NAME,
-        robot_id: robotId,
+        ...(robotId === null ? {} : { robot_id: robotId }),
         time_received: { $gte: day, $lt: dayEnd },
       },
     },
@@ -363,31 +396,34 @@ export interface OrderVideo {
   capturedAt: Date | null;
 }
 
-const VIDEO_TIME_BUFFER_MS = 5 * 60 * 1000;
+export const VIDEO_MIME = "video/mp4";
+export const PLAN_MIME = "application/json";
 
-interface OrderTimeBounds {
-  orderId: string;
-  startTime: Date;
-  endTime: Date;
-}
-
-function buildVideoFilter(order: OrderTimeBounds): VIAM.dataApi.Filter {
-  const start = new Date(order.startTime.getTime() - VIDEO_TIME_BUFFER_MS);
-  const end = new Date(order.endTime.getTime() + VIDEO_TIME_BUFFER_MS);
-  return {
+// An order's ID tags two very different payloads: its camera clips, and every
+// motion-plan JSON coffee/motion.go's planRequestTagDir saves (one file per
+// planned motion, dozens per order). Only the mime type separates them —
+// without it the clip list fills with plan files that render as broken video
+// players. The tag match is exact, so no capture-time window is needed.
+export function buildOrderFileFilter(
+  orderIds: string[],
+  mimeTypes: string[]
+): VIAM.dataApi.Filter {
+  return new VIAM.dataApi.Filter({
     locationIds: [LOCATION_ID],
-    tagsFilter: { tags: [order.orderId] },
-    startTime: start,
-    endTime: end,
-  } as unknown as VIAM.dataApi.Filter;
+    mimeType: mimeTypes,
+    tagsFilter: new VIAM.dataApi.TagsFilter({
+      type: VIAM.dataApi.TagsFilterType.MATCH_BY_OR,
+      tags: orderIds,
+    }),
+  });
 }
 
 export async function loadVideosForOrder(
   client: VIAM.ViamClient,
-  order: OrderTimeBounds
+  orderId: string
 ): Promise<OrderVideo[]> {
   const result = await client.dataClient.binaryDataByFilter(
-    buildVideoFilter(order),
+    buildOrderFileFilter([orderId], [VIDEO_MIME]),
     100,
     undefined,
     undefined,
@@ -404,53 +440,28 @@ export async function loadVideosForOrder(
     }));
 }
 
-export async function getVideoSignedUrl(
+export async function getBinarySignedUrl(
   client: VIAM.ViamClient,
   binaryDataId: string
 ): Promise<string> {
   return client.dataClient.createBinaryDataSignedURL(binaryDataId);
 }
 
-export async function countVideosForOrder(
-  client: VIAM.ViamClient,
-  order: OrderTimeBounds
-): Promise<number> {
-  const result = await client.dataClient.binaryDataByFilter(
-    buildVideoFilter(order),
-    undefined,
-    undefined,
-    undefined,
-    false,
-    true,
-    false
-  );
-  return Number(result.count);
-}
+// One clip per camera per order, so a day's worth of orders fits well inside
+// this page; the tag match is exact, so nothing extra is counted.
+const VIDEO_COUNT_PAGE_SIZE = 500;
 
 export async function countVideosForOrders(
   client: VIAM.ViamClient,
-  orders: OrderTimeBounds[]
+  orderIds: string[]
 ): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
-  for (const o of orders) counts.set(o.orderId, 0);
-  if (orders.length === 0) return counts;
-
-  let minStart = orders[0].startTime.getTime();
-  let maxEnd = orders[0].endTime.getTime();
-  for (const o of orders) {
-    minStart = Math.min(minStart, o.startTime.getTime());
-    maxEnd = Math.max(maxEnd, o.endTime.getTime());
-  }
-  const filter = {
-    locationIds: [LOCATION_ID],
-    tagsFilter: { tags: orders.map((o) => o.orderId) },
-    startTime: new Date(minStart - VIDEO_TIME_BUFFER_MS),
-    endTime: new Date(maxEnd + VIDEO_TIME_BUFFER_MS),
-  } as unknown as VIAM.dataApi.Filter;
+  for (const id of orderIds) counts.set(id, 0);
+  if (orderIds.length === 0) return counts;
 
   const result = await client.dataClient.binaryDataByFilter(
-    filter,
-    500,
+    buildOrderFileFilter(orderIds, [VIDEO_MIME]),
+    VIDEO_COUNT_PAGE_SIZE,
     undefined,
     undefined,
     false,
@@ -482,4 +493,95 @@ export async function loadErrorsLast7Days(
     { $sort: { time_received: -1 } },
   ]);
   return parseOrderResults(results);
+}
+
+// --- Motion plan requests ---------------------------------------------------
+
+/**
+ * One saved motion-plan request/response pair. Everything here is read off the
+ * tags and filename that coffee/motion.go writes — see planRequestTagDir.
+ */
+export interface PlanRequestFile {
+  binaryDataId: string;
+  /** Basename, e.g. "20260917_094831.007_move.json". */
+  fileName: string;
+  /** Full synced path, including the tag= directories the tags came from. */
+  path: string;
+  /** Brew step the plan was issued under, or "" for one issued outside a step. */
+  step: string;
+  /** Motion kind: move, pivot, circular, carry, or a door action. */
+  motion: string;
+  ok: boolean;
+  /** Clock time from the filename stamp, e.g. "09:48:31.007". */
+  at: string;
+  /** 1-based position in the order's plan sequence. */
+  seq: number;
+}
+
+// Tag prefixes planRequestTagDir writes. Renaming one in Go empties this panel
+// with no compile error here, so they are named in that function's doc comment.
+const STEP_TAG_PREFIX = "step_";
+const MOTION_TAG_PREFIX = "motion_";
+const PLANNING_SUCCESS_TAG = "planning_success";
+
+// ponytail: single page, no cursor. An order runs tens of plans against this
+// ceiling; if one ever exceeds it the tail is silently dropped — page with
+// `result.last` if that becomes real.
+const PLAN_PAGE_SIZE = 1000;
+
+// savePlanRequestAndResponse names every file "20060102_150405.000_<label>.json".
+const PLAN_STAMP = /^\d{8}_(\d{2})(\d{2})(\d{2})\.(\d{3})_/;
+
+export function planTimeLabel(fileName: string): string {
+  const m = PLAN_STAMP.exec(fileName);
+  return m ? `${m[1]}:${m[2]}:${m[3]}.${m[4]}` : "";
+}
+
+/** "step_locking_portafilter" -> "Locking portafilter". */
+export function unslugStep(tag: string): string {
+  const words = tag.slice(STEP_TAG_PREFIX.length).replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+export async function loadPlanRequestsForOrder(
+  client: VIAM.ViamClient,
+  orderId: string
+): Promise<PlanRequestFile[]> {
+  const result = await client.dataClient.binaryDataByFilter(
+    buildOrderFileFilter([orderId], [PLAN_MIME]),
+    PLAN_PAGE_SIZE,
+    undefined,
+    undefined,
+    // Metadata only: the payloads are megabytes each and are only ever fetched
+    // one at a time, on a download click.
+    false,
+    false,
+    false
+  );
+
+  const files = result.data
+    .filter((d) => d.metadata?.binaryDataId)
+    .map((d) => {
+      const tags = d.metadata?.captureMetadata?.tags ?? [];
+      const stepTag = tags.find((t) => t.startsWith(STEP_TAG_PREFIX));
+      const motionTag = tags.find((t) => t.startsWith(MOTION_TAG_PREFIX));
+      const path = d.metadata!.fileName;
+      const fileName = path.split("/").pop() ?? "";
+      return {
+        binaryDataId: d.metadata!.binaryDataId,
+        fileName,
+        path,
+        step: stepTag ? unslugStep(stepTag) : "",
+        motion: motionTag ? motionTag.slice(MOTION_TAG_PREFIX.length) : "",
+        ok: tags.includes(PLANNING_SUCCESS_TAG),
+        at: planTimeLabel(fileName),
+        seq: 0,
+      };
+    });
+
+  // The filename's zero-padded stamp sorts lexically into plan order, which
+  // beats cloud capture timestamps: the module wrote it at save time, and it
+  // survives however the data manager batches the sync.
+  files.sort((a, b) => a.fileName.localeCompare(b.fileName));
+  return files.map((f, i) => ({ ...f, seq: i + 1 }));
 }

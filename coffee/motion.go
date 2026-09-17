@@ -644,6 +644,12 @@ func (s *beanjaminCoffee) savePlanRequestAndResponse(req *armplanning.PlanReques
 // on sync to tag the uploaded file (see inferTagsAndDatasetIDsFromPath), making
 // it filterable on the data page. Empty values (e.g. a plan issued outside an
 // order) are skipped.
+//
+// These tag values are a cross-repo contract: the web app's motion-plan panel
+// (web-app/app/home/data.ts, loadPlanRequestsForOrder) parses the "step_",
+// "motion_" and "planning_" prefixes to group and label plans. It deploys
+// separately, so renaming a prefix here empties that panel with no build
+// failure on either side.
 func planRequestTagDir(baseDir, orderID, step, label, outcome string) string {
 	parts := []string{baseDir}
 	for _, tag := range []string{orderID, stepTag(step), "motion_" + label, outcome} {

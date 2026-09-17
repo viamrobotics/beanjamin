@@ -38,11 +38,11 @@ export function Leaderboard({
   drinks: LeaderboardEntry[] | null;
 }) {
   return (
-    <section className="mb-6">
+    <section>
       <h2 className="text-xl font-semibold text-neutral-900 mb-3">
         🏆 Leaderboard · last 7 days
       </h2>
-      <div className="grid grid-cols-2 gap-6 max-w-xl">
+      <div className="grid grid-cols-2 gap-6 max-w-xl lg:grid-cols-1 lg:gap-4">
         <div>
           <div className="text-sm text-neutral-500 mb-2">Top customers</div>
           <LeaderboardList entries={customers} emptyMsg="No orders yet." />
