@@ -205,10 +205,18 @@ func (s *beanjaminCoffee) slowMoveOptions() *StepMoveOptions {
 	}
 }
 
-// moveToPose fetches a named pose and moves to it.
-func (s *beanjaminCoffee) moveToPose(ctx, cancelCtx context.Context, step Step) error {
+// moveToPose fetches a named pose and moves to it. A non-nil plan was computed
+// ahead by runStepsPipelined and is executed as-is; nil plans on arrival.
+func (s *beanjaminCoffee) moveToPose(ctx, cancelCtx context.Context, step Step, plan motionplan.Plan) error {
 	ctx, done := mergedCancelContext(ctx, cancelCtx)
 	defer done()
+
+	if plan != nil {
+		if err := s.executePlan(ctx, plan, step.LinearConstraint, step.MoveOptions); err != nil {
+			return fmt.Errorf("move to %q failed: %w", step.PoseName, err)
+		}
+		return nil
+	}
 
 	pd, err := s.fetchPose(ctx, step.PoseSwitch, step.PoseName)
 	if err != nil {
@@ -784,6 +792,110 @@ func (s *beanjaminCoffee) withArmInputs(base referenceframe.FrameSystemInputs, a
 	maps.Copy(out, base)
 	out[s.cfg.ArmName] = armInputs
 	return out
+}
+
+// stepPipelineable reports whether a step can be planned before the arm reaches
+// its start position.
+//
+// Pivots and circular motions plan from the arm's live pose, and the no-spill
+// carry bounds a full cup's tilt about it, so all three wait for the arm to
+// arrive. Plain moves plan from their start inputs alone.
+func (s *beanjaminCoffee) stepPipelineable(step Step) bool {
+	if step.PivotFromPose != "" || step.CircularRadiusMm > 0 {
+		return false
+	}
+	return !step.NoSpill
+}
+
+// planStepMove plans a step's move from startInputs without touching the arm.
+func (s *beanjaminCoffee) planStepMove(
+	ctx context.Context,
+	fs *referenceframe.FrameSystem,
+	startInputs referenceframe.FrameSystemInputs,
+	step Step,
+) (motionplan.Plan, error) {
+	// This builds a direct plan. A NoSpill carry planned here would lose its
+	// orientation bound and spill, so refuse rather than plan the wrong motion.
+	if !s.stepPipelineable(step) {
+		return nil, fmt.Errorf("plan move to %q: step must be planned on arrival, not ahead", step.PoseName)
+	}
+	pd, err := s.fetchPose(ctx, step.PoseSwitch, step.PoseName)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := s.planToRawPose(ctx, fs, startInputs, pd, step.LinearConstraint, step.AllowedCollisions)
+	if err != nil {
+		return nil, fmt.Errorf("plan move to %q: %w", step.PoseName, err)
+	}
+	return plan, nil
+}
+
+// pipelinedPlan is a step's plan computed ahead of time, or the error that stopped it.
+type pipelinedPlan struct {
+	plan motionplan.Plan
+	err  error
+}
+
+// runStepsPipelined runs a sequence of pipelineable steps, planning each move
+// while the previous one executes. The first step plans from the arm's current
+// configuration; the rest plan from the previous plan's end.
+//
+// Steps still execute through executeStep, so spans, cancellation and pauses
+// behave as they do sequentially. Planning only reads the frame system and one
+// plan runs at a time, so it never races the moving arm.
+//
+// A pipelined plan starts at the previous plan's nominal end rather than where
+// the arm settled, so its first waypoint may be a servo tolerance off. That is
+// negligible on free-space moves, which is why steps that touch something are
+// excluded.
+func (s *beanjaminCoffee) runStepsPipelined(ctx, cancelCtx context.Context, steps []Step) error {
+	if len(steps) == 0 {
+		return nil
+	}
+	// Stop planning as soon as the sequence returns or an operator cancels.
+	planCtx, stopPlanning := mergedCancelContext(ctx, cancelCtx)
+	defer stopPlanning()
+
+	// The frame system holds still for the whole run: nothing in a step sequence
+	// re-parents a frame or attaches geometry, so only the arm's inputs change.
+	fs, fsInputs, err := s.currentInputs(planCtx)
+	if err != nil {
+		return err
+	}
+	plan, err := s.planStepMove(planCtx, fs, fsInputs, steps[0])
+	if err != nil {
+		return err
+	}
+
+	for i, step := range steps {
+		// Plan the next step while this one executes.
+		var ahead chan pipelinedPlan
+		if i+1 < len(steps) {
+			ahead = make(chan pipelinedPlan, 1)
+			go func(from motionplan.Plan, next Step) {
+				end, err := s.planEndArmInputs(from)
+				if err != nil {
+					ahead <- pipelinedPlan{err: err}
+					return
+				}
+				p, err := s.planStepMove(planCtx, fs, s.withArmInputs(fsInputs, end), next)
+				ahead <- pipelinedPlan{plan: p, err: err}
+			}(plan, steps[i+1])
+		}
+
+		if err := s.executeStepWithPlan(ctx, cancelCtx, step, plan); err != nil {
+			return err
+		}
+		if ahead == nil {
+			return nil
+		}
+		result := <-ahead
+		if result.err != nil {
+			return fmt.Errorf("plan ahead to %q: %w", steps[i+1].PoseName, result.err)
+		}
+		plan = result.plan
+	}
+	return nil
 }
 
 // executePivot fetches start and end poses, computes interpolated waypoints,

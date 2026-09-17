@@ -9,6 +9,7 @@ import (
 	"github.com/golang/geo/r3"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/module/trace"
+	"go.viam.com/rdk/motionplan"
 )
 
 const (
@@ -593,16 +594,45 @@ const (
 
 // runSteps executes each step in order, wrapping the first failure with label
 // (e.g. "tamp_ground") so the caller's error identifies the failed phase.
+//
+// Runs of pipelineable steps go through runStepsPipelined, which plans each move
+// while the previous one executes. Steps that need the arm's live pose execute on
+// their own. The arm's path is the same either way; only the idle gaps close.
 func (s *beanjaminCoffee) runSteps(ctx, cancelCtx context.Context, label string, steps ...Step) error {
-	for _, step := range steps {
-		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+	for len(steps) > 0 {
+		if n := s.pipelineRun(steps); n > 0 {
+			if err := s.runStepsPipelined(ctx, cancelCtx, steps[:n]); err != nil {
+				return fmt.Errorf("%s: %w", label, err)
+			}
+			steps = steps[n:]
+			continue
+		}
+		if err := s.executeStep(ctx, cancelCtx, steps[0]); err != nil {
 			return fmt.Errorf("%s: %w", label, err)
 		}
+		steps = steps[1:]
 	}
 	return nil
 }
 
+// pipelineRun returns how many steps at the front of steps can be pipelined.
+// Zero means the first step needs the arm's live pose.
+func (s *beanjaminCoffee) pipelineRun(steps []Step) int {
+	n := 0
+	for n < len(steps) && s.stepPipelineable(steps[n]) {
+		n++
+	}
+	return n
+}
+
 func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step) error {
+	return s.executeStepWithPlan(ctx, cancelCtx, step, nil)
+}
+
+// executeStepWithPlan is executeStep with the move already planned. A nil plan
+// means plan on arrival. Both paths share this body so the step behaves the same
+// either way.
+func (s *beanjaminCoffee) executeStepWithPlan(ctx, cancelCtx context.Context, step Step, plan motionplan.Plan) error {
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::executeStep::"+step.PoseName)
 	defer span.End()
@@ -627,7 +657,7 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 		}
 	} else {
 		logger.Infof("moving to %q", step.PoseName)
-		if err := s.moveToPose(ctx, cancelCtx, step); err != nil {
+		if err := s.moveToPose(ctx, cancelCtx, step, plan); err != nil {
 			return err
 		}
 	}
