@@ -6,10 +6,10 @@ package coffee
 // poses on the dedicated camera-observe switch
 // (camera_observe_pose_switcher_name) one at a time, calling a vision service
 // for cup detections at each. At every pose that sees at least one cup the
-// detections are lifted into world frame, ranked by proximity to the gripper
-// (closest first), and grabbed in turn — the configured approach/grab relative
-// poses (from Config — they are offsets, not switch-resident world-frame poses)
-// are composed onto each centroid and fed to moveToRawPose. The sweep stops as
+// detections (each a world-parented transform tree) are ranked by proximity to
+// the gripper (closest first) and grabbed in turn — the configured approach/grab
+// relative poses (from Config — they are offsets, not switch-resident world-frame
+// poses) are planned as poses in each cup's own frame. The sweep stops as
 // soon as a cup is in hand; when a pose's cups are all unreachable it continues
 // to the remaining poses, so a cup reachable only from a later vantage is still
 // found before we give up.
@@ -59,11 +59,16 @@ const (
 	cleanGlassAreaShieldFrameName = "clean-glass-area-shield"
 )
 
-// pickupCandidate is one detected item: its world-frame grasp centroid plus the
-// world-frame detected geometry (nil when geometry is unavailable). The geometry
-// rides alongside the centroid so the held-item tracker can attach the detected
-// shape to the gripper after a successful grab.
+// pickupCandidate is one detected item. frame names the item's root transform,
+// which the grasp offsets are expressed against; links is the detection's whole
+// transform tree (root first), attached to the planning frame system so frame
+// resolves and the item's shape is a collision body. centroid is the root's
+// world position, kept for merge/rank and for callers that put an item back
+// where it came from. geom is the world-frame shape the held-item tracker
+// attaches to the gripper after a successful grab.
 type pickupCandidate struct {
+	frame    string
+	links    []*referenceframe.LinkInFrame
 	centroid r3.Vector
 	geom     spatialmath.Geometry
 }
@@ -153,21 +158,25 @@ func relativePoseToSpatial(r *RelativePose) spatialmath.Pose {
 	)
 }
 
-// cameraToWorldPose resolves the camera frame's pose in the world frame at the
-// given inputs. Composing it onto a camera-frame pose lifts that pose into world
-// coordinates — the vision service reports object geometry and point clouds in
-// the camera frame, so everything an observation produces goes through it.
-func cameraToWorldPose(
-	fs *referenceframe.FrameSystem,
-	fsInputs referenceframe.FrameSystemInputs,
-	cameraFrame string,
-) (spatialmath.Pose, error) {
-	pif := referenceframe.NewPoseInFrame(cameraFrame, spatialmath.NewZeroPose())
-	tf, err := fs.Transform(fsInputs.ToLinearInputs(), pif, referenceframe.World)
+// planningFrameSystem returns a copy of fs with a detection's transforms attached
+// as static frames, so a grasp pose can name the item's frame directly and the
+// item's shape is collision-checked without being passed as a separate obstacle.
+// The cached frame system is never mutated: each plan gets its own copy.
+func planningFrameSystem(fs *referenceframe.FrameSystem, links []*referenceframe.LinkInFrame) (*referenceframe.FrameSystem, error) {
+	pfs, err := fs.Clone()
 	if err != nil {
-		return nil, fmt.Errorf("transform %q to world: %w", cameraFrame, err)
+		return nil, fmt.Errorf("clone frame system: %w", err)
 	}
-	return tf.(*referenceframe.PoseInFrame).Pose(), nil
+	for _, l := range links {
+		f, err := l.ToStaticFrame("")
+		if err != nil {
+			return nil, fmt.Errorf("detection frame %q: %w", l.Name(), err)
+		}
+		if err := pfs.AddFrame(f, pfs.Frame(l.Parent())); err != nil {
+			return nil, fmt.Errorf("attach detection frame %q under %q: %w", l.Name(), l.Parent(), err)
+		}
+	}
+	return pfs, nil
 }
 
 // boxDims converts a diameter/height override into axis-aligned box extents:
@@ -217,7 +226,6 @@ func (s *beanjaminCoffee) gripperWorldPoint(ctx context.Context) (r3.Vector, err
 type pickupTarget struct {
 	label            string               // "cup" / "glass" — logs, spans, errors
 	vision           vision.Service       // detector for this item
-	cameraName       string               // camera frame for centroid->world (shared)
 	observeSw        toggleswitch.Switch  // switch holding the observe vantages; steps read poses from it directly
 	observeHomePose  string               // recovery pose name on observeSw
 	approachRel      *RelativePose        // gripper offset for the pre-grab pose
@@ -235,7 +243,6 @@ func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 	return &pickupTarget{
 		label:            pickupLabelCup,
 		vision:           s.cupVision,
-		cameraName:       s.cupCameraName,
 		observeSw:        s.cameraObserveSw,
 		observeHomePose:  camPoseCupObserve,
 		approachRel:      s.cfg.CupApproachRelativePose,
@@ -256,7 +263,6 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 	return &pickupTarget{
 		label:            pickupLabelGlass,
 		vision:           s.glassVision,
-		cameraName:       s.cupCameraName,
 		observeSw:        s.glassObserveSw,
 		observeHomePose:  glassPoseObserve,
 		approachRel:      s.cfg.GlassApproachRelativePose,
@@ -270,33 +276,26 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 	}
 }
 
-// observeVantage captures one vision frame at the arm's current pose and lifts
-// each detection into world coordinates. Returns the pickup candidates
-// (world-frame centroid + geometry). Returns a nil slice with no error when the
-// frame produced no detection, so the sweep can move on to the next observe pose.
+// observeVantage captures one vision frame at the arm's current pose and returns
+// the pickup candidates. Each detection's root transform is parented to world by
+// the vision service, so no camera frame lookup happens here. Returns a nil slice
+// with no error when the frame produced no detection, so the sweep can move on to
+// the next observe pose.
 func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) ([]pickupCandidate, error) {
 	logger := s.activeOrderLogger()
 
-	// Pass an empty camera name so the vision service falls back to its own
-	// configured default camera. t.cameraName is still used below to transform
-	// detection centroids from the camera frame into world coords.
-	objects, err := t.vision.GetObjectPointClouds(ctx, "", nil)
+	// Empty camera name: the vision service uses its configured default camera.
+	// TODO(RSDK): requires rdk GetDetections3D (api PR pending)
+	dets, err := t.vision.GetDetections3D(ctx, "", nil)
 	if err != nil {
 		return nil, fmt.Errorf("detect: %w", err)
 	}
-	logger.Infof("dynamic %s pickup: found %d detections", t.label, len(objects))
-	if len(objects) == 0 {
+	logger.Infof("dynamic %s pickup: found %d detections", t.label, len(dets))
+	if len(dets) == 0 {
 		return nil, nil
 	}
 
 	fs, fsInputs, err := s.currentInputs(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// The camera's world pose at these inputs — everything the vision service
-	// reports is in the camera frame
-	camToWorld, err := cameraToWorldPose(fs, fsInputs, t.cameraName)
 	if err != nil {
 		return nil, err
 	}
@@ -309,55 +308,51 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 		return nil, err
 	}
 
-	candidates := make([]pickupCandidate, 0, len(objects))
-	// What goes into the debug snapshot below. Every detection contributes its raw
-	// point cloud, including the ones dropped here for lacking a usable geometry —
-	// a detection the pickup threw away is exactly what one wants to look at.
-	detections := make([]detectionSnapshotItem, 0, len(objects))
-	for _, obj := range objects {
-		detections = append(detections, detectionSnapshotItem{cloud: obj.PointCloud})
-		detectionIdx := len(detections) - 1
-		if obj.Geometry == nil {
+	candidates := make([]pickupCandidate, 0, len(dets))
+	detections := make([]detectionSnapshotItem, 0, len(dets))
+	for _, det := range dets {
+		if len(det.Transforms) == 0 || det.Transforms[0].Geometry() == nil {
 			continue
 		}
-		local := obj.Geometry.Pose().Point()
-		world := spatialmath.Compose(camToWorld, spatialmath.NewPoseFromPoint(local)).Point()
-		// Build the detection geometry as a world-frame, axis-aligned (orientation
-		// OZ=1) box of the configured container size, centered on the grasp
-		// centroid — a known-size container modeled around where it is actually
-		// grasped, sidestepping a point-cloud midpoint skewed by a partial view. The
-		// held-item tracker attaches this shape to the gripper after the grab, and it
-		// is drawn in the saved snapshot.
-		geomWorld, err := containerBox(world, t.dims, t.label)
-		if err != nil {
-			return nil, err
+		root := det.Transforms[0]
+		if root.Parent() != referenceframe.World {
+			return nil, fmt.Errorf("detection %q is parented to %q, want world", root.Name(), root.Parent())
 		}
+		world := root.Pose().Point()
+		// The shape is expressed in the root frame; compose it onto the root pose
+		// to get the world-frame geometry the held-item tracker and snapshot use.
+		geomWorld := root.Geometry().Transform(root.Pose())
 		// Resolve the grasp Z from the surface the container rests on: with the
 		// container's known height, seat its base surfaceRestClearanceMm above the
 		// top of the highest static surface directly beneath the detection, keeping
 		// the detected X/Y (which depth noise pushes above or below the true base).
-		// The geometry is shifted with the centroid so it stays centered on the
-		// grasp point. When no surface is found underneath, the raw detected Z is
-		// used unchanged.
+		// The root transform is re-issued at the seated pose so the frame-relative
+		// grasp offsets land on the seated item. When no surface is found
+		// underneath, the raw detected Z is used unchanged.
+		links := det.Transforms
 		if topZ, ok := surfaceTopZUnder(surfaces, world.X, world.Y, world.Z); ok {
 			newZ := topZ + surfaceRestClearanceMm + t.dims.HeightMm/2
 			logger.Infof("dynamic %s pickup: seating base %.1fmm above surface top Z=%.1f -> grasp Z %.1f (detected %.1f)",
 				t.label, surfaceRestClearanceMm, topZ, newZ, world.Z)
-			geomWorld = geomWorld.Transform(spatialmath.NewPoseFromPoint(r3.Vector{Z: newZ - world.Z}))
+			shift := spatialmath.NewPoseFromPoint(r3.Vector{Z: newZ - world.Z})
+			geomWorld = geomWorld.Transform(shift)
 			world.Z = newZ
+			links = append([]*referenceframe.LinkInFrame{
+				referenceframe.NewLinkInFrame(referenceframe.World, spatialmath.Compose(shift, root.Pose()), root.Name(), root.Geometry()),
+			}, det.Transforms[1:]...)
 		} else {
 			logger.Infof("dynamic %s pickup: no static surface beneath detection at (x=%.1f, y=%.1f) below Z=%.1f; keeping detected Z",
 				t.label, world.X, world.Y, world.Z)
 		}
-		logger.Debugf("dynamic %s pickup: detection at camera-local %v -> world %v", t.label, local, world)
-		detections[detectionIdx].box = geomWorld
-		candidates = append(candidates, pickupCandidate{centroid: world, geom: geomWorld})
+		logger.Debugf("dynamic %s pickup: detection %q at world %v", t.label, root.Name(), world)
+		detections = append(detections, detectionSnapshotItem{box: geomWorld})
+		candidates = append(candidates, pickupCandidate{frame: root.Name(), links: links, centroid: world, geom: geomWorld})
 	}
 
 	// Persist a motion-tools snapshot of this observation to the motion-requests
-	// dir: the frame system at these inputs plus every detection's point cloud and
-	// bounding box, replayable in a local motion-tools visualizer.
-	s.saveDetectionSnapshot(t.label, fs, fsInputs, camToWorld, detections)
+	// dir: the frame system at these inputs plus every detection's bounding box,
+	// replayable in a local motion-tools visualizer. Shapes are already in world.
+	s.saveDetectionSnapshot(t.label, fs, fsInputs, spatialmath.NewZeroPose(), detections)
 	return candidates, nil
 }
 
@@ -440,23 +435,23 @@ func centroidsOf(candidates []pickupCandidate) []r3.Vector {
 	return out
 }
 
-// candidatesForCentroids pairs each ranked centroid with the geometry of the
-// nearest original detection, so the held-item tracker can attach the detected
-// shape after the grab. Geometry is matched back by nearest original rather than
-// threaded through the merge (which averages centroids).
+// candidatesForCentroids pairs each ranked centroid with the frame, transforms
+// and geometry of the nearest original detection. The merge averages centroids,
+// so the detection identity is matched back by nearest original afterward.
 func candidatesForCentroids(ranked []r3.Vector, originals []pickupCandidate) []pickupCandidate {
 	out := make([]pickupCandidate, len(ranked))
 	for i, c := range ranked {
-		out[i] = pickupCandidate{centroid: c, geom: nearestGeometry(c, originals)}
+		out[i] = nearestCandidate(c, originals)
+		out[i].centroid = c
 	}
 	return out
 }
 
-// nearestGeometry returns the geometry of the original detection whose centroid
-// is closest to c, skipping detections with no geometry. Returns nil when no
+// nearestCandidate returns the original detection whose centroid is closest to
+// c, skipping detections with no geometry. Returns a zero candidate when no
 // original carries a geometry.
-func nearestGeometry(c r3.Vector, originals []pickupCandidate) spatialmath.Geometry {
-	var best spatialmath.Geometry
+func nearestCandidate(c r3.Vector, originals []pickupCandidate) pickupCandidate {
+	var best pickupCandidate
 	bestDist := math.MaxFloat64
 	for _, o := range originals {
 		if o.geom == nil {
@@ -464,10 +459,16 @@ func nearestGeometry(c r3.Vector, originals []pickupCandidate) spatialmath.Geome
 		}
 		if d := o.centroid.Sub(c).Norm(); d < bestDist {
 			bestDist = d
-			best = o.geom
+			best = o
 		}
 	}
 	return best
+}
+
+// nearestGeometry returns the geometry of the original detection whose centroid
+// is closest to c. Returns nil when no original carries a geometry.
+func nearestGeometry(c r3.Vector, originals []pickupCandidate) spatialmath.Geometry {
+	return nearestCandidate(c, originals).geom
 }
 
 // pickupAreaShieldCollisions allows the claws, gripper sub-frames, and — once an
@@ -513,24 +514,17 @@ func (s *beanjaminCoffee) pickupAreaShieldCollisions(shieldFrame string) []Allow
 //   - anything else → execution error or operator cancel; bubble up.
 func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarget, cand pickupCandidate) (r3.Vector, error) {
 	centroid := cand.centroid
-	// For the glass, grab at the geometry centroid's Z (the middle of the box)
-	// while keeping the detected X/Y. The point-cloud centroid Z can land high on
-	// the rim; the box center is a more stable mid-height grasp point.
-	if t.graspZFromGeom && cand.geom != nil {
-		geomZ := cand.geom.Pose().Point().Z
-		if geomZ != centroid.Z {
-			s.activeOrderLogger().Infof("dynamic %s pickup: grasping at geometry-centroid Z %.1f (was detected-centroid Z %.1f)", t.label, geomZ, centroid.Z)
-		}
-		centroid.Z = geomZ
-	}
+	// The approach and grab offsets are poses in the item's own frame. The
+	// planner resolves them against the detection transforms attached below, so
+	// the offsets no longer need to be composed onto a world point here.
 	approachPD := &poseData{
-		pose:          composeCupPose(centroid, relativePoseToSpatial(t.approachRel)),
-		refFrame:      referenceframe.World,
+		pose:          relativePoseToSpatial(t.approachRel),
+		refFrame:      cand.frame,
 		componentName: gripPoint,
 	}
 	grabPD := &poseData{
-		pose:          composeCupPose(centroid, relativePoseToSpatial(t.grabRel)),
-		refFrame:      referenceframe.World,
+		pose:          relativePoseToSpatial(t.grabRel),
+		refFrame:      cand.frame,
 		componentName: gripPoint,
 	}
 
@@ -542,6 +536,12 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	// (Opening the gripper and grabbing don't change the planning geometry, so the
 	// grab plans the same before the descent as it would at descent time.)
 	fs, fsInputs, err := s.currentInputs(ctx)
+	if err != nil {
+		return centroid, err
+	}
+	// Per-plan frame system with the detection attached: cand.frame resolves as a
+	// goal frame and the item's shape is a static collision body.
+	fs, err = planningFrameSystem(fs, cand.links)
 	if err != nil {
 		return centroid, err
 	}

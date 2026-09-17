@@ -243,57 +243,6 @@ func TestCandidatesForCentroids(t *testing.T) {
 	}
 }
 
-func cameraToWorldTestFS(t *testing.T, camPose spatialmath.Pose) *referenceframe.FrameSystem {
-	t.Helper()
-	fs := referenceframe.NewEmptyFrameSystem("test")
-	camFrame, err := referenceframe.NewStaticFrame("camera", camPose)
-	if err != nil {
-		t.Fatalf("create camera frame: %v", err)
-	}
-	if err := fs.AddFrame(camFrame, fs.World()); err != nil {
-		t.Fatalf("add camera frame: %v", err)
-	}
-	return fs
-}
-
-func TestCameraToWorldPose_Identity(t *testing.T) {
-	fs := cameraToWorldTestFS(t, spatialmath.NewZeroPose())
-	fsInputs := referenceframe.NewZeroInputs(fs)
-	camToWorld, err := cameraToWorldPose(fs, fsInputs, "camera")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	point := r3.Vector{X: 50, Y: 60, Z: 70}
-	got := spatialmath.Compose(camToWorld, spatialmath.NewPoseFromPoint(point)).Point()
-	if got != point {
-		t.Fatalf("expected %v unchanged, got %v", point, got)
-	}
-}
-
-func TestCameraToWorldPose_Translated(t *testing.T) {
-	camPose := spatialmath.NewPose(r3.Vector{X: 100, Y: 0, Z: 0}, spatialmath.NewZeroOrientation())
-	fs := cameraToWorldTestFS(t, camPose)
-	fsInputs := referenceframe.NewZeroInputs(fs)
-	camToWorld, err := cameraToWorldPose(fs, fsInputs, "camera")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	got := spatialmath.Compose(camToWorld, spatialmath.NewPoseFromPoint(r3.Vector{X: 10})).Point()
-	want := r3.Vector{X: 110, Y: 0, Z: 0}
-	if got != want {
-		t.Fatalf("expected %v, got %v", want, got)
-	}
-}
-
-func TestCameraToWorldPose_MissingFrame(t *testing.T) {
-	fs := referenceframe.NewEmptyFrameSystem("test")
-	fsInputs := referenceframe.NewZeroInputs(fs)
-	_, err := cameraToWorldPose(fs, fsInputs, "no-such-camera")
-	if err == nil {
-		t.Fatalf("expected error for missing camera frame")
-	}
-}
-
 // TestContainerBox verifies that containerBox builds an axis-aligned box of the
 // configured size (width = depth = diameter, height = height) centered on the
 // grasp centroid — not on any point-cloud-derived midpoint.
