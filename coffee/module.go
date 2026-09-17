@@ -116,7 +116,6 @@ type beanjaminCoffee struct {
 	// the keep-alive loop (keepalive.go). nil when keepalive is unconfigured.
 	machineActivity *machineActivityStore
 	cupVision       vision.Service // vision service for cup pickup (always configured)
-	cupCameraName   string         // SrcCameraName, validated to exist in cachedFS
 	glassVision     vision.Service // optional; nil unless CanServeIced
 	glassObserveSw  toggleswitch.Switch
 	milkVision      vision.Service // optional; nil unless CanServeIcedLatte
@@ -204,7 +203,7 @@ func optionalGenericDep(deps resource.Dependencies, logger logging.Logger, confi
 // visionPickup resolves the vision service and observe-pose switch backing one
 // vision-driven pickup (cup, glass, or milk bottle). All three share the cup
 // camera, so only the per-target pair is resolved here.
-func visionPickup(deps resource.Dependencies, logger logging.Logger, label, visionName, switchName, cameraName string) (vision.Service, toggleswitch.Switch, error) {
+func visionPickup(deps resource.Dependencies, logger logging.Logger, label, visionName, switchName string) (vision.Service, toggleswitch.Switch, error) {
 	vis, err := vision.FromProvider(deps, visionName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s vision service %q: %w", label, visionName, err)
@@ -213,7 +212,7 @@ func visionPickup(deps resource.Dependencies, logger logging.Logger, label, visi
 	if err != nil {
 		return nil, nil, err
 	}
-	logger.Infof("%s vision pickup (vision=%q, camera=%q, observe_switch=%q)", label, visionName, cameraName, switchName)
+	logger.Infof("%s vision pickup (vision=%q, observe_switch=%q)", label, visionName, switchName)
 	return vis, sw, nil
 }
 
@@ -251,15 +250,10 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, fmt.Errorf("apply joint limits: %w", err)
 	}
 
-	// The camera backs every vision pickup, so it is checked once here.
-	if cachedFS.Frame(conf.SrcCameraName) == nil {
-		return nil, fmt.Errorf("src_camera_name %q not found in frame system — add the camera to the frame system fragment", conf.SrcCameraName)
-	}
-
 	// Cup pickup is always vision-driven; the glass and milk pipelines mirror it
 	// behind their feature flags.
 	cupVision, cameraObserveSw, err := visionPickup(deps, logger, "cup",
-		conf.CupVisionServiceName, conf.CameraObservePoseSwitcherName, conf.SrcCameraName)
+		conf.CupVisionServiceName, conf.CameraObservePoseSwitcherName)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +262,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	var glassObserveSw toggleswitch.Switch
 	if conf.CanServeIced {
 		if glassVision, glassObserveSw, err = visionPickup(deps, logger, "iced coffee glass",
-			conf.GlassVisionServiceName, conf.GlassObservePoseSwitcherName, conf.SrcCameraName); err != nil {
+			conf.GlassVisionServiceName, conf.GlassObservePoseSwitcherName); err != nil {
 			return nil, err
 		}
 	}
@@ -277,7 +271,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	var milkObserveSw toggleswitch.Switch
 	if conf.CanServeIcedLatte {
 		if milkVision, milkObserveSw, err = visionPickup(deps, logger, "iced latte milk",
-			conf.MilkVisionServiceName, conf.MilkObservePoseSwitcherName, conf.SrcCameraName); err != nil {
+			conf.MilkVisionServiceName, conf.MilkObservePoseSwitcherName); err != nil {
 			return nil, err
 		}
 	}
@@ -386,7 +380,6 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		orderSensorSink:      sink,
 		usageSensor:          usageSensor,
 		cupVision:            cupVision,
-		cupCameraName:        conf.SrcCameraName,
 		glassVision:          glassVision,
 		glassObserveSw:       glassObserveSw,
 		milkVision:           milkVision,
