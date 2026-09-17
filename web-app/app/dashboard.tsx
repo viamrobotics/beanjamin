@@ -355,12 +355,10 @@ export function Dashboard() {
           ))}
       </ul>
 
-      <Leaderboard
-        customers={customerLeaderboard}
-        drinks={drinkLeaderboard}
-      />
-
-      <section className="mb-6">
+      {/* Chart and leaderboard share a row: the leaderboard is two short lists
+          and was costing a full screen of height on its own. */}
+      <div className="flex flex-col lg:flex-row gap-6 mb-6">
+      <section className="grow min-w-0">
         <h2 className="text-xl font-semibold text-neutral-900">Orders</h2>
         <p className="text-sm text-neutral-500 mb-3">
           Click any bar to see that day&apos;s orders and videos.
@@ -424,20 +422,29 @@ export function Dashboard() {
             </div>
           </>
         )}
-        {/* Outside the chart's loading branch: today's orders don't depend on
-            the 7-day aggregate, and shouldn't wait for it. */}
-        {panel && (
-          <OrdersPanel
-            key={panelKey(panel)}
-            panel={panel}
-            orders={panelOrders}
-            error={panelError}
-            onClose={closePanel}
-            viamClient={viamClient}
-            machineNameById={machineNameById}
-          />
-        )}
       </section>
+
+        <div className="shrink-0 lg:w-80">
+          <Leaderboard
+            customers={customerLeaderboard}
+            drinks={drinkLeaderboard}
+          />
+        </div>
+      </div>
+
+      {/* Full width, and outside the chart's loading branch: today's orders
+          don't depend on the 7-day aggregate and shouldn't wait for it. */}
+      {panel && (
+        <OrdersPanel
+          key={panelKey(panel)}
+          panel={panel}
+          orders={panelOrders}
+          error={panelError}
+          onClose={closePanel}
+          viamClient={viamClient}
+          machineNameById={machineNameById}
+        />
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import * as VIAM from "@viamrobotics/sdk";
 import {
   type OrderRecord,
@@ -16,16 +16,20 @@ import {
 import { PlanPanel } from "./plan-panel";
 import { drinkLabel } from "../order/drinks";
 
+// Display order, which is not sort order: the identity columns (when, which
+// order, which machine) lead, then the drink, then how it went.
 const ORDER_COLUMNS = [
-  { key: "time", label: "Time", defaultDir: "desc" },
-  { key: "customer", label: "Customer", defaultDir: "asc" },
-  { key: "drink", label: "Drink", defaultDir: "asc" },
-  { key: "duration", label: "Duration", defaultDir: "desc" },
-  { key: "status", label: "Status", defaultDir: "asc" },
+  { key: "time", label: "Time", sort: "time", defaultDir: "desc" },
+  { key: "orderId", label: "Order ID" },
+  { key: "machine", label: "Machine" },
+  { key: "customer", label: "Customer", sort: "customer", defaultDir: "asc" },
+  { key: "drink", label: "Drink", sort: "drink", defaultDir: "asc" },
+  { key: "duration", label: "Duration", sort: "duration", defaultDir: "desc" },
+  { key: "status", label: "Status", sort: "status", defaultDir: "asc" },
+  { key: "video", label: "Video" },
 ] as const;
 
-// +1 order ID, +1 machine, +1 video — none of them sortable.
-const TABLE_COL_COUNT = ORDER_COLUMNS.length + 3;
+const TABLE_COL_COUNT = ORDER_COLUMNS.length;
 
 const TH_BASE =
   "sticky top-0 z-10 bg-neutral-50 px-2 py-1.5 text-left font-medium border-b border-neutral-200";
@@ -66,7 +70,9 @@ function OrderIdCell({ orderId }: { orderId: string }) {
         {shortOrderId(orderId)}
       </span>
       <button
-        onClick={() => {
+        onClick={(e) => {
+          // The row toggles on click; copying an ID is not that.
+          e.stopPropagation();
           // Clipboard access can be denied (insecure origin, permissions);
           // the ID stays readable in the title attribute either way.
           navigator.clipboard.writeText(orderId).then(
@@ -98,6 +104,17 @@ function StatusCell({ order }: { order: OrderRecord }) {
   );
 }
 
+/**
+ * The whole row toggles the clips, so a control inside it that does the same
+ * thing has to stop the click or the two fire and cancel out.
+ */
+function stopAnd(fn: () => void) {
+  return (e: React.MouseEvent) => {
+    e.stopPropagation();
+    fn();
+  };
+}
+
 function VideoCell({
   order,
   count,
@@ -115,7 +132,7 @@ function VideoCell({
   if (!order.orderId) return <>—</>;
   if (isExpanded) {
     return (
-      <button onClick={onToggle} className="text-blue-600 hover:underline">
+      <button onClick={stopAnd(onToggle)} className="text-blue-600 hover:underline">
         Hide
       </button>
     );
@@ -133,7 +150,7 @@ function VideoCell({
     );
   }
   return (
-    <button onClick={onToggle} className="text-blue-600 hover:underline">
+    <button onClick={stopAnd(onToggle)} className="text-blue-600 hover:underline">
       ▶ Watch ({count})
     </button>
   );
@@ -172,13 +189,14 @@ function VideoExpansion({ entry }: { entry: VideoEntry | undefined }) {
     );
   }
   return (
-    <div className="space-y-2">
+    <div className="flex flex-wrap gap-3">
       {entry.items.map((item) => (
         <video
           key={item.id}
           controls
           src={item.url}
-          className="max-w-full rounded-md border border-neutral-200"
+          // One camera per clip: side by side is how you compare them.
+          className="flex-1 basis-64 min-w-0 rounded-md border border-neutral-200"
         />
       ))}
     </div>
@@ -250,20 +268,28 @@ function OrderTable({
           <thead>
             <tr className="text-left text-neutral-500">
               {ORDER_COLUMNS.map((col) => {
-                const active = sort.key === col.key;
-                const arrow = active ? (sort.dir === "desc" ? "↓" : "↑") : "";
+                if (!("sort" in col)) {
+                  return (
+                    <th key={col.key} className={TH_BASE}>
+                      {col.label}
+                    </th>
+                  );
+                }
+                const sortKey = col.sort;
+                const arrow =
+                  sort.key === sortKey ? (sort.dir === "desc" ? "↓" : "↑") : "";
                 return (
                   <th
                     key={col.key}
                     className={`${TH_BASE} cursor-pointer select-none hover:text-neutral-900 transition-colors`}
                     onClick={() =>
                       setSort((s) =>
-                        s.key === col.key
+                        s.key === sortKey
                           ? {
-                              key: col.key,
+                              key: sortKey,
                               dir: s.dir === "desc" ? "asc" : "desc",
                             }
-                          : { key: col.key, dir: col.defaultDir }
+                          : { key: sortKey, dir: col.defaultDir }
                       )
                     }
                   >
@@ -271,9 +297,6 @@ function OrderTable({
                   </th>
                 );
               })}
-              <th className={TH_BASE}>Order ID</th>
-              <th className={TH_BASE}>Machine</th>
-              <th className={TH_BASE}>Video</th>
             </tr>
           </thead>
           <tbody>
@@ -281,12 +304,24 @@ function OrderTable({
               const rowKey = o.orderId || o.startTime.toISOString();
               const isExpanded = !!o.orderId && expandedOrder === o.orderId;
               const rows = [
-                <tr key={rowKey} className="border-t border-neutral-200">
+                <tr
+                  key={rowKey}
+                  onClick={() => o.orderId && toggleVideo(o)}
+                  className={`border-t border-neutral-200 ${
+                    o.orderId ? "cursor-pointer hover:bg-neutral-50" : ""
+                  } ${isExpanded ? "bg-neutral-50" : ""}`}
+                >
                   <td className="px-2 py-1.5 whitespace-nowrap">
                     {o.startTime.toLocaleTimeString(undefined, {
                       hour: "numeric",
                       minute: "2-digit",
                     })}
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <OrderIdCell orderId={o.orderId} />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    {machineNameById.get(o.robotId) ?? "—"}
                   </td>
                   <td className="px-2 py-1.5">{o.customerName || "—"}</td>
                   <td className="px-2 py-1.5">
@@ -302,12 +337,6 @@ function OrderTable({
                   </td>
                   <td className="px-2 py-1.5">
                     <StatusCell order={o} />
-                  </td>
-                  <td className="px-2 py-1.5">
-                    <OrderIdCell orderId={o.orderId} />
-                  </td>
-                  <td className="px-2 py-1.5">
-                    {machineNameById.get(o.robotId) ?? "—"}
                   </td>
                   <td className="px-2 py-1.5">
                     <VideoCell
