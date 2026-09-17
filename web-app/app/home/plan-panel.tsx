@@ -148,6 +148,9 @@ function PlanTable({
             <th className="sticky top-0 z-10 bg-neutral-50 px-2 py-1.5 font-medium border-b border-neutral-200">
               File
             </th>
+            <th className="sticky top-0 z-10 bg-neutral-50 px-2 py-1.5 font-medium border-b border-neutral-200 w-40">
+              Step
+            </th>
             <th className="sticky top-0 z-10 bg-neutral-50 px-2 py-1.5 font-medium border-b border-neutral-200 w-24">
               Motion
             </th>
@@ -176,9 +179,12 @@ function PlanTable({
               <td className="px-2 py-1.5 font-mono text-neutral-500">{f.seq}</td>
               <td
                 className="px-2 py-1.5 font-mono truncate max-w-0"
-                title={f.fileName}
+                title={f.path}
               >
                 {f.fileName}
+              </td>
+              <td className="px-2 py-1.5 text-neutral-600">
+                {f.step || NO_STEP_LABEL}
               </td>
               <td className="px-2 py-1.5 font-mono text-neutral-600">
                 {f.motion || "—"}
@@ -262,17 +268,15 @@ export function PlanPanel({
 
   return (
     <div className="rounded-md border border-neutral-200 bg-white">
-      <div className="flex items-center gap-2 px-3 py-2">
-        <button
-          onClick={toggle}
-          aria-expanded={open}
-          className="flex items-center gap-2 text-sm text-neutral-900"
-        >
-          <span className="text-[10px] text-neutral-500">
-            {open ? "▼" : "▶"}
-          </span>
-          <span className="font-semibold">Motion plans</span>
-        </button>
+      <button
+        onClick={toggle}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-900 hover:bg-neutral-50 transition-colors rounded-md"
+      >
+        <span className="text-[10px] text-neutral-500">
+          {open ? "▼" : "▶"}
+        </span>
+        <span className="font-semibold">Motion plans</span>
         {state.kind === "ready" && (
           <span className="text-xs text-neutral-500">
             {all.length} requests across {stepCount}{" "}
@@ -288,7 +292,7 @@ export function PlanPanel({
             )}
           </span>
         )}
-      </div>
+      </button>
 
       {open && (
         <div className="px-3 pb-3 flex flex-col gap-3">

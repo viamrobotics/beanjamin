@@ -505,6 +505,8 @@ export interface PlanRequestFile {
   binaryDataId: string;
   /** Basename, e.g. "20260917_094831.007_move.json". */
   fileName: string;
+  /** Full synced path, including the tag= directories the tags came from. */
+  path: string;
   /** Brew step the plan was issued under, or "" for one issued outside a step. */
   step: string;
   /** Motion kind: move, pivot, circular, carry, or a door action. */
@@ -563,10 +565,12 @@ export async function loadPlanRequestsForOrder(
       const tags = d.metadata?.captureMetadata?.tags ?? [];
       const stepTag = tags.find((t) => t.startsWith(STEP_TAG_PREFIX));
       const motionTag = tags.find((t) => t.startsWith(MOTION_TAG_PREFIX));
-      const fileName = d.metadata!.fileName.split("/").pop() ?? "";
+      const path = d.metadata!.fileName;
+      const fileName = path.split("/").pop() ?? "";
       return {
         binaryDataId: d.metadata!.binaryDataId,
         fileName,
+        path,
         step: stepTag ? unslugStep(stepTag) : "",
         motion: motionTag ? motionTag.slice(MOTION_TAG_PREFIX.length) : "",
         ok: tags.includes(PLANNING_SUCCESS_TAG),
