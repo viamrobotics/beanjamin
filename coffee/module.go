@@ -82,8 +82,7 @@ type beanjaminCoffee struct {
 	// captured inside prepareDrink before `running` flips false so cancel
 	// recovery can't overwrite it. "" when the order succeeded. Reported on
 	// the order sensor; reset at the start of each order.
-	failedStep     atomic.Value
-	currentOrderID atomic.Value // string: ID of the order currently being processed; "" when idle
+	failedStep atomic.Value
 	// faultActive is raised for faultWindow after a genuine fault and surfaced
 	// in Status() as fault_active (fault_alert.go).
 	faultActive atomic.Bool

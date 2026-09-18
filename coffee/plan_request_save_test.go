@@ -101,8 +101,9 @@ func TestSavePlanRequestAndResponse_NoOpWhenDirUnset(t *testing.T) {
 
 func TestSavePlanRequestAndResponse_FailureTags(t *testing.T) {
 	dir := t.TempDir()
-	c := &beanjaminCoffee{logger: logging.NewTestLogger(t), cfg: &Config{SaveMotionRequestsDir: dir}}
-	c.currentOrderID.Store("order-123")
+	c := &beanjaminCoffee{logger: logging.NewTestLogger(t), cfg: &Config{SaveMotionRequestsDir: dir}, queue: NewOrderQueue()}
+	c.queue.Enqueue(Order{ID: "order-123"})
+	c.queue.Start()
 	c.currentStep.Store("Locking portafilter")
 
 	c.savePlanRequestAndResponse(minimalPlanRequest(), nil, "move", errors.New("boom"))
@@ -133,8 +134,9 @@ func TestSavePlanRequestAndResponse_FailureTags(t *testing.T) {
 
 func TestSavePlanRequestAndResponse_SuccessOutcome(t *testing.T) {
 	dir := t.TempDir()
-	c := &beanjaminCoffee{logger: logging.NewTestLogger(t), cfg: &Config{SaveMotionRequestsDir: dir}}
-	c.currentOrderID.Store("order-9")
+	c := &beanjaminCoffee{logger: logging.NewTestLogger(t), cfg: &Config{SaveMotionRequestsDir: dir}, queue: NewOrderQueue()}
+	c.queue.Enqueue(Order{ID: "order-9"})
+	c.queue.Start()
 	c.currentStep.Store("Grinding")
 
 	c.savePlanRequestAndResponse(minimalPlanRequest(), nil, "circular", nil)

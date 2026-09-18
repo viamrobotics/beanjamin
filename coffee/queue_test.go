@@ -12,13 +12,14 @@ import (
 	"go.viam.com/rdk/resource"
 )
 
-func TestQueue_SetStep_UpdatesOrder(t *testing.T) {
+func TestQueue_SetCurrentStep_UpdatesCurrentOrder(t *testing.T) {
 	q := NewOrderQueue()
 	o := NewOrder("espresso", "Ale", "hi", "bye")
 	q.Enqueue(o)
+	q.Start()
 
-	q.SetStep(o.ID, "Grinding")
-	q.SetStep(o.ID, "Brewing")
+	q.SetCurrentStep("Grinding")
+	q.SetCurrentStep("Brewing")
 
 	got := q.List()
 	if len(got) != 1 {
@@ -41,12 +42,15 @@ func TestQueue_SetStep_UpdatesOrder(t *testing.T) {
 	}
 }
 
-func TestQueue_SetStep_UnknownIDIsNoOp(t *testing.T) {
+// TestQueue_SetCurrentStep_IdleQueueIsNoOp pins that a step published while
+// nothing is on the arm — a keep-alive purge, say — attaches to no order, and
+// in particular does not leak onto the next order waiting in the backlog.
+func TestQueue_SetCurrentStep_IdleQueueIsNoOp(t *testing.T) {
 	q := NewOrderQueue()
 	o := NewOrder("espresso", "Ale", "", "")
 	q.Enqueue(o)
 
-	q.SetStep("not-a-real-id", "Grinding")
+	q.SetCurrentStep("Grinding")
 
 	got := q.List()
 	if got[0].RawStep != "" {
@@ -57,22 +61,23 @@ func TestQueue_SetStep_UnknownIDIsNoOp(t *testing.T) {
 	}
 }
 
-func TestQueue_SetStep_OnlyAffectsMatchingOrder(t *testing.T) {
+func TestQueue_SetCurrentStep_OnlyAffectsCurrentOrder(t *testing.T) {
 	q := NewOrderQueue()
 	a := NewOrder("espresso", "Alice", "", "")
 	b := NewOrder("lungo", "Bob", "", "")
 	q.Enqueue(a)
 	q.Enqueue(b)
+	q.Start() // a goes on the arm, b stays in the backlog
 
-	q.SetStep(b.ID, "Brewing")
+	q.SetCurrentStep("Brewing")
 
 	got := q.List()
-	// Both pending; FIFO order
-	if got[0].ID != a.ID || got[0].RawStep != "" {
-		t.Errorf("expected order A untouched, got %+v", got[0])
+	// current renders ahead of the backlog.
+	if got[0].ID != a.ID || got[0].RawStep != "Brewing" {
+		t.Errorf("expected order A RawStep=Brewing, got %+v", got[0])
 	}
-	if got[1].ID != b.ID || got[1].RawStep != "Brewing" {
-		t.Errorf("expected order B RawStep=Brewing, got %+v", got[1])
+	if got[1].ID != b.ID || got[1].RawStep != "" {
+		t.Errorf("expected backlog order B untouched, got %+v", got[1])
 	}
 }
 
@@ -80,12 +85,13 @@ func TestQueue_List_DeepCopiesStepHistory(t *testing.T) {
 	q := NewOrderQueue()
 	o := NewOrder("espresso", "Ale", "", "")
 	q.Enqueue(o)
+	q.Start()
 
-	q.SetStep(o.ID, "Grinding")
+	q.SetCurrentStep("Grinding")
 	snapshot := q.List()
 
 	// Mutate after taking the snapshot — the snapshot must not see it.
-	q.SetStep(o.ID, "Brewing")
+	q.SetCurrentStep("Brewing")
 
 	if len(snapshot[0].StepHistory) != 1 {
 		t.Errorf("snapshot StepHistory length = %d, want 1 (snapshot must be deep-copied)",
@@ -102,10 +108,11 @@ func TestQueue_List_DeepCopiesStepHistory(t *testing.T) {
 	}
 }
 
-func TestQueue_SetStep_ConcurrentSafety(t *testing.T) {
+func TestQueue_SetCurrentStep_ConcurrentSafety(t *testing.T) {
 	q := NewOrderQueue()
 	o := NewOrder("espresso", "Ale", "", "")
 	q.Enqueue(o)
+	q.Start()
 
 	const writers = 8
 	const writes = 200
@@ -115,7 +122,7 @@ func TestQueue_SetStep_ConcurrentSafety(t *testing.T) {
 		go func(label string) {
 			defer wg.Done()
 			for j := 0; j < writes; j++ {
-				q.SetStep(o.ID, label)
+				q.SetCurrentStep(label)
 				_ = q.List()
 			}
 		}([]string{"Grinding", "Tamping", "Brewing", "Serving"}[i%4])
@@ -128,16 +135,17 @@ func TestQueue_SetStep_ConcurrentSafety(t *testing.T) {
 	}
 }
 
-func TestQueue_Complete_MovesPendingToRecentWithTimestamp(t *testing.T) {
+func TestQueue_Complete_MovesCurrentToRecentWithTimestamp(t *testing.T) {
 	q := NewOrderQueue()
 	o := NewOrder("espresso", "Ale", "", "")
 	q.Enqueue(o)
-	q.SetStep(o.ID, "Brewing")
+	q.Start()
+	q.SetCurrentStep("Brewing")
 
-	q.Complete(o.ID)
+	q.Complete()
 
 	if got := q.Len(); got != 0 {
-		t.Errorf("Len after Complete = %d, want 0 (pending only)", got)
+		t.Errorf("Len after Complete = %d, want 0 (nothing left to make)", got)
 	}
 	got := q.List()
 	if len(got) != 1 {
@@ -154,22 +162,24 @@ func TestQueue_Complete_MovesPendingToRecentWithTimestamp(t *testing.T) {
 	}
 }
 
-func TestQueue_Complete_UnknownIDIsNoOp(t *testing.T) {
+// TestQueue_Complete_IdleQueueIsNoOp covers Complete arriving with nothing on
+// the arm: the backlog must not be touched, least of all silently retired.
+func TestQueue_Complete_IdleQueueIsNoOp(t *testing.T) {
 	q := NewOrderQueue()
 	o := NewOrder("espresso", "Ale", "", "")
 	q.Enqueue(o)
 
-	q.Complete("does-not-exist")
+	q.Complete()
 
 	if got := q.Len(); got != 1 {
-		t.Errorf("Len = %d, want 1 (Complete with unknown id is no-op)", got)
+		t.Errorf("Len = %d, want 1 (Complete on an idle queue is a no-op)", got)
 	}
 	if got := q.List(); len(got) != 1 || got[0].ID != o.ID {
-		t.Errorf("List should still contain the original pending order")
+		t.Errorf("List should still contain the original backlog order")
 	}
 }
 
-func TestQueue_List_OrdersRecentFirstThenPending(t *testing.T) {
+func TestQueue_List_RendersRecentThenCurrentThenBacklog(t *testing.T) {
 	q := NewOrderQueue()
 	a := NewOrder("espresso", "Alice", "", "")
 	b := NewOrder("espresso", "Bob", "", "")
@@ -180,10 +190,13 @@ func TestQueue_List_OrdersRecentFirstThenPending(t *testing.T) {
 	q.Enqueue(c)
 	q.Enqueue(d)
 
-	// Complete a then b. b is most recent → must appear first in List.
-	q.Complete(a.ID)
+	// Run a then b through the arm. b is most recent → must appear first.
+	q.Start()
+	q.Complete()
 	time.Sleep(2 * time.Millisecond) // ensure distinct CompletedAt
-	q.Complete(b.ID)
+	q.Start()
+	q.Complete()
+	q.Start() // c is now on the arm, d still in the backlog
 
 	got := q.List()
 	if len(got) != 4 {
@@ -201,7 +214,8 @@ func TestQueue_List_PrunesExpiredRecent(t *testing.T) {
 	q := NewOrderQueue()
 	o := NewOrder("espresso", "Ale", "", "")
 	q.Enqueue(o)
-	q.Complete(o.ID)
+	q.Start()
+	q.Complete()
 
 	// Force the recent entry to look expired by stomping CompletedAt directly.
 	q.mu.Lock()
@@ -221,30 +235,44 @@ func TestQueue_Len_ExcludesRecent(t *testing.T) {
 	q.Enqueue(a)
 	q.Enqueue(b)
 
-	q.Complete(a.ID)
+	q.Start()
+	q.Complete()
 
 	if got := q.Len(); got != 1 {
 		t.Errorf("Len = %d, want 1 (recent excluded)", got)
 	}
+
+	// The order on the arm still counts — depth is "drinks still to make".
+	q.Start()
+	if got := q.Len(); got != 1 {
+		t.Errorf("Len with an order on the arm = %d, want 1", got)
+	}
 }
 
-func TestQueue_Clear_ClearsBothPendingAndRecent(t *testing.T) {
+func TestQueue_Clear_ClearsEveryStage(t *testing.T) {
 	q := NewOrderQueue()
 	a := NewOrder("espresso", "Alice", "", "")
 	b := NewOrder("espresso", "Bob", "", "")
+	c := NewOrder("espresso", "Carol", "", "")
 	q.Enqueue(a)
 	q.Enqueue(b)
-	q.Complete(a.ID)
+	q.Enqueue(c)
+	q.Start()    // a on the arm
+	q.Complete() // a → recent
+	q.Start()    // b on the arm, c still in the backlog
 
 	n := q.Clear()
-	if n != 2 {
-		t.Errorf("Clear returned %d, want 2", n)
+	if n != 3 {
+		t.Errorf("Clear returned %d, want 3 (recent + current + backlog)", n)
 	}
 	if got := q.List(); len(got) != 0 {
 		t.Errorf("List after Clear length = %d, want 0", len(got))
 	}
 	if got := q.Len(); got != 0 {
 		t.Errorf("Len after Clear = %d, want 0", got)
+	}
+	if got := q.CurrentID(); got != "" {
+		t.Errorf("CurrentID after Clear = %q, want empty", got)
 	}
 }
 
@@ -585,18 +613,118 @@ func TestEnqueueOrder_IcedLatteGatedByCanServeIcedLatte(t *testing.T) {
 	}
 }
 
-func TestQueue_SetStep_FindsRecentOrder(t *testing.T) {
-	// SetStep called after Complete (e.g. straggling step from a goroutine)
-	// should still be attributed to the order if it's still in recent.
+// TestQueue_SetCurrentStep_AfterCompleteIsDropped pins the narrowing that came
+// with the current slot. A step published once the order has been retired
+// attaches to nothing: there is no order on the arm to attribute it to, and
+// reaching back into recent would let a straggling goroutine rewrite the step
+// label on a drink already sitting on the shelf.
+func TestQueue_SetCurrentStep_AfterCompleteIsDropped(t *testing.T) {
 	q := NewOrderQueue()
 	o := NewOrder("espresso", "Ale", "", "")
 	q.Enqueue(o)
-	q.Complete(o.ID)
+	q.Start()
+	q.SetCurrentStep("Brewing")
+	q.Complete()
 
-	q.SetStep(o.ID, "AfterComplete")
+	q.SetCurrentStep("AfterComplete")
 
 	got := q.List()
-	if got[0].RawStep != "AfterComplete" {
-		t.Errorf("RawStep on recent order = %q, want AfterComplete", got[0].RawStep)
+	if got[0].RawStep != "Brewing" {
+		t.Errorf("RawStep on the retired order = %q, want Brewing (the step it finished on)", got[0].RawStep)
+	}
+}
+
+// TestQueue_Enqueue_PositionCountsTheOrderOnTheArm guards the spoken
+// acknowledgement: enqueueOrder says "Order received" only above position 1, so
+// an order placed while a drink is being made has to come back as 2. Counting
+// the backlog alone would return 1 and leave that customer unacknowledged.
+func TestQueue_Enqueue_PositionCountsTheOrderOnTheArm(t *testing.T) {
+	q := NewOrderQueue()
+
+	if pos := q.Enqueue(NewOrder("espresso", "Ada", "", "")); pos != 1 {
+		t.Errorf("first order into an idle queue = position %d, want 1", pos)
+	}
+	q.Start() // Ada's drink goes on the arm, backlog is empty again
+
+	if pos := q.Enqueue(NewOrder("espresso", "Bob", "", "")); pos != 2 {
+		t.Errorf("order placed mid-brew = position %d, want 2", pos)
+	}
+	if pos := q.Enqueue(NewOrder("espresso", "Cleo", "", "")); pos != 3 {
+		t.Errorf("order placed behind one already waiting = position %d, want 3", pos)
+	}
+}
+
+// TestQueue_ClearPending_SparesCurrentAndRecent pins the clear_queue contract:
+// it drops the backlog only, leaving the order on the arm and the
+// recently-completed buffer untouched.
+func TestQueue_ClearPending_SparesCurrentAndRecent(t *testing.T) {
+	q := NewOrderQueue()
+	done := NewOrder("espresso", "Ada", "", "")
+	current := NewOrder("espresso", "Bob", "", "")
+	waiting := NewOrder("lungo", "Cleo", "", "")
+	extra := NewOrder("espresso", "Dev", "", "")
+	for _, o := range []Order{done, current, waiting, extra} {
+		q.Enqueue(o)
+	}
+	q.Start()    // done on the arm
+	q.Complete() // done → recent
+	q.Start()    // current on the arm
+
+	removed, currentID := q.ClearPending()
+	if removed != 2 || currentID != current.ID {
+		t.Errorf("ClearPending = (%d, %q), want (2, %q)", removed, currentID, current.ID)
+	}
+	if got := q.Len(); got != 1 {
+		t.Fatalf("Len after ClearPending = %d, want 1 (the order on the arm)", got)
+	}
+	if _, ok := q.Peek(); ok {
+		t.Error("backlog should be empty after ClearPending")
+	}
+
+	// Both the order on the arm and the completed one must still be visible to
+	// the webapp, which polls List() through get_queue.
+	list := q.List()
+	if len(list) != 2 {
+		t.Fatalf("List after ClearPending = %d orders, want 2", len(list))
+	}
+	if list[0].ID != done.ID || list[1].ID != current.ID {
+		t.Errorf("List = [%s %s], want [%s %s] (recent first, then the arm)",
+			list[0].ID, list[1].ID, done.ID, current.ID)
+	}
+
+	// The spared order must still take step updates and still be completable.
+	q.SetCurrentStep(stepBrewing)
+	q.Complete()
+	if got := q.Len(); got != 0 {
+		t.Errorf("Len after completing the spared order = %d, want 0", got)
+	}
+	for _, o := range q.List() {
+		if o.ID != current.ID {
+			continue
+		}
+		if o.RawStep != stepBrewing {
+			t.Errorf("spared order raw_step = %q, want %q", o.RawStep, stepBrewing)
+		}
+		if o.CompletedAt.IsZero() {
+			t.Error("spared order should have completed_at set, so the UI renders its Ready! card")
+		}
+		return
+	}
+	t.Errorf("spared order %s missing from List after Complete", current.ID)
+}
+
+// TestQueue_ClearPending_IdleQueue covers the no-order-running case, where
+// there is nothing to spare and the whole backlog goes.
+func TestQueue_ClearPending_IdleQueue(t *testing.T) {
+	q := NewOrderQueue()
+	q.Enqueue(NewOrder("espresso", "Ada", "", ""))
+	q.Enqueue(NewOrder("espresso", "Bob", "", ""))
+
+	removed, currentID := q.ClearPending()
+	if removed != 2 || currentID != "" {
+		t.Errorf("ClearPending on an idle queue = (%d, %q), want (2, \"\")", removed, currentID)
+	}
+	if got := q.Len(); got != 0 {
+		t.Errorf("Len after ClearPending = %d, want 0", got)
 	}
 }

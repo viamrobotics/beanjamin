@@ -68,13 +68,21 @@ type Order struct {
 	CompletedAt time.Time `json:"completed_at"`
 }
 
-// OrderQueue is a thread-safe FIFO order queue with a short-lived buffer
-// of recently-completed orders. The completed buffer exists so the webapp
-// can render a "Ready!" card without having to diff polls — the lifecycle
-// is fully owned by the backend.
+// OrderQueue is a thread-safe order queue. An order moves through three
+// stages, and which stage it is in is the queue's own structure rather than
+// something callers have to infer:
+//
+//	pending → current → recent
+//
+// pending is the FIFO backlog still waiting to be made, current is the single
+// order being made right now, and recent is a short-lived buffer of completed
+// orders so the webapp can render a "Ready!" card without diffing polls. The
+// whole lifecycle is owned by the backend.
+//
 type OrderQueue struct {
 	mu      sync.Mutex
-	pending []Order       // active queue, FIFO
+	pending []Order       // backlog still waiting to be made, FIFO
+	current *Order        // the order being made right now; nil when idle
 	recent  []Order       // completed orders, append-most-recent-last
 	notify  chan struct{} // buffered(1), poked on enqueue to wake consumer
 	proceed chan struct{} // buffered(1), operator signal to resume after inter-order pause
@@ -88,12 +96,20 @@ func NewOrderQueue() *OrderQueue {
 	}
 }
 
-// Enqueue adds an order to the back of the pending queue and returns its
-// 1-based position within pending.
+// Enqueue adds an order to the back of the backlog and returns its 1-based
+// position among the orders still to be made, counting the one on the arm.
+// Position 1 therefore means "nothing ahead of you, this starts next".
+//
+// The in-flight order has to count: callers gate the spoken "Order received"
+// acknowledgement on a position above 1, so leaving it out would meet a
+// customer who ordered mid-brew with silence.
 func (q *OrderQueue) Enqueue(order Order) int {
 	q.mu.Lock()
 	q.pending = append(q.pending, order)
 	pos := len(q.pending)
+	if q.current != nil {
+		pos++
+	}
 	q.mu.Unlock()
 
 	// Non-blocking poke to wake consumer.
@@ -105,49 +121,91 @@ func (q *OrderQueue) Enqueue(order Order) int {
 	return pos
 }
 
-// Peek returns the front pending order without removing it.
+// Peek returns the order at the front of the backlog — the one Start picks up
+// next — without removing it. It never returns the in-flight order; Current
+// does that.
 func (q *OrderQueue) Peek() (Order, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if len(q.pending) == 0 {
 		return Order{}, false
 	}
-	return q.pending[0], true
+	return copyOrder(q.pending[0]), true
 }
 
-// Complete marks the order matching id as completed. It removes the order
-// from pending and appends it to recent with CompletedAt = time.Now(). This
-// is the canonical "the espresso routine finished" transition — there is no
-// separate Dequeue.
-func (q *OrderQueue) Complete(id string) {
+// Start moves the front of the backlog into the current slot and returns it,
+// reporting false when the backlog is empty.
+//
+// The queue has a single consumer (processQueue), which pairs every successful
+// Start with a Complete; starting while an order is already current would
+// abandon that order. The returned copy is deep so the consumer can hold it for
+// the length of the brew while SetCurrentStep keeps appending to the queue's
+// own StepHistory.
+func (q *OrderQueue) Start() (Order, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	for i := range q.pending {
-		if q.pending[i].ID != id {
-			continue
-		}
-		o := q.pending[i]
-		o.CompletedAt = time.Now()
-		q.pending = append(q.pending[:i], q.pending[i+1:]...)
-		q.recent = append(q.recent, o)
-		return
+	if len(q.pending) == 0 {
+		return Order{}, false
 	}
+	o := q.pending[0]
+	q.pending = append(q.pending[:0], q.pending[1:]...)
+	q.current = &o
+	return copyOrder(o), true
 }
 
-// Len returns the number of pending orders. Recently-completed orders do
-// NOT count toward depth — the depth reported to clients is "how many
-// orders still need to be made".
+// Current returns the order being made right now, or false when idle.
+func (q *OrderQueue) Current() (Order, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.current == nil {
+		return Order{}, false
+	}
+	return copyOrder(*q.current), true
+}
+
+// CurrentID returns the ID of the order being made right now, or "" when idle.
+func (q *OrderQueue) CurrentID() string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.current == nil {
+		return ""
+	}
+	return q.current.ID
+}
+
+// Complete retires the current order into the recent buffer with
+// CompletedAt = time.Now(), leaving the queue idle. This is the canonical
+// "the espresso routine finished" transition. No-op when nothing is current.
+func (q *OrderQueue) Complete() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.current == nil {
+		return
+	}
+	o := *q.current
+	o.CompletedAt = time.Now()
+	q.current = nil
+	q.recent = append(q.recent, o)
+}
+
+// Len returns how many orders still need to be made: the backlog plus the one
+// on the arm. Recently-completed orders do NOT count toward depth.
 func (q *OrderQueue) Len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return len(q.pending)
+	n := len(q.pending)
+	if q.current != nil {
+		n++
+	}
+	return n
 }
 
-// List returns a snapshot of all visible orders, in render order:
-// recently-completed orders first (most-recent first), then pending in FIFO.
-// Expired entries in recent (CompletedAt older than RecentDisplayDuration)
-// are pruned in the same call. StepHistory is deep-copied so callers can
-// read the snapshot without racing against concurrent SetStep updates.
+// List returns a snapshot of all visible orders in render order: recently
+// completed first (most-recent first), then the order on the arm, then the
+// backlog in FIFO — top to bottom as the UI reads it. Expired entries in recent
+// (CompletedAt older than RecentDisplayDuration) are pruned in the same call.
+// StepHistory is deep-copied so callers can read the snapshot without racing
+// against concurrent SetCurrentStep updates.
 func (q *OrderQueue) List() []Order {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -162,10 +220,13 @@ func (q *OrderQueue) List() []Order {
 	}
 	q.recent = kept
 
-	out := make([]Order, 0, len(q.recent)+len(q.pending))
+	out := make([]Order, 0, len(q.recent)+1+len(q.pending))
 	// Recent orders rendered most-recent-first (top of the UI).
 	for i := len(q.recent) - 1; i >= 0; i-- {
 		out = append(out, copyOrder(q.recent[i]))
+	}
+	if q.current != nil {
+		out = append(out, copyOrder(*q.current))
 	}
 	for _, o := range q.pending {
 		out = append(out, copyOrder(o))
@@ -183,42 +244,58 @@ func copyOrder(o Order) Order {
 	return out
 }
 
-// SetStep records a step transition for the order matching id. It updates
-// RawStep and appends to StepHistory. Searches both pending and recent so
-// late-arriving step updates after Complete are still attributed correctly.
-// No-op if no order matches.
-func (q *OrderQueue) SetStep(id, rawStep string) {
+// SetCurrentStep records a step transition on the order being made right now,
+// updating RawStep and appending to StepHistory.
+//
+// No-op when the queue is idle: a step published with no order on the arm — a
+// keep-alive purge, say — belongs to no order and surfaces through Status only.
+func (q *OrderQueue) SetCurrentStep(rawStep string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if setStepIn(q.pending, id, rawStep) {
+	if q.current == nil {
 		return
 	}
-	setStepIn(q.recent, id, rawStep)
+	q.current.RawStep = rawStep
+	q.current.StepHistory = append(q.current.StepHistory, StepEntry{
+		Step:      rawStep,
+		StartedAt: time.Now(),
+	})
 }
 
-func setStepIn(orders []Order, id, rawStep string) bool {
-	for i := range orders {
-		if orders[i].ID != id {
-			continue
-		}
-		orders[i].RawStep = rawStep
-		orders[i].StepHistory = append(orders[i].StepHistory, StepEntry{
-			Step:      rawStep,
-			StartedAt: time.Now(),
-		})
-		return true
-	}
-	return false
-}
-
-// Clear removes all pending and recent orders, returning the total removed.
+// Clear empties every stage — backlog, the order on the arm, and the recent
+// buffer — returning the total removed. This is the full wipe behind
+// reset_world, which has already cancelled the sequence running the current
+// order. clear_queue wants ClearPending instead.
 func (q *OrderQueue) Clear() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	n := len(q.pending) + len(q.recent)
+	if q.current != nil {
+		n++
+	}
 	q.pending = nil
+	q.current = nil
 	q.recent = nil
 	return n
+}
+
+// ClearPending drops the backlog. It reports how many orders were removed and
+// the ID of the order left running ("" when idle), both read under one lock so
+// a caller can describe what it spared without racing the brew finishing.
+//
+// The order on the arm and the recent buffer are structurally out of reach,
+// which is the point: clear_queue means "make no more drinks", and the drink
+// already being made has to survive it — staying visible in List, still taking
+// SetCurrentStep updates, and still completing into recent as a "Ready!" card.
+func (q *OrderQueue) ClearPending() (removed int, currentID string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	removed = len(q.pending)
+	q.pending = nil
+	if q.current != nil {
+		currentID = q.current.ID
+	}
+	return removed, currentID
 }
 
 // NewOrder creates an Order with a generated UUID and current timestamp.
@@ -256,7 +333,7 @@ func (s *beanjaminCoffee) processQueue() {
 				return
 			}
 
-			order, ok := s.queue.Peek()
+			order, ok := s.queue.Start()
 			if !ok {
 				s.logger.Debugf("queue empty, waiting for new orders")
 				break
@@ -266,25 +343,22 @@ func (s *beanjaminCoffee) processQueue() {
 			// thread the tagged logger down through the whole brew lifecycle.
 			orderLogger := s.logger.WithFields("order_id", order.ID)
 
-			remaining := s.queue.Len() - 1 // excluding the one about to run
+			remaining := s.queue.Len() - 1 // Len counts the current order; drop it
 			orderLogger.Infof("processing order for %s (%s) — %d order(s) waiting behind it",
 				order.CustomerName, order.Drink, remaining)
 
-			s.currentOrderID.Store(order.ID)
 			// Publish the tagged logger so the whole brew lifecycle — and
 			// out-of-goroutine entry points like cancel — pick it up via
 			// activeOrderLogger().
 			s.activeLogger.Store(&orderLogger)
 			s.safeExecuteOrder(order)
 			s.activeLogger.Store(nil)
-			s.currentOrderID.Store("")
-			// Move the order from pending to recent with CompletedAt set.
-			// The frontend renders recent orders as the green "Ready!" card
-			// for RecentDisplayDuration before they're pruned by List().
-			s.queue.Complete(order.ID)
-			// Reset the service-global step now that the order is no longer
-			// pending. The completed copy in recent keeps its raw_step for
-			// debugging.
+			// Retire the order into recent with CompletedAt set. The frontend
+			// renders recent orders as the green "Ready!" card for
+			// RecentDisplayDuration before they're pruned by List().
+			s.queue.Complete()
+			// Reset the service-global step now that no order is current. The
+			// completed copy in recent keeps its raw_step for debugging.
 			s.currentStep.Store("")
 		}
 	}
