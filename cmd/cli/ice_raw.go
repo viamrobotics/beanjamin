@@ -1,33 +1,23 @@
 package main
 
-// Raw capture and offline analysis.
+// Raw capture: saveRawFrame and readManifest back every capture command.
+// ice-level is the analysis path.
 //
-// saveRawFrame/readManifest back every capture command. runIceAnalyze is
-// HISTORICAL — it replays captures through a depth sample volume, and depth does
-// not work at the dispense pose. ice-level is the live analysis path.
+// The machine is shared, so no analysis choice should have to be right while you
+// are standing at it. A --raw-dir records every camera image, the poses, the
+// joints and the frame system, and every decision about how to measure them is
+// made later, offline, as many times as you like.
 //
-// The machine is shared, so nothing about the sample volume should have to be
-// right while you are standing at it. With --raw-dir, ice-snapshot writes each
-// frame's cloud to disk in world coordinates and records what it was, and every
-// decision about which volume to measure — diameter, height band, percentile —
-// is made later by ice-analyze, as many times as you like, with the machine
-// back in someone else's hands.
-//
-// Clouds are saved in WORLD frame, already transformed, so offline analysis
-// needs no frame system and no machine connection. Every camera image is saved
-// alongside them: which modality answers the question is exactly the kind of
-// decision this file exists to defer, and an RGB frame is also the training
-// data a classifier fallback would need.
+// Clouds, when captured, are saved in WORLD frame, already transformed, so
+// offline analysis needs no frame system and no machine connection.
 
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -286,159 +276,6 @@ func readManifest(dir string) ([]rawFrame, error) {
 		return nil, fmt.Errorf("%s is empty — capture with --raw-dir first", path)
 	}
 	return frames, nil
-}
-
-// runIceAnalyze replays a raw capture dir through a sample volume, offline.
-func runIceAnalyze(args []string) error {
-	flagSet := flag.NewFlagSet("ice-analyze", flag.ExitOnError)
-	rawDir := flagSet.String("raw-dir", "", "Directory written by ice-snapshot --raw-dir (required)")
-	diameter := flagSet.Float64("diameter", 80, "Sample cylinder diameter, mm")
-	zLo := flagSet.Float64("z-lo", -150, "Bottom of the sample volume, mm relative to the grip point")
-	zHi := flagSet.Float64("z-hi", 20, "Top of the sample volume, mm relative to the grip point")
-	sweep := flagSet.Bool("sweep", false, "Ignore --z-lo/--z-hi and show where the points actually are, in 20mm bands")
-	csvPath := flagSet.String("csv", "", "Write the measurements to this CSV, in the format ice-fit reads")
-
-	if err := flagSet.Parse(args); err != nil {
-		return err
-	}
-	if *rawDir == "" {
-		return fmt.Errorf("--raw-dir is required")
-	}
-	if !*sweep && *zLo >= *zHi {
-		return fmt.Errorf("--z-lo (%.0f) must be below --z-hi (%.0f)", *zLo, *zHi)
-	}
-
-	frames, err := readManifest(*rawDir)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("%d frames in %s\n", len(frames), *rawDir)
-
-	if *sweep {
-		return sweepBands(*rawDir, frames, *diameter)
-	}
-
-	byLabel := map[string][]capture{}
-	var order []string
-	for _, frame := range frames {
-		cloud, err := loadCloud(filepath.Join(*rawDir, frame.File))
-		if err != nil {
-			return err
-		}
-		grip := r3.Vector{X: frame.GripPoint[0], Y: frame.GripPoint[1], Z: frame.GripPoint[2]}
-		// The saved cloud is already in world coordinates, so the lift is identity.
-		zs := sampleColumn(cloud, spatialmath.NewZeroPose(), grip, *diameter, *zLo, *zHi)
-		sort.Float64s(zs)
-		if _, seen := byLabel[frame.Label]; !seen {
-			order = append(order, frame.Label)
-		}
-		byLabel[frame.Label] = append(byLabel[frame.Label], capture{
-			cloudPoints: frame.CloudPoints, points: len(zs), zs: zs, gripZ: grip.Z, fraction: -1,
-		})
-	}
-
-	fmt.Printf("\nvolume: %.0fmm dia, z %+.0f..%+.0f relative to the grip point\n", *diameter, *zLo, *zHi)
-	for _, label := range order {
-		fmt.Printf("\ncapture %q\n", label)
-		report(byLabel[label], len(byLabel[label]))
-	}
-
-	if *csvPath == "" {
-		return nil
-	}
-	// Rewrite rather than append: an analysis is a whole-directory result, and
-	// re-running with a different volume should replace it, not stack on it.
-	if err := os.Remove(*csvPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("replacing %s: %w", *csvPath, err)
-	}
-	for _, frame := range frames {
-		caps := byLabel[frame.Label]
-		if len(caps) == 0 {
-			continue
-		}
-		if err := appendCSV(*csvPath, frame.Label, frame.Truth, caps); err != nil {
-			return err
-		}
-		delete(byLabel, frame.Label)
-	}
-	fmt.Printf("\nwrote %s — run: beanjamin-cli ice-fit --csv %s\n", *csvPath, *csvPath)
-	return nil
-}
-
-// sweepBands answers "where is the glass" without needing it known in advance:
-// for each label it bins every point in the XY cylinder by height relative to
-// the grip point, so the occupied band is simply the one with points in it.
-func sweepBands(dir string, frames []rawFrame, diameter float64) error {
-	const band = 20.0
-	radius := diameter / 2
-
-	byLabel := map[string]map[int]int{}
-	var order []string
-	for _, frame := range frames {
-		cloud, err := loadCloud(filepath.Join(dir, frame.File))
-		if err != nil {
-			return err
-		}
-		grip := r3.Vector{X: frame.GripPoint[0], Y: frame.GripPoint[1], Z: frame.GripPoint[2]}
-		if _, seen := byLabel[frame.Label]; !seen {
-			byLabel[frame.Label] = map[int]int{}
-			order = append(order, frame.Label)
-		}
-		bins := byLabel[frame.Label]
-		cloud.Iterate(0, 0, func(p r3.Vector, _ pointcloud.Data) bool {
-			if math.Hypot(p.X-grip.X, p.Y-grip.Y) > radius {
-				return true
-			}
-			bins[int(math.Floor((p.Z-grip.Z)/band))]++
-			return true
-		})
-	}
-
-	lo, hi := math.MaxInt32, -math.MaxInt32
-	for _, bins := range byLabel {
-		for b := range bins {
-			lo, hi = min(lo, b), max(hi, b)
-		}
-	}
-	if lo > hi {
-		fmt.Printf("\nno points inside a %.0fmm cylinder at any height — widen --diameter,\n", diameter)
-		fmt.Printf("or --grip-frame / --camera-frame was wrong at capture time.\n")
-		return nil
-	}
-
-	fmt.Printf("\npoints per %.0fmm band inside a %.0fmm cylinder, by height relative to the grip point:\n\n", band, diameter)
-	fmt.Printf("  %-12s", "band (mm)")
-	for _, label := range order {
-		fmt.Printf(" %10s", truncate(label, 10))
-	}
-	fmt.Println()
-	for b := hi; b >= lo; b-- {
-		fmt.Printf("  %+5.0f..%+5.0f", float64(b)*band, float64(b+1)*band)
-		for _, label := range order {
-			if n := byLabel[label][b]; n > 0 {
-				fmt.Printf(" %10d", n)
-			} else {
-				fmt.Printf(" %10s", "·")
-			}
-		}
-		fmt.Println()
-	}
-	fmt.Printf("\nPick --z-lo / --z-hi to bracket the bands that fill up as the level rises,\n")
-	fmt.Printf("then re-run without --sweep.\n")
-	return nil
-}
-
-func loadCloud(path string) (pointcloud.PointCloud, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("opening %s: %w", path, err)
-	}
-	defer file.Close() //nolint:errcheck // read-only
-	cloud, err := pointcloud.ReadPCD(file, pointcloud.BasicType)
-	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", path, err)
-	}
-	return cloud, nil
 }
 
 func truncate(s string, n int) string {

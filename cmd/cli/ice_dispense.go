@@ -1,7 +1,6 @@
 package main
 
-// ice-dispense: the G6 probe from ICE_LEVEL_PLAN.md — what a live dispense
-// actually looks like over time.
+// ice-dispense: what a live dispense actually looks like over time.
 //
 // This command drives the ice pin itself rather than asking you to run a
 // DoCommand in another terminal. That is the whole point: every captured frame
@@ -162,7 +161,6 @@ func runIceDispense(args []string) error {
 		cam: cam, arm: robotArm, fs: fs, armName: *armName,
 		camFrame: camFrameName, gripFrame: *gripFrame,
 		sources: splitSources(*sources), withCloud: *withCloud, cropMm: *rawCrop,
-		logger: logger,
 	}
 
 	interval := time.Duration(float64(time.Second) / *hz)
@@ -176,10 +174,13 @@ func runIceDispense(args []string) error {
 		return err
 	}
 
+	// Marked high BEFORE the write: a Set that reaches the board and then loses
+	// its response returns an error with the pin open, and the only safe
+	// assumption is that it might be.
+	pinIsHigh = true
 	if err := pin.Set(ctx, true, nil); err != nil {
 		return fmt.Errorf("opening ice pin %q: %w", *pinName, err)
 	}
-	pinIsHigh = true
 	openedAt := time.Now()
 	fmt.Printf("  pin HIGH\n")
 
@@ -215,7 +216,6 @@ type dispenseCapture struct {
 	sources             []string
 	withCloud           bool
 	cropMm              float64
-	logger              logging.Logger
 	count               int
 }
 

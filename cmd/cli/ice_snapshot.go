@@ -12,10 +12,9 @@ package main
 //
 //	ice-snapshot --address $M --label 60 --truth 60 --repeat 5 --raw-dir icedata
 //
-// Then measure offline with ice-level. The point-cloud sampling flags
-// (--diameter, --z-lo, --z-hi) belong to the depth investigation, which found
-// depth unusable at the dispense pose; they are kept only for re-analyzing the
-// existing captures.
+// Then measure offline with ice-level. Point clouds are opt-in (--cloud): depth
+// turned out to be unusable at the dispense pose, so the sampling flags
+// (--diameter, --z-lo, --z-hi) only matter when you ask for a cloud.
 
 import (
 	"context"
@@ -92,9 +91,10 @@ func runIceSnapshot(args []string) error {
 	truth := flagSet.Float64("truth", -1, "True fill level you filled to, as a fraction (0.33) or percent (33). Recorded in the CSV")
 	baseZ := flagSet.Float64("base-z", math.NaN(), "World Z of the glass interior floor, mm. Read it off an empty capture's z_min")
 	glassHeight := flagSet.Float64("glass-height", 0, "Glass interior height, mm. With --base-z, turns each capture into a fill fraction")
+	withCloud := flagSet.Bool("cloud", false, "Also capture point clouds. Slow and large, and depth returns nothing at the dispense pose")
 	repeat := flagSet.Int("repeat", 1, "Frames to capture at this level; more frames show how noisy one frame is")
 	csvPath := flagSet.String("csv", "", "Append one row per frame to this CSV, creating it with a header if absent")
-	rawDir := flagSet.String("raw-dir", "", "Save each frame's world-frame cloud here for offline ice-analyze. Machine time stops mattering once this is set")
+	rawDir := flagSet.String("raw-dir", "", "Save each frame's images, poses and (with --cloud) cloud here for offline ice-level. Machine time stops mattering once this is set")
 	rawCrop := flagSet.Float64("raw-crop", 300, "Half-extent kept around the grip point when saving raw clouds, mm. 0 saves everything")
 	outDir := flagSet.String("out", ".", "Directory to write snapshots into")
 	noWrite := flagSet.Bool("no-write", false, "Print the numbers only, skip the snapshot file")
@@ -216,9 +216,11 @@ func runIceSnapshot(args []string) error {
 		if err != nil {
 			return err
 		}
-		cloud, err := cam.NextPointCloud(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("capturing point cloud from %q: %w", *cameraName, err)
+		var cloud pointcloud.PointCloud
+		if *withCloud {
+			if cloud, err = cam.NextPointCloud(ctx, nil); err != nil {
+				return fmt.Errorf("capturing point cloud from %q: %w", *cameraName, err)
+			}
 		}
 		// Grab the images too when raw-capturing. Whether the answer comes from
 		// depth or from RGB is precisely the decision --raw-dir exists to defer,
@@ -232,9 +234,14 @@ func runIceSnapshot(args []string) error {
 		}
 
 		center := gripToWorld.Point()
-		zs := sampleColumn(cloud, camToWorld, center, *diameter, *zLo, *zHi)
-		sort.Float64s(zs)
-		c := capture{cloudPoints: cloud.Size(), points: len(zs), zs: zs, gripZ: center.Z, fraction: -1}
+		var zs []float64
+		cloudPoints := 0
+		if cloud != nil {
+			zs = sampleColumn(cloud, camToWorld, center, *diameter, *zLo, *zHi)
+			sort.Float64s(zs)
+			cloudPoints = cloud.Size()
+		}
+		c := capture{cloudPoints: cloudPoints, points: len(zs), zs: zs, gripZ: center.Z, fraction: -1}
 		if len(zs) > 0 && !math.IsNaN(*baseZ) && *glassHeight > 0 {
 			c.fraction = clamp((percentile(zs, 0.90)-*baseZ)/(*glassHeight), 0, 1)
 		}
@@ -257,14 +264,14 @@ func runIceSnapshot(args []string) error {
 		}
 
 		if i == 0 {
-			fmt.Printf("  cloud            %d points total\n", cloud.Size())
 			fmt.Printf("  %-16s x=%.1f y=%.1f z=%.1f (world, mm)\n", *gripFrame, center.X, center.Y, center.Z)
-			fmt.Printf("  sample volume    %.0fmm dia, z %+.0f..%+.0f relative to %s\n", *diameter, *zLo, *zHi, *gripFrame)
+			if cloud != nil {
+				fmt.Printf("  cloud            %d points total\n", cloud.Size())
+				fmt.Printf("  sample volume    %.0fmm dia, z %+.0f..%+.0f relative to %s\n", *diameter, *zLo, *zHi, *gripFrame)
+			}
 			// An empty volume is the one result that can't be tuned blind, so
 			// spend the extra pass over the cloud to say which axis missed.
-			// With --raw-dir the cloud is on disk and ice-analyze --sweep answers
-			// this better, so don't spend the pass.
-			if len(zs) == 0 && *rawDir == "" {
+			if cloud != nil && len(zs) == 0 {
 				reportDiagnosis(diagnose(cloud, camToWorld, center, *diameter, *zLo, *zHi), *diameter, *zLo, *zHi)
 			}
 			// One snapshot per invocation: the frames are the same scene, and
@@ -317,10 +324,18 @@ func report(captures []capture, repeat int) {
 		fmt.Printf("  or the camera is returning no depth here at all\n")
 		return
 	}
-	first := captures[0].zs
+	// The first frame's volume can come back empty while later ones fill, so
+	// report the base Z off the first frame that actually caught something.
+	var first []float64
+	for _, c := range captures {
+		if len(c.zs) > 0 {
+			first = c.zs
+			break
+		}
+	}
 	fmt.Printf("  contents top Z   %s mm (world, p90)\n", summarizeStats(p90s, "%.1f"))
-	fmt.Printf("  contents base Z  min=%.1f  p10=%.1f  (first frame)\n", first[0], percentile(first, 0.10))
-	fmt.Printf("  spread           %.1f mm between p10 and p90 (first frame)\n",
+	fmt.Printf("  contents base Z  min=%.1f  p10=%.1f  (first frame with points)\n", first[0], percentile(first, 0.10))
+	fmt.Printf("  spread           %.1f mm between p10 and p90 (first frame with points)\n",
 		percentile(first, 0.90)-percentile(first, 0.10))
 	if len(fracs) > 0 {
 		pct := make([]float64, len(fracs))
@@ -330,7 +345,7 @@ func report(captures []capture, repeat int) {
 		fmt.Printf("  reported fill    %s %%\n", summarizeStats(pct, "%.1f"))
 	}
 	if repeat > 1 {
-		fmt.Printf("  (± is one standard deviation across %d frames — this is the G5 noise number)\n", repeat)
+		fmt.Printf("  (± is one standard deviation across %d frames — how much one frame wobbles)\n", repeat)
 	}
 }
 
@@ -564,13 +579,15 @@ func writeSnapshot(
 	}
 	// The cloud keeps its camera-frame coordinates and is anchored by the
 	// camera's world pose, so it lands where it was actually seen from.
-	if _, err := snapshot.DrawPointCloud(draw.DrawPointCloudOptions{
-		Name:       slug + "_cloud",
-		Parent:     referenceframe.World,
-		Pose:       camToWorld,
-		PointCloud: cloud,
-	}); err != nil {
-		return "", fmt.Errorf("drawing point cloud: %w", err)
+	if cloud != nil {
+		if _, err := snapshot.DrawPointCloud(draw.DrawPointCloudOptions{
+			Name:       slug + "_cloud",
+			Parent:     referenceframe.World,
+			Pose:       camToWorld,
+			PointCloud: cloud,
+		}); err != nil {
+			return "", fmt.Errorf("drawing point cloud: %w", err)
+		}
 	}
 	volume, err := spatialmath.NewBox(
 		spatialmath.NewPoseFromPoint(r3.Vector{X: center.X, Y: center.Y, Z: center.Z + (zLo+zHi)/2}),

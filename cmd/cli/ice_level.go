@@ -22,6 +22,12 @@ import (
 	"strings"
 )
 
+// occlusionFloorTruth is the fill level at or below which the ice machine's
+// ledge hides the glass entirely, so a capture shows no ice however much was
+// poured. Measured on the cappuccina dispense pose; re-derive it with
+// --dump-profile before trusting --contrast at any other pose.
+const occlusionFloorTruth = 0.30
+
 // roi is the column inside the glass that gets scanned, in image pixels.
 type roi struct {
 	x0, x1, y0, y1 int
@@ -130,7 +136,7 @@ func measureFrame(dir string, f rawFrame, r roi) (float64, error) {
 	}
 	// The topmost sustained bright run is the ice surface. A single bright row is
 	// glare off the glass; ice holds its brightness over many rows.
-	for i := 0; i+r.runLen < len(rows); i++ {
+	for i := 0; i+r.runLen <= len(rows); i++ {
 		bright := true
 		for j := 0; j < r.runLen; j++ {
 			if rows[i+j] < r.thresh {
@@ -215,8 +221,7 @@ func rowProfile(path string, r roi) ([]float64, error) {
 	return rows, nil
 }
 
-// reportLevels groups by label and fits measured height against the true fill,
-// the same shape ice-fit reports for depth captures.
+// reportLevels groups by label and fits measured height against the true fill.
 func reportLevels(dir string, frames []rawFrame, r roi, csvPath string) error {
 	byLabel := map[string][]float64{}
 	truthOf := map[string]float64{}
@@ -297,7 +302,13 @@ func reportLevels(dir string, frames []rawFrame, r roi, csvPath string) error {
 		if truthOf[l] < 0 {
 			continue
 		}
-		reported := (mean(byLabel[l]) - intercept) / slope
+		// No surface found means fill 0. Running px=0 through the fit reports a
+		// fifth-full glass on a negative intercept, which is the one number this
+		// table must never print.
+		reported := 0.0
+		if px := mean(byLabel[l]); px > 0 {
+			reported = (px - intercept) / slope
+		}
 		fmt.Printf("  %-10s %6.0f%% %9.0f%% %+7.0f%%\n", l, truthOf[l]*100, reported*100, (reported-truthOf[l])*100)
 		if mean(byLabel[l]) > 0 {
 			absErr += math.Abs(reported - truthOf[l])
@@ -357,6 +368,9 @@ func reportSeries(dir string, frames []rawFrame, r roi, targetPx float64, showFi
 	// falling. settled: readings from the end of post-roll, after it stopped.
 	// The gap between them is the whole point of the run.
 	var inFlight, settled []float64
+	// Runs that were already reading ice before the pin opened. There is no ramp
+	// to bias in those, so the falling-ice comparison means nothing.
+	var notEmptyAtOpen []string
 
 	for _, l := range order {
 		samples := runs[l]
@@ -412,6 +426,22 @@ func reportSeries(dir string, frames []rawFrame, r roi, targetPx float64, showFi
 				settled = append(settled, sm.px)
 			}
 		}
+		// The pre-roll is the control: an empty glass must read zero before the
+		// pin opens. A run that starts non-zero measured something that was
+		// already there — on 2026-09-17 that was the glass rim, held flat for the
+		// whole run and reported as a nearly-full glass.
+		prePeak, preFrames := 0.0, 0
+		for _, s := range samples {
+			if s.ms < 0 {
+				prePeak = math.Max(prePeak, s.px)
+				preFrames++
+			}
+		}
+		// No pre-roll at all is not a passing control, it is a missing one.
+		if preFrames == 0 || prePeak > 0 {
+			notEmptyAtOpen = append(notEmptyAtOpen, l)
+		}
+
 		peaks = append(peaks, peak)
 		fmt.Printf("  peak %.0f px%s", peak, asFill(peak))
 		if first >= 0 {
@@ -434,7 +464,17 @@ func reportSeries(dir string, frames []rawFrame, r roi, targetPx float64, showFi
 	// The question this run exists to answer: does ice in flight corrupt the
 	// reading? Compare the settled level against what was being reported while
 	// ice was actively falling.
-	if len(inFlight) > 0 && len(settled) > 0 {
+	if len(notEmptyAtOpen) > 0 {
+		fmt.Printf("\n=== falling ice ===\n")
+		fmt.Printf("  NO VERDICT. These runs had no empty-glass pre-roll, or were already\n")
+		fmt.Printf("  reading ice before the pin opened:\n")
+		fmt.Printf("  %s\n\n", strings.Join(notEmptyAtOpen, ", "))
+		fmt.Printf("  With no ramp there is nothing for falling ice to bias, and comparing the\n")
+		fmt.Printf("  end of the dwell against the post-roll compares two readings of the same\n")
+		fmt.Printf("  thing. Re-run from an empty glass and check the pre-roll reads zero.\n")
+		fmt.Printf("  A flat non-zero pre-roll usually means the scan found the glass rim\n")
+		fmt.Printf("  rather than an ice surface — see --dump-profile.\n")
+	} else if len(inFlight) > 0 && len(settled) > 0 {
 		flying, still := mean(inFlight), mean(settled)
 		delta := flying - still
 		fmt.Printf("\n=== falling ice ===\n")
@@ -506,6 +546,7 @@ func reportContrast(dir string, frames []rawFrame, r roi) error {
 		all = append(all, rec{f.Label, f.Truth, rows})
 	}
 
+	fmt.Printf("  levels at or below %.0f%% fill count as no-ice: the ledge hides them.\n\n", occlusionFloorTruth*100)
 	fmt.Printf("  %-8s %10s %9s %8s %8s %8s\n", "window", "no-ice max", "ice min", "gap", "full px", "R²")
 	type result struct {
 		w         int
@@ -526,11 +567,11 @@ func reportContrast(dir string, frames []rawFrame, r roi) error {
 			step, idx := contrastStep(a.rows, w)
 			// A level at or below the occlusion floor shows no ice however much
 			// was poured, so it belongs to the no-ice population.
-			if a.truth >= 0 && a.truth <= 0.30 {
+			if a.truth >= 0 && a.truth <= occlusionFloorTruth {
 				noIce = append(noIce, step)
 				continue
 			}
-			if a.truth > 0.30 {
+			if a.truth > occlusionFloorTruth {
 				ice = append(ice, step)
 				if idx >= 0 {
 					pts = append(pts, fitPoint{truth: a.truth, z: float64(len(a.rows) - idx), label: a.label})
@@ -639,7 +680,8 @@ func dumpProfiles(dir string, frames []rawFrame, r roi) error {
 		}
 		fmt.Println()
 	}
-	fmt.Printf("\n  Ice reads bright, an empty glass reads dark. Put --thresh between them.\n")
+	fmt.Printf("\n  Ice reads bright, an empty glass reads dark. The topmost large step is\n")
+	fmt.Printf("  the glass rim, not ice — check where it sits before trusting a scan.\n")
 	return nil
 }
 
@@ -654,7 +696,11 @@ func writeLevelCSV(path string, order []string, truthOf map[string]float64, byLa
 	}
 	for _, l := range order {
 		for _, px := range byLabel[l] {
-			if _, err := fmt.Fprintf(file, "%s,%.3f,%.0f,%.4f\n", l, truthOf[l], px, (px-intercept)/slope); err != nil {
+			reported := 0.0
+			if px > 0 {
+				reported = (px - intercept) / slope
+			}
+			if _, err := fmt.Fprintf(file, "%s,%.3f,%.0f,%.4f\n", l, truthOf[l], px, reported); err != nil {
 				return err
 			}
 		}
