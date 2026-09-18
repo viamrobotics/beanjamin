@@ -240,11 +240,7 @@ export interface QueueOrder {
   id: string;
   drink: string;
   customer_name: string;
-  /**
-   * The misspelling shown for this order. Absent on orders placed by callers
-   * that don't misspell, and on machines running an older module — render
-   * `modified_customer_name || customer_name`.
-   */
+  /** Absent from callers that don't misspell, and from older modules. */
   modified_customer_name?: string;
   /**
    * How the customer receives the drink. Optional so dashboards can still
@@ -356,13 +352,9 @@ export async function prepareOrder(
   opts: {
     drink: string;
     drinkLabel: string;
-    /** The name the customer gave; the identity key for aggregation. */
+    /** The name the customer gave; what aggregation groups on. */
     customerName: string;
-    /**
-     * The deliberate misspelling shown and spoken for this order. Re-rolled per
-     * order, so it identifies nothing — customerName is what aggregations group
-     * on. Omit it and the backend shows customerName instead.
-     */
+    /** The misspelling to show and speak. Omitted, the backend uses customerName. */
     modifiedName?: string;
     customerEmail?: string;
     pronunciation?: string;

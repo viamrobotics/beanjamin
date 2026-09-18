@@ -218,11 +218,7 @@ export function Kiosk() {
     }
   }
 
-  /**
-   * `misspelledName` is what the customer sees and hears; the untouched `name`
-   * state is what the order is filed under, so repeat orders from one customer
-   * aggregate together despite each order getting a fresh misspelling.
-   */
+  /** `misspelledName` is shown and spoken; `name` is what the order is filed under. */
   async function placeOrder(misspelledName: string): Promise<void> {
     console.log("[app] placing order for:", misspelledName);
     setMisspelled(misspelledName);

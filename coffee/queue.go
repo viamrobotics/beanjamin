@@ -39,13 +39,12 @@ type StepEntry struct {
 type Order struct {
 	ID    string `json:"id"`
 	Drink string `json:"drink"`
-	// CustomerName is the name the customer actually gave, and the identity key
-	// for per-customer aggregation (leaderboards, the daily digest).
+	// CustomerName is the name the customer gave; per-customer aggregation
+	// groups on it.
 	CustomerName string `json:"customer_name"`
-	// ModifiedCustomerName is what the customer is shown and told: the kiosk
-	// misspells the name on purpose, with a fresh misspelling each order, which
-	// is why it cannot double as the aggregation key. Empty for callers that
-	// never misspell (voice, operator); use DisplayName rather than reading it.
+	// ModifiedCustomerName is the misspelling shown for this order, re-rolled
+	// each time, so it can't double as the aggregation key. Read it through
+	// DisplayName. Empty for callers that don't misspell.
 	ModifiedCustomerName string `json:"modified_customer_name,omitempty"`
 	// CustomerEmail identifies the recognized customer, to credit their history.
 	CustomerEmail string `json:"customer_email,omitempty"`
@@ -305,9 +304,8 @@ func (q *OrderQueue) ClearPending() (removed int, currentID string) {
 	return removed, currentID
 }
 
-// DisplayName is the name to show and speak: the deliberate misspelling when
-// one was supplied, otherwise the name the customer gave. Never use it as an
-// aggregation key — it is not stable across a customer's orders.
+// DisplayName is the name to show and speak: the misspelling when there is one,
+// otherwise the name the customer gave. Not stable across a customer's orders.
 func (o Order) DisplayName() string {
 	if o.ModifiedCustomerName != "" {
 		return o.ModifiedCustomerName

@@ -440,8 +440,6 @@ func waterDelta(drink string) float64 {
 }
 
 func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err error) {
-	// The spoken name is the misspelling the customer was shown, not the
-	// tracking name.
 	drink, customerName := order.Drink, order.DisplayName()
 	batchIndex, batchSize := order.BatchIndex, order.BatchSize
 	logger := s.activeOrderLogger()

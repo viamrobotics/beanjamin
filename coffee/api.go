@@ -66,11 +66,9 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 			completedAt = o.CompletedAt.Format(time.RFC3339)
 		}
 		orderMaps[i] = map[string]any{
-			"id":            o.ID,
-			"drink":         o.Drink,
-			"customer_name": o.CustomerName,
-			// The tracker renders this so the queue card matches the cup; the
-			// real name rides along for anything that needs to identify them.
+			"id":                     o.ID,
+			"drink":                  o.Drink,
+			"customer_name":          o.CustomerName,
 			"modified_customer_name": o.ModifiedCustomerName,
 			"fulfillment":            o.Fulfillment,
 			"enqueued_at":            o.EnqueuedAt.Format(time.RFC3339),

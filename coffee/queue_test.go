@@ -741,8 +741,6 @@ func TestOrderDisplayName(t *testing.T) {
 			want:  "Vijoy",
 		},
 		{
-			// Voice and operator orders never misspell, so there is nothing to
-			// show but the name they gave.
 			name:  "falls back to the real name when nothing misspelled it",
 			order: Order{CustomerName: "Ada"},
 			want:  "Ada",
@@ -780,8 +778,6 @@ func TestEnqueueOrder_CarriesBothNames(t *testing.T) {
 			wantModified: "Vijoy",
 		},
 		{
-			// customer_name is the aggregation key now, so stray whitespace must
-			// not hand one customer a second identity.
 			name: "surrounding whitespace is trimmed off the tracking name",
 			payload: map[string]any{
 				"drink":                  "espresso",
