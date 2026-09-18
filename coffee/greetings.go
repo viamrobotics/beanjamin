@@ -135,6 +135,29 @@ func pickOrderReceivedBatch(drink, customerName string, count int) string {
 	return fmt.Sprintf(orderReceivedBatchAnonymous[rand.Intn(len(orderReceivedBatchAnonymous))], count, plural)
 }
 
+// orderCancelled lines acknowledge a queued order pulled out of the line from
+// the app, before the machine ever started on it. Format verbs: %[1]s drink,
+// %[2]s customer name.
+var orderCancelledAnonymous = []string{
+	"That %[1]s is off the list.",
+	"%[1]s cancelled. More beans for everyone else.",
+	"Fine by me — one less %[1]s to make.",
+}
+
+var orderCancelledNamed = []string{
+	"%[2]s, your %[1]s is cancelled.",
+	"Dropped %[2]s's %[1]s from the queue.",
+	"No %[1]s for %[2]s then. Noted.",
+}
+
+func pickOrderCancelled(drink, customerName string) string {
+	drink = speakableDrink(drink)
+	if customerName != "" {
+		return fmt.Sprintf(orderCancelledNamed[rand.Intn(len(orderCancelledNamed))], drink, customerName)
+	}
+	return fmt.Sprintf(orderCancelledAnonymous[rand.Intn(len(orderCancelledAnonymous))], drink)
+}
+
 func pickAlmostReady() string {
 	return almostReadyAnonymous[rand.Intn(len(almostReadyAnonymous))]
 }

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.viam.com/rdk/logging"
@@ -256,6 +257,43 @@ func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]any, error) {
 		"status":    "cancelled",
 		"cancelled": cancelled,
 		"queue":     queueState(s.paused.Load()),
+	}, nil
+}
+
+// cancelOrder drops a single order out of the backlog — clearQueue narrowed to
+// one order, and sparing the drink on the arm for the same reason. It touches
+// nothing else: the machine keeps making whatever it is making, the queue is
+// not paused, and the orders behind the cancelled one move up. Stopping the
+// order already in flight is `cancel`'s job; Remove refuses it rather than
+// reporting a miss, because that drink is real and someone is waiting on it.
+func (s *beanjaminCoffee) cancelOrder(ctx context.Context, v any) (map[string]any, error) {
+	id, ok := v.(string)
+	if !ok {
+		return nil, fmt.Errorf("cancel_order value must be an order ID string, got %T", v)
+	}
+	if strings.TrimSpace(id) == "" {
+		return nil, errors.New("cancel_order requires a non-empty order ID")
+	}
+
+	order, err := s.queue.Remove(id)
+	if err != nil {
+		return nil, fmt.Errorf("cancel_order %s: %w", id, err)
+	}
+
+	remaining := s.queue.Len()
+	s.logger.Infof("cancel_order: dropped queued order %s (%s for %s) — %d order(s) still queued",
+		order.ID, order.Drink, order.CustomerName, remaining)
+
+	if err := s.say(ctx, pickOrderCancelled(order.Drink, order.CustomerName)); err != nil {
+		s.logger.Warnf("cancel_order: failed to announce cancellation: %v", err)
+	}
+
+	return map[string]any{
+		"status":        "cancelled",
+		"order_id":      order.ID,
+		"customer_name": order.CustomerName,
+		"drink":         order.Drink,
+		"remaining":     float64(remaining),
 	}, nil
 }
 

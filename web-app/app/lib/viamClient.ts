@@ -107,6 +107,12 @@ function pruneDevRecent() {
   }
 }
 
+// Mirrors the backend's "claimed order" rule in dev mode: the front order is
+// only being made while the simulated consumer is running.
+function isDevOrderInFlight(index: number): boolean {
+  return index === 0 && devProcessing;
+}
+
 function getDevStep(): string {
   if (!devProcessing || devQueue.length === 0) return "";
   const elapsed = Date.now() - devProcessingStartedAt;
@@ -256,6 +262,14 @@ export interface QueueOrder {
    * then prunes them automatically.
    */
   completed_at: string;
+  /**
+   * Whether `cancelOrder` would be accepted for this order: true for orders
+   * still waiting, false for the one being made and for completed ones. The
+   * backend owns the rule — the front order is not "being made" while the
+   * queue is paused or idle. Optional so the kiosk still works against
+   * machines running older module versions that don't send it.
+   */
+  cancellable?: boolean;
 }
 
 export interface QueueStatus {
@@ -313,6 +327,7 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
       raw_step: r.rawStep,
       step_history: [],
       completed_at: new Date(r.completedAt).toISOString(),
+      cancellable: false,
     }));
     const pendingOrders: QueueOrder[] = devQueue.map((o, i) => ({
       id: o.id,
@@ -326,6 +341,7 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
           ? [{ step: devStep, started_at: new Date().toISOString() }]
           : [],
       completed_at: "",
+      cancellable: !isDevOrderInFlight(i),
     }));
     return {
       count: devQueue.length,
@@ -397,6 +413,42 @@ export async function prepareOrder(
   );
   console.log("[viamClient] prepareOrder result:", result);
   return result;
+}
+
+/**
+ * Drop a still-waiting order from the queue. Rejects (throws) when the order
+ * is the one being made, has already been made, or is gone — the backend is
+ * the authority on that, so callers render the thrown message rather than
+ * pre-judging it from a stale poll.
+ */
+export async function cancelOrder(
+  conn: ViamConnection,
+  orderId: string,
+): Promise<{
+  status: string;
+  order_id: string;
+  customer_name: string;
+  drink: string;
+  remaining: number;
+}> {
+  if (isDevMode()) {
+    const i = devQueue.findIndex((o) => o.id === orderId);
+    if (i < 0) throw new Error("no such order in the queue");
+    if (isDevOrderInFlight(i)) {
+      throw new Error("order is already being made");
+    }
+    const [removed] = devQueue.splice(i, 1);
+    console.log("[dev] order cancelled:", removed.name, "id:", removed.id);
+    return {
+      status: "cancelled",
+      order_id: removed.id,
+      customer_name: removed.name,
+      drink: "espresso",
+      remaining: devQueue.length,
+    };
+  }
+
+  return doCommand(conn, COFFEE_SERVICE_NAME, { cancel_order: orderId });
 }
 
 // --- Customer Detector ---
