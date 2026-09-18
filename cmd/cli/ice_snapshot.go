@@ -1,20 +1,12 @@
 package main
 
-// ice-snapshot: capture frames from the machine for offline analysis.
-//
-// Moves nothing. It captures at whatever pose the arm is already in, saves every
-// camera image plus (optionally) the point cloud, and records the poses, joint
-// positions and calibration context needed to analyze them later without a
-// machine. See ICE_LEVEL_PLAN.md.
-//
-// Typical use — one run per fill level, --truth recording what you actually
-// poured, all into one --raw-dir:
+// ice-snapshot: capture frames from the machine for offline analysis with
+// ice-level. Moves nothing; captures at whatever pose the arm is already in.
 //
 //	ice-snapshot --address $M --label 60 --truth 60 --repeat 5 --raw-dir icedata
 //
-// Then measure offline with ice-level. Point clouds are opt-in (--cloud): depth
-// turned out to be unusable at the dispense pose, so the sampling flags
-// (--diameter, --z-lo, --z-hi) only matter when you ask for a cloud.
+// Point clouds are opt-in (--cloud) because depth is unusable at the dispense
+// pose, so --diameter / --z-lo / --z-hi only matter when you ask for one.
 
 import (
 	"context"
@@ -286,7 +278,10 @@ func runIceSnapshot(args []string) error {
 		}
 	}
 
-	report(captures, *repeat)
+	// No cloud, no sample volume — report's empty-volume advice would misfire.
+	if *withCloud {
+		report(captures, *repeat)
+	}
 
 	if *csvPath != "" {
 		if err := appendCSV(*csvPath, *label, trueFill, captures); err != nil {

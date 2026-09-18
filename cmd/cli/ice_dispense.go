@@ -1,18 +1,13 @@
 package main
 
-// ice-dispense: what a live dispense actually looks like over time.
+// ice-dispense: what a live dispense looks like over time.
 //
-// This command drives the ice pin itself rather than asking you to run a
-// DoCommand in another terminal. That is the whole point: every captured frame
-// is stamped with milliseconds since the pin went HIGH, and without that
-// alignment the trace cannot answer the three questions it exists to answer —
-// how long the falling stream fools the reading (ice_dispense_min_sec), how long
-// the pile takes to settle after the pin closes, and how long reaching the
-// target takes (ice_dispense_max_sec).
+// It drives the pin itself so every frame can be stamped against pin-open;
+// without that alignment the trace answers none of the timing questions.
 //
-// The pin is driven LOW on every exit path, including Ctrl-C, using a context
-// that cannot already be cancelled. An ice machine left running is the one
-// failure this must never have.
+// The pin is driven LOW on every exit path, including Ctrl-C, on a context that
+// cannot already be cancelled. An ice machine left running is the one failure
+// this must never have.
 
 import (
 	"context"

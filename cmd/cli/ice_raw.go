@@ -1,15 +1,11 @@
 package main
 
 // Raw capture: saveRawFrame and readManifest back every capture command.
-// ice-level is the analysis path.
 //
-// The machine is shared, so no analysis choice should have to be right while you
-// are standing at it. A --raw-dir records every camera image, the poses, the
-// joints and the frame system, and every decision about how to measure them is
-// made later, offline, as many times as you like.
-//
-// Clouds, when captured, are saved in WORLD frame, already transformed, so
-// offline analysis needs no frame system and no machine connection.
+// The machine is shared, so a --raw-dir records everything — images, poses,
+// joints, frame system — and defers every analysis choice to offline commands.
+// Clouds are saved in WORLD frame, already transformed, so offline analysis
+// needs no frame system and no machine connection.
 
 import (
 	"context"

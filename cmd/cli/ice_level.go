@@ -8,8 +8,8 @@ package main
 // machine through it, so the ice surface is a strong horizontal brightness
 // edge. Scanning rows down a column inside the glass finds it.
 //
-// The ROI defaults are for the cappuccina dispense pose. Check them against one
-// image (--dump-profile) before trusting a batch from any other pose.
+// The ROI defaults are for the cappuccina dispense pose; check them with
+// --dump-profile before trusting a batch from any other pose.
 
 import (
 	"flag"
