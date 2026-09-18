@@ -124,8 +124,7 @@ func (s *orderSensor) pushOrderReading(r orderReading) {
 		"order_id":      r.order.ID,
 		"drink":         r.order.Drink,
 		"customer_name": r.order.CustomerName,
-		// What the customer was actually shown; recorded for support ("my cup
-		// said Vijoy"), never for grouping — it changes every order.
+		// What the customer was actually shown; 
 		"modified_customer_name": r.order.ModifiedCustomerName,
 		"order_ok":               ok,
 		"operator_cancelled":     r.operatorCancelled,

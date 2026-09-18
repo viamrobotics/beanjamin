@@ -558,8 +558,6 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 
 	drink, _ := order["drink"].(string)
 	customerName, _ := order["customer_name"].(string)
-	// Trimmed because this is an aggregation key: " Vijay" and "Vijay" must not
-	// become two customers.
 	customerName = strings.TrimSpace(customerName)
 	modifiedCustomerName, _ := order["modified_customer_name"].(string)
 	customerEmail, _ := order["customer_email"].(string)
@@ -622,8 +620,6 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		return nil, err
 	}
 
-	// Everything spoken or shown uses the misspelling when the caller supplied
-	// one; Order.DisplayName applies the same rule once an order exists.
 	displayName := modifiedCustomerName
 	if displayName == "" {
 		displayName = customerName
