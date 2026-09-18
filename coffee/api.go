@@ -45,6 +45,8 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 	_, span := trace.StartSpan(ctx, "beanjamin::Status")
 	defer span.End()
 	orders := s.queue.List()
+
+	currentID := s.queue.CurrentID()
 	// structpb.NewStruct (used by RDK to serialize Status over the wire) only
 	// accepts []any for list values, not []map[string]any, so
 	// the slice element type must be any.
@@ -74,6 +76,7 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 			"raw_step":      o.RawStep,
 			"step_history":  history,
 			"completed_at":  completedAt,
+			"cancellable":   o.CompletedAt.IsZero() && o.ID != currentID,
 		}
 	}
 	step, _ := s.currentStep.Load().(string)
@@ -150,6 +153,9 @@ var coffeeCommands = []commandDef{
 	{key: "cancel", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.cancel(ctx)
 	}},
+	{key: "cancel_order", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
+		return s.cancelOrder(ctx, cmd["cancel_order"])
+	}},
 	{key: "rewind", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.rewind(ctx)
 	}},
@@ -213,7 +219,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]any) (ma
 		}
 	}
 
-	err := fmt.Errorf("unknown command, supported commands: cancel, rewind, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action, send_delivery_message, send_daily_summary, send_weekly_chores")
+	err := fmt.Errorf("unknown command, supported commands: cancel, cancel_order, rewind, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action, send_delivery_message, send_daily_summary, send_weekly_chores")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }

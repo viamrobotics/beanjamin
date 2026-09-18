@@ -2,6 +2,7 @@ package coffee
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -78,7 +79,6 @@ type Order struct {
 // order being made right now, and recent is a short-lived buffer of completed
 // orders so the webapp can render a "Ready!" card without diffing polls. The
 // whole lifecycle is owned by the backend.
-//
 type OrderQueue struct {
 	mu      sync.Mutex
 	pending []Order       // backlog still waiting to be made, FIFO
@@ -171,6 +171,43 @@ func (q *OrderQueue) CurrentID() string {
 		return ""
 	}
 	return q.current.ID
+}
+
+// Errors returned by Remove, distinguishing the three ways a cancel can miss.
+var (
+	errOrderNotQueued = errors.New("no such order in the queue")
+	errOrderInFlight  = errors.New("order is already being made — use 'cancel' to stop the machine")
+	errOrderCompleted = errors.New("order has already been made")
+)
+
+// Remove drops one still-waiting order out of the backlog and returns it,
+// closing the gap so the orders behind it move up.
+//
+// The order on the arm is out of reach by construction — it sits in the
+// current slot, not in pending — which is the same guarantee ClearPending
+// leans on. A cancel aimed at it is refused with errOrderInFlight rather than
+// quietly missing, because removing it would leave the consumer brewing a
+// drink the queue no longer accounts for; `cancel` is what stops that one.
+func (q *OrderQueue) Remove(id string) (Order, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i := range q.pending {
+		if q.pending[i].ID != id {
+			continue
+		}
+		o := q.pending[i]
+		q.pending = append(q.pending[:i], q.pending[i+1:]...)
+		return o, nil
+	}
+	if q.current != nil && q.current.ID == id {
+		return Order{}, errOrderInFlight
+	}
+	for i := range q.recent {
+		if q.recent[i].ID == id {
+			return Order{}, errOrderCompleted
+		}
+	}
+	return Order{}, errOrderNotQueued
 }
 
 // Complete retires the current order into the recent buffer with
