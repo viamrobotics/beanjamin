@@ -241,6 +241,12 @@ export interface QueueOrder {
   drink: string;
   customer_name: string;
   /**
+   * The misspelling shown for this order. Absent on orders placed by callers
+   * that don't misspell, and on machines running an older module — render
+   * `modified_customer_name || customer_name`.
+   */
+  modified_customer_name?: string;
+  /**
    * How the customer receives the drink. Optional so dashboards can still
    * talk to machines running older module versions that don't send it;
    * treat absent as "pickup" (the backend default).
@@ -350,14 +356,14 @@ export async function prepareOrder(
   opts: {
     drink: string;
     drinkLabel: string;
-    /** What the cup and the tracker show: the deliberately misspelled name. */
+    /** The name the customer gave; the identity key for aggregation. */
     customerName: string;
     /**
-     * The name the customer actually typed, used only as the identity key for
-     * per-customer aggregation. customerName is re-misspelled on every order,
-     * so counting on it splits one customer across a row per drink.
+     * The deliberate misspelling shown and spoken for this order. Re-rolled per
+     * order, so it identifies nothing — customerName is what aggregations group
+     * on. Omit it and the backend shows customerName instead.
      */
-    realName?: string;
+    modifiedName?: string;
     customerEmail?: string;
     pronunciation?: string;
     /** Defaults to "pickup" on the backend when omitted. */
@@ -367,7 +373,7 @@ export async function prepareOrder(
   if (isDevMode()) {
     if (opts.customerName) {
       const id = `dev-${++devOrderCounter}`;
-      devQueue.push({ id, name: opts.customerName });
+      devQueue.push({ id, name: opts.modifiedName || opts.customerName });
       startDevProcessing();
       console.log(
         "[dev] order queued:",
@@ -396,7 +402,7 @@ export async function prepareOrder(
       prepare_order: {
         drink: opts.drink,
         customer_name: opts.customerName,
-        ...(opts.realName && { customer_real_name: opts.realName }),
+        ...(opts.modifiedName && { modified_customer_name: opts.modifiedName }),
         ...(opts.customerEmail && { customer_email: opts.customerEmail }),
         ...(greeting && { initial_greeting: greeting }),
         ...(opts.fulfillment && { fulfillment: opts.fulfillment }),

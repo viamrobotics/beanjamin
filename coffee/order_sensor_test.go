@@ -160,26 +160,30 @@ func TestOrderSensor_Readings_FIFO(t *testing.T) {
 	}
 }
 
-func TestOrderSensor_Readings_CustomerRealName(t *testing.T) {
+func TestOrderSensor_Readings_CustomerNames(t *testing.T) {
 	tests := []struct {
 		name         string
 		order        Order
-		wantRealName string
+		wantName     string
+		wantModified string
 	}{
 		{
-			name:         "kiosk order keeps the misspelling separate from the tracking name",
-			order:        Order{CustomerName: "Vijoy", CustomerRealName: "Vijay"},
-			wantRealName: "Vijay",
+			name:         "kiosk order carries both the real name and the misspelling",
+			order:        Order{CustomerName: "Vijay", ModifiedCustomerName: "Vijoy"},
+			wantName:     "Vijay",
+			wantModified: "Vijoy",
 		},
 		{
-			name:         "caller that does not misspell falls back to customer_name",
+			name:         "caller that does not misspell reports no modified name",
 			order:        Order{CustomerName: "Ada"},
-			wantRealName: "Ada",
+			wantName:     "Ada",
+			wantModified: "",
 		},
 		{
 			name:         "anonymous order stays anonymous",
 			order:        Order{},
-			wantRealName: "",
+			wantName:     "",
+			wantModified: "",
 		},
 	}
 	for _, tc := range tests {
@@ -191,11 +195,11 @@ func TestOrderSensor_Readings_CustomerRealName(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if r["customer_real_name"] != tc.wantRealName {
-				t.Fatalf("customer_real_name: want %q got %#v", tc.wantRealName, r["customer_real_name"])
+			if r["customer_name"] != tc.wantName {
+				t.Errorf("customer_name: want %q got %#v", tc.wantName, r["customer_name"])
 			}
-			if r["customer_name"] != tc.order.CustomerName {
-				t.Fatalf("customer_name: want %q got %#v", tc.order.CustomerName, r["customer_name"])
+			if r["modified_customer_name"] != tc.wantModified {
+				t.Errorf("modified_customer_name: want %q got %#v", tc.wantModified, r["modified_customer_name"])
 			}
 		})
 	}

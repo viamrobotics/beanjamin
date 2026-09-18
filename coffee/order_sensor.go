@@ -118,29 +118,23 @@ func (s *orderSensor) pushOrderReading(r orderReading) {
 	if ok {
 		failedStep = ""
 	}
-	// The kiosk is the only caller that deliberately corrupts the name, and it
-	// sends the real one alongside. For every other caller (voice, operator)
-	// customer_name already is the customer's name, so filling the gap here
-	// means no consumer of this reading needs a fallback of its own.
-	realName := r.order.CustomerRealName
-	if realName == "" {
-		realName = r.order.CustomerName
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pending = append(s.pending, map[string]any{
-		"order_id":           r.order.ID,
-		"drink":              r.order.Drink,
-		"customer_name":      r.order.CustomerName,
-		"customer_real_name": realName,
-		"order_ok":           ok,
-		"operator_cancelled": r.operatorCancelled,
-		"error_message":      errMsg,
-		"failed_step":        failedStep,
-		"trace_id":           r.traceID,
-		"decaf":              r.decaf,
-		"start_time":         r.startedAt.UTC().Format(time.RFC3339Nano),
-		"end_time":           r.endedAt.UTC().Format(time.RFC3339Nano),
-		"duration_ms":        float64(r.endedAt.Sub(r.startedAt).Milliseconds()),
+		"order_id":      r.order.ID,
+		"drink":         r.order.Drink,
+		"customer_name": r.order.CustomerName,
+		// What the customer was actually shown; recorded for support ("my cup
+		// said Vijoy"), never for grouping — it changes every order.
+		"modified_customer_name": r.order.ModifiedCustomerName,
+		"order_ok":               ok,
+		"operator_cancelled":     r.operatorCancelled,
+		"error_message":          errMsg,
+		"failed_step":            failedStep,
+		"trace_id":               r.traceID,
+		"decaf":                  r.decaf,
+		"start_time":             r.startedAt.UTC().Format(time.RFC3339Nano),
+		"end_time":               r.endedAt.UTC().Format(time.RFC3339Nano),
+		"duration_ms":            float64(r.endedAt.Sub(r.startedAt).Milliseconds()),
 	})
 }

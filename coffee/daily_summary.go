@@ -40,7 +40,6 @@ const dailySummaryWindow = 24 * time.Hour
 type orderRow struct {
 	Drink             string  `json:"drink"`
 	CustomerName      string  `json:"customer_name"`
-	CustomerRealName  string  `json:"customer_real_name"`
 	OrderOK           bool    `json:"order_ok"`
 	OperatorCancelled bool    `json:"operator_cancelled"`
 	FailedStep        string  `json:"failed_step"`
@@ -220,15 +219,8 @@ func summarizeOrders(rows []orderRow) daySummary {
 		}
 		// Every attempt counts toward a customer's tally, succeeded or not: they
 		// asked for a drink, and whether the machine managed it is the machine's
-		// record rather than theirs. Tally on the real name: customer_name is
-		// re-misspelled per order, so it would split one customer across a row
-		// per drink. Readings written before customer_real_name existed only
-		// have the misspelling, which is still better than dropping them.
-		name := strings.TrimSpace(row.CustomerRealName)
-		if name == "" {
-			name = strings.TrimSpace(row.CustomerName)
-		}
-		if name != "" {
+		// record rather than theirs.
+		if name := strings.TrimSpace(row.CustomerName); name != "" {
 			sum.customers[name]++
 		}
 

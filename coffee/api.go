@@ -69,11 +69,14 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 			"id":            o.ID,
 			"drink":         o.Drink,
 			"customer_name": o.CustomerName,
-			"fulfillment":   o.Fulfillment,
-			"enqueued_at":   o.EnqueuedAt.Format(time.RFC3339),
-			"raw_step":      o.RawStep,
-			"step_history":  history,
-			"completed_at":  completedAt,
+			// The tracker renders this so the queue card matches the cup; the
+			// real name rides along for anything that needs to identify them.
+			"modified_customer_name": o.ModifiedCustomerName,
+			"fulfillment":            o.Fulfillment,
+			"enqueued_at":            o.EnqueuedAt.Format(time.RFC3339),
+			"raw_step":               o.RawStep,
+			"step_history":           history,
+			"completed_at":           completedAt,
 		}
 	}
 	step, _ := s.currentStep.Load().(string)

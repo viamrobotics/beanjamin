@@ -143,7 +143,7 @@ func TestDailySummaryStagesMatchOrderRow(t *testing.T) {
 	if !ok {
 		t.Fatalf("stage is not a $project: %#v", stages[0])
 	}
-	fields := []string{"drink", "customer_name", "customer_real_name", "order_ok", "operator_cancelled", "failed_step", "decaf", "duration_ms"}
+	fields := []string{"drink", "customer_name", "order_ok", "operator_cancelled", "failed_step", "decaf", "duration_ms"}
 	for _, field := range fields {
 		want := "$data.readings." + field
 		if got := project[field]; got != want {
@@ -386,33 +386,5 @@ func TestDailySummaryBlocksNoOrders(t *testing.T) {
 	}
 	if !strings.Contains(dailySummaryText(summarizeOrders(nil)), "No orders") {
 		t.Error("fallback text does not say there were no orders")
-	}
-}
-
-// The kiosk re-misspells a name on every order, so counting on CustomerName
-// splits one customer into as many rows as they placed orders. The digest
-// groups on the real name instead.
-func TestSummarizeOrdersGroupsByRealName(t *testing.T) {
-	sum := summarizeOrders([]orderRow{
-		{Drink: "espresso", CustomerName: "Vijoy", CustomerRealName: "Vijay", OrderOK: true},
-		{Drink: "espresso", CustomerName: "Vijai", CustomerRealName: "Vijay", OrderOK: true},
-		{Drink: "lungo", CustomerName: "Bijay", CustomerRealName: "Vijay", FailedStep: stepGrinding},
-	})
-
-	if len(sum.customers) != 1 || sum.customers["Vijay"] != 3 {
-		t.Errorf("customers = %v, want only Vijay with 3", sum.customers)
-	}
-}
-
-// Readings written before the real name existed, and orders from callers that
-// never misspell, still carry a usable name in customer_name.
-func TestSummarizeOrdersFallsBackToCustomerName(t *testing.T) {
-	sum := summarizeOrders([]orderRow{
-		{Drink: "espresso", CustomerName: "Ada", OrderOK: true},
-		{Drink: "espresso", CustomerName: "   ", CustomerRealName: "   ", OrderOK: true},
-	})
-
-	if len(sum.customers) != 1 || sum.customers["Ada"] != 1 {
-		t.Errorf("customers = %v, want only Ada with 1", sum.customers)
 	}
 }

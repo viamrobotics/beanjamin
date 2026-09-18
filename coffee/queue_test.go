@@ -729,39 +729,76 @@ func TestQueue_ClearPending_IdleQueue(t *testing.T) {
 	}
 }
 
-func TestEnqueueOrder_CarriesCustomerRealName(t *testing.T) {
+func TestOrderDisplayName(t *testing.T) {
 	tests := []struct {
-		name     string
-		payload  map[string]any
-		wantReal string
+		name  string
+		order Order
+		want  string
 	}{
 		{
-			name: "kiosk sends both names",
-			payload: map[string]any{
-				"drink":              "espresso",
-				"customer_name":      "Vijoy",
-				"customer_real_name": "Vijay",
-			},
-			wantReal: "Vijay",
+			name:  "the misspelling is what the customer sees and hears",
+			order: Order{CustomerName: "Vijay", ModifiedCustomerName: "Vijoy"},
+			want:  "Vijoy",
 		},
 		{
-			// A name typed with stray whitespace must not become its own
-			// leaderboard row, so the tracking key is trimmed at the door.
-			name: "surrounding whitespace is trimmed",
-			payload: map[string]any{
-				"drink":              "espresso",
-				"customer_name":      "Vijoy",
-				"customer_real_name": "  Vijay  ",
-			},
-			wantReal: "Vijay",
+			// Voice and operator orders never misspell, so there is nothing to
+			// show but the name they gave.
+			name:  "falls back to the real name when nothing misspelled it",
+			order: Order{CustomerName: "Ada"},
+			want:  "Ada",
 		},
 		{
-			name: "caller that omits it leaves the field empty",
+			name:  "anonymous order has nothing to show",
+			order: Order{},
+			want:  "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.order.DisplayName(); got != tc.want {
+				t.Errorf("DisplayName() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnqueueOrder_CarriesBothNames(t *testing.T) {
+	tests := []struct {
+		name         string
+		payload      map[string]any
+		wantName     string
+		wantModified string
+	}{
+		{
+			name: "kiosk sends the real name and the misspelling it displayed",
+			payload: map[string]any{
+				"drink":                  "espresso",
+				"customer_name":          "Vijay",
+				"modified_customer_name": "Vijoy",
+			},
+			wantName:     "Vijay",
+			wantModified: "Vijoy",
+		},
+		{
+			// customer_name is the aggregation key now, so stray whitespace must
+			// not hand one customer a second identity.
+			name: "surrounding whitespace is trimmed off the tracking name",
+			payload: map[string]any{
+				"drink":                  "espresso",
+				"customer_name":          "  Vijay  ",
+				"modified_customer_name": "Vijoy",
+			},
+			wantName:     "Vijay",
+			wantModified: "Vijoy",
+		},
+		{
+			name: "caller that never misspells sends only the real name",
 			payload: map[string]any{
 				"drink":         "espresso",
 				"customer_name": "Ada",
 			},
-			wantReal: "",
+			wantName:     "Ada",
+			wantModified: "",
 		},
 	}
 	for _, tc := range tests {
@@ -774,11 +811,11 @@ func TestEnqueueOrder_CarriesCustomerRealName(t *testing.T) {
 			if len(orders) != 1 {
 				t.Fatalf("queue length = %d, want 1", len(orders))
 			}
-			if got := orders[0].CustomerRealName; got != tc.wantReal {
-				t.Errorf("CustomerRealName = %q, want %q", got, tc.wantReal)
+			if got := orders[0].CustomerName; got != tc.wantName {
+				t.Errorf("CustomerName = %q, want %q", got, tc.wantName)
 			}
-			if got := orders[0].CustomerName; got != tc.payload["customer_name"] {
-				t.Errorf("CustomerName = %q, want %q", got, tc.payload["customer_name"])
+			if got := orders[0].ModifiedCustomerName; got != tc.wantModified {
+				t.Errorf("ModifiedCustomerName = %q, want %q", got, tc.wantModified)
 			}
 		})
 	}

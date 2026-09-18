@@ -37,16 +37,16 @@ type StepEntry struct {
 // espresso routine; all are guarded by OrderQueue.mu and must only be updated
 // through OrderQueue methods.
 type Order struct {
-	ID           string `json:"id"`
-	Drink        string `json:"drink"`
+	ID    string `json:"id"`
+	Drink string `json:"drink"`
+	// CustomerName is the name the customer actually gave, and the identity key
+	// for per-customer aggregation (leaderboards, the daily digest).
 	CustomerName string `json:"customer_name"`
-	// CustomerRealName is the name the customer actually gave, before the kiosk
-	// misspelled it into CustomerName. It is the identity key for per-customer
-	// aggregation: CustomerName is re-misspelled on every order, so counting on
-	// it splits one customer across as many rows as they have placed orders.
-	// Empty for callers that never misspell (voice, operator) — the order
-	// sensor falls back to CustomerName for those.
-	CustomerRealName string `json:"customer_real_name,omitempty"`
+	// ModifiedCustomerName is what the customer is shown and told: the kiosk
+	// misspells the name on purpose, with a fresh misspelling each order, which
+	// is why it cannot double as the aggregation key. Empty for callers that
+	// never misspell (voice, operator); use DisplayName rather than reading it.
+	ModifiedCustomerName string `json:"modified_customer_name,omitempty"`
 	// CustomerEmail identifies the recognized customer, to credit their history.
 	CustomerEmail string `json:"customer_email,omitempty"`
 	Greeting      string `json:"greeting"`
@@ -305,6 +305,16 @@ func (q *OrderQueue) ClearPending() (removed int, currentID string) {
 	return removed, currentID
 }
 
+// DisplayName is the name to show and speak: the deliberate misspelling when
+// one was supplied, otherwise the name the customer gave. Never use it as an
+// aggregation key — it is not stable across a customer's orders.
+func (o Order) DisplayName() string {
+	if o.ModifiedCustomerName != "" {
+		return o.ModifiedCustomerName
+	}
+	return o.CustomerName
+}
+
 // NewOrder creates an Order with a generated UUID and current timestamp.
 // Fulfillment defaults to pickup; callers override it before enqueueing.
 func NewOrder(drink, customerName, greeting, completion string) Order {
@@ -550,8 +560,8 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 	customerName, _ := order["customer_name"].(string)
 	// Trimmed because this is an aggregation key: " Vijay" and "Vijay" must not
 	// become two customers.
-	customerRealName, _ := order["customer_real_name"].(string)
-	customerRealName = strings.TrimSpace(customerRealName)
+	customerName = strings.TrimSpace(customerName)
+	modifiedCustomerName, _ := order["modified_customer_name"].(string)
 	customerEmail, _ := order["customer_email"].(string)
 	s.logger.Infof("order request: drink=%q customer=%q", drink, customerName)
 
@@ -612,6 +622,13 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		return nil, err
 	}
 
+	// Everything spoken or shown uses the misspelling when the caller supplied
+	// one; Order.DisplayName applies the same rule once an order exists.
+	displayName := modifiedCustomerName
+	if displayName == "" {
+		displayName = customerName
+	}
+
 	count, err := s.parseOrderCount(order["count"])
 	if err != nil {
 		s.logger.Warnf("rejected order: %v", err)
@@ -629,10 +646,10 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		// noise. (executeQueuedOrder skips the speech when Greeting is "".)
 		greeting := initialGreeting
 		if greeting == "" && count == 1 {
-			greeting = pickGreeting(drink, customerName)
+			greeting = pickGreeting(drink, displayName)
 		}
 		o := NewOrder(drink, customerName, greeting, completionStatement)
-		o.CustomerRealName = customerRealName
+		o.ModifiedCustomerName = modifiedCustomerName
 		o.CustomerEmail = customerEmail
 		o.Fulfillment = fulfillment
 		if count > 1 {
@@ -654,11 +671,11 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 	// back-to-back.
 	switch {
 	case count == 1 && firstPos > 1:
-		if err := s.say(ctx, pickOrderReceived(drink, customerName)); err != nil {
+		if err := s.say(ctx, pickOrderReceived(drink, displayName)); err != nil {
 			s.logger.Warnf("failed to announce order %s: %v", ids[0], err)
 		}
 	case count > 1:
-		if err := s.say(ctx, pickOrderReceivedBatch(drink, customerName, count)); err != nil {
+		if err := s.say(ctx, pickOrderReceivedBatch(drink, displayName, count)); err != nil {
 			s.logger.Warnf("failed to announce batch: %v", err)
 		}
 	}

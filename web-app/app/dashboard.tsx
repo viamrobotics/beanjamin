@@ -184,22 +184,12 @@ export function Dashboard() {
         .catch((e) =>
           console.error("failed to load 14-day robot totals:", e)
         );
-      // Group on the real name, not the deliberate misspelling — the kiosk
-      // re-misspells on every order, so customer_name gives one customer a row
-      // per drink. Readings written before customer_real_name existed have no
-      // such field, and fall back to the misspelling rather than dropping off
-      // the board entirely while they age out of the 7-day window.
-      loadLeaderboard(currentClient, {
-        $ifNull: [
-          "$data.readings.customer_real_name",
-          "$data.readings.customer_name",
-        ],
-      })
+      loadLeaderboard(currentClient, "data.readings.customer_name")
         .then((d) => !cancelled && setCustomerLeaderboard(d))
         .catch((e) =>
           console.error("failed to load customer leaderboard:", e)
         );
-      loadLeaderboard(currentClient, "$data.readings.drink", {
+      loadLeaderboard(currentClient, "data.readings.drink", {
         "data.readings.order_ok": true,
       })
         .then((d) => !cancelled && setDrinkLeaderboard(d))
