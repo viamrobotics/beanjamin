@@ -304,23 +304,24 @@ func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order Order) {
 // to, so their closures drop it and return only the error.
 func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.Context) error {
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
-		"grind_coffee":       s.grindCoffee,
-		"grind_decaf":        s.grindDecaf,
-		"tamp_ground":        s.tampGround,
-		"lock_portafilter":   s.lockPortaFilter,
-		"unlock_portafilter": s.unlockPortaFilter,
-		"release_filter":     s.releaseFilter,
-		"grab_filter":        s.grabFilter,
-		"brew_coffee":        s.brewCoffee,
-		"set_cup_for_coffee": s.setCupForCoffee,
-		"clean_portafilter":  s.cleanPortafilter,
-		"fetch_glass":        s.fetchGlass,               // vision-grab a glass off the shelf
-		"pulse_ice_pin":      s.pulseIcePin,              // hardware only, no arm motion
-		"dispense_ice":       s.dispenseIce,              // arm to chute + pulse + retreat
-		"stage_glass":        s.stageGlass,               // set held glass down, release
-		"grab_brewed_cup":    s.grabBrewedCupFromMachine, // retrieve cup from under machine
-		"pour_espresso":      s.pourEspresso,             // pour held cup over staged glass
-		"grab_staged_glass":  s.grabStagedGlass,          // re-grab the staged glass
+		"grind_coffee":         s.grindCoffee,
+		"grind_decaf":          s.grindDecaf,
+		"tamp_ground":          s.tampGround,
+		"lock_portafilter":     s.lockPortaFilter,
+		"unlock_portafilter":   s.unlockPortaFilter,
+		"release_filter":       s.releaseFilter,
+		"grab_filter":          s.grabFilter,
+		"brew_coffee":          s.brewCoffee,
+		"set_cup_for_coffee":   s.setCupForCoffee,
+		"clean_portafilter":    s.cleanPortafilter,
+		"fetch_glass":          s.fetchGlass,               // vision-grab a glass off the shelf
+		"pulse_ice_pin":        s.pulseIcePin,              // hardware only, no arm motion
+		"dispense_ice":         s.dispenseIce,              // arm to chute + pulse + retreat
+		"move_to_ice_dispense": s.moveToIceDispense,        // dispense_ice's move half, no pin
+		"stage_glass":          s.stageGlass,               // set held glass down, release
+		"grab_brewed_cup":      s.grabBrewedCupFromMachine, // retrieve cup from under machine
+		"pour_espresso":        s.pourEspresso,             // pour held cup over staged glass
+		"grab_staged_glass":    s.grabStagedGlass,          // re-grab the staged glass
 		"give_full_cup_to_customer": func(ctx, cancelCtx context.Context) error {
 			_, err := s.placeFullCupOnShelf(ctx, cancelCtx)
 			return err
@@ -366,7 +367,9 @@ func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.C
 	return actions
 }
 
-func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]any, error) {
+// executeAction runs one named action, holding the arm for its duration.
+// withoutPortafilter drops the filter from the frame system for the call.
+func (s *beanjaminCoffee) executeAction(ctx context.Context, name string, withoutPortafilter bool) (map[string]any, error) {
 	actions := s.actionFuncs()
 
 	action, ok := actions[name]
@@ -392,6 +395,24 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 	// step-by-step sequences span separate DoCommands) is preserved.
 	if err := s.refreshFrameSystemIfClean(ctx); err != nil {
 		return nil, fmt.Errorf("refresh frame system before action %q: %w", name, err)
+	}
+	// After the refresh, or it would be put straight back.
+	if withoutPortafilter {
+		detached, err := s.detachFilterFrame()
+		if err != nil {
+			return nil, err
+		}
+		// Restore on every exit path: the next action's refresh is skipped while
+		// anything is held, which would leave the filter detached for good.
+		defer func() {
+			if err := s.reattachFilterFrame(detached); err != nil {
+				s.logger.Errorf("action %q: %v — the frame system no longer models the portafilter; run reset_world before brewing", name, err)
+				return
+			}
+			if err := s.refreshFrameSystemIfClean(ctx); err != nil {
+				s.logger.Warnf("action %q: refresh frame system after reattaching the portafilter: %v", name, err)
+			}
+		}()
 	}
 
 	s.logger.Infof("executing action %q", name)

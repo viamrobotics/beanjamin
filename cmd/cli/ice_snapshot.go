@@ -250,8 +250,12 @@ func runIceSnapshot(args []string) error {
 				return err
 			}
 			if i == 0 {
-				fmt.Printf("  raw              %s (%d points kept, %d image(s))\n",
-					filepath.Join(*rawDir, frame.File), frame.CloudPoints, len(frame.Images))
+				if frame.File != "" {
+					fmt.Printf("  raw              %s (%d points kept, %d image(s))\n",
+						filepath.Join(*rawDir, frame.File), frame.CloudPoints, len(frame.Images))
+				} else {
+					fmt.Printf("  raw              %s (%d image(s), no cloud)\n", *rawDir, len(frame.Images))
+				}
 			}
 		}
 

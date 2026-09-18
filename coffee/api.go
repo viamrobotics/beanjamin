@@ -113,6 +113,20 @@ func parseCupFlowCount(v any) (int, error) {
 	return count, nil
 }
 
+// parseOptionalBool reads an optional boolean beside a command. A wrong type is
+// an error rather than a silent false the caller would never notice.
+func parseOptionalBool(cmd map[string]any, key string) (bool, error) {
+	v, ok := cmd[key]
+	if !ok {
+		return false, nil
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return false, fmt.Errorf("%s must be a boolean, got %T", key, v)
+	}
+	return b, nil
+}
+
 // commandDef is one entry in the DoCommand dispatch table. needsStr restricts a
 // match to string values (execute_action/action dispatch on the string).
 type commandDef struct {
@@ -145,7 +159,11 @@ var coffeeCommands = []commandDef{
 			return "execute_action[" + cmd["execute_action"].(string) + "]"
 		},
 		run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
-			return s.executeAction(ctx, cmd["execute_action"].(string))
+			withoutPortafilter, err := parseOptionalBool(cmd, "without_portafilter")
+			if err != nil {
+				return nil, err
+			}
+			return s.executeAction(ctx, cmd["execute_action"].(string), withoutPortafilter)
 		}},
 	{key: "cancel", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.cancel(ctx)

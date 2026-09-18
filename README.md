@@ -410,12 +410,19 @@ Only `drink` is required. If `initial_greeting` is omitted, a random greeting is
 **`execute_action`** - Run a single coffee-making action by name, for manual step-by-step operation. An unknown name returns the full list of available actions in the error. Available actions:
 
 - Brew cycle: `grind_coffee`, `grind_decaf`, `tamp_ground`, `lock_portafilter`, `unlock_portafilter`, `release_filter`, `grab_filter`, `brew_coffee`, plus the button actions for the configured machine (`turn_coffee_button_on` / `turn_coffee_button_off`, or `press_espresso_button` / `press_lungo_button` / `brew_lungo` under `has_separate_brew_buttons`), `set_cup_for_coffee`, `give_full_cup_to_customer` (place the finished cup in the serving area), `clean_portafilter`, `place_held` (place the currently held vessel in the serving area), `keepalive_purge` (one group-head purge on demand — available on the `has_separate_brew_buttons` machine whether or not `keepalive` is configured, so the `purge_*` poses can be verified before the loop is switched on).
-- Iced coffee (require `can_serve_iced`): `fetch_glass`, `pulse_ice_pin`, `dispense_ice`, `stage_glass`, `grab_brewed_cup`, `pour_espresso`, `grab_staged_glass`, `serve_iced_coffee` (the full iced sequence end-to-end).
+- Iced coffee (require `can_serve_iced`): `fetch_glass`, `pulse_ice_pin`, `move_to_ice_dispense` (hold the glass under the chute without opening the pin), `dispense_ice`, `stage_glass`, `grab_brewed_cup`, `pour_espresso`, `grab_staged_glass`, `serve_iced_coffee` (the full iced sequence end-to-end).
 - Iced latte (require `can_serve_iced_latte`): `fetch_milk` (vision-grab the bottle from the **already open** fridge), `pour_milk` (pour the held bottle into the staged glass), `return_milk` (set the bottle back down where `fetch_milk` picked it up), `add_milk` (the whole fridge trip: open door → fetch → pour → return → close door), `serve_iced_latte` (the full iced-plus-milk sequence end-to-end). `fetch_milk`, `pour_milk` and `return_milk` are meant for stepping the sequence one move at a time while calibrating; each assumes the state the one before it leaves behind, and `return_milk` fails if no `fetch_milk` recorded a pickup position.
 - Fridge door (requires `door_approach_relative_pose`): `open_door` (grip the handle and swing the door open — see below).
 
 ```json
 {"execute_action": "grind_coffee"}
+```
+
+`without_portafilter: true` drops the filter from the frame system for that one call, for driving the arm after physically taking the portafilter off the gripper. Without it the planner routes around a part that is not there, which from rest blocks any move past the espresso machine. It is refused while the filter frame is locked into the machine (`lock_portafilter` without `grab_filter`), because there the frame models the real portafilter sitting in the bayonet and removing it would let the arm plan straight through it. Every `filter_*` pose stops planning while the filter is gone, so this is for claw-only sequences. The filter is put back when the action ends, on every exit path — so pass the flag on **every** call of a multi-step sequence, not just the first.
+
+```json
+{"execute_action": "fetch_glass", "without_portafilter": true}
+{"execute_action": "move_to_ice_dispense", "without_portafilter": true}
 ```
 
 **`cancel`** - Stop whatever is running, and nothing else. It cancels the shared sequence context so the run aborts at its next step boundary, calls `Stop` on the arm so the in-flight trajectory halts where it stands instead of playing out to its authored pose, and pauses the queue. No arm motion is planned, no gripper is opened, no state flag is cleared, and the cached frame system is left untouched: the portafilter stays wherever it was, a held cup stays in the jaws, pending orders stay queued.
