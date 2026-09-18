@@ -272,8 +272,8 @@ func (s *beanjaminCoffee) readyForDelivery(ctx context.Context, order Order) err
 	s.notifyDeliveryRequest(ctx, order)
 	drink := speakableDrink(order.Drink)
 	text := fmt.Sprintf("%s ready for delivery!", drink)
-	if order.CustomerName != "" {
-		text = fmt.Sprintf("%s for %s, ready for delivery!", drink, order.CustomerName)
+	if name := order.DisplayName(); name != "" {
+		text = fmt.Sprintf("%s for %s, ready for delivery!", drink, name)
 	}
 	return s.sayAlways(ctx, text)
 }
@@ -440,7 +440,7 @@ func waterDelta(drink string) float64 {
 }
 
 func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err error) {
-	drink, customerName := order.Drink, order.CustomerName
+	drink, customerName := order.Drink, order.DisplayName()
 	batchIndex, batchSize := order.BatchIndex, order.BatchSize
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::prepareDrink["+drink+"]")

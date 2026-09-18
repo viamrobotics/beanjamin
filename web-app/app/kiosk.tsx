@@ -218,6 +218,7 @@ export function Kiosk() {
     }
   }
 
+  /** `misspelledName` is shown and spoken; `name` is what the order is filed under. */
   async function placeOrder(misspelledName: string): Promise<void> {
     console.log("[app] placing order for:", misspelledName);
     setMisspelled(misspelledName);
@@ -242,7 +243,8 @@ export function Kiosk() {
       await prepareOrder(viamConn, {
         drink: selectedDrink!,
         drinkLabel: drinkLabel(selectedDrink!),
-        customerName: misspelledName,
+        customerName: name.trim(),
+        modifiedName: misspelledName,
         // Credits the drink to this customer's history; empty = anonymous
         // (ignored). Required by the backend when fulfillment is delivery.
         customerEmail: email,

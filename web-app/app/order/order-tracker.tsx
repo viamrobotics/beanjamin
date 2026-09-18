@@ -195,7 +195,7 @@ function OrderCard({ order, cardClass, statusKind, label }: OrderCardProps) {
           className="text-lg text-neutral-900 truncate"
           style={{ fontFamily: "var(--font-just-me), cursive" }}
         >
-          {order.customer_name}
+          {order.modified_customer_name || order.customer_name}
         </p>
         <span className="text-[10px] font-mono text-neutral-300 shrink-0">
           {order.id.slice(0, 8)}

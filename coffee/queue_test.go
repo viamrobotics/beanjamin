@@ -728,3 +728,91 @@ func TestQueue_ClearPending_IdleQueue(t *testing.T) {
 		t.Errorf("Len after ClearPending = %d, want 0", got)
 	}
 }
+
+func TestOrderDisplayName(t *testing.T) {
+	tests := []struct {
+		name  string
+		order Order
+		want  string
+	}{
+		{
+			name:  "the misspelling is what the customer sees and hears",
+			order: Order{CustomerName: "Vijay", ModifiedCustomerName: "Vijoy"},
+			want:  "Vijoy",
+		},
+		{
+			name:  "falls back to the real name when nothing misspelled it",
+			order: Order{CustomerName: "Ada"},
+			want:  "Ada",
+		},
+		{
+			name:  "anonymous order has nothing to show",
+			order: Order{},
+			want:  "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.order.DisplayName(); got != tc.want {
+				t.Errorf("DisplayName() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnqueueOrder_CarriesBothNames(t *testing.T) {
+	tests := []struct {
+		name         string
+		payload      map[string]any
+		wantName     string
+		wantModified string
+	}{
+		{
+			name: "kiosk sends the real name and the misspelling it displayed",
+			payload: map[string]any{
+				"drink":                  "espresso",
+				"customer_name":          "Vijay",
+				"modified_customer_name": "Vijoy",
+			},
+			wantName:     "Vijay",
+			wantModified: "Vijoy",
+		},
+		{
+			name: "surrounding whitespace is trimmed off the tracking name",
+			payload: map[string]any{
+				"drink":                  "espresso",
+				"customer_name":          "  Vijay  ",
+				"modified_customer_name": "Vijoy",
+			},
+			wantName:     "Vijay",
+			wantModified: "Vijoy",
+		},
+		{
+			name: "caller that never misspells sends only the real name",
+			payload: map[string]any{
+				"drink":         "espresso",
+				"customer_name": "Ada",
+			},
+			wantName:     "Ada",
+			wantModified: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := newTestCoffee(t, nil)
+			if _, err := c.enqueueOrder(context.Background(), tc.payload); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			orders := c.queue.List()
+			if len(orders) != 1 {
+				t.Fatalf("queue length = %d, want 1", len(orders))
+			}
+			if got := orders[0].CustomerName; got != tc.wantName {
+				t.Errorf("CustomerName = %q, want %q", got, tc.wantName)
+			}
+			if got := orders[0].ModifiedCustomerName; got != tc.wantModified {
+				t.Errorf("ModifiedCustomerName = %q, want %q", got, tc.wantModified)
+			}
+		})
+	}
+}
