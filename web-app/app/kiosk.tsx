@@ -218,6 +218,11 @@ export function Kiosk() {
     }
   }
 
+  /**
+   * `misspelledName` is what the customer sees and hears; the untouched `name`
+   * state rides along as the tracking key so repeat orders from one customer
+   * aggregate together despite each order getting a fresh misspelling.
+   */
   async function placeOrder(misspelledName: string): Promise<void> {
     console.log("[app] placing order for:", misspelledName);
     setMisspelled(misspelledName);
@@ -243,6 +248,7 @@ export function Kiosk() {
         drink: selectedDrink!,
         drinkLabel: drinkLabel(selectedDrink!),
         customerName: misspelledName,
+        realName: name.trim(),
         // Credits the drink to this customer's history; empty = anonymous
         // (ignored). Required by the backend when fulfillment is delivery.
         customerEmail: email,

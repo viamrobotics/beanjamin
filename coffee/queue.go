@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +40,13 @@ type Order struct {
 	ID           string `json:"id"`
 	Drink        string `json:"drink"`
 	CustomerName string `json:"customer_name"`
+	// CustomerRealName is the name the customer actually gave, before the kiosk
+	// misspelled it into CustomerName. It is the identity key for per-customer
+	// aggregation: CustomerName is re-misspelled on every order, so counting on
+	// it splits one customer across as many rows as they have placed orders.
+	// Empty for callers that never misspell (voice, operator) — the order
+	// sensor falls back to CustomerName for those.
+	CustomerRealName string `json:"customer_real_name,omitempty"`
 	// CustomerEmail identifies the recognized customer, to credit their history.
 	CustomerEmail string `json:"customer_email,omitempty"`
 	Greeting      string `json:"greeting"`
@@ -78,7 +86,6 @@ type Order struct {
 // order being made right now, and recent is a short-lived buffer of completed
 // orders so the webapp can render a "Ready!" card without diffing polls. The
 // whole lifecycle is owned by the backend.
-//
 type OrderQueue struct {
 	mu      sync.Mutex
 	pending []Order       // backlog still waiting to be made, FIFO
@@ -541,6 +548,10 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 
 	drink, _ := order["drink"].(string)
 	customerName, _ := order["customer_name"].(string)
+	// Trimmed because this is an aggregation key: " Vijay" and "Vijay" must not
+	// become two customers.
+	customerRealName, _ := order["customer_real_name"].(string)
+	customerRealName = strings.TrimSpace(customerRealName)
 	customerEmail, _ := order["customer_email"].(string)
 	s.logger.Infof("order request: drink=%q customer=%q", drink, customerName)
 
@@ -621,6 +632,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 			greeting = pickGreeting(drink, customerName)
 		}
 		o := NewOrder(drink, customerName, greeting, completionStatement)
+		o.CustomerRealName = customerRealName
 		o.CustomerEmail = customerEmail
 		o.Fulfillment = fulfillment
 		if count > 1 {

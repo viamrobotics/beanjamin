@@ -350,7 +350,14 @@ export async function prepareOrder(
   opts: {
     drink: string;
     drinkLabel: string;
+    /** What the cup and the tracker show: the deliberately misspelled name. */
     customerName: string;
+    /**
+     * The name the customer actually typed, used only as the identity key for
+     * per-customer aggregation. customerName is re-misspelled on every order,
+     * so counting on it splits one customer across a row per drink.
+     */
+    realName?: string;
     customerEmail?: string;
     pronunciation?: string;
     /** Defaults to "pickup" on the backend when omitted. */
@@ -389,6 +396,7 @@ export async function prepareOrder(
       prepare_order: {
         drink: opts.drink,
         customer_name: opts.customerName,
+        ...(opts.realName && { customer_real_name: opts.realName }),
         ...(opts.customerEmail && { customer_email: opts.customerEmail }),
         ...(greeting && { initial_greeting: greeting }),
         ...(opts.fulfillment && { fulfillment: opts.fulfillment }),

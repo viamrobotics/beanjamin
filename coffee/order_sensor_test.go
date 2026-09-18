@@ -159,3 +159,44 @@ func TestOrderSensor_Readings_FIFO(t *testing.T) {
 		t.Fatalf("second reading: %#v", r2)
 	}
 }
+
+func TestOrderSensor_Readings_CustomerRealName(t *testing.T) {
+	tests := []struct {
+		name         string
+		order        Order
+		wantRealName string
+	}{
+		{
+			name:         "kiosk order keeps the misspelling separate from the tracking name",
+			order:        Order{CustomerName: "Vijoy", CustomerRealName: "Vijay"},
+			wantRealName: "Vijay",
+		},
+		{
+			name:         "caller that does not misspell falls back to customer_name",
+			order:        Order{CustomerName: "Ada"},
+			wantRealName: "Ada",
+		},
+		{
+			name:         "anonymous order stays anonymous",
+			order:        Order{},
+			wantRealName: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestOrderSensor(t)
+			s.pushOrderReading(orderReading{order: tc.order})
+
+			r, err := s.Readings(context.Background(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r["customer_real_name"] != tc.wantRealName {
+				t.Fatalf("customer_real_name: want %q got %#v", tc.wantRealName, r["customer_real_name"])
+			}
+			if r["customer_name"] != tc.order.CustomerName {
+				t.Fatalf("customer_name: want %q got %#v", tc.order.CustomerName, r["customer_name"])
+			}
+		})
+	}
+}

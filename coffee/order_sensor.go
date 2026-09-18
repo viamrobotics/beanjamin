@@ -118,12 +118,21 @@ func (s *orderSensor) pushOrderReading(r orderReading) {
 	if ok {
 		failedStep = ""
 	}
+	// The kiosk is the only caller that deliberately corrupts the name, and it
+	// sends the real one alongside. For every other caller (voice, operator)
+	// customer_name already is the customer's name, so filling the gap here
+	// means no consumer of this reading needs a fallback of its own.
+	realName := r.order.CustomerRealName
+	if realName == "" {
+		realName = r.order.CustomerName
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pending = append(s.pending, map[string]any{
 		"order_id":           r.order.ID,
 		"drink":              r.order.Drink,
 		"customer_name":      r.order.CustomerName,
+		"customer_real_name": realName,
 		"order_ok":           ok,
 		"operator_cancelled": r.operatorCancelled,
 		"error_message":      errMsg,

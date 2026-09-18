@@ -333,9 +333,16 @@ export async function loadRobotTotalsLastNDays(
     .sort((a, b) => a.robotName.localeCompare(b.robotName));
 }
 
+/**
+ * `groupId` is the MQL `$group._id` expression, not a bare field name, so a
+ * caller can fold several fields into one bucket (see the customer leaderboard
+ * in dashboard.tsx). A plain string must keep its `$` — without it MQL reads a
+ * literal and buckets every order together, which looks like a working query
+ * returning one enormous row, so the type enforces the prefix.
+ */
 export async function loadLeaderboard(
   client: VIAM.ViamClient,
-  groupByField: string,
+  groupId: `$${string}` | Record<string, unknown>,
   extraMatch: Record<string, unknown> = {}
 ): Promise<LeaderboardEntry[]> {
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -350,7 +357,7 @@ export async function loadLeaderboard(
     },
     {
       $group: {
-        _id: `$${groupByField}`,
+        _id: groupId,
         value: { $sum: 1 },
       },
     },

@@ -728,3 +728,58 @@ func TestQueue_ClearPending_IdleQueue(t *testing.T) {
 		t.Errorf("Len after ClearPending = %d, want 0", got)
 	}
 }
+
+func TestEnqueueOrder_CarriesCustomerRealName(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  map[string]any
+		wantReal string
+	}{
+		{
+			name: "kiosk sends both names",
+			payload: map[string]any{
+				"drink":              "espresso",
+				"customer_name":      "Vijoy",
+				"customer_real_name": "Vijay",
+			},
+			wantReal: "Vijay",
+		},
+		{
+			// A name typed with stray whitespace must not become its own
+			// leaderboard row, so the tracking key is trimmed at the door.
+			name: "surrounding whitespace is trimmed",
+			payload: map[string]any{
+				"drink":              "espresso",
+				"customer_name":      "Vijoy",
+				"customer_real_name": "  Vijay  ",
+			},
+			wantReal: "Vijay",
+		},
+		{
+			name: "caller that omits it leaves the field empty",
+			payload: map[string]any{
+				"drink":         "espresso",
+				"customer_name": "Ada",
+			},
+			wantReal: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := newTestCoffee(t, nil)
+			if _, err := c.enqueueOrder(context.Background(), tc.payload); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			orders := c.queue.List()
+			if len(orders) != 1 {
+				t.Fatalf("queue length = %d, want 1", len(orders))
+			}
+			if got := orders[0].CustomerRealName; got != tc.wantReal {
+				t.Errorf("CustomerRealName = %q, want %q", got, tc.wantReal)
+			}
+			if got := orders[0].CustomerName; got != tc.payload["customer_name"] {
+				t.Errorf("CustomerName = %q, want %q", got, tc.payload["customer_name"])
+			}
+		})
+	}
+}
