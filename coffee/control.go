@@ -110,10 +110,20 @@ func wakeQueue(q *OrderQueue) {
 	}
 }
 
+// clearQueue drops the backlog of orders still waiting to be made. The order
+// currently being brewed is deliberately spared: clear_queue means "stop making
+// more drinks", not "abandon the one on the arm right now" — cancel and
+// reset_world are the commands that stop a running sequence. Recently-completed
+// orders are left alone for the same reason, being drinks already sitting in the
+// serving area; they self-prune after RecentDisplayDuration.
 func (s *beanjaminCoffee) clearQueue() (map[string]any, error) {
-	removed := s.queue.Clear()
-	s.logger.Infof("cleared %d orders from queue", removed)
-	return map[string]any{"status": "cleared", "removed": removed}, nil
+	removed, currentID := s.queue.ClearPending()
+	s.logger.Infof("cleared %d pending orders from queue (in-flight order kept: %v)", removed, currentID != "")
+	resp := map[string]any{"status": "cleared", "removed": removed, "kept_current": currentID != ""}
+	if currentID != "" {
+		resp["kept_current_order_id"] = currentID
+	}
+	return resp, nil
 }
 
 // resetWorld brings the service back to an idle state from anywhere: cancels a

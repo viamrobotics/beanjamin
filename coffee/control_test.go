@@ -513,3 +513,73 @@ func TestProceedRebuildFailureKeepsQueuePaused(t *testing.T) {
 	default:
 	}
 }
+
+// TestClearQueueKeepsInFlightOrder is the regression test for clear_queue
+// having wiped the order being brewed along with the backlog: the webapp, which
+// renders whatever get_queue returns, lost the in-flight order mid-brew while
+// the arm carried on making it.
+func TestClearQueueKeepsInFlightOrder(t *testing.T) {
+	ctx := context.Background()
+	s := newStatusService(t, &Config{})
+	s.queue.Enqueue(Order{ID: "current", Drink: "espresso", CustomerName: "Bob"})
+	s.queue.Enqueue(Order{ID: "next", Drink: "lungo", CustomerName: "Cleo"})
+	// What processQueue does at the top of every order.
+	s.queue.Start()
+	s.setStep(stepBrewing)
+
+	res, err := s.DoCommand(ctx, map[string]any{"clear_queue": true})
+	if err != nil {
+		t.Fatalf("clear_queue error: %v", err)
+	}
+	if got, _ := res["removed"].(int); got != 1 {
+		t.Errorf("removed = %v, want 1 (the backlog only)", res["removed"])
+	}
+	if kept, _ := res["kept_current"].(bool); !kept {
+		t.Errorf("kept_current = %v, want true", res["kept_current"])
+	}
+	if got, _ := res["kept_current_order_id"].(string); got != "current" {
+		t.Errorf("kept_current_order_id = %v, want %q", res["kept_current_order_id"], "current")
+	}
+
+	st, err := s.Status(ctx)
+	if err != nil {
+		t.Fatalf("get_queue error: %v", err)
+	}
+	orders, _ := st["orders"].([]any)
+	if len(orders) != 1 {
+		t.Fatalf("orders after clear_queue = %d, want 1 (the in-flight order stays visible)", len(orders))
+	}
+	order, _ := orders[0].(map[string]any)
+	if order["id"] != "current" {
+		t.Errorf("surviving order id = %v, want %q", order["id"], "current")
+	}
+
+	// Step updates must keep landing on the spared order, so the tracker
+	// carries on following the brew instead of freezing.
+	s.setStep(stepServing)
+	if cur, ok := s.queue.Current(); !ok || cur.RawStep != stepServing {
+		t.Errorf("in-flight raw_step = %q (present=%v), want %q", cur.RawStep, ok, stepServing)
+	}
+}
+
+// TestClearQueueOnIdleQueueClearsEverythingPending confirms sparing the
+// in-flight order costs nothing when none is running.
+func TestClearQueueOnIdleQueueClearsEverythingPending(t *testing.T) {
+	s := newStatusService(t, &Config{})
+	s.queue.Enqueue(Order{ID: "a", Drink: "espresso"})
+	s.queue.Enqueue(Order{ID: "b", Drink: "espresso"})
+
+	res, err := s.DoCommand(context.Background(), map[string]any{"clear_queue": true})
+	if err != nil {
+		t.Fatalf("clear_queue error: %v", err)
+	}
+	if got, _ := res["removed"].(int); got != 2 {
+		t.Errorf("removed = %v, want 2", res["removed"])
+	}
+	if kept, _ := res["kept_current"].(bool); kept {
+		t.Error("kept_current = true on an idle queue, want false")
+	}
+	if got := s.queue.Len(); got != 0 {
+		t.Errorf("Len after clear_queue = %d, want 0", got)
+	}
+}

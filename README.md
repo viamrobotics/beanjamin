@@ -476,13 +476,13 @@ Because the rebuild forgets the modeled contents of the gripper without opening 
 
 Returns `{"status": "resumed", "resumed": true, "frame_system_reset": true}`, or `{"status": "reset", "resumed": false, "frame_system_reset": true}` when the queue was not paused. A `fridge_door_cleared_degs` field is added when the rebuild forgot a door angle.
 
-**`clear_queue`** - Remove all pending orders from the queue.
+**`clear_queue`** - Drop the backlog of orders still waiting to be made. The order currently being brewed keeps running and stays in the queue, and recently-completed orders keep showing as ready. Use `cancel` to stop an order mid-brew, or `reset_world` to cancel and wipe the queue entirely.
 
 ```json
 {"clear_queue": true}
 ```
 
-Returns `{"status": "cleared", "removed": 2}`.
+Returns `{"status": "cleared", "removed": 2, "kept_current": false}`. When an order was being brewed, `kept_current` is `true` and `kept_current_order_id` names the order that was spared.
 
 **`cleanup_pending_clips`** - Attempt a video save for any remaining pending-clip records under `data_dir`, then remove them. Catches clips whose live save was interrupted (process died during the post-roll wait) or failed (e.g. cam storage unavailable). Records younger than one full clip window plus a segment-flush margin are skipped, so an in-progress order is not double-saved. Intended to be invoked via a Viam scheduled job.
 

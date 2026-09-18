@@ -36,9 +36,9 @@ const (
 
 func (s *beanjaminCoffee) setStep(step string) {
 	s.currentStep.Store(step)
-	if id, ok := s.currentOrderID.Load().(string); ok && id != "" {
-		s.queue.SetStep(id, step)
-	}
+	// No-op when nothing is on the arm, which is what a keep-alive purge wants:
+	// its step is service-global and belongs to no order.
+	s.queue.SetCurrentStep(step)
 }
 
 func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {

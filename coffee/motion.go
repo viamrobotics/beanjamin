@@ -624,7 +624,7 @@ func (s *beanjaminCoffee) savePlanRequestAndResponse(req *armplanning.PlanReques
 	if planErr != nil {
 		outcome = tagPlanningFailure
 	}
-	orderID, _ := s.currentOrderID.Load().(string)
+	orderID := s.queue.CurrentID()
 	step, _ := s.currentStep.Load().(string)
 	tagDir := planRequestTagDir(dir, orderID, step, label, outcome)
 	if err := os.MkdirAll(tagDir, 0o755); err != nil {
