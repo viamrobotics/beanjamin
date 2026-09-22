@@ -304,23 +304,24 @@ func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order Order) {
 // to, so their closures drop it and return only the error.
 func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.Context) error {
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
-		"grind_coffee":       s.grindCoffee,
-		"grind_decaf":        s.grindDecaf,
-		"tamp_ground":        s.tampGround,
-		"lock_portafilter":   s.lockPortaFilter,
-		"unlock_portafilter": s.unlockPortaFilter,
-		"release_filter":     s.releaseFilter,
-		"grab_filter":        s.grabFilter,
-		"brew_coffee":        s.brewCoffee,
-		"set_cup_for_coffee": s.setCupForCoffee,
-		"clean_portafilter":  s.cleanPortafilter,
-		"fetch_glass":        s.fetchGlass,               // vision-grab a glass off the shelf
-		"pulse_ice_pin":      s.pulseIcePin,              // hardware only, no arm motion
-		"dispense_ice":       s.dispenseIce,              // arm to chute + pulse + retreat
-		"stage_glass":        s.stageGlass,               // set held glass down, release
-		"grab_brewed_cup":    s.grabBrewedCupFromMachine, // retrieve cup from under machine
-		"pour_espresso":      s.pourEspresso,             // pour held cup over staged glass
-		"grab_staged_glass":  s.grabStagedGlass,          // re-grab the staged glass
+		"grind_coffee":         s.grindCoffee,
+		"grind_decaf":          s.grindDecaf,
+		"tamp_ground":          s.tampGround,
+		"lock_portafilter":     s.lockPortaFilter,
+		"unlock_portafilter":   s.unlockPortaFilter,
+		"release_filter":       s.releaseFilter,
+		"grab_filter":          s.grabFilter,
+		"brew_coffee":          s.brewCoffee,
+		"set_cup_for_coffee":   s.setCupForCoffee,
+		"clean_portafilter":    s.cleanPortafilter,
+		"fetch_glass":          s.fetchGlass,               // vision-grab a glass off the shelf
+		"pulse_ice_pin":        s.pulseIcePin,              // hardware only, no arm motion
+		"dispense_ice":         s.dispenseIce,              // arm to chute + pulse + retreat
+		"move_to_ice_dispense": s.moveToIceDispense,        // dispense_ice's move half, no pin
+		"stage_glass":          s.stageGlass,               // set held glass down, release
+		"grab_brewed_cup":      s.grabBrewedCupFromMachine, // retrieve cup from under machine
+		"pour_espresso":        s.pourEspresso,             // pour held cup over staged glass
+		"grab_staged_glass":    s.grabStagedGlass,          // re-grab the staged glass
 		"give_full_cup_to_customer": func(ctx, cancelCtx context.Context) error {
 			_, err := s.placeFullCupOnShelf(ctx, cancelCtx)
 			return err
@@ -373,7 +374,12 @@ func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.C
 	return actions
 }
 
-func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]any, error) {
+// executeAction runs one named action, holding the arm for its duration.
+// withGlass takes the portafilter out of the frame system for the call and, when
+// nothing is modeled in the gripper, puts a configured glass in its place — for
+// stepping the iced sequence with the filter lifted off by hand. It is refused
+// on any action outside withGlassActions.
+func (s *beanjaminCoffee) executeAction(ctx context.Context, name string, withGlass bool) (map[string]any, error) {
 	actions := s.actionFuncs()
 
 	action, ok := actions[name]
@@ -383,6 +389,13 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 			names = append(names, k)
 		}
 		return nil, fmt.Errorf("unknown action %q, available actions: %v", name, names)
+	}
+
+	// Before the run gate, so a rejected flag costs no state.
+	if withGlass {
+		if err := checkWithGlassAllowed(name); err != nil {
+			return nil, err
+		}
 	}
 
 	if !s.running.CompareAndSwap(false, true) {
@@ -400,6 +413,17 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 	if err := s.refreshFrameSystemIfClean(ctx); err != nil {
 		return nil, fmt.Errorf("refresh frame system before action %q: %w", name, err)
 	}
+	// After the refresh, or it would be put straight back.
+	if withGlass {
+		restore, err := s.swapFilterForGlass(ctx)
+		if err != nil {
+			return nil, err
+		}
+		// Restore on every exit path: the next action's refresh is skipped while
+		// anything is held, which would leave the swap in place for good.
+		defer restore()
+	}
+
 	s.logger.Infof("executing action %q", name)
 
 	if err := action(ctx, cancelCtx); err != nil {

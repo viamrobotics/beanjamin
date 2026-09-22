@@ -1,6 +1,7 @@
 package coffee
 
 import (
+	"context"
 	"math"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
+	"go.viam.com/rdk/testutils/inject"
 )
 
 // requireVecEqual fails the test unless got is within tol of want. Wraps the
@@ -257,30 +259,56 @@ func gripPointStaticFS(t *testing.T, gpPose spatialmath.Pose) *referenceframe.Fr
 	return fs
 }
 
-// TestConfiguredCupBox verifies the cup_dimensions modeling centers the modeled
-// box on the grasp centroid — the grip-point world position minus the grab
-// offset (inverting composeCupPose) — and sizes it from cup_dimensions.
-func TestConfiguredCupBox(t *testing.T) {
-	gripPointWorld := r3.Vector{X: 170, Y: -300, Z: 250}
-	fs := gripPointStaticFS(t, spatialmath.NewPoseFromPoint(gripPointWorld))
-	s := heldGeomService(t, fs)
-	s.cfg.CupDimensions = &ContainerDimensions{DiameterMm: 60, HeightMm: 90}
-	// The grab sends the grip point 5mm +X and 30mm -Z off the cup centroid, so the
-	// centroid sits at grip-point minus that offset.
-	s.cfg.CupGrabRelativePose = &RelativePose{X: 5, Z: -30}
+// TestConfiguredContainerBox verifies the modeled box is centered on the grasp
+// centroid — the grip-point world position minus the grab offset, inverting
+// composeCupPose — and sized from the configured dimensions. The glass case is
+// what the with_glass override models.
+func TestConfiguredContainerBox(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		label        string
+		gripPoint    r3.Vector
+		dims         *ContainerDimensions
+		grab         *RelativePose
+		wantCentroid r3.Vector
+	}{
+		{
+			name:      "cup",
+			label:     pickupLabelCup,
+			gripPoint: r3.Vector{X: 170, Y: -300, Z: 250},
+			dims:      &ContainerDimensions{DiameterMm: 60, HeightMm: 90},
+			// The grab sends the grip point 5mm +X and 30mm -Z off the centroid.
+			grab:         &RelativePose{X: 5, Z: -30},
+			wantCentroid: r3.Vector{X: 165, Y: -300, Z: 280},
+		},
+		{
+			name:         "glass",
+			label:        pickupLabelGlass,
+			gripPoint:    r3.Vector{X: 100, Y: -200, Z: 300},
+			dims:         &ContainerDimensions{DiameterMm: 75, HeightMm: 140},
+			grab:         &RelativePose{X: 10, Z: -40},
+			wantCentroid: r3.Vector{X: 90, Y: -200, Z: 340},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := gripPointStaticFS(t, spatialmath.NewPoseFromPoint(tc.gripPoint))
+			s := heldGeomService(t, fs)
 
-	box, err := s.configuredCupBox(fs, referenceframe.NewZeroInputs(fs))
-	if err != nil {
-		t.Fatalf("configuredCupBox: %v", err)
+			box, err := s.configuredContainerBox(fs, referenceframe.NewZeroInputs(fs), tc.label, tc.dims, tc.grab)
+			if err != nil {
+				t.Fatalf("configuredContainerBox: %v", err)
+			}
+
+			requireVecEqual(t, box.Pose().Point(), tc.wantCentroid, 1e-6)
+
+			dims := box.ToProtobuf().GetBox().GetDimsMm()
+			if dims == nil {
+				t.Fatalf("expected a box geometry, got %v", box)
+			}
+			requireVecEqual(t, r3.Vector{X: dims.X, Y: dims.Y, Z: dims.Z},
+				r3.Vector{X: tc.dims.DiameterMm, Y: tc.dims.DiameterMm, Z: tc.dims.HeightMm}, 1e-6)
+		})
 	}
-
-	requireVecEqual(t, box.Pose().Point(), r3.Vector{X: 165, Y: -300, Z: 280}, 1e-6)
-
-	dims := box.ToProtobuf().GetBox().GetDimsMm()
-	if dims == nil {
-		t.Fatalf("expected a box geometry, got %v", box)
-	}
-	requireVecEqual(t, r3.Vector{X: dims.X, Y: dims.Y, Z: dims.Z}, r3.Vector{X: 60, Y: 60, Z: 90}, 1e-6)
 }
 
 func TestClearHeldGeometry(t *testing.T) {
@@ -422,5 +450,120 @@ func TestServingAreaShieldCollisions(t *testing.T) {
 	}
 	if !hasHeld {
 		t.Fatalf("expected held-item↔shield pair when attached, got %v", got)
+	}
+}
+
+// Empty jaws and no glass configured: there is nothing to model the hand-loaded
+// vessel from, and dropping the filter alone would leave the arm carrying an
+// invisible glass.
+func TestSwapFilterForGlassNeedsGlassConfig(t *testing.T) {
+	s := heldGeomService(t, filterOnArmFS(t))
+
+	if _, err := s.swapFilterForGlass(context.Background()); err == nil {
+		t.Error("swapFilterForGlass succeeded without glass_dimensions, want an error")
+	}
+	if s.cachedFS.Frame(componentFilter) == nil {
+		t.Error("filter was left detached after the refusal")
+	}
+}
+
+// A glass the vision pickup already attached is the real detection; the swap
+// drops only the filter and leaves it — and the restore must not take it away.
+func TestSwapFilterForGlassKeepsAttachedItem(t *testing.T) {
+	s := heldGeomService(t, filterOnArmFS(t))
+	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
+		t.Fatalf("addHeldItemFrame: %v", err)
+	}
+	s.cacheHeldGeometry(pickupLabelGlass, testBox(t, spatialmath.NewZeroPose()))
+
+	restore, err := s.swapFilterForGlass(context.Background())
+	if err != nil {
+		t.Fatalf("swapFilterForGlass: %v", err)
+	}
+	if s.cachedFS.Frame(componentFilter) != nil {
+		t.Error("filter still modeled during the swap")
+	}
+	if !s.heldItemAttached || s.cachedFS.Frame(heldItemFrameName) == nil {
+		t.Error("the already-attached glass was dropped by the swap")
+	}
+
+	restore()
+	if !s.heldItemAttached || s.cachedFS.Frame(heldItemFrameName) == nil {
+		t.Error("the already-attached glass was dropped by the restore")
+	}
+	if s.heldGlassGeom == nil {
+		t.Error("the cached glass grasp was cleared by the restore")
+	}
+	if s.cachedFS.Frame(componentFilter) == nil {
+		t.Error("filter was not restored")
+	}
+}
+
+// glassSwapService builds a service swapFilterForGlass can run against: a
+// portafilter on the claws, a grip point to recover the grasp centroid from, and
+// an arm with no joints to read inputs off.
+func glassSwapService(t *testing.T) *beanjaminCoffee {
+	t.Helper()
+	fs := filterOnArmFS(t)
+	gp, err := referenceframe.NewStaticFrame(gripPoint, spatialmath.NewPoseFromPoint(r3.Vector{Z: 200}))
+	if err != nil {
+		t.Fatalf("new grip-point frame: %v", err)
+	}
+	if err := fs.AddFrame(gp, fs.Frame(componentClaws)); err != nil {
+		t.Fatalf("add grip-point frame: %v", err)
+	}
+	s := heldGeomService(t, fs)
+	s.cfg.GlassDimensions = &ContainerDimensions{DiameterMm: 75, HeightMm: 140}
+	s.cfg.GlassGrabRelativePose = &RelativePose{}
+	s.arm = &inject.Arm{CurrentInputsFunc: func(context.Context) ([]referenceframe.Input, error) {
+		return nil, nil
+	}}
+	return s
+}
+
+// The stand-in must not displace a grasp the vision pickup cached, and must not
+// survive the action that borrowed it.
+func TestSwapFilterForGlassKeepsCachedGrasp(t *testing.T) {
+	s := glassSwapService(t)
+	cached := testBox(t, spatialmath.NewZeroPose())
+	s.cacheHeldGeometry(pickupLabelGlass, cached)
+
+	restore, err := s.swapFilterForGlass(context.Background())
+	if err != nil {
+		t.Fatalf("swapFilterForGlass: %v", err)
+	}
+	if s.heldGlassGeom != cached {
+		t.Error("the stand-in displaced the cached glass grasp")
+	}
+	if !s.heldItemAttached {
+		t.Error("the stand-in was not attached")
+	}
+
+	restore()
+	if s.heldItemAttached {
+		t.Error("the stand-in outlived the action")
+	}
+	if s.heldGlassGeom != cached {
+		t.Error("the restore cleared the cached glass grasp")
+	}
+}
+
+// An action that grabs something for real leaves the arm holding it, so the
+// stand-in's restore must leave that attachment alone.
+func TestSwapFilterForGlassKeepsItemAttachedByTheAction(t *testing.T) {
+	s := glassSwapService(t)
+
+	restore, err := s.swapFilterForGlass(context.Background())
+	if err != nil {
+		t.Fatalf("swapFilterForGlass: %v", err)
+	}
+	// Stand in for the action re-grabbing the real glass mid-call.
+	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
+		t.Fatalf("addHeldItemFrame: %v", err)
+	}
+
+	restore()
+	if !s.heldItemAttached || s.cachedFS.Frame(heldItemFrameName) == nil {
+		t.Error("the restore detached the item the action grabbed")
 	}
 }
