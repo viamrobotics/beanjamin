@@ -429,6 +429,22 @@ Returns `{"status": "cancelled", "cancelled": true, "queue": "paused"}` — `can
 
 To get the arm back to a clean starting state afterwards, run `rewind`, then `proceed` to resume the queue.
 
+**`cancel_order`** - Drop one order out of the **backlog**, by ID. It is `clear_queue` narrowed to a single order, and it spares the drink on the arm for the same reason: the machine keeps making whatever it is making, the queue is not paused, no state flag is touched, and the orders behind the cancelled one move up a place. This is the customer-facing "actually, never mind" — `cancel` is the operator's stop button.
+
+```json
+{"cancel_order": "3f8c1e2a-…"}
+```
+
+Returns `{"status": "cancelled", "order_id": "3f8c1e2a-…", "customer_name": "Alice", "drink": "lungo", "remaining": 2}`, where `remaining` is the depth after the removal on the same count `get_queue` reports — backlog plus the order on the arm. The order is announced as cancelled when `conversational` is on.
+
+It errors rather than guessing when the order can't be dropped:
+
+- **The order on the arm** — it is in the queue's `current` slot, not the backlog, so a cancel aimed at it is refused rather than quietly missing. Use `cancel` to stop the machine instead.
+- **An order that has already been made** — it is in the completed buffer `get_queue` shows for ~15s.
+- **An unknown ID** — it was cancelled already, or never existed.
+
+`get_queue` marks every order with a `cancellable` boolean saying which of these it is, so a UI can offer the action only where it will be accepted. Note this is not the same as "first in the list": the front of the backlog is cancellable precisely because nothing has started on it.
+
 **`rewind`** - Drive the arm back to the state a brew cycle starts from: nothing in the gripper, no grounds in the portafilter, the filter home in the claws. It stops any running sequence first, so it is safe to send at any time without a preceding `cancel`.
 
 In order: drop a cup or glass still in the jaws (open → detach the held-item geometry → close; a gripper closed on the thin filter handle reads as closed, so the portafilter is never dropped), then run whichever recovery the recorded portafilter state calls for:
@@ -456,8 +472,22 @@ Returns `{"status": "rewound", "cancelled": false, "recovered": true, "queue": "
 Returns:
 
 ```json
-{"count": 2, "orders": ["Alice", "Bob"], "is_paused": false, "is_busy": true}
+{
+  "count": 2,
+  "orders": [
+    {"id": "3f8c1e2a-…", "drink": "espresso", "customer_name": "Alice", "fulfillment": "pickup",
+     "enqueued_at": "2026-09-17T09:12:03Z", "raw_step": "Brewing", "step_history": [],
+     "completed_at": "", "cancellable": false},
+    {"id": "9b21d740-…", "drink": "lungo", "customer_name": "Bob", "fulfillment": "pickup",
+     "enqueued_at": "2026-09-17T09:12:40Z", "raw_step": "", "step_history": [],
+     "completed_at": "", "cancellable": true}
+  ],
+  "is_paused": false,
+  "is_busy": true
+}
 ```
+
+`count` is how many drinks still have to be made — the backlog plus the one on the arm. Orders that have finished stay in the list with `completed_at` set for ~15s so a UI can render a "Ready!" card without diffing polls, but they don't count toward the depth. `cancellable` says whether `cancel_order` would accept this order.
 
 **`proceed`** - Re-sync the recorded world with the real one, and resume queue processing after a cancel-induced pause.
 
