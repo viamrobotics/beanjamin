@@ -124,6 +124,18 @@ type Config struct {
 	PourVelDegsPerSec    float64 `json:"pour_vel_degs_per_sec,omitempty"`
 	PourAccDegsPerSec2   float64 `json:"pour_acc_degs_per_sec2,omitempty"`
 
+	// The measurement's pixel geometry. Every one of these is a raw pixel
+	// coordinate at the camera's configured resolution — reconfigure the camera
+	// to a different frame size and they all silently mean something else.
+	// IceStopRowPx is the row the ice surface has to reach; the band scanned is
+	// derived from it, never configured above it.
+	IceStopRowPx      int     `json:"ice_stop_row_px,omitempty"`
+	IceContrastWindow int     `json:"ice_contrast_window,omitempty"`
+	IceMinContrast    float64 `json:"ice_min_contrast,omitempty"`
+	IceROIX0          int     `json:"ice_roi_x0,omitempty"`
+	IceROIX1          int     `json:"ice_roi_x1,omitempty"`
+	IceROIY1          int     `json:"ice_roi_y1,omitempty"`
+
 	// CanServeIcedLatte enables the iced_latte drink: the iced-coffee flow plus
 	// a fridge trip for milk (coffee/milk.go). It builds on can_serve_iced — the
 	// glass, the ice and the staging area all come from there — and on the
@@ -487,6 +499,12 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		camera.Named(cfg.SrcCameraName).String(),
 		cfg.CameraObservePoseSwitcherName,
 	)
+
+	// Not gated on can_serve_iced: the band is checked wherever it is configured,
+	// so a band that scans nothing is rejected rather than measuring silently.
+	if err := validateIceVision(cfg, path); err != nil {
+		return nil, nil, err
+	}
 
 	if cfg.CanServeIced {
 		// The glass is fetched by its own vision pipeline, reusing the cup camera.
