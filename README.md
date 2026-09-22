@@ -394,6 +394,7 @@ When `can_serve_iced_latte` is enabled, the dedicated milk-observe switch must h
   "prepare_order": {
     "drink": "espresso",
     "customer_name": "Alice",
+    "modified_customer_name": "Alise",
     "customer_email": "alice@example.com",
     "initial_greeting": "optional custom greeting",
     "completion_statement": "optional custom completion message",
@@ -403,7 +404,7 @@ When `can_serve_iced_latte` is enabled, the dedicated milk-observe switch must h
 }
 ```
 
-Only `drink` is required. If `initial_greeting` is omitted, a random greeting is generated. If `customer_name` is provided, it personalizes the greeting and completion messages. If `customer_email` is provided **and** `customer_detector_name` is configured, the completed drink is credited to that customer's order history (see "the usual"). `fulfillment` is either `"pickup"` (default) or `"delivery"`; it is carried on each order through `get_queue`. Pickup orders keep the usual drink-ready announcement at cup handoff; delivery orders instead announce "…ready for delivery!" and send the delivery machine a `delivery_request` (see `send_delivery_message`). **Delivery orders require `customer_email`** — the delivery bot identifies the recipient by email, so an anonymous delivery is rejected at enqueue; pickup stays open to anonymous walk-ups. Orders are added to a queue and processed sequentially.
+Only `drink` is required. If `initial_greeting` is omitted, a random greeting is generated. If `customer_name` is provided, it personalizes the greeting and completion messages. `customer_name` must be the name the customer actually gave: it is the identity key every per-customer aggregation groups on (leaderboards, the daily digest's top customers). `modified_customer_name` is optional and exists for one reason — the kiosk deliberately misspells the name it shows and says, with a fresh misspelling each order, so that string can never identify a repeat customer. A caller that misspells sends the altered name here and the real one in `customer_name`; everything spoken and everything `get_queue` renders uses this field, falling back to `customer_name` when it is absent, which is what callers that never misspell (voice, operator) should do. If `customer_email` is provided **and** `customer_detector_name` is configured, the completed drink is credited to that customer's order history (see "the usual"). `fulfillment` is either `"pickup"` (default) or `"delivery"`; it is carried on each order through `get_queue`. Pickup orders keep the usual drink-ready announcement at cup handoff; delivery orders instead announce "…ready for delivery!" and send the delivery machine a `delivery_request` (see `send_delivery_message`). **Delivery orders require `customer_email`** — the delivery bot identifies the recipient by email, so an anonymous delivery is rejected at enqueue; pickup stays open to anonymous walk-ups. Orders are added to a queue and processed sequentially.
 
 `count` is an optional positive integer (default 1) that enqueues N identical orders in one call — each gets its own UUID. The cap is `max_batch_size` (default 10). When `count > 1`, the response also includes `order_ids: [...]` (one per enqueued order) and `count`; existing `order_id` and `queue_position` keys still refer to the first order so existing callers keep working. To keep audio sane, the per-order "Order received…" line is replaced with a single consolidated batch announcement at submission time; the per-cup drink-ready announcement at cup handoff still fires once per order as each cup completes.
 
@@ -950,6 +951,7 @@ After each order attempt completes (success, failure, or panic), the **next** `R
   "order_id": "<uuid>",
   "drink": "espresso",
   "customer_name": "Alice",
+  "modified_customer_name": "Alise",
   "order_ok": true,
   "operator_cancelled": false,
   "error_message": "",
@@ -966,6 +968,8 @@ After each order attempt completes (success, failure, or panic), the **next** `R
 
 The remaining fields exist to support observability (per-step error rates and failure investigation):
 
+- **`customer_name`** — the name the customer gave, and the key to group on for per-customer aggregation. **Never group on `modified_customer_name`.**
+- **`modified_customer_name`** — the misspelling this particular order was shown and told, recorded so a support question ("my cup said Alise") can be traced back to an order. It is re-rolled per order, so grouping on it gives one customer a separate bucket per drink. Empty when the caller never misspelled. Readings written before this field existed have a misspelling in `customer_name` itself and cannot be regrouped.
 - **`failed_step`** — the step label the order errored at (e.g. `"Brewing"`, `"Grinding"`), matching the `setStep` labels surfaced through `get_queue`. Empty on success. Count readings by `failed_step` to see where orders die.
 - **`operator_cancelled`** — `true` when the failure was an operator `cancel` (a `context.Canceled` interruption), not a genuine fault. **Exclude these from step error-rate metrics** so intentional cancellations don't inflate failure counts. `failed_step` is still populated (it marks where the cancel interrupted).
 - **`trace_id`** — the OpenTelemetry trace ID for the order. Use it to jump from a failed reading to the order's full distributed trace (every motion plan and step span). Empty if no trace context was present.

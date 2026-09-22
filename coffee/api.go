@@ -68,15 +68,16 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 			completedAt = o.CompletedAt.Format(time.RFC3339)
 		}
 		orderMaps[i] = map[string]any{
-			"id":            o.ID,
-			"drink":         o.Drink,
-			"customer_name": o.CustomerName,
-			"fulfillment":   o.Fulfillment,
-			"enqueued_at":   o.EnqueuedAt.Format(time.RFC3339),
-			"raw_step":      o.RawStep,
-			"step_history":  history,
-			"completed_at":  completedAt,
-			"cancellable":   o.CompletedAt.IsZero() && o.ID != currentID,
+			"id":                     o.ID,
+			"drink":                  o.Drink,
+			"customer_name":          o.CustomerName,
+			"modified_customer_name": o.ModifiedCustomerName,
+			"fulfillment":            o.Fulfillment,
+			"enqueued_at":            o.EnqueuedAt.Format(time.RFC3339),
+			"raw_step":               o.RawStep,
+			"step_history":           history,
+			"completed_at":           completedAt,
+			"cancellable":            o.CompletedAt.IsZero() && o.ID != currentID,
 		}
 	}
 	step, _ := s.currentStep.Load().(string)

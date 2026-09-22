@@ -246,6 +246,8 @@ export interface QueueOrder {
   id: string;
   drink: string;
   customer_name: string;
+  /** Absent from callers that don't misspell, and from older modules. */
+  modified_customer_name?: string;
   /**
    * How the customer receives the drink. Optional so dashboards can still
    * talk to machines running older module versions that don't send it;
@@ -366,7 +368,10 @@ export async function prepareOrder(
   opts: {
     drink: string;
     drinkLabel: string;
+    /** The name the customer gave; what aggregation groups on. */
     customerName: string;
+    /** The misspelling to show and speak. Omitted, the backend uses customerName. */
+    modifiedName?: string;
     customerEmail?: string;
     pronunciation?: string;
     /** Defaults to "pickup" on the backend when omitted. */
@@ -376,7 +381,7 @@ export async function prepareOrder(
   if (isDevMode()) {
     if (opts.customerName) {
       const id = `dev-${++devOrderCounter}`;
-      devQueue.push({ id, name: opts.customerName });
+      devQueue.push({ id, name: opts.modifiedName || opts.customerName });
       startDevProcessing();
       console.log(
         "[dev] order queued:",
@@ -405,6 +410,7 @@ export async function prepareOrder(
       prepare_order: {
         drink: opts.drink,
         customer_name: opts.customerName,
+        ...(opts.modifiedName && { modified_customer_name: opts.modifiedName }),
         ...(opts.customerEmail && { customer_email: opts.customerEmail }),
         ...(greeting && { initial_greeting: greeting }),
         ...(opts.fulfillment && { fulfillment: opts.fulfillment }),

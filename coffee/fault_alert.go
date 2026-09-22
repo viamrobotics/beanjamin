@@ -29,7 +29,7 @@ func (s *beanjaminCoffee) reactToOrderFailure(r orderReading) {
 	if s.speech == nil {
 		return
 	}
-	line := pickOrderFailed(r.order.Drink, r.order.CustomerName)
+	line := pickOrderFailed(r.order.Drink, r.order.DisplayName())
 	logger := s.logger.WithFields("order_id", r.order.ID)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
