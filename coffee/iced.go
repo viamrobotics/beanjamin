@@ -32,7 +32,7 @@ func (s *beanjaminCoffee) serveIced(ctx, cancelCtx context.Context, withMilk boo
 
 // prepIcedGlass runs the ice-side half of the iced flow (steps 1-3): fetch a
 // glass, ice it, and stage it, leaving the gripper free. It never approaches
-// the coffee machine, so it can run mid-pour (see brewAndPrepIce).
+// the coffee machine, so it can run mid-pour (see brewAndPrep).
 func (s *beanjaminCoffee) prepIcedGlass(ctx, cancelCtx context.Context, withMilk bool) error {
 	if s.gripper == nil {
 		return fmt.Errorf("prep_iced_glass: no gripper configured")
@@ -104,37 +104,46 @@ func (s *beanjaminCoffee) finishIced(ctx, cancelCtx context.Context, withMilk bo
 	return s.placeHeldInServingArea(ctx, cancelCtx, heldFilled)
 }
 
-// brewAndPrepIce pokes the brew button, runs prepIcedGlass while the machine
-// pours, then waits out the rest of the brew window. On return the pour is done
-// and the glass is staged, so the caller continues with finishIced (a latte's
-// milk step runs there, after the pour). Separate-buttons machines only — the
-// toggle style holds the switch for the whole pour, leaving no idle arm time
-// to reclaim.
-func (s *beanjaminCoffee) brewAndPrepIce(ctx, cancelCtx context.Context, drink string) error {
+// brewAndPrep pokes the brew button, then does the one bit of prep it can while
+// the machine pours — prepIcedGlass for an iced drink, or approachBrewedCup to
+// line the open gripper up over the cup for an espresso or lungo — then waits out
+// the rest of the brew window. On return the pour is done and that prep is
+// complete, so the caller finishes with only what's left: a hot drink grasps the
+// cup straight away, an iced drink already has its glass staged. Separate-buttons
+// machines only — the toggle style holds the switch for the whole pour, leaving
+// no idle arm time to reclaim.
+func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink string) error {
 	if !s.cfg.HasSeparateBrewButtons {
-		return fmt.Errorf("brew_and_prep_ice: requires has_separate_brew_buttons (the toggle machine's claw holds the switch for the whole pour)")
+		return fmt.Errorf("brew_and_prep: requires has_separate_brew_buttons (the toggle machine's claw holds the switch for the whole pour)")
 	}
 	press := s.pressEspressoButton
 	if isLungoDrink(drink) {
 		press = s.pressLungoButton
 	}
 	if err := press(ctx, cancelCtx); err != nil {
-		return fmt.Errorf("brew_and_prep_ice: %w", err)
+		return fmt.Errorf("brew_and_prep: %w", err)
 	}
 	pourStarted := time.Now()
 
-	prepErr := s.prepIcedGlass(ctx, cancelCtx, isMilkDrink(drink))
+	// Fill the pour time with prep: an iced drink stages its glass, anything else
+	// lines the gripper up over the cup so only the grasp is left afterward.
+	prepErr := func() error {
+		if isIcedDrink(drink) {
+			return s.prepIcedGlass(ctx, cancelCtx, isMilkDrink(drink))
+		}
+		return s.approachBrewedCup(ctx, cancelCtx)
+	}()
 
-	// Wait out the rest of the pour even when the ice prep failed, so the
-	// machine is quiescent before an operator or a rewind gets near it.
+	// Wait out the rest of the pour even when the prep failed, so the machine is
+	// quiescent before an operator or a rewind gets near it.
 	remaining := s.drinkBrewTime(drink) - time.Since(pourStarted)
-	s.activeOrderLogger().Infof("waiting out the remaining %s of the %s pour (ice prep error: %v)", remaining, drink, prepErr)
+	s.activeOrderLogger().Infof("waiting out the remaining %s of the %s pour (prep error: %v)", remaining, drink, prepErr)
 	waitErr := waitOutPour(ctx, cancelCtx, remaining)
 	if prepErr != nil {
-		return fmt.Errorf("brew_and_prep_ice: %w", prepErr)
+		return fmt.Errorf("brew_and_prep: %w", prepErr)
 	}
 	if waitErr != nil {
-		return fmt.Errorf("brew_and_prep_ice: %w", waitErr)
+		return fmt.Errorf("brew_and_prep: %w", waitErr)
 	}
 
 	// Water has run, so the keep-alive clock restarts (keepalive.go).
@@ -154,34 +163,45 @@ func (s *beanjaminCoffee) serveIcedLatte(ctx, cancelCtx context.Context) (int, e
 	return s.serveIced(ctx, cancelCtx, true)
 }
 
-// grabBrewedCupFromMachine retrieves the brewed cup from under the machine:
-// approach -> open gripper -> linear descent + grab -> linear retreat. On return
-// the cup is held by the gripper and the arm sits at cup_under_machine_approach.
-func (s *beanjaminCoffee) grabBrewedCupFromMachine(ctx, cancelCtx context.Context) error {
+// approachBrewedCup lines the open gripper up over the brewed cup: approach ->
+// open gripper, leaving the arm at cup_under_machine_approach ready to descend.
+// Split from graspBrewedCup so the brew path can run it during the pour, while
+// the arm would otherwise sit idle; graspBrewedCup then finishes once the pour is.
+func (s *beanjaminCoffee) approachBrewedCup(ctx, cancelCtx context.Context) error {
 	if s.gripper == nil {
-		return fmt.Errorf("grab_brewed_cup_from_machine: no gripper configured")
+		return fmt.Errorf("approach_brewed_cup: no gripper configured")
 	}
 	approachStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
-		return fmt.Errorf("grab_brewed_cup_from_machine: %w", err)
+		return fmt.Errorf("approach_brewed_cup: %w", err)
 	}
 	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("grab_brewed_cup_from_machine: open gripper: %w", err)
+		return fmt.Errorf("approach_brewed_cup: open gripper: %w", err)
 	}
 	time.Sleep(gripperPause)
+	return nil
+}
+
+// graspBrewedCup takes the cup once the gripper is open above it (approachBrewedCup):
+// linear descent + grab -> linear retreat. On return the cup is held by the gripper
+// and the arm is back at cup_under_machine_approach.
+func (s *beanjaminCoffee) graspBrewedCup(ctx, cancelCtx context.Context) error {
+	if s.gripper == nil {
+		return fmt.Errorf("grasp_brewed_cup: no gripper configured")
+	}
 	grabStep := Step{PoseName: clawPoseCupReadyForCoffee, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
-		return fmt.Errorf("grab_brewed_cup_from_machine: %w", err)
+		return fmt.Errorf("grasp_brewed_cup: %w", err)
 	}
 	if err := s.grabAndVerifyHolding(ctx); err != nil {
-		return fmt.Errorf("grab_brewed_cup_from_machine: grab gripper: %w", err)
+		return fmt.Errorf("grasp_brewed_cup: grab gripper: %w", err)
 	}
 	// The cup was tracked at pickup and released under the machine; restore its
 	// geometry now that it's back in the gripper so the retreat routes around it.
 	// grabAndVerifyHolding only returns nil on a confirmed grab, so this never
 	// reattaches onto empty jaws.
 	if err := s.reattachGeometry(pickupLabelCup); err != nil {
-		s.activeOrderLogger().Warnf("grab_brewed_cup_from_machine: reattach cup geometry failed, continuing untracked: %v", err)
+		s.activeOrderLogger().Warnf("grasp_brewed_cup: reattach cup geometry failed, continuing untracked: %v", err)
 	}
 	// Nothing was cached to reattach (e.g. a manually-stepped serving that never ran
 	// the vision cup pickup) — model the cup from cup_dimensions so the pour and the
@@ -189,14 +209,24 @@ func (s *beanjaminCoffee) grabBrewedCupFromMachine(ctx, cancelCtx context.Contex
 	// grip-point move.
 	if !s.heldItemAttached {
 		if err := s.attachConfiguredCupGeometry(ctx); err != nil {
-			s.activeOrderLogger().Warnf("grab_brewed_cup_from_machine: model cup from cup_dimensions failed, continuing untracked: %v", err)
+			s.activeOrderLogger().Warnf("grasp_brewed_cup: model cup from cup_dimensions failed, continuing untracked: %v", err)
 		}
 	}
 	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions)}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
-		return fmt.Errorf("grab_brewed_cup_from_machine: %w", err)
+		return fmt.Errorf("grasp_brewed_cup: %w", err)
 	}
 	return nil
+}
+
+// grabBrewedCupFromMachine retrieves the brewed cup from under the machine in one
+// go: approach -> open gripper -> linear descent + grab -> linear retreat. On
+// return the cup is held by the gripper and the arm sits at cup_under_machine_approach.
+func (s *beanjaminCoffee) grabBrewedCupFromMachine(ctx, cancelCtx context.Context) error {
+	if err := s.approachBrewedCup(ctx, cancelCtx); err != nil {
+		return err
+	}
+	return s.graspBrewedCup(ctx, cancelCtx)
 }
 
 // grabStagedGlass picks the iced glass back up from the staging area: approach

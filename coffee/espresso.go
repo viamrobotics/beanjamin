@@ -554,15 +554,28 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 	// A cup was pulled off the stack; count it now so a later fault still credits real use.
 	s.incrementSensorReading(ctx, s.usageSensor, "espresso cups", "espresso_cups_used", 1)
 
-	// The separate-buttons machine doses itself, leaving the arm idle mid-pour,
-	// so iced drinks run the ice-side prep during the pour instead of after it.
-	// The toggle machine holds the switch throughout, so it stays sequential.
-	overlapIce := isIcedDrink(drink) && s.cfg.HasSeparateBrewButtons
+	// The separate-buttons machine doses itself, leaving the arm free mid-pour.
+	// Put that idle time to use (brewAndPrep): an iced drink stages its glass, and
+	// an espresso or lungo lines the gripper up over the cup, so once the pour ends
+	// only the grasp is left — no plan-and-move to wait through. The toggle machine
+	// holds the switch throughout, so it stays sequential.
+	armFreeDuringPour := s.cfg.HasSeparateBrewButtons
+	cupApproached := false
+
 	brewProgress := fmt.Sprintf("step 6/9: brewing %s", drink)
 	brewPhase := func(ctx, cancelCtx context.Context) error { return s.brew(ctx, cancelCtx, drink) }
-	if overlapIce {
-		brewProgress += " while prepping the iced glass"
-		brewPhase = func(ctx, cancelCtx context.Context) error { return s.brewAndPrepIce(ctx, cancelCtx, drink) }
+	if armFreeDuringPour {
+		if isIcedDrink(drink) {
+			brewProgress += " while prepping the iced glass"
+		}
+		brewPhase = func(ctx, cancelCtx context.Context) error {
+			if err := s.brewAndPrep(ctx, cancelCtx, drink); err != nil {
+				return err
+			}
+			// brewAndPrep lines the gripper up over the cup for every non-iced drink.
+			cupApproached = !isIcedDrink(drink)
+			return nil
+		}
 	}
 	if err := s.say(ctx, pickAlmostReady()); err != nil {
 		logger.Warnf("failed to say almost-ready: %v", err)
@@ -576,11 +589,17 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 	var servedSlot int
 	serve := func(ctx, cancelCtx context.Context) (err error) {
 		switch {
-		case overlapIce:
+		case isIcedDrink(drink) && armFreeDuringPour:
 			// Glass already iced and staged during the brew; finish the rest.
 			servedSlot, err = s.finishIced(ctx, cancelCtx, isMilkDrink(drink))
 		case isIcedDrink(drink):
 			servedSlot, err = s.serveIced(ctx, cancelCtx, isMilkDrink(drink))
+		case cupApproached:
+			// Hot drink, gripper already poised over the cup: grasp it and shelf it.
+			if err = s.graspBrewedCup(ctx, cancelCtx); err != nil {
+				return err
+			}
+			servedSlot, err = s.placeHeldInServingArea(ctx, cancelCtx, heldFilled)
 		default:
 			servedSlot, err = s.placeFullCupOnShelf(ctx, cancelCtx)
 		}
