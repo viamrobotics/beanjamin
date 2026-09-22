@@ -33,6 +33,12 @@ func realMain() error {
 		return runFetchOrder(os.Args[2:])
 	case "orders":
 		return runOrders(os.Args[2:])
+	case "ice-snapshot":
+		return runIceSnapshot(os.Args[2:])
+	case "ice-dispense":
+		return runIceDispense(os.Args[2:])
+	case "ice-level":
+		return runIceLevel(os.Args[2:])
 	default:
 		printUsage()
 		return fmt.Errorf("unknown command: %s", os.Args[1])
@@ -43,9 +49,13 @@ func printUsage() {
 	fmt.Println("Usage: beanjamin-cli <command> [flags]")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  say          Say text aloud via the speech service")
-	fmt.Println("  fetch-order  Download one order's plan requests into ./<order-id>/")
-	fmt.Println("  orders       Show the most recent orders and how they ended")
+	fmt.Println("  say           Say text aloud via the speech service")
+	fmt.Println("  fetch-order   Download one order's plan requests into ./<order-id>/")
+	fmt.Println("  orders        Show the most recent orders and how they ended")
+	fmt.Println("  ice-snapshot  Capture images, clouds and poses at the arm's current")
+	fmt.Println("                pose into a --raw-dir")
+	fmt.Println("  ice-dispense  Drive the ice pin and capture the fill over time")
+	fmt.Println("  ice-level     Measure ice height from a capture dir's color images")
 }
 
 // connFlags holds the shared connection flags used by all commands.
