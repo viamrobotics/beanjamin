@@ -10,7 +10,7 @@ the true fill percentage. The glass was placed once and levels poured into it,
 so all five agree on the rim to the pixel.
 
 **`rim379_*.jpg` — rim row 379** (2026-09-17). Frames from one real
-`fetch_glass` + `ice-dispense` run, which gripped the glass 102 px — about
+`fetch_glass` + ice-dispense run, which gripped the glass 102 px — about
 23 mm — lower. Nothing bounds that difference: `fetch_glass` grabs at whatever
 centroid segmentation returned.
 
@@ -44,6 +44,9 @@ Beyond the table the tests scale fixture luminance 0.5x-1.8x and confirm an empt
 still reports no surface: an absolute-brightness threshold reads a brightly-lit
 empty glass as full, and the contrast step exists to prevent exactly that.
 
-The full 148 MB capture set (five frames per level, point clouds, depth frames,
-poses, intrinsics) is not in the repo. Regenerate with `cmd/cli`'s
-`ice-snapshot`.
+The full 148 MB capture set these were cut from (five frames per level, point
+clouds, depth frames, poses, intrinsics) is not in the repo, and the CLI that
+produced it has been removed. These eight frames are the record: a change to the
+band or to either measurement has to be justified against them, and new fixtures
+now come off a machine via `check_ice_level` and the annotated frame each
+watched dispense saves.
