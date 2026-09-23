@@ -6,9 +6,9 @@ require (
 	github.com/golang/geo v0.0.0-20230421003525-6adc56603217
 	github.com/google/uuid v1.6.0
 	github.com/viam-labs/motion-tools v1.45.2-0.20260825171254-94549756064c
-	go.viam.com/api v0.1.579
-	go.viam.com/rdk v1.8.1-0.20260915211323-dedbc45dc969
-	go.viam.com/utils v0.12.1
+	go.viam.com/api v0.1.583
+	go.viam.com/rdk v1.9.0
+	go.viam.com/utils v0.13.0
 	gonum.org/v1/gonum v0.17.0
 	google.golang.org/protobuf v1.36.12
 )
