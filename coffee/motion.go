@@ -978,8 +978,8 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 //
 // The bound is on the excursion off the slerp, not on the commanded rotation:
 // both endpoints are upright container poses, so the slerp itself stays level
-// and 20° leaves the drink well inside a full cup's static spill angle.
-const noSpillOrientationToleranceDegs = 20.0
+// and 15° leaves the drink well inside a full cup's static spill angle.
+const noSpillOrientationToleranceDegs = 15.0
 
 // withNoSpillOrientationConstraint adds the carry's path orientation bound,
 // allocating the Constraints when the caller has none (no linear constraint and
