@@ -411,12 +411,22 @@ Only `drink` is required. If `initial_greeting` is omitted, a random greeting is
 **`execute_action`** - Run a single coffee-making action by name, for manual step-by-step operation. An unknown name returns the full list of available actions in the error. Available actions:
 
 - Brew cycle: `grind_coffee`, `grind_decaf`, `tamp_ground`, `lock_portafilter`, `unlock_portafilter`, `release_filter`, `grab_filter`, `brew_coffee`, plus the button actions for the configured machine (`turn_coffee_button_on` / `turn_coffee_button_off`, or `press_espresso_button` / `press_lungo_button` / `brew_lungo` under `has_separate_brew_buttons`), `set_cup_for_coffee`, `give_full_cup_to_customer` (place the finished cup in the serving area), `clean_portafilter`, `place_held` (place the currently held vessel in the serving area), `keepalive_purge` (one group-head purge on demand — available on the `has_separate_brew_buttons` machine whether or not `keepalive` is configured, so the `purge_*` poses can be verified before the loop is switched on).
-- Iced coffee (require `can_serve_iced`): `fetch_glass`, `pulse_ice_pin`, `dispense_ice`, `stage_glass`, `grab_brewed_cup`, `pour_espresso`, `grab_staged_glass`, `serve_iced_coffee` (the full iced sequence end-to-end).
+- Iced coffee (require `can_serve_iced`): `fetch_glass`, `pulse_ice_pin`, `move_to_ice_dispense` (hold the glass under the chute without opening the pin), `dispense_ice`, `stage_glass`, `grab_brewed_cup`, `pour_espresso`, `grab_staged_glass`, `serve_iced_coffee` (the full iced sequence end-to-end).
 - Iced latte (require `can_serve_iced_latte`): `fetch_milk` (vision-grab the bottle from the **already open** fridge), `pour_milk` (pour the held bottle into the staged glass), `return_milk` (set the bottle back down where `fetch_milk` picked it up), `add_milk` (the whole fridge trip: open door → fetch → pour → return → close door), `serve_iced_latte` (the full iced-plus-milk sequence end-to-end). `fetch_milk`, `pour_milk` and `return_milk` are meant for stepping the sequence one move at a time while calibrating; each assumes the state the one before it leaves behind, and `return_milk` fails if no `fetch_milk` recorded a pickup position.
 - Fridge door (requires `door_approach_relative_pose`): `open_door` (grip the handle and swing the door open — see below).
 
 ```json
 {"execute_action": "grind_coffee"}
+```
+
+`with_glass: true` swaps the portafilter for a glass in the frame system for that one call — the filter subtree comes out, a box of `glass_dimensions` at the `glass_grab_relative_pose` centroid goes on the gripper — for stepping the iced sequence with a glass loaded into the jaws by hand. Without it the frame system models a portafilter that is not there and no glass that is, and the arm plans a path that drags the glass across the table, or cannot reach `ice_machine_dispense` at all. The swap is undone when the action ends, so pass the flag on **every** call of the sequence, not just the first.
+
+Accepted by `move_to_ice_dispense`, `dispense_ice`, `stage_glass` and `pulse_ice_pin`; anything else is refused, and the error names those four. The pickups (`fetch_glass`, `grab_staged_glass`, `grab_brewed_cup`) refuse it because they start with empty jaws: a stand-in there is a phantom sitting exactly where the real glass is about to be grasped, and every candidate fails to plan. Reach empty jaws with `lock_portafilter` then `release_filter` instead.
+
+`glass_dimensions` / `glass_grab_relative_pose` are needed only for that empty-jaws case — when the gripper already models a held item, only the filter is dropped. A filter locked into the machine is modeled in the bayonet rather than on the claws, so it is left alone.
+
+```json
+{"execute_action": "move_to_ice_dispense", "with_glass": true}
 ```
 
 **`cancel`** - Stop whatever is running, and nothing else. It cancels the shared sequence context so the run aborts at its next step boundary, calls `Stop` on the arm so the in-flight trajectory halts where it stands instead of playing out to its authored pose, and pauses the queue. No arm motion is planned, no gripper is opened, no state flag is cleared, and the cached frame system is left untouched: the portafilter stays wherever it was, a held cup stays in the jaws, pending orders stay queued.

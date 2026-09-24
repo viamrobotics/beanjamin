@@ -500,6 +500,85 @@ func (s *beanjaminCoffee) refreshFrameSystemIfClean(ctx context.Context) error {
 	return nil
 }
 
+// dropFilter takes the portafilter out of the frame system and returns the
+// restore, to be deferred by the caller. A filter locked into the machine models
+// the real portafilter in the bayonet rather than one on the claws, so it is
+// left in place and the restore is a no-op.
+func (s *beanjaminCoffee) dropFilter() (func(), error) {
+	if s.filterFrameLocked {
+		return func() {}, nil
+	}
+	detached, err := s.detachFilterFrame()
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		if err := s.reattachFilterFrame(detached); err != nil {
+			s.activeOrderLogger().Errorf("%v — the frame system no longer models the portafilter; run reset_world before brewing", err)
+		}
+	}, nil
+}
+
+// detachFilterFrame removes the portafilter from the cached frame system, for
+// driving the arm after it has physically been taken off the gripper. Returns
+// what it removed, for reattachFilterFrame.
+//
+// Every filterSw step fails to plan while it is gone — motion goals are keyed by
+// frame name — so this is for claw-only sequences.
+func (s *beanjaminCoffee) detachFilterFrame() ([]descendantEntry, error) {
+	// A locked filter models the real portafilter in the machine, not one on the
+	// arm; dropping it would let the arm plan straight through it.
+	if s.filterFrameLocked {
+		return nil, fmt.Errorf("detach filter: the filter frame is locked into the machine, so it is not on the arm; unlock_portafilter first")
+	}
+	// RemoveFrame takes descendants with it, and the RDK parents the model frame
+	// under its "_origin", so the origin carries the whole part away.
+	var removed []descendantEntry
+	for _, name := range []string{componentFilter + "_origin", componentFilter} {
+		root := s.cachedFS.Frame(name)
+		if root == nil {
+			continue
+		}
+		parent, err := s.cachedFS.Parent(root)
+		if err != nil {
+			return nil, fmt.Errorf("detach filter: parent of %q: %w", name, err)
+		}
+		// Root first, then BFS descendants, so reattaching in order always finds
+		// the parent already present.
+		removed = append(removed, descendantEntry{root, parent.Name()})
+		removed = append(removed, collectDescendants(s.cachedFS, name)...)
+		s.cachedFS.RemoveFrame(root)
+	}
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	s.activeOrderLogger().Infof("detached %q from the frame system (%d frames) for this action", componentFilter, len(removed))
+	return removed, nil
+}
+
+// reattachFilterFrame puts back what detachFilterFrame removed, parents first.
+// It restores the exact frames rather than rebuilding from the service because
+// the action may have attached a held item, which refreshFrameSystemIfClean
+// declines to rebuild around.
+func (s *beanjaminCoffee) reattachFilterFrame(removed []descendantEntry) error {
+	for _, e := range removed {
+		if s.cachedFS.Frame(e.frame.Name()) != nil {
+			continue // already back
+		}
+		parent := s.cachedFS.Frame(e.parentName)
+		if parent == nil {
+			return fmt.Errorf("reattach filter: parent %q is gone, cannot restore %q", e.parentName, e.frame.Name())
+		}
+		if err := s.cachedFS.AddFrame(e.frame, parent); err != nil {
+			return fmt.Errorf("reattach filter: add %q under %q: %w", e.frame.Name(), e.parentName, err)
+		}
+	}
+	if len(removed) > 0 {
+		s.activeOrderLogger().Infof("reattached %q to the frame system (%d frames)", componentFilter, len(removed))
+	}
+	return nil
+}
+
 // unlockFilterFrame rebuilds the cached frame system from the service,
 // restoring the filter frame to its original position in the arm subtree.
 func (s *beanjaminCoffee) unlockFilterFrame(ctx context.Context) error {
