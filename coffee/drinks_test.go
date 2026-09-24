@@ -18,10 +18,10 @@ func TestDrinkClassifiers(t *testing.T) {
 		{"lungo", false, true, false, false, 1.5},
 		{"decaf", true, false, false, false, 1},
 		{"decaf_lungo", true, true, false, false, 1.5},
-		{"iced_coffee", false, false, true, false, 1},
+		{"iced_coffee", false, true, true, false, 1.5},
 		// An iced latte is an iced drink that additionally gets milk, so it must
 		// take the iced serving path as well as the milk one.
-		{"iced_latte", false, false, true, true, 1},
+		{"iced_latte", false, true, true, true, 1.5},
 		{"unknown", false, false, false, false, 1},
 	}
 	for _, tt := range tests {
@@ -54,6 +54,8 @@ func TestDrinkBrewTime(t *testing.T) {
 		"decaf":       defaultEspressoBrewTime,
 		"lungo":       defaultLungoBrewTime,
 		"decaf_lungo": defaultLungoBrewTime,
+		"iced_coffee": defaultLungoBrewTime,
+		"iced_latte":  defaultLungoBrewTime,
 	}
 	for drink, want := range defaults {
 		if got := def.drinkBrewTime(drink); got != want {
