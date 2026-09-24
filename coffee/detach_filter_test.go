@@ -171,7 +171,7 @@ func TestDropFilterLeavesLockedFilterAlone(t *testing.T) {
 func TestWithGlassAllowlist(t *testing.T) {
 	// The pickup actions are the reason the allowlist exists: they start with
 	// empty jaws, so a stand-in glass lands in the free approach plan.
-	for _, name := range []string{"move_to_ice_dispense", "dispense_ice", "stage_glass", "pulse_ice_pin"} {
+	for _, name := range []string{"move_to_ice_dispense", "dispense_ice", "stage_glass", "pulse_ice_pin", "check_ice_level"} {
 		if err := checkWithGlassAllowed(name); err != nil {
 			t.Errorf("checkWithGlassAllowed(%q) = %v, want allowed", name, err)
 		}
