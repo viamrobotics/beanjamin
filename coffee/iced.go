@@ -247,18 +247,28 @@ func (s *beanjaminCoffee) fetchGlass(ctx, cancelCtx context.Context) error {
 	return nil
 }
 
+// moveToIceDispense carries the held glass to the ice machine and holds it under
+// the chute. Split out of dispenseIce so the pose can be reached without opening
+// the pin: ice-level instrumentation has to own the pin to time against it.
+func (s *beanjaminCoffee) moveToIceDispense(ctx, cancelCtx context.Context) error {
+	approachStep := Step{PoseName: clawPoseIceMachineApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
+	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
+		return fmt.Errorf("move_to_ice_dispense: %w", err)
+	}
+	dispenseStep := Step{PoseName: clawPoseIceMachineDispense, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	if err := s.executeStep(ctx, cancelCtx, dispenseStep); err != nil {
+		return fmt.Errorf("move_to_ice_dispense: %w", err)
+	}
+	return nil
+}
+
 // dispenseIce carries the held glass to the ice machine, holds it under the
 // chute, pulses the ice pin HIGH for iceDispenseSec, then retreats. The pin is
 // always driven back LOW — including on cancel — so the ice machine can't be
 // left running.
 func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
-	approachStep := Step{PoseName: clawPoseIceMachineApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
-	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
-		return fmt.Errorf("dispense_ice: %w", err)
-	}
-	dispenseStep := Step{PoseName: clawPoseIceMachineDispense, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
-	if err := s.executeStep(ctx, cancelCtx, dispenseStep); err != nil {
-		return fmt.Errorf("dispense_ice: %w", err)
+	if err := s.moveToIceDispense(ctx, cancelCtx); err != nil {
+		return err
 	}
 
 	if err := s.pulseIcePin(ctx, cancelCtx); err != nil {
