@@ -213,10 +213,12 @@ type iceReading struct {
 
 // iceMeasurement is one frame read by both methods. contrast decides the
 // dispense; brightness is the shadow and is only populated when shadow is set.
+// frame is retained so the deciding moment can be drawn and saved.
 type iceMeasurement struct {
 	contrast   iceReading
 	brightness iceReading
 	shadow     bool
+	frame      image.Image
 }
 
 // iceSurfaceRow finds the ice surface in the band: the largest brightness step
@@ -334,7 +336,7 @@ func (s *beanjaminCoffee) measureIceFrame(img image.Image) (iceMeasurement, erro
 	if err != nil {
 		return iceMeasurement{}, err
 	}
-	return s.measureIceRows(rows, b), nil
+	return s.measureIceRows(rows, b, img), nil
 }
 
 // measureIceRows runs both methods over a profile already in hand. One profile,
@@ -343,8 +345,8 @@ func (s *beanjaminCoffee) measureIceFrame(img image.Image) (iceMeasurement, erro
 // over rows the deciding method has already read, so it has no failure of its
 // own and can never contribute to the camera-error count that falls back to a
 // fixed dwell.
-func (s *beanjaminCoffee) measureIceRows(rows []float64, b iceBand) iceMeasurement {
-	m := iceMeasurement{contrast: contrastReading(rows, b)}
+func (s *beanjaminCoffee) measureIceRows(rows []float64, b iceBand, img image.Image) iceMeasurement {
+	m := iceMeasurement{contrast: contrastReading(rows, b), frame: img}
 	if s.iceBrightnessShadowOn() {
 		m.shadow = true
 		m.brightness = brightnessSurfaceRow(rows, b, s.cfg.IceBrightnessThresh, s.iceBrightRun())
@@ -375,6 +377,10 @@ func (s *beanjaminCoffee) iceFrame(ctx context.Context) (image.Image, error) {
 // empty glass that is the rim, and the rim row is the one number that shows the
 // seating drifting between grabs — the thing the stop row cannot correct for,
 // and the reason to re-check a machine's ice_stop_row_px.
+//
+// With "annotate": true on the DoCommand it also saves the frame drawn, which
+// is the whole loop for tuning a stop row: hold a glass at the dispense pose and
+// fire this as often as you like, without spending any ice.
 func (s *beanjaminCoffee) checkIceLevel(ctx, _ context.Context) error {
 	logger := s.activeOrderLogger()
 	img, err := s.iceFrame(ctx)
@@ -386,8 +392,9 @@ func (s *beanjaminCoffee) checkIceLevel(ctx, _ context.Context) error {
 	if err != nil {
 		return fmt.Errorf("check_ice_level: %w", err)
 	}
-	measurement := s.measureIceRows(rows, b)
+	measurement := s.measureIceRows(rows, b, img)
 	surface := measurement.contrast
+	s.saveIceDispenseFrame(ctx, measurement, "check", "", 0)
 
 	bounds := img.Bounds()
 	stopRow := s.iceStopRowPx()

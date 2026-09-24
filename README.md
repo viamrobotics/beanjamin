@@ -243,7 +243,7 @@ Add a **`viam:beanjamin:order-sensor`** component to the machine, put it in the 
 - `usage` — +1 after a regular brew (espresso/decaf), +1.5 after a lungo brew (lungo/decaf_lungo)
 - `cleanings` — +1 after each cleaning cycle
 - `ice_dispenses` — +1 after each ice dispense (iced coffee only)
-- `ice_dispense_timeouts` — +1 when a watched ice dispense hits either ceiling — `ice_dispense_max_sec` from the pin opening, or `ice_after_first_seen_max_sec` from the first sighting — without the surface passing the stop row (`ice_vision_enabled` only). The glass is served as it is, so a climbing counter is how an empty hopper — or a stop row that no longer matches how the glass is being gripped — shows up. The log line names which ceiling fired.
+- `ice_dispense_timeouts` — +1 when a watched ice dispense hits either ceiling — `ice_dispense_max_sec` from the pin opening, or `ice_after_first_seen_max_sec` from the first sighting — without the surface passing the stop row (`ice_vision_enabled` only). The glass is served as it is, so a climbing counter is how an empty hopper — or a stop row that no longer matches how the glass is being gripped — shows up. The log line names which ceiling fired, and the saved frame is tagged `ice_timeout` or `ice_surface_cap`.
 - `ice_shadow_disagreements` — +1 per watched dispense where the brightness shadow and the contrast step differed in kind rather than in timing: the shadow never saw ice, saw it but never reached the stop row, or reached the stop row on the first surface it ever saw. The last means it locked onto something already there — the rim or a reflection — and is the one that would rule out ever promoting it. Timing gaps are expected and are not counted. See "Brightness shadow" below.
 - `milk_pours` — +1 after each milk pour (iced latte only)
 - `drip_tray_brews` — +1 after each brew
@@ -441,6 +441,18 @@ Accepted by `move_to_ice_dispense`, `dispense_ice`, `stage_glass`, `pulse_ice_pi
 
 ```json
 {"execute_action": "move_to_ice_dispense", "with_glass": true}
+```
+
+`annotate: true` makes `check_ice_level`, `dispense_ice` and `pulse_ice_pin` save
+an annotated JPEG of each frame they measure — scan band, stop row, both
+methods' readings — into `save_motion_requests_dir`. An order's dispense saves
+one without being asked; the flag only adds the hand-run actions, which are a
+tuning loop fired as fast as it can be typed and would otherwise bury the
+orders. Does nothing without `save_motion_requests_dir`, or on a dispense
+without `ice_vision_enabled`.
+
+```json
+{"execute_action": "check_ice_level", "annotate": true}
 ```
 
 **`cancel`** - Stop whatever is running, and nothing else. It cancels the shared sequence context so the run aborts at its next step boundary, calls `Stop` on the arm so the in-flight trajectory halts where it stands instead of playing out to its authored pose, and pauses the queue. No arm motion is planned, no gripper is opened, no state flag is cleared, and the cached frame system is left untouched: the portafilter stays wherever it was, a held cup stays in the jaws, pending orders stay queued.
@@ -1383,3 +1395,24 @@ Pick the threshold first: `check_ice_level` prints the range of row brightness
 it sees, and the cutoff has to sit above an empty glass's brightest row and
 below ice's dimmest. 132 is the midpoint on the committed fixtures under one
 lighting condition — a seed, not a value.
+
+### Annotated frames
+
+Every dispense inside an order saves the drawn frame under
+`tag=<order-id>/tag=ice_dispense/tag=ice_<outcome>/`; a hand-run action saves one
+only with `annotate: true`, and without an order ID to nest under. Outcome is
+`stopped`, `timeout`, `surface_cap`, `vision_fallback`, `cancelled` or `check`.
+Under a
+data-synced capture dir the data manager tags the upload from those segments, so
+frames filter on the data page by order and by how the run ended, like the
+motion-plan requests. `vision_fallback` and `cancelled` save the last frame that
+measured cleanly, captioned with its age.
+
+Rows grow downward, so a surface drawn *above* the stop row is a full glass —
+which is why the step reports nothing there and the shadow reports a row. A log
+line says the stop row was reached; only the picture says whether it still
+matches how that glass was gripped.
+
+**To tune a stop row**: glass in the jaws, `move_to_ice_dispense` with
+`with_glass: true`, then `check_ice_level` with `annotate: true` as often as you
+like. No ice spent, a drawn frame each time.

@@ -99,25 +99,33 @@ func (s *beanjaminCoffee) dwellUntilFull(
 	}
 	var sawSurface bool
 	var firstSeen time.Duration
+	// The most recent frame that measured cleanly, and when. A run that ends on
+	// a camera failure or a cancel still leaves the last thing the loop actually
+	// saw — captioned with its age, because a frame from before the failure is
+	// evidence about the run, not a picture of how it ended.
+	var last iceMeasurement
+	var lastAt time.Duration
 
 	// Reporting is handed back on every exit rather than done here: holdIcePin's
 	// deferred pin close does not run until this function has returned, so a
 	// sensor RPC or a JPEG encode from inside the loop is more ice in the glass.
-	result := func(outcome string, at time.Duration) iceDwellResult {
+	result := func(outcome string, at time.Duration, note string) iceDwellResult {
 		return iceDwellResult{
 			sawSurface: sawSurface,
 			shadow:     shadow,
 			stopped:    outcome == "stopped",
 			elapsed:    at,
 			firstSeen:  firstSeen,
+			frame:      last,
 			outcome:    outcome,
+			note:       note,
 		}
 	}
 
 	// Ice takes seconds to reach the glass; nothing read before that can be a
 	// surface, and a reading taken as the pin opens is only a chance to be wrong.
 	if err := s.waitOrCancel(ctx, cancelCtx, secondsToDuration(s.iceDispenseMinSec())); err != nil {
-		return result("cancelled", time.Since(start)), err
+		return result("cancelled", time.Since(start), ""), err
 	}
 
 	var sightings, misses, visionErrors int
@@ -127,7 +135,8 @@ func (s *beanjaminCoffee) dwellUntilFull(
 		measurement, err := measure(ctx)
 		reading := measurement.contrast
 		if err == nil {
-			shadow.observe(measurement.brightness, time.Since(start), describeContrast(reading, sawSurface, stopRow), logger)
+			last, lastAt = measurement, time.Since(start)
+			shadow.observe(measurement.brightness, lastAt, describeContrast(reading, sawSurface, stopRow), logger)
 		}
 		switch {
 		case err != nil:
@@ -141,7 +150,7 @@ func (s *beanjaminCoffee) dwellUntilFull(
 				remaining := secondsToDuration(s.iceDispenseSec()) - elapsed
 				logger.Warnf("dispensing ice: level checks are failing; falling back to a fixed %s dispense (%s of it already elapsed)",
 					secondsToDuration(s.iceDispenseSec()), elapsed.Round(time.Millisecond))
-				return result("vision_fallback", elapsed),
+				return result("vision_fallback", elapsed, staleness(lastAt, elapsed)),
 					s.waitOrCancel(ctx, cancelCtx, remaining)
 			}
 		case reading.found:
@@ -159,7 +168,7 @@ func (s *beanjaminCoffee) dwellUntilFull(
 				elapsed := time.Since(start)
 				logger.Infof("dispensing ice: the surface has risen past row %d after %s — closing the pin",
 					stopRow, elapsed.Round(time.Millisecond))
-				res := result("stopped", elapsed)
+				res := result("stopped", elapsed, "")
 				res.compare = true
 				return res, nil
 			}
@@ -171,19 +180,20 @@ func (s *beanjaminCoffee) dwellUntilFull(
 		// is never confirmed past the stop row.
 		elapsed := time.Since(start)
 		if !time.Now().Before(deadline) {
-			res := result("timeout", elapsed)
+			res := result("timeout", elapsed, "")
 			res.timedOut, res.compare = true, true
 			return res, nil
 		}
 		if sawSurface && elapsed-firstSeen >= afterFirstSeen {
 			logger.Warnf("dispensing ice: %s since the surface first appeared without it passing row %d — closing the pin",
 				afterFirstSeen, stopRow)
-			res := result("surface_cap", elapsed)
+			res := result("surface_cap", elapsed, "")
 			res.timedOut, res.compare, res.cappedAfterFirstSeen = true, true, true
 			return res, nil
 		}
 		if err := s.waitOrCancel(ctx, cancelCtx, interval); err != nil {
-			return result("cancelled", time.Since(start)), err
+			elapsed = time.Since(start)
+			return result("cancelled", elapsed, staleness(lastAt, elapsed)), err
 		}
 	}
 }
@@ -204,18 +214,47 @@ type iceDwellResult struct {
 	stopped   bool
 	elapsed   time.Duration
 	firstSeen time.Duration
-	outcome   string // how the dispense ended; empty when the pin never opened
+
+	frame   iceMeasurement
+	outcome string // tag slug for the saved frame
+	note    string // what the frame cannot be trusted on by itself
 }
 
-// reportIceDispense logs the shadow comparison. Called by pulseIcePin with the
-// pin already shut, never from inside the loop: it is a sensor RPC, and that
-// would otherwise be more ice in the glass.
+// reportIceDispense logs the shadow comparison and saves the annotated frame.
+// Called by pulseIcePin with the pin already shut, never from inside the loop:
+// between them these are two sensor RPCs and a JPEG encode, and every one of
+// them would otherwise be more ice in the glass.
+//
+// A cancelled dispense still saves its frame, so the context is rebuilt rather
+// than reused: a cancelled context is the wrong thing to hand a write that has
+// to finish.
 func (s *beanjaminCoffee) reportIceDispense(ctx context.Context, res iceDwellResult) {
 	// A fixed dwell, or a pin that never opened, produces no result to report.
-	if res.outcome == "" || !res.compare {
+	if res.outcome == "" {
 		return
 	}
-	s.reportShadow(ctx, res.shadow, res.stopped, res.elapsed, res.firstSeen)
+	if res.compare {
+		s.reportShadow(ctx, res.shadow, res.stopped, res.elapsed, res.firstSeen)
+	}
+	s.saveIceDispenseFrame(s.iceFrameSavingCtx(ctx), res.frame, res.outcome, res.note, res.elapsed)
+}
+
+// staleness notes how far before the end of the run a frame was taken, for the
+// exits where the last good frame is not a picture of how the run ended.
+func staleness(takenAt, endedAt time.Duration) string {
+	if takenAt <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("last clean frame, %s before the run ended", (endedAt - takenAt).Round(time.Millisecond))
+}
+
+// iceFrameSavingCtx carries the intent to save onto a fresh context, so a frame
+// still lands when the dispense was cancelled.
+func (s *beanjaminCoffee) iceFrameSavingCtx(ctx context.Context) context.Context {
+	if !s.iceFramesWanted(ctx) {
+		return ctx
+	}
+	return withIceFrameSaving(context.Background())
 }
 
 // describeContrast renders what the deciding method saw on one frame, so a
