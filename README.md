@@ -243,6 +243,8 @@ Add a **`viam:beanjamin:order-sensor`** component to the machine, put it in the 
 - `usage` — +1 after a regular brew (espresso/decaf), +1.5 after a lungo brew (lungo/decaf_lungo)
 - `cleanings` — +1 after each cleaning cycle
 - `ice_dispenses` — +1 after each ice dispense (iced coffee only)
+- `ice_dispense_timeouts` — +1 when a watched ice dispense hits either ceiling — `ice_dispense_max_sec` from the pin opening, or `ice_after_first_seen_max_sec` from the first sighting — without the surface passing the stop row (`ice_vision_enabled` only). The glass is served as it is, so a climbing counter is how an empty hopper — or a stop row that no longer matches how the glass is being gripped — shows up. The log line names which ceiling fired, and the saved frame is tagged `ice_timeout` or `ice_surface_cap`.
+- `ice_shadow_disagreements` — +1 per watched dispense where the brightness shadow and the contrast step differed in kind rather than in timing: the shadow never saw ice, saw it but never reached the stop row, or reached the stop row on the first surface it ever saw. The last means it locked onto something already there — the rim or a reflection — and is the one that would rule out ever promoting it. Timing gaps are expected and are not counted. See "Brightness shadow" below.
 - `milk_pours` — +1 after each milk pour (iced latte only)
 - `drip_tray_brews` — +1 after each brew
 - `espresso_cups_used` — +1 after the brew cup is placed, on every drink
@@ -280,7 +282,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `lock_overshoot_degs`      | float  | No       | Extra rotation applied to the `coffee_locked_final` lock pivot, unwound back onto the authored angle within the same planned trajectory. The claws slip on the portafilter handle once the bayonet is under load, so the arm has to over-rotate for the filter to seat; the unwind re-zeroes the grip, since a seated filter out-holds the claws and the handle slides back through them. Defaults to 0 (no overshoot) — tune it on the machine. |
 | `save_motion_requests_dir` | string | No       | Directory to save debugging payloads. Each plan writes a single request+response JSON (RDK's `WriteRequestAndResponseToFile`; readable back with `ReadRequestAndResponseFromFile`, and the response is absent when planning failed), nested under `tag=<order-id>/tag=step_<step>/tag=motion_<move\|pivot\|circular\|carry>/tag=planning_<success\|failure>/`. When this directory is a Viam data-synced capture dir, the data manager reads those `tag=` segments and tags each uploaded file, so plans are searchable on the data page by order, step, motion type, and planning outcome — and a failed order's Slack notification deep-links to that order's plan requests (which the reader can narrow to `planning_failure` or a specific step). Also writes a `visualization_snapshot_<timestamp>_<cup\|glass>.pb.gz` motion-tools snapshot on each cup/glass observation: the whole frame system resolved at the joint configuration the arm held when the photo was taken, plus every detection's point cloud (as captured, anchored at the camera's world pose) and the world-frame bounding box the grasp was derived from. Drag the file onto a motion-tools visualizer to replay the observation — the `visualization_snapshot` prefix is what its drag-and-drop loader keys off. |
 | `order_sensor_name`        | string | No       | Name of a `viam:beanjamin:order-sensor` sensor to notify when each order attempt completes (must appear in **depends_on**). |
-| `usage_sensor_name`        | string | No       | Name of a single sensor whose per-key counters are updated through the brew lifecycle: `regular_grinds`, `decaf_grinds`, `usage`, `cleanings`, `ice_dispenses`, `drip_tray_brews`, `espresso_cups_used`, `latte_glasses_used`, and `successful_consecutive_orders`. See "Usage sensor" below. |
+| `usage_sensor_name`        | string | No       | Name of a single sensor whose per-key counters are updated through the brew lifecycle: `regular_grinds`, `decaf_grinds`, `usage`, `cleanings`, `ice_dispenses`, `ice_dispense_timeouts`, `ice_shadow_disagreements`, `drip_tray_brews`, `espresso_cups_used`, `latte_glasses_used`, and `successful_consecutive_orders`. See "Usage sensor" below. |
 | `cam_storage_mux_name` | string | No   | Name of a [`viam:multiplexer:resource-multiplexer`](https://github.com/viam-modules/multiplexer) generic service whose dependencies are `viam:video:storage` stores; when set, saves a clip per order attempt (synchronous `save`) to all configured stores. |
 | `data_dir`                 | string | No       | Directory for persistent module data. When set alongside `cam_storage_mux_name`, a pending-clip record is written under `<data_dir>/pending-clips` when each order starts and removed only once that order's clip has been saved successfully — a save that fails (or never runs because the process died first) leaves the record in place. Use with a Viam scheduled job calling `cleanup_pending_clips` to recover clips for any order whose save was interrupted or failed. |
 | `slack_notifier_name`      | string | No       | Name of a [`viam:notifications:slack`](https://github.com/viam-modules/notifications) generic service. When set, the coffee service sends a best-effort Slack message on every non-successful order attempt (faults and operator cancels). See "Slack notifications" above. |
@@ -307,12 +309,19 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `can_serve_iced`           | bool   | No       | Enables the `iced_coffee` drink. When `true`, after brewing the espresso the arm vision-detects a glass off the top shelf, dispenses ice into it via `ice_board_name`/`ice_pin_name`, sets the glass in a staging area, then pours the espresso over the ice. Both finished items — the empty espresso cup and the iced glass — are then placed in the serving area at the next round-robin slots (two slots are consumed per order). The glass is always vision-detected, so iced coffee requires `ice_board_name`, `ice_pin_name`, the `glass_*` vision fields below, and the iced claws poses below. A `serving-area` (or `serving-area_origin`) Box geometry must exist in the framesystem; this is checked at runtime, not at config time. Default `false`. |
 | `ice_board_name`           | string | When `can_serve_iced` is enabled | Name of a `rdk:component:board` whose GPIO pin triggers the ice machine. |
 | `ice_pin_name`             | string | When `can_serve_iced` is enabled | Board pin held HIGH to dispense ice. Required — there is no default pin. |
-| `ice_dispense_sec`         | float  | No       | How long the ice pin is held HIGH per drink, in seconds. Defaults to 5. |
+| `ice_dispense_sec`         | float  | No       | How long the ice pin is held HIGH per drink, in seconds. Defaults to 5. With `ice_vision_enabled` this is only the fallback used when the camera fails. |
+| `ice_vision_enabled`       | bool   | No       | Watch the glass while ice falls and close the pin when the ice surface passes `ice_stop_row_px`, instead of dispensing for a fixed `ice_dispense_sec`. Default `false`: the shipping stop row was measured on one machine at one glass seating, so confirm yours with `check_ice_level` before turning this on. |
 | `ice_stop_row_px`          | int    | No       | Image row the ice surface must reach for the glass to count as full. The camera rides the gripper, so a row is a fixed height above the jaws. Defaults to 565. |
 | `ice_contrast_window`      | int    | No       | Rows averaged on each side of a candidate row when measuring the brightness step. The ice surface is a gradual edge, so a narrow window measures only part of it. Defaults to 48. |
 | `ice_min_contrast`         | float  | No       | Smallest brightness step counted as an ice surface. Below it the frame reports no ice. Defaults to 25. |
 | `ice_roi_x0`, `ice_roi_x1` | int    | No       | Left and right edges of the column strip whose row brightness is averaged, inset from the glass walls. Default 700 and 910. |
 | `ice_roi_y1`               | int    | No       | Bottom of the scan — the lowest part of the glass the camera can see before the ice machine's ledge occludes it. Defaults to 670. There is no `ice_roi_y0`: the top of the scan is derived as `ice_stop_row_px - ice_contrast_window`, which is what keeps the glass rim out of the measurement. |
+| `ice_dispense_max_sec`     | float  | No       | Absolute ceiling on a watched dispense, measured from the pin opening. On reaching it the glass is served as it is and `ice_dispense_timeouts` is bumped; the order is not failed. Defaults to 40 — an observed fill took 17-20s, so a much lower value times out every drink. This is the backstop for a hopper that never delivers; `ice_after_first_seen_max_sec` is the one that bounds overflow. |
+| `ice_after_first_seen_max_sec` | float | No  | Second ceiling, measured from the first confirmed sighting rather than from the pin opening. Defaults to 30. It exists because `ice_dispense_max_sec` has to clear a whole fill, which leaves it ~10s above a full glass on a run whose surface is never confirmed past the stop row — and that overflow is ice, not a light drink. Ends the dispense the same way the absolute ceiling does. Must be more than `ice_check_interval_sec`, or the dispense ends on the first poll after ice appears. |
+| `ice_dispense_min_sec`     | float  | No       | How long the pin is held open before any reading counts. Defaults to 2. |
+| `ice_check_interval_sec`   | float  | No       | How often the glass is measured during a watched dispense. Defaults to 0.5. |
+| `ice_brightness_thresh`    | float  | No       | Row-brightness cutoff (0-255) for the **brightness shadow**: a second read of every dispense frame by absolute brightness, logged beside the contrast step and never acted on. Unset (the default) the shadow is off, and it deliberately has no default value — an absolute cutoff is the one number that does not survive a change in lighting, so read it off the machine with `check_ice_level`, which prints the range of row brightness it sees. See "Brightness shadow" below. |
+| `ice_bright_run`           | int    | No       | Consecutive rows that must clear `ice_brightness_thresh` for the shadow to call it a surface. One bright row is a glint off the glass; ice holds its brightness over many rows. Defaults to 8. |
 | `pour_vel_degs_per_sec`    | float  | No       | Max joint velocity (degrees/sec) for the pour tilt and return-upright pivots — the espresso pour and the milk pour alike. Overrides the general slow-movement velocity so the pour isn't dragged out (default: 60). Lower it if the espresso splashes over the ice. |
 | `pour_acc_degs_per_sec2`   | float  | No       | Max joint acceleration (degrees/sec²) for the pour pivots. The tilt is a short move that's usually acceleration-limited, so this — not velocity — is what actually snaps it faster. Default `0` leaves the arm's own acceleration in place; raise it to speed the tilt, watching for splash and joint stress. |
 | `glass_vision_service_name`           | string | When `can_serve_iced` is enabled | Name of a `rdk:service:vision` segmenter that returns glass detections via `GetObjectPointClouds`. Glass pickup mirrors cup pickup but with its own vision service and observe poses (tuned for the taller iced-coffee glass); it shares the cup camera (`src_camera_name`). |
@@ -348,7 +357,7 @@ When `can_serve_iced` is enabled, the claws switch must additionally hold these 
 | Pose name              | Description |
 | ---------------------- | ----------- |
 | `ice_machine_approach` | Staged in front of the ice chute. |
-| `ice_machine_dispense` | Glass held under the chute while the ice pin pulses. **If you re-teach this pose, re-check `ice_stop_row_px`**: the ice level is measured in raw image rows at this pose, and moving the glass in frame moves what those rows mean. `check_ice_level` prints both the surface row and the glass rim. |
+| `ice_machine_dispense` | Glass held under the chute while the ice pin pulses. **If you re-teach this pose, re-check `ice_stop_row_px`**: with `ice_vision_enabled` the ice level is measured in raw image rows at this pose, and moving the glass in frame moves what those rows mean. `check_ice_level` prints both the surface row and the glass rim. |
 | `staging_approach`     | Above the staging area where the glass rests during the pour. |
 | `staging`              | Down in the staging area; the glass is set here to free the gripper for the pour, then re-grabbed and placed in the serving area. |
 | `pour_approach`        | Espresso cup held upright above the staged glass. |
@@ -424,14 +433,26 @@ Only `drink` is required. If `initial_greeting` is omitted, a random greeting is
 {"execute_action": "grind_coffee"}
 ```
 
-`with_glass: true` swaps the portafilter for a glass in the frame system for that one call: the filter subtree comes out, and an upright box of `glass_dimensions`, centered on the grasp centroid that `glass_grab_relative_pose` puts under the current grip point, goes on the gripper as the held item. It is for stepping the iced sequence with a glass loaded into the jaws by hand, where the vision pickup never ran and the frame system would otherwise model a portafilter that is not there and no glass that is — the state in which the arm plans a path that drags the glass across the table, and cannot plan into `ice_machine_dispense` at all. The swap is undone when the action ends, on every exit path, so pass the flag on **every** call of a manual sequence that accepts it, not just the first.
+`with_glass: true` swaps the portafilter for a glass in the frame system for that one call — the filter subtree comes out, a box of `glass_dimensions` at the `glass_grab_relative_pose` centroid goes on the gripper — for stepping the iced sequence with a glass loaded into the jaws by hand. Without it the frame system models a portafilter that is not there and no glass that is, and the arm plans a path that drags the glass across the table, or cannot reach `ice_machine_dispense` at all. The swap is undone when the action ends, so pass the flag on **every** call of the sequence, not just the first.
 
-The box is a stand-in for that one call and nothing more. It never displaces the grasp a vision pickup cached, so a re-grab mid-action still restores the real detection, and the teardown leaves alone any held item the action attached for itself (a `fetch_glass`, a `grab_staged_glass`) — there the arm really is holding something. When the gripper already models a held item at the start of the call, no box is built and **only** the filter is dropped, which is why `glass_dimensions` / `glass_grab_relative_pose` are needed only for the empty-jaws case. A filter locked into the machine (`lock_portafilter` without `grab_filter`) models the real portafilter in the bayonet rather than one on the claws, so it is left in place and the flag is a no-op — which is the state an automated iced order dispenses in.
+Accepted by `move_to_ice_dispense`, `dispense_ice`, `stage_glass`, `pulse_ice_pin` and `check_ice_level`; anything else is refused, and the error names those five. The pickups (`fetch_glass`, `grab_staged_glass`, `grab_brewed_cup`) refuse it because they start with empty jaws: a stand-in there is a phantom sitting exactly where the real glass is about to be grasped, and every candidate fails to plan. Reach empty jaws with `lock_portafilter` then `release_filter` instead.
 
-**Five actions accept it** — `move_to_ice_dispense`, `dispense_ice`, `stage_glass`, `pulse_ice_pin` and `check_ice_level`, the steps you can be running with a glass already in the jaws. Anything else is refused and the error names the five. The refusal that matters is on an action that fetches its own glass (`fetch_glass`, `grab_staged_glass`, `grab_brewed_cup`): those start with empty jaws, so a stand-in would hang a phantom exactly where the real glass is about to be grasped, inside the clean-area shield that is a hard obstacle on the free approach — every candidate would fail to plan. Reach empty jaws with `lock_portafilter` then `release_filter` instead, which leaves the filter modeled in the bayonet, where the flag is a no-op and the pickup plans normally.
+`glass_dimensions` / `glass_grab_relative_pose` are needed only for that empty-jaws case — when the gripper already models a held item, only the filter is dropped. A filter locked into the machine is modeled in the bayonet rather than on the claws, so it is left alone.
 
 ```json
 {"execute_action": "move_to_ice_dispense", "with_glass": true}
+```
+
+`annotate: true` makes `check_ice_level`, `dispense_ice` and `pulse_ice_pin` save
+an annotated JPEG of each frame they measure — scan band, stop row, both
+methods' readings — into `save_motion_requests_dir`. An order's dispense saves
+one without being asked; the flag only adds the hand-run actions, which are a
+tuning loop fired as fast as it can be typed and would otherwise bury the
+orders. Does nothing without `save_motion_requests_dir`, or on a dispense
+without `ice_vision_enabled`.
+
+```json
+{"execute_action": "check_ice_level", "annotate": true}
 ```
 
 **`cancel`** - Stop whatever is running, and nothing else. It cancels the shared sequence context so the run aborts at its next step boundary, calls `Stop` on the arm so the in-flight trajectory halts where it stands instead of playing out to its authored pose, and pauses the queue. No arm motion is planned, no gripper is opened, no state flag is cleared, and the cached frame system is left untouched: the portafilter stays wherever it was, a held cup stays in the jaws, pending orders stay queued.
@@ -1351,3 +1372,47 @@ permission look alike from the outside. The command turns that into a
 `no data found for order <id>` error rather than reporting success, and leaves no
 directory behind. A truncated order ID looks identical from the outside, so check
 it is a full UUID (8-4-4-4-**12**) first.
+
+### Brightness shadow
+
+The shipping measurement finds the ice surface as a *brightness step* — dark
+empty glass above, bright ice below — because a step survives a lighting change
+where an absolute cutoff does not. The cost is a dead band: the step needs a
+full `ice_contrast_window` of rows either side of a candidate, so it can only
+name rows `ice_stop_row_px` to `ice_roi_y1 - window` (565-622 at the defaults).
+A surface above the stop row is unnameable, which is why the dispense stops on
+the surface *disappearing* rather than on a row.
+
+An absolute cutoff has no dead band, but it is exactly what a lighting change
+breaks. Set `ice_brightness_thresh` and it runs as a **shadow**: the same
+frames, read both ways, with only the contrast step deciding anything. Each
+watched dispense logs its first sighting, when its own stop test
+(`row <= ice_stop_row_px`) would have fired, and a closing comparison;
+differences in kind bump `ice_shadow_disagreements`, timing gaps do not. Nothing
+about the pin changes, so it is safe to leave on.
+
+Pick the threshold first: `check_ice_level` prints the range of row brightness
+it sees, and the cutoff has to sit above an empty glass's brightest row and
+below ice's dimmest. 132 is the midpoint on the committed fixtures under one
+lighting condition — a seed, not a value.
+
+### Annotated frames
+
+Every dispense inside an order saves the drawn frame under
+`tag=<order-id>/tag=ice_dispense/tag=ice_<outcome>/`; a hand-run action saves one
+only with `annotate: true`, and without an order ID to nest under. Outcome is
+`stopped`, `timeout`, `surface_cap`, `vision_fallback`, `cancelled` or `check`.
+Under a
+data-synced capture dir the data manager tags the upload from those segments, so
+frames filter on the data page by order and by how the run ended, like the
+motion-plan requests. `vision_fallback` and `cancelled` save the last frame that
+measured cleanly, captioned with its age.
+
+Rows grow downward, so a surface drawn *above* the stop row is a full glass —
+which is why the step reports nothing there and the shadow reports a row. A log
+line says the stop row was reached; only the picture says whether it still
+matches how that glass was gripped.
+
+**To tune a stop row**: glass in the jaws, `move_to_ice_dispense` with
+`with_glass: true`, then `check_ice_level` with `annotate: true` as often as you
+like. No ice spent, a drawn frame each time.

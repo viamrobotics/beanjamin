@@ -263,9 +263,8 @@ func (s *beanjaminCoffee) moveToIceDispense(ctx, cancelCtx context.Context) erro
 }
 
 // dispenseIce carries the held glass to the ice machine, holds it under the
-// chute, pulses the ice pin HIGH for iceDispenseSec, then retreats. The pin is
-// always driven back LOW — including on cancel — so the ice machine can't be
-// left running.
+// chute, runs pulseIcePin, then retreats. The pin is always driven back LOW —
+// including on cancel — so the ice machine can't be left running.
 func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 	if err := s.moveToIceDispense(ctx, cancelCtx); err != nil {
 		return err
@@ -283,39 +282,66 @@ func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 	return nil
 }
 
+// pulseIcePin opens the ice-machine pin, waits, and closes it. With
+// ice_vision_enabled the wait watches the glass; unset, it is the fixed
+// ice_dispense_sec.
+//
+// Everything the dispense reports happens here rather than inside the loop, so
+// holdIcePin has already closed the pin: the announcement, the counters, the
+// shadow comparison and the saved frame are RPCs and encodes, and every one of
+// them would otherwise be more ice.
 func (s *beanjaminCoffee) pulseIcePin(ctx, cancelCtx context.Context) error {
+	res, err := s.holdIcePin(ctx, cancelCtx)
+	// Before the error check: a dispense that ended badly is the one whose
+	// comparison and whose frame are worth having.
+	s.reportIceDispense(ctx, res)
+	if err != nil {
+		return err
+	}
+	if res.timedOut {
+		s.iceDispenseTimedOut(ctx, res)
+	}
+	return nil
+}
+
+// holdIcePin drives the pin HIGH, waits out the dispense, and drives it LOW,
+// handing back what the dispense saw. It logs nothing about the result and
+// saves nothing: the pin is still open until this function returns.
+//
+// The pin is driven LOW on every exit path — cancel, error, panic — with a fresh
+// context so the write still lands when ctx is already cancelled. The close is
+// deferred *before* the HIGH write, not after: a Set that reaches the board and
+// then loses its response returns an error with the pin already open, and the
+// only safe assumption is that it might be. That deferred close is the invariant
+// the whole feature hangs off: watching the glass adds exit paths, and "left the
+// ice machine running" is the one bug class here that costs more than a drink.
+func (s *beanjaminCoffee) holdIcePin(ctx, cancelCtx context.Context) (res iceDwellResult, err error) {
 	if s.iceBoard == nil {
-		return fmt.Errorf("pulse_ice_pin: no ice board configured (set ice_board_name)")
+		return res, fmt.Errorf("pulse_ice_pin: no ice board configured (set ice_board_name)")
 	}
 	logger := s.activeOrderLogger()
 	pinName := s.icePinName()
 	pin, err := s.iceBoard.GPIOPinByName(pinName)
 	if err != nil {
-		return fmt.Errorf("pulse_ice_pin: get pin %q: %w", pinName, err)
+		return res, fmt.Errorf("pulse_ice_pin: get pin %q: %w", pinName, err)
 	}
-	dwell := time.Duration(s.iceDispenseSec() * float64(time.Second))
-	logger.Infof("dispensing ice: pin %q HIGH for %s", pinName, dwell)
-	if err := pin.Set(ctx, true, nil); err != nil {
-		return fmt.Errorf("pulse_ice_pin: set pin %q high: %w", pinName, err)
-	}
-	// Drive the pin LOW with a fresh context so the write still lands if ctx is
-	// already cancelled.
-	stop := func() error {
-		if err := pin.Set(context.Background(), false, nil); err != nil {
-			return fmt.Errorf("pulse_ice_pin: set pin %q low: %w", pinName, err)
+	defer func() {
+		if stopErr := pin.Set(context.Background(), false, nil); stopErr != nil && err == nil {
+			err = fmt.Errorf("pulse_ice_pin: set pin %q low: %w", pinName, stopErr)
 		}
-		return nil
+	}()
+	if setErr := pin.Set(ctx, true, nil); setErr != nil {
+		return res, fmt.Errorf("pulse_ice_pin: set pin %q high: %w", pinName, setErr)
 	}
-	select {
-	case <-time.After(dwell):
-	case <-ctx.Done():
-		_ = stop()
-		return fmt.Errorf("pulse_ice_pin: cancelled during dispense: %w", ctx.Err())
-	case <-cancelCtx.Done():
-		_ = stop()
-		return fmt.Errorf("pulse_ice_pin: cancelled during dispense")
+
+	if s.cfg.IceVisionEnabled {
+		logger.Infof("dispensing ice: pin %q HIGH, watching for the surface to pass row %d (ceiling %.0fs)",
+			pinName, s.iceStopRowPx(), s.iceDispenseMaxSec())
+		return s.dwellUntilFull(ctx, cancelCtx, s.measureIceSurface)
 	}
-	return stop()
+	dwell := secondsToDuration(s.iceDispenseSec())
+	logger.Infof("dispensing ice: pin %q HIGH for %s", pinName, dwell)
+	return res, s.waitOrCancel(ctx, cancelCtx, dwell)
 }
 
 // stageGlass sets the held glass down in the staging area and releases it,

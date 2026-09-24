@@ -1,6 +1,7 @@
 package coffee
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"image/color"
@@ -9,6 +10,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go.viam.com/rdk/components/camera"
+	"go.viam.com/rdk/data"
+	rdkutils "go.viam.com/rdk/utils"
 )
 
 func loadFixture(t *testing.T, name string) image.Image {
@@ -48,7 +53,7 @@ func TestIceSurfaceRowFixtures(t *testing.T) {
 		// empty case is the one that matters: the rim is a stronger step than any
 		// ice surface, and it must not be mistaken for one.
 		{"empty at the low seating", "rim379_empty.jpg", false, 0},
-		{"rising, still below the stop row", "rim379_rising.jpg", true, 567},
+		{"rising, still below the stop row", "rim379_rising.jpg", true, 595},
 		{"risen past the stop row", "rim379_passed.jpg", false, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -124,6 +129,35 @@ func TestIceSurfaceRowExcludesTheRim(t *testing.T) {
 	}
 	if !got.found || got.row != 600 {
 		t.Errorf("step inside the band: found=%v row=%d, want true 600", got.found, got.row)
+	}
+}
+
+// TestIceScanBandReportsTheStopRowFirst pins the identity the band is built
+// around: the topmost row the scan can nominate is the stop row itself. Break
+// it — by deriving the band top from anything other than the stop row — and the
+// scan starts reaching above the stop row, where the glass rim lives.
+func TestIceScanBandReportsTheStopRowFirst(t *testing.T) {
+	for _, tc := range []struct{ stopRow, window, roiY1 int }{
+		{defaultIceStopRowPx, defaultIceContrastWindow, defaultIceROIY1},
+		{400, 20, 500},
+		{900, 64, 1080},
+	} {
+		top, bottom, firstRow, lastRow := iceScanBand(tc.stopRow, tc.window, tc.roiY1)
+		if firstRow != tc.stopRow {
+			t.Errorf("stop row %d, window %d: first reportable row %d, want the stop row", tc.stopRow, tc.window, firstRow)
+		}
+		if top != tc.stopRow-tc.window || bottom != tc.roiY1 || lastRow != tc.roiY1-tc.window {
+			t.Errorf("stop row %d, window %d, y1 %d: band %d..%d reporting %d..%d",
+				tc.stopRow, tc.window, tc.roiY1, top, bottom, firstRow, lastRow)
+		}
+	}
+
+	// The config path has to agree with it, or the exported helper describes a
+	// band nothing scans.
+	b := iceBandFromConfig(&Config{})
+	top, bottom, _, _ := iceScanBand(defaultIceStopRowPx, defaultIceContrastWindow, defaultIceROIY1)
+	if b.y0 != top || b.y1 != bottom {
+		t.Errorf("config band rows %d..%d, iceScanBand %d..%d", b.y0, b.y1, top, bottom)
 	}
 }
 
@@ -211,6 +245,9 @@ func TestValidateIceVisionRejectsSilentGeometry(t *testing.T) {
 		{"band bottom inside the window", func(c *Config) { c.IceROIY1 = 600 }, "ice_roi_y1"},
 		{"negative contrast", func(c *Config) { c.IceMinContrast = -1 }, "must not be negative"},
 		{"negative stop row", func(c *Config) { c.IceStopRowPx = -565 }, "must not be negative"},
+		{"min dwell past the ceiling", func(c *Config) { c.IceDispenseMinSec, c.IceDispenseMaxSec = 40, 30 }, "ice_dispense_min_sec"},
+		// A cap inside one poll ends every dispense on the tick after ice appears.
+		{"cap at the poll interval", func(c *Config) { c.IceAfterFirstSeenMaxSec, c.IceCheckIntervalSec = 0.5, 0.5 }, "ice_after_first_seen_max_sec"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := validCanServeIcedConfig()
@@ -265,5 +302,41 @@ func TestValidateIceVisionAcceptsDefaults(t *testing.T) {
 	}
 	if b.y0+2*b.window >= b.y1 {
 		t.Errorf("band y %d..%d cannot reach the stop row with window %d", b.y0, b.y1, b.window)
+	}
+}
+
+// TestFirstDecodableImageNeedsTheColorSource: the depth payload reads as a
+// perfectly good brightness profile, so picking it would produce a stop row out
+// of nothing. A camera serving one stream is the ordinary case and is taken
+// whatever it calls it; only an ambiguous response is refused.
+func TestFirstDecodableImageNeedsTheColorSource(t *testing.T) {
+	named := func(t *testing.T, source string) camera.NamedImage {
+		t.Helper()
+		ni, err := camera.NamedImageFromImage(stepImage(16, 16, 8, 20, 200), source, rdkutils.MimeTypePNG, data.Annotations{})
+		if err != nil {
+			t.Fatalf("named image: %v", err)
+		}
+		return ni
+	}
+
+	for _, tc := range []struct {
+		name    string
+		images  []string
+		wantErr bool
+	}{
+		{"one unnamed stream", []string{""}, false},
+		{"color among several", []string{"depth", iceColorSourceName}, false},
+		{"several, none of them color", []string{"depth", "rgb"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			images := make([]camera.NamedImage, 0, len(tc.images))
+			for _, source := range tc.images {
+				images = append(images, named(t, source))
+			}
+			_, err := firstDecodableImage(context.Background(), images)
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Errorf("firstDecodableImage = %v, want an error: %v", err, tc.wantErr)
+			}
+		})
 	}
 }

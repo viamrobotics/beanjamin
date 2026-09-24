@@ -9,6 +9,7 @@ require (
 	go.viam.com/api v0.1.583
 	go.viam.com/rdk v1.9.0
 	go.viam.com/utils v0.13.0
+	golang.org/x/image v0.41.0
 	gonum.org/v1/gonum v0.17.0
 	google.golang.org/protobuf v1.36.12
 )
@@ -211,7 +212,6 @@ require (
 	go4.org/unsafe/assume-no-moving-gc v0.0.0-20230525183740-e7c30c78aeb2 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect
-	golang.org/x/image v0.41.0 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect

@@ -9,7 +9,8 @@ import (
 
 // The usage sensor tracks physical consumables and service health by mirroring
 // several counters — one per key (regular_grinds, decaf_grinds, usage,
-// cleanings, ice_dispenses, drip_tray_brews, espresso_cups_used,
+// cleanings, ice_dispenses, ice_dispense_timeouts,
+// ice_shadow_disagreements, drip_tray_brews, espresso_cups_used,
 // latte_glasses_used, successful_consecutive_orders) — into a single external
 // sensor resource. The sensor replaces its whole readings map on `set`, so every
 // update is a best-effort read-modify-write of the *entire* map: read all
