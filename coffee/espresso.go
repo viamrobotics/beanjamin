@@ -349,6 +349,13 @@ func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.C
 		"close_door": s.closeDoor, // grip the open door's handle and swing it shut
 	}
 
+	// Measurement only — no arm motion, no pin. Reading the rim and surface rows
+	// off a machine is how its stop row gets confirmed before anything is tuned
+	// against it.
+	if s.cfg.CanServeIced {
+		actions["check_ice_level"] = s.checkIceLevel
+	}
+
 	// Only register the button actions this machine actually has, so the
 	// unknown-action error lists a set the operator can really run.
 	if s.cfg.HasSeparateBrewButtons {

@@ -183,10 +183,11 @@ var withGlassActions = map[string]bool{
 	"move_to_ice_dispense": true,
 	"dispense_ice":         true,
 	"stage_glass":          true,
-	// Plans no motion, so the flag does nothing for it. Allowed anyway: it
-	// belongs to the same stepping sequence, and making it the one exception is
-	// a trap for an operator told to pass the flag on every call.
-	"pulse_ice_pin": true,
+	// These plan no motion, so the flag does nothing for them. Allowed anyway:
+	// they belong to the same stepping sequence, and making them its two
+	// exceptions is a trap for an operator told to pass the flag on every call.
+	"pulse_ice_pin":   true,
+	"check_ice_level": true,
 }
 
 // checkWithGlassAllowed refuses with_glass on an action outside

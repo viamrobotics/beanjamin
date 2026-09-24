@@ -48,3 +48,6 @@ bin
 # Order directories created by `make fetch-order` (see README, "Fetch one
 # order's data"). One order is ~80MB of plan JSON, named by its order UUID.
 /????????-????-????-????-????????????/
+# Local ice capture sets, not regenerable from this repo. The frames kept as the
+# record are in coffee/testdata/icelevel/.
+/icedata/

@@ -16,6 +16,7 @@ import (
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/board"
+	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/components/gripper"
 	"go.viam.com/rdk/components/sensor"
 	toggleswitch "go.viam.com/rdk/components/switch"
@@ -116,10 +117,14 @@ type beanjaminCoffee struct {
 	machineActivity *machineActivityStore
 	cupVision       vision.Service // vision service for cup pickup (always configured)
 	cupCameraName   string         // SrcCameraName, validated to exist in cachedFS
-	glassVision     vision.Service // optional; nil unless CanServeIced
-	glassObserveSw  toggleswitch.Switch
-	milkVision      vision.Service // optional; nil unless CanServeIcedLatte
-	milkObserveSw   toggleswitch.Switch
+	// srcCamera is the same camera as cupCameraName, held as a resource so the
+	// ice-level measurement (ice_level.go) can read frames directly. The vision
+	// pipelines reach it by name through their own services instead.
+	srcCamera      camera.Camera
+	glassVision    vision.Service // optional; nil unless CanServeIced
+	glassObserveSw toggleswitch.Switch
+	milkVision     vision.Service // optional; nil unless CanServeIcedLatte
+	milkObserveSw  toggleswitch.Switch
 	// servingAreaSlotCounter is the round-robin counter for serving-area placement.
 	// It increments once per placeFullCupOnShelf and selects the shelf slot
 	// modulo the number of tiles. Process-local; resets to 0 on rebuild.
@@ -310,6 +315,11 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, err
 	}
 
+	srcCamera, err := camera.FromProvider(deps, conf.SrcCameraName)
+	if err != nil {
+		return nil, fmt.Errorf("src_camera_name %q: %w", conf.SrcCameraName, err)
+	}
+
 	var iceBoard board.Board
 	if conf.IceDispenseBoardName != "" {
 		if iceBoard, err = board.FromProvider(deps, conf.IceDispenseBoardName); err != nil {
@@ -386,6 +396,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		usageSensor:          usageSensor,
 		cupVision:            cupVision,
 		cupCameraName:        conf.SrcCameraName,
+		srcCamera:            srcCamera,
 		glassVision:          glassVision,
 		glassObserveSw:       glassObserveSw,
 		milkVision:           milkVision,
