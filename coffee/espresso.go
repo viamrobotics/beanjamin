@@ -433,14 +433,15 @@ func isDecafDrink(drink string) bool {
 }
 
 // isLungoDrink reports whether the drink is a lungo-size pour, matching the
-// lungo cases in drinkBrewTime.
+// lungo cases in drinkBrewTime. The iced drinks pour a lungo into the cup
+// before it is tipped over the ice.
 func isLungoDrink(drink string) bool {
-	return drink == "lungo" || drink == "decaf_lungo"
+	return drink == "lungo" || drink == "decaf_lungo" || isIcedDrink(drink)
 }
 
 // isIcedDrink reports whether the drink uses the iced serving path
 // (fetch glass -> dispense ice -> pour espresso over ice) instead of handing
-// the espresso cup to the customer. It brews espresso like any other drink.
+// the espresso cup to the customer. It brews a lungo (see isLungoDrink).
 func isIcedDrink(drink string) bool {
 	return drink == "iced_coffee" || drink == "iced_latte"
 }
@@ -454,7 +455,7 @@ func isMilkDrink(drink string) bool {
 }
 
 // waterDelta returns the water-usage increment for a brew: 1.5 for lungo sizes
-// (lungo/decaf_lungo), 1 otherwise (espresso/decaf).
+// (lungo/decaf_lungo and the iced drinks), 1 otherwise (espresso/decaf).
 func waterDelta(drink string) float64 {
 	if isLungoDrink(drink) {
 		return 1.5
