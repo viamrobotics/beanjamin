@@ -29,6 +29,7 @@ package coffee
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
@@ -115,27 +116,45 @@ func (s *beanjaminCoffee) reattachGeometry(label string) error {
 // grip point to centroid + cup_grab_relative_pose, so the centroid is the current
 // grip-point world position minus that offset.
 func (s *beanjaminCoffee) attachConfiguredCupGeometry(ctx context.Context) error {
+	return s.attachConfiguredGeometry(ctx, pickupLabelCup, s.cfg.CupDimensions, s.cfg.CupGrabRelativePose)
+}
+
+// attachConfiguredGlassGeometry is attachConfiguredCupGeometry for an iced glass,
+// modeled from glass_dimensions. Its caller is swapFilterForGlass, not the iced
+// flow — there the vision pickup attaches the glass it actually detected.
+func (s *beanjaminCoffee) attachConfiguredGlassGeometry(ctx context.Context) error {
+	return s.attachConfiguredGeometry(ctx, pickupLabelGlass, s.cfg.GlassDimensions, s.cfg.GlassGrabRelativePose)
+}
+
+// attachConfiguredGeometry models a held container of the configured size at the
+// grasp centroid recovered from the current grip-point pose, and attaches it.
+func (s *beanjaminCoffee) attachConfiguredGeometry(
+	ctx context.Context, label string, dims *ContainerDimensions, grabRel *RelativePose,
+) error {
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return err
 	}
-	box, err := s.configuredCupBox(fs, fsInputs)
+	box, err := s.configuredContainerBox(fs, fsInputs, label, dims, grabRel)
 	if err != nil {
 		return err
 	}
-	s.activeOrderLogger().Infof("cup geometry not cached — modeling it from cup_dimensions (%.0f×%.0f mm) for held-item tracking",
-		s.cfg.CupDimensions.DiameterMm, s.cfg.CupDimensions.HeightMm)
-	return s.attachDetectedGeometry(ctx, pickupLabelCup, box)
+	s.activeOrderLogger().Infof("modeling the held %s from the configured %.0f×%.0f mm for held-item tracking",
+		label, dims.DiameterMm, dims.HeightMm)
+	return s.attachDetectedGeometry(ctx, label, box)
 }
 
-// configuredCupBox builds the world-frame cup box from cup_dimensions, centered
-// on the grasp centroid recovered from the current grip-point world pose. It
-// inverts composeCupPose: the grab sends the grip point to
-// centroid + cup_grab_relative_pose, so the centroid is the grip-point world
-// position minus that offset. Split from attachConfiguredCupGeometry (which reads
-// the arm's joint inputs) so the centroid math is unit-testable against a static
-// frame system.
-func (s *beanjaminCoffee) configuredCupBox(fs *referenceframe.FrameSystem, fsInputs referenceframe.FrameSystemInputs) (spatialmath.Geometry, error) {
+// configuredContainerBox builds the world-frame container box from the given
+// dimensions, centered on the grasp centroid recovered from the current
+// grip-point world pose. It inverts composeCupPose: the grab sends the grip point
+// to centroid + the grab offset, so the centroid is the grip-point world position
+// minus that offset. Split from attachConfiguredGeometry (which reads the arm's
+// joint inputs) so the centroid math is unit-testable against a static frame
+// system.
+func (s *beanjaminCoffee) configuredContainerBox(
+	fs *referenceframe.FrameSystem, fsInputs referenceframe.FrameSystemInputs,
+	label string, dims *ContainerDimensions, grabRel *RelativePose,
+) (spatialmath.Geometry, error) {
 	gripPointPIF := referenceframe.NewPoseInFrame(gripPoint, spatialmath.NewZeroPose())
 	tf, err := fs.Transform(fsInputs.ToLinearInputs(), gripPointPIF, referenceframe.World)
 	if err != nil {
@@ -143,10 +162,89 @@ func (s *beanjaminCoffee) configuredCupBox(fs *referenceframe.FrameSystem, fsInp
 	}
 	gripPointWorld := tf.(*referenceframe.PoseInFrame).Pose().Point()
 
-	// cup_grab_relative_pose is required by Validate whenever pickup is configured,
-	// so it is non-nil on any machine that reaches a serving flow.
-	grabOffset := relativePoseToSpatial(s.cfg.CupGrabRelativePose).Point()
-	return containerBox(gripPointWorld.Sub(grabOffset), s.cfg.CupDimensions, pickupLabelCup)
+	// The grab poses are required by Validate wherever their pickup is configured,
+	// so they are non-nil on any machine that reaches the matching flow.
+	grabOffset := relativePoseToSpatial(grabRel).Point()
+	return containerBox(gripPointWorld.Sub(grabOffset), dims, label)
+}
+
+// withGlassActions are the actions with_glass may be passed to: the steps run
+// with a glass loaded into the jaws by hand and the portafilter lifted off.
+//
+// An allowlist rather than a per-action opt-out, because the flag is an
+// assertion about the physical world that only some steps can be making. An
+// action that does its own pickup starts with empty jaws by definition, and
+// hanging a stand-in where the real glass is about to be grasped puts a phantom
+// in the free approach plan — inside the clean-area shield, which is hard
+// there — so every candidate fails to plan. It would also hand the grasp descent
+// the held-item shield exemption that pickupAreaShieldCollisions withholds until
+// after the grab. Use lock_portafilter + release_filter to reach empty jaws.
+var withGlassActions = map[string]bool{
+	"move_to_ice_dispense": true,
+	"dispense_ice":         true,
+	"stage_glass":          true,
+	// Plans no motion, so the flag does nothing for it. Allowed anyway: it
+	// belongs to the same stepping sequence, and making it the one exception is
+	// a trap for an operator told to pass the flag on every call.
+	"pulse_ice_pin": true,
+}
+
+// checkWithGlassAllowed refuses with_glass on an action outside
+// withGlassActions, naming the ones that accept it.
+func checkWithGlassAllowed(name string) error {
+	if withGlassActions[name] {
+		return nil
+	}
+	allowed := make([]string, 0, len(withGlassActions))
+	for k := range withGlassActions {
+		allowed = append(allowed, k)
+	}
+	sort.Strings(allowed)
+	return fmt.Errorf("with_glass is not accepted by action %q: it asserts a glass loaded into the jaws by hand, which only these steps can be run with: %v", name, allowed)
+}
+
+// swapFilterForGlass models the claws as holding a glass instead of the
+// portafilter for the span of one action, and returns the restore for the caller
+// to defer. It is what an operator stepping the iced sequence by hand needs: the
+// frame system still models the filter they lifted off at rest, and the filter
+// cannot follow a glass in under the ice chute.
+//
+// A glass already modeled in the gripper — the vision pickup's, from a
+// fetch_glass earlier in the same session — is left exactly as it is, and only
+// the filter comes out. A real detection beats a box built from config, and the
+// restore must not take a held item away from the caller that grabbed it.
+func (s *beanjaminCoffee) swapFilterForGlass(ctx context.Context) (func(), error) {
+	restoreFilter, err := s.dropFilter()
+	if err != nil {
+		return nil, fmt.Errorf("with_glass: %w", err)
+	}
+	if s.heldItemAttached {
+		s.activeOrderLogger().Infof("with_glass: the gripper already models a held item, dropping only the portafilter")
+		return restoreFilter, nil
+	}
+	if s.cfg.GlassDimensions == nil || s.cfg.GlassGrabRelativePose == nil {
+		restoreFilter()
+		return nil, fmt.Errorf("with_glass: nothing is modeled in the gripper and there is no glass to model one from; set glass_dimensions and glass_grab_relative_pose (can_serve_iced)")
+	}
+	cachedGlass := s.heldGlassGeom
+	if err := s.attachConfiguredGlassGeometry(ctx); err != nil {
+		restoreFilter()
+		return nil, fmt.Errorf("with_glass: %w", err)
+	}
+	// The box is fabricated from config, not detected, so put the cache back the
+	// way the attach found it: a grasp a vision pickup recorded is what a re-grab
+	// during this action should restore, and this box must outlive nothing.
+	s.heldGlassGeom = cachedGlass
+	standIn := s.cachedFS.Frame(heldItemFrameName)
+	return func() {
+		// Only the stand-in comes down. An action that attached a held item of its
+		// own — a re-grab, or a pickup — leaves the arm really holding something,
+		// and that has to stay modeled after the swap unwinds.
+		if s.cachedFS.Frame(heldItemFrameName) == standIn {
+			s.detachHeldGeometry()
+		}
+		restoreFilter()
+	}, nil
 }
 
 // heldItemFramePose returns the transform the held-item frame is attached at,

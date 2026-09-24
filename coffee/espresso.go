@@ -367,7 +367,12 @@ func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.C
 	return actions
 }
 
-func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[string]any, error) {
+// executeAction runs one named action, holding the arm for its duration.
+// withGlass takes the portafilter out of the frame system for the call and, when
+// nothing is modeled in the gripper, puts a configured glass in its place — for
+// stepping the iced sequence with the filter lifted off by hand. It is refused
+// on any action outside withGlassActions.
+func (s *beanjaminCoffee) executeAction(ctx context.Context, name string, withGlass bool) (map[string]any, error) {
 	actions := s.actionFuncs()
 
 	action, ok := actions[name]
@@ -377,6 +382,13 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 			names = append(names, k)
 		}
 		return nil, fmt.Errorf("unknown action %q, available actions: %v", name, names)
+	}
+
+	// Before the run gate, so a rejected flag costs no state.
+	if withGlass {
+		if err := checkWithGlassAllowed(name); err != nil {
+			return nil, err
+		}
 	}
 
 	if !s.running.CompareAndSwap(false, true) {
@@ -393,6 +405,16 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string) (map[s
 	// step-by-step sequences span separate DoCommands) is preserved.
 	if err := s.refreshFrameSystemIfClean(ctx); err != nil {
 		return nil, fmt.Errorf("refresh frame system before action %q: %w", name, err)
+	}
+	// After the refresh, or it would be put straight back.
+	if withGlass {
+		restore, err := s.swapFilterForGlass(ctx)
+		if err != nil {
+			return nil, err
+		}
+		// Restore on every exit path: the next action's refresh is skipped while
+		// anything is held, which would leave the swap in place for good.
+		defer restore()
 	}
 
 	s.logger.Infof("executing action %q", name)
