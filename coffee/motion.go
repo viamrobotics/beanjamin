@@ -979,6 +979,11 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 // The bound is on the excursion off the slerp, not on the commanded rotation:
 // both endpoints are upright container poses, so the slerp itself stays level
 // and 15° leaves the drink well inside a full cup's static spill angle.
+//
+// The constraint ignores theta — spin about the moving frame's own +Z, which is
+// the container's vertical axis (heldItemFramePose). A cup or bottle spills when
+// tipped, not when spun about its axis, so bounding spin would only shrink the
+// planner's reachable space without keeping the drink any more level.
 const noSpillOrientationToleranceDegs = 15.0
 
 // withNoSpillOrientationConstraint adds the carry's path orientation bound,
@@ -989,7 +994,7 @@ func withNoSpillOrientationConstraint(constraints *motionplan.Constraints) *moti
 		constraints = &motionplan.Constraints{}
 	}
 	constraints.OrientationConstraint = append(constraints.OrientationConstraint,
-		motionplan.OrientationConstraint{OrientationToleranceDegs: noSpillOrientationToleranceDegs})
+		motionplan.OrientationConstraint{OrientationToleranceDegs: noSpillOrientationToleranceDegs, IgnoreTheta: true})
 	return constraints
 }
 

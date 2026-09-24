@@ -156,6 +156,9 @@ func TestWithNoSpillOrientationConstraint(t *testing.T) {
 	if deg := got.OrientationConstraint[0].OrientationToleranceDegs; deg != noSpillOrientationToleranceDegs {
 		t.Errorf("tolerance = %g, want %g", deg, noSpillOrientationToleranceDegs)
 	}
+	if !got.OrientationConstraint[0].IgnoreTheta {
+		t.Errorf("IgnoreTheta = false, want true: spin about the container's axis must not be bounded")
+	}
 
 	// The allowed collisions the carry injects must not be dropped.
 	acs := []AllowedCollision{{Frame1: heldItemFrameName, Frame2: componentClaws}}
