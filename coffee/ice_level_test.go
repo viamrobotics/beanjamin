@@ -245,6 +245,9 @@ func TestValidateIceVisionRejectsSilentGeometry(t *testing.T) {
 		{"band bottom inside the window", func(c *Config) { c.IceROIY1 = 600 }, "ice_roi_y1"},
 		{"negative contrast", func(c *Config) { c.IceMinContrast = -1 }, "must not be negative"},
 		{"negative stop row", func(c *Config) { c.IceStopRowPx = -565 }, "must not be negative"},
+		{"min dwell past the ceiling", func(c *Config) { c.IceDispenseMinSec, c.IceDispenseMaxSec = 40, 30 }, "ice_dispense_min_sec"},
+		// A cap inside one poll ends every dispense on the tick after ice appears.
+		{"cap at the poll interval", func(c *Config) { c.IceAfterFirstSeenMaxSec, c.IceCheckIntervalSec = 0.5, 0.5 }, "ice_after_first_seen_max_sec"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := validCanServeIcedConfig()

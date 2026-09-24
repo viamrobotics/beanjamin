@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"math"
 
 	"go.viam.com/rdk/components/camera"
 )
@@ -122,6 +123,12 @@ func validateIceVision(cfg *Config, path string) error {
 		{"ice_roi_x0", float64(cfg.IceROIX0)},
 		{"ice_roi_x1", float64(cfg.IceROIX1)},
 		{"ice_roi_y1", float64(cfg.IceROIY1)},
+		{"ice_dispense_max_sec", cfg.IceDispenseMaxSec},
+		{"ice_dispense_min_sec", cfg.IceDispenseMinSec},
+		{"ice_after_first_seen_max_sec", cfg.IceAfterFirstSeenMaxSec},
+		{"ice_check_interval_sec", cfg.IceCheckIntervalSec},
+		{"ice_brightness_thresh", cfg.IceBrightnessThresh},
+		{"ice_bright_run", float64(cfg.IceBrightRun)},
 	} {
 		if f.v < 0 {
 			return fmt.Errorf("%s: %s must not be negative, got %v", path, f.name, f.v)
@@ -162,15 +169,54 @@ func validateIceVision(cfg *Config, path string) error {
 			path,
 		)
 	}
+	if maxSec, minSec := orDefault(cfg.IceDispenseMaxSec, defaultIceDispenseMaxSec), orDefault(cfg.IceDispenseMinSec, defaultIceDispenseMinSec); minSec >= maxSec {
+		return fmt.Errorf("%s: ice_dispense_min_sec (%v) must be less than ice_dispense_max_sec (%v)", path, minSec, maxSec)
+	}
+	// The cap runs from the first sighting, which itself takes iceConfirmations
+	// polls to latch. At or below one interval it fires on the poll right after,
+	// ending every dispense the moment ice becomes visible.
+	if capSec, interval := orDefault(cfg.IceAfterFirstSeenMaxSec, defaultIceAfterFirstSeenMaxSec), orDefault(cfg.IceCheckIntervalSec, defaultIceCheckIntervalSec); capSec <= interval {
+		return fmt.Errorf(
+			"%s: ice_after_first_seen_max_sec (%v) must be more than ice_check_interval_sec (%v) — otherwise the dispense ends on the first poll after ice becomes visible",
+			path,
+			capSec,
+			interval,
+		)
+	}
+	// The shadow decides nothing, so its settings are only rejected where they
+	// would make it silently useless rather than visibly wrong: a cutoff no
+	// 8-bit row mean can reach, or a run longer than the band it scans, both
+	// report "no ice" on every frame for the life of the machine.
+	if cfg.IceBrightnessThresh > 0 {
+		if cfg.IceBrightnessThresh >= 255 {
+			return fmt.Errorf(
+				"%s: ice_brightness_thresh (%v) must be below 255 — row brightness is an 8-bit mean, so nothing ever reaches it and the shadow reports no ice on every frame",
+				path,
+				cfg.IceBrightnessThresh,
+			)
+		}
+		if run := orDefault(cfg.IceBrightRun, defaultIceBrightRun); run > b.y1-b.y0 {
+			return fmt.Errorf("%s: ice_bright_run (%d) must fit inside the %d-row scan band", path, run, b.y1-b.y0)
+		}
+	}
 	return nil
 }
 
 // iceReading is one frame's measurement. row is meaningful only when found,
-// and step is the brightness step it was judged by.
+// and step carries whatever number the method judged by — the brightness step
+// for the contrast method, the row's mean brightness for the shadow.
 type iceReading struct {
 	row   int
 	step  float64
 	found bool
+}
+
+// iceMeasurement is one frame read by both methods. contrast decides the
+// dispense; brightness is the shadow and is only populated when shadow is set.
+type iceMeasurement struct {
+	contrast   iceReading
+	brightness iceReading
+	shadow     bool
 }
 
 // iceSurfaceRow finds the ice surface in the band: the largest brightness step
@@ -272,6 +318,40 @@ func contrastStep(rows []float64, w int) (step float64, idx int) {
 	return best, bestIdx
 }
 
+// measureIceSurface grabs a frame and measures it with both methods.
+func (s *beanjaminCoffee) measureIceSurface(ctx context.Context) (iceMeasurement, error) {
+	img, err := s.iceFrame(ctx)
+	if err != nil {
+		return iceMeasurement{}, err
+	}
+	return s.measureIceFrame(img)
+}
+
+// measureIceFrame runs both methods over one frame.
+func (s *beanjaminCoffee) measureIceFrame(img image.Image) (iceMeasurement, error) {
+	b := s.iceBand()
+	rows, err := rowBrightness(img, b)
+	if err != nil {
+		return iceMeasurement{}, err
+	}
+	return s.measureIceRows(rows, b), nil
+}
+
+// measureIceRows runs both methods over a profile already in hand. One profile,
+// not two: readings taken a poll apart would compare the ice machine against
+// itself rather than the two methods against each other. The shadow is pure
+// over rows the deciding method has already read, so it has no failure of its
+// own and can never contribute to the camera-error count that falls back to a
+// fixed dwell.
+func (s *beanjaminCoffee) measureIceRows(rows []float64, b iceBand) iceMeasurement {
+	m := iceMeasurement{contrast: contrastReading(rows, b)}
+	if s.iceBrightnessShadowOn() {
+		m.shadow = true
+		m.brightness = brightnessSurfaceRow(rows, b, s.cfg.IceBrightnessThresh, s.iceBrightRun())
+	}
+	return m
+}
+
 // iceFrame grabs one frame from the arm-mounted camera. Filtering to the color
 // source keeps the depth payload — 1.8 MB that nothing here reads — off the
 // wire, which is a latency decision: the check has to fit inside the poll
@@ -306,12 +386,14 @@ func (s *beanjaminCoffee) checkIceLevel(ctx, _ context.Context) error {
 	if err != nil {
 		return fmt.Errorf("check_ice_level: %w", err)
 	}
-	surface := contrastReading(rows, b)
+	measurement := s.measureIceRows(rows, b)
+	surface := measurement.contrast
 
 	bounds := img.Bounds()
 	stopRow := s.iceStopRowPx()
 	logger.Infof("check_ice_level: frame %dx%d, band x %d..%d y %d..%d, window %d, min contrast %.0f, stop row %d",
 		bounds.Max.X, bounds.Max.Y, b.x0, b.x1, b.y0, b.y1, b.window, b.minContrast, stopRow)
+	s.reportCheckBrightness(rows, measurement.brightness, stopRow)
 	if !surface.found {
 		logger.Infof("check_ice_level: no ice surface in the band — either not enough ice yet, or risen past row %d", stopRow)
 	} else {
@@ -332,6 +414,51 @@ func (s *beanjaminCoffee) checkIceLevel(ctx, _ context.Context) error {
 		rim.step,
 	)
 	return nil
+}
+
+// reportCheckBrightness prints the brightness shadow's read of the same frame,
+// and — whether or not the shadow is configured — the range of row means it
+// found. That range is how ice_brightness_thresh gets chosen in the first
+// place: an empty glass has to sit below it and ice above it, at this machine's
+// lighting rather than the one the fixtures were shot under.
+func (s *beanjaminCoffee) reportCheckBrightness(rows []float64, shadow iceReading, stopRow int) {
+	logger := s.activeOrderLogger()
+	lo, hi := rows[0], rows[0]
+	for _, v := range rows {
+		lo, hi = math.Min(lo, v), math.Max(hi, v)
+	}
+	logger.Infof(
+		"check_ice_level: row brightness in the band runs %.0f to %.0f — ice_brightness_thresh has to sit above an empty glass's highest row and below ice's lowest",
+		lo,
+		hi,
+	)
+	if !s.iceBrightnessShadowOn() {
+		logger.Infof(
+			"check_ice_level: brightness shadow off (set ice_brightness_thresh to log what an absolute cutoff would have decided on every dispense)",
+		)
+		return
+	}
+	if !shadow.found {
+		logger.Infof("check_ice_level: brightness shadow (threshold %.0f over %d rows) found no surface",
+			s.cfg.IceBrightnessThresh, s.iceBrightRun())
+		return
+	}
+	logger.Infof("check_ice_level: brightness shadow (threshold %.0f over %d rows) has the surface at row %d (%.0f) — %s",
+		s.cfg.IceBrightnessThresh, s.iceBrightRun(), shadow.row, shadow.step, iceRowRelativeToStop(shadow.row, stopRow))
+}
+
+// iceRowRelativeToStop says which side of the stop row a row falls on, in
+// words, because the sign of the difference is the thing a bare row number
+// hides.
+func iceRowRelativeToStop(row, stopRow int) string {
+	switch {
+	case row > stopRow:
+		return fmt.Sprintf("%d px below the stop row — not yet", row-stopRow)
+	case row < stopRow:
+		return fmt.Sprintf("%d px above the stop row", stopRow-row)
+	default:
+		return "level with the stop row"
+	}
 }
 
 // iceColorSourceName is the camera source the measurement reads.
