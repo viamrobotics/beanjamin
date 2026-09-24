@@ -369,28 +369,62 @@ func countingReadings(found ...bool) (func(context.Context) (iceMeasurement, err
 		}
 }
 
-// TestDwellUntilFullReportsHowItEnded pins how each exit is labelled, and which
-// of them the shadow comparison is worth drawing from: only the exits where the
-// measurement ran to an answer.
+// TestDwellUntilFullDefersItsReporting is the ordering invariant the whole
+// result struct exists for: holdIcePin's deferred pin close does not run until
+// dwellUntilFull returns, so anything the loop logged or wrote from inside
+// itself would be a sensor RPC or a JPEG encode with the ice still running.
+func TestDwellUntilFullDefersItsReporting(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := iceTestService(t, &Config{SaveMotionRequestsDir: dir})
+	ctx := withIceFrameSaving(context.Background())
+	frame := loadFixture(t, "fill_40.jpg")
+	var i int
+	measure := func(context.Context) (iceMeasurement, error) {
+		i++
+		// Seen twice then gone twice: the stop path, with a real frame behind it
+		// so the annotation actually runs.
+		return iceMeasurement{contrast: iceReading{row: 570, step: 40, found: i <= 2}, frame: frame}, nil
+	}
+
+	res, err := s.dwellUntilFull(ctx, context.Background(), measure)
+	if err != nil {
+		t.Fatalf("dwellUntilFull: %v", err)
+	}
+	if wrote := savedFrames(t, dir); len(wrote) != 0 {
+		t.Errorf("the loop wrote %v before returning, while the pin was still open", wrote)
+	}
+
+	s.reportIceDispense(ctx, res)
+	if wrote := savedFrames(t, dir); len(wrote) != 1 {
+		t.Errorf("reportIceDispense wrote %d frames, want 1", len(wrote))
+	}
+}
+
+// TestDwellUntilFullReportsHowItEnded: the outcome slug becomes a tag on the
+// data page and picks the caption, and the two exits that end on a fault hand
+// back the last frame that measured cleanly — with a note, because a frame from
+// before the fault is evidence about the run and not a picture of its end.
 func TestDwellUntilFullReportsHowItEnded(t *testing.T) {
+	frame := loadFixture(t, "fill_40.jpg")
 	seen := func(found bool) iceMeasurement {
-		return iceMeasurement{contrast: iceReading{row: 570, step: 40, found: found}}
+		return iceMeasurement{contrast: iceReading{row: 570, step: 40, found: found}, frame: frame}
 	}
 
 	for _, tc := range []struct {
-		name    string
-		outcome string
-		compare bool
-		measure func(cancel context.CancelFunc) func(context.Context) (iceMeasurement, error)
+		name     string
+		outcome  string
+		wantNote bool
+		compare  bool
+		measure  func(cancel context.CancelFunc) func(context.Context) (iceMeasurement, error)
 	}{
-		{"stopped", "stopped", true, func(context.CancelFunc) func(context.Context) (iceMeasurement, error) {
+		{"stopped", "stopped", false, true, func(context.CancelFunc) func(context.Context) (iceMeasurement, error) {
 			var i int
 			return func(context.Context) (iceMeasurement, error) { i++; return seen(i <= 2), nil }
 		}},
-		{"ceiling", "timeout", true, func(context.CancelFunc) func(context.Context) (iceMeasurement, error) {
+		{"ceiling", "timeout", false, true, func(context.CancelFunc) func(context.Context) (iceMeasurement, error) {
 			return func(context.Context) (iceMeasurement, error) { return seen(false), nil }
 		}},
-		{"camera gives out", "vision_fallback", false, func(context.CancelFunc) func(context.Context) (iceMeasurement, error) {
+		{"camera gives out", "vision_fallback", true, false, func(context.CancelFunc) func(context.Context) (iceMeasurement, error) {
 			var i int
 			return func(context.Context) (iceMeasurement, error) {
 				if i++; i == 1 {
@@ -399,7 +433,7 @@ func TestDwellUntilFullReportsHowItEnded(t *testing.T) {
 				return iceMeasurement{}, errors.New("camera is down")
 			}
 		}},
-		{"cancelled mid-run", "cancelled", false, func(cancel context.CancelFunc) func(context.Context) (iceMeasurement, error) {
+		{"cancelled mid-run", "cancelled", true, false, func(cancel context.CancelFunc) func(context.Context) (iceMeasurement, error) {
 			var i int
 			return func(context.Context) (iceMeasurement, error) {
 				if i++; i == 2 {
@@ -415,6 +449,9 @@ func TestDwellUntilFullReportsHowItEnded(t *testing.T) {
 		cancel()
 		if res.outcome != tc.outcome {
 			t.Errorf("%s: outcome %q, want %q", tc.name, res.outcome, tc.outcome)
+		}
+		if gotNote := res.note != ""; gotNote != tc.wantNote {
+			t.Errorf("%s: note %q, want one: %v", tc.name, res.note, tc.wantNote)
 		}
 		if res.compare != tc.compare {
 			t.Errorf("%s: compare=%v, want %v — the shadow comparison only means something where the measurement ran to an answer",

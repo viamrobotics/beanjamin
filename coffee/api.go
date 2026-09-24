@@ -167,6 +167,16 @@ var coffeeCommands = []commandDef{
 			if err != nil {
 				return nil, err
 			}
+			// Orders save their ice frames unconditionally; this only adds the
+			// hand-run actions, which are a tuning loop and would otherwise bury
+			// them.
+			annotate, err := parseOptionalBool(cmd, "annotate")
+			if err != nil {
+				return nil, err
+			}
+			if annotate {
+				ctx = withIceFrameSaving(ctx)
+			}
 			return s.executeAction(ctx, cmd["execute_action"].(string), withGlass)
 		}},
 	{key: "cancel", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
