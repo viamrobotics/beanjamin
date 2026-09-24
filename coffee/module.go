@@ -444,5 +444,9 @@ const rewindAnnouncement = "Rewinding to a clean start. I'll clean up if needed 
 func (s *beanjaminCoffee) Close(context.Context) error {
 	close(s.queueStop)
 	s.cancelFunc()
+	// Cancelling the sequence context is not the same as closing the ice pin: a
+	// rebuild or a crash mid-dispense would otherwise leave the ice machine
+	// running until somebody notices.
+	s.closeIcePin()
 	return nil
 }

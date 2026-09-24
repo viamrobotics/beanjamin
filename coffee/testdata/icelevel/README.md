@@ -26,24 +26,26 @@ so rows 547-670, of which the step can name only 595-622):
 | `fill_100.jpg` | none | risen past the stop row (real surface 335) |
 | `rim379_empty.jpg` | none | **the important one**: the rim sits at 379 with a step of 56, stronger than any real ice surface, and is excluded by position alone |
 | `rim379_rising.jpg` | row 595, step 32 | +13.5s into the run; its real surface is at 567, above what the band can name — see below |
-| `rim379_passed.jpg` | none | +16.5s, risen past it |
+| `rim379_passed.jpg` | none | +16.5s, risen past it — the frame the loop stops on |
 
 `rim379_rising` is worth reading twice. Its surface sits at row 567, which at
 `ice_stop_row_px` 595 has already passed the stop row — but 567 is outside the
 nameable range, so the step reports the tail of that same edge at the boundary
-row 595, a step of 32 against a floor of 25. A found row reads as "not yet" on a
-glass that is already full, and only `rim379_passed` three seconds later drops
-the tail under the floor. At `ice_stop_row_px` 565 the same frame reads row 567, step 49. The fixture is
+row 595, a step of 32 against a floor of 25. A found row means "not yet" to the
+loop, so this frame keeps the pin open on a glass that is already full, and only
+`rim379_passed` three seconds later drops the tail under the floor and stops it.
+At `ice_stop_row_px` 565 the same frame reads row 567, step 49. The fixture is
 the cost of the higher stop row, in one frame.
 
 Single-frame values; the plan quotes 5-frame means for the `fill_*` set, so small
 differences there are per-frame noise.
 
 Note what the empty glass and the full one have in common: **no surface in the
-band**. The measurement cannot tell them apart and does not try; whatever reads
-it has to. That is why a false sighting is the dangerous direction — a single
-glare frame on an empty glass is worth more care than a missed one on a full
-one.
+band**. The measurement cannot tell them apart and does not try — the loop's
+`sawSurface` latch does. That is why a false sighting is more dangerous than a
+missed one: a single glare frame among the ~20 empty ticks before ice arrives
+would arm the latch and let the next empty reading stop a dispense on an empty
+glass.
 
 These fixtures pin the contrast step, not a fill fraction: the measurement
 answers "has the surface passed the stop row", not "how full is the glass".

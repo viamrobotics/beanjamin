@@ -124,6 +124,12 @@ type Config struct {
 	PourVelDegsPerSec    float64 `json:"pour_vel_degs_per_sec,omitempty"`
 	PourAccDegsPerSec2   float64 `json:"pour_acc_degs_per_sec2,omitempty"`
 
+	// IceVisionEnabled watches the glass while ice falls and closes the pin when
+	// the surface passes IceStopRowPx, instead of dispensing for a fixed
+	// IceDispenseSec (ice_dwell.go). Off by default: the shipping stop row rests
+	// on a single observed glass seating, and check_ice_level is how a machine
+	// confirms its own value before turning this on.
+	IceVisionEnabled bool `json:"ice_vision_enabled,omitempty"`
 	// The measurement's pixel geometry. Every one of these is a raw pixel
 	// coordinate at the camera's configured resolution — reconfigure the camera
 	// to a different frame size and they all silently mean something else.
@@ -135,6 +141,25 @@ type Config struct {
 	IceROIX0          int     `json:"ice_roi_x0,omitempty"`
 	IceROIX1          int     `json:"ice_roi_x1,omitempty"`
 	IceROIY1          int     `json:"ice_roi_y1,omitempty"`
+	// The brightness shadow: a second read of the same frame by absolute
+	// brightness, logged beside the contrast step and never acted on.
+	// IceBrightnessThresh is the row-mean cutoff; unset, the shadow is off, and
+	// it deliberately has no default because an absolute cutoff is the one value
+	// that does not survive a change in lighting. IceBrightRun is how many
+	// consecutive rows must clear it.
+	IceBrightnessThresh float64 `json:"ice_brightness_thresh,omitempty"`
+	IceBrightRun        int     `json:"ice_bright_run,omitempty"`
+	// Dispense loop timing. IceDispenseMaxSec is the ceiling that ends a
+	// dispense the measurement never stopped; IceDispenseMinSec holds the pin
+	// open before any reading counts, since ice takes seconds to arrive.
+	// IceAfterFirstSeenMaxSec is the second ceiling, measured from the first
+	// sighting instead of from the pin opening: the absolute one has to clear a
+	// whole fill, so only this one is tight enough to bound the overflow when ice
+	// is flowing but its surface is never confirmed past the stop row.
+	IceDispenseMaxSec       float64 `json:"ice_dispense_max_sec,omitempty"`
+	IceDispenseMinSec       float64 `json:"ice_dispense_min_sec,omitempty"`
+	IceAfterFirstSeenMaxSec float64 `json:"ice_after_first_seen_max_sec,omitempty"`
+	IceCheckIntervalSec     float64 `json:"ice_check_interval_sec,omitempty"`
 
 	// CanServeIcedLatte enables the iced_latte drink: the iced-coffee flow plus
 	// a fridge trip for milk (coffee/milk.go). It builds on can_serve_iced — the
@@ -500,8 +525,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		cfg.CameraObservePoseSwitcherName,
 	)
 
-	// Not gated on can_serve_iced: the band is checked wherever it is configured,
-	// so a band that scans nothing is rejected rather than measuring silently.
+	// Not gated on can_serve_iced: pulse_ice_pin is an execute_action on every
+	// machine, so ice_vision_enabled is reachable — and a band that scans nothing
+	// would then ride every dispense to its ceiling with nothing in the logs.
 	if err := validateIceVision(cfg, path); err != nil {
 		return nil, nil, err
 	}
