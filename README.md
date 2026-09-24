@@ -311,12 +311,12 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `ice_pin_name`             | string | When `can_serve_iced` is enabled | Board pin held HIGH to dispense ice. Required — there is no default pin. |
 | `ice_dispense_sec`         | float  | No       | How long the ice pin is held HIGH per drink, in seconds. Defaults to 5. With `ice_vision_enabled` this is only the fallback used when the camera fails. |
 | `ice_vision_enabled`       | bool   | No       | Watch the glass while ice falls and close the pin when the ice surface passes `ice_stop_row_px`, instead of dispensing for a fixed `ice_dispense_sec`. Default `false`: the shipping stop row was measured on one machine at one glass seating, so confirm yours with `check_ice_level` before turning this on. |
-| `ice_stop_row_px`          | int    | No       | Image row the ice surface must reach for the glass to count as full. The camera rides the gripper, so a row is a fixed height above the jaws. Defaults to 565. |
+| `ice_stop_row_px`          | int    | No       | Image row the ice surface must reach for the glass to count as full. The camera rides the gripper, so a row is a fixed height above the jaws. Defaults to 595. |
 | `ice_contrast_window`      | int    | No       | Rows averaged on each side of a candidate row when measuring the brightness step. The ice surface is a gradual edge, so a narrow window measures only part of it. Defaults to 48. |
 | `ice_min_contrast`         | float  | No       | Smallest brightness step counted as an ice surface. Below it the frame reports no ice. Defaults to 25. |
 | `ice_roi_x0`, `ice_roi_x1` | int    | No       | Left and right edges of the column strip whose row brightness is averaged, inset from the glass walls. Default 700 and 910. |
 | `ice_roi_y1`               | int    | No       | Bottom of the scan — the lowest part of the glass the camera can see before the ice machine's ledge occludes it. Defaults to 670. There is no `ice_roi_y0`: the top of the scan is derived as `ice_stop_row_px - ice_contrast_window`, which is what keeps the glass rim out of the measurement. |
-| `ice_dispense_max_sec`     | float  | No       | Absolute ceiling on a watched dispense, measured from the pin opening. On reaching it the glass is served as it is and `ice_dispense_timeouts` is bumped; the order is not failed. Defaults to 40 — an observed fill took 17-20s, so a much lower value times out every drink. This is the backstop for a hopper that never delivers; `ice_after_first_seen_max_sec` is the one that bounds overflow. |
+| `ice_dispense_max_sec`     | float  | No       | Absolute ceiling on a watched dispense, measured from the pin opening. On reaching it the glass is served as it is and `ice_dispense_timeouts` is bumped; the order is not failed. Defaults to 60 — an observed fill took 17-20s, so a much lower value times out every drink. This is the backstop for a hopper that never delivers; `ice_after_first_seen_max_sec` is the one that bounds overflow. |
 | `ice_after_first_seen_max_sec` | float | No  | Second ceiling, measured from the first confirmed sighting rather than from the pin opening. Defaults to 30. It exists because `ice_dispense_max_sec` has to clear a whole fill, which leaves it ~10s above a full glass on a run whose surface is never confirmed past the stop row — and that overflow is ice, not a light drink. Ends the dispense the same way the absolute ceiling does. Must be more than `ice_check_interval_sec`, or the dispense ends on the first poll after ice appears. |
 | `ice_dispense_min_sec`     | float  | No       | How long the pin is held open before any reading counts. Defaults to 2. |
 | `ice_check_interval_sec`   | float  | No       | How often the glass is measured during a watched dispense. Defaults to 0.5. |
@@ -1379,7 +1379,7 @@ The shipping measurement finds the ice surface as a *brightness step* — dark
 empty glass above, bright ice below — because a step survives a lighting change
 where an absolute cutoff does not. The cost is a dead band: the step needs a
 full `ice_contrast_window` of rows either side of a candidate, so it can only
-name rows `ice_stop_row_px` to `ice_roi_y1 - window` (565-622 at the defaults).
+name rows `ice_stop_row_px` to `ice_roi_y1 - window` (595-622 at the defaults).
 A surface above the stop row is unnameable, which is why the dispense stops on
 the surface *disappearing* rather than on a row.
 

@@ -3,8 +3,8 @@ package coffee
 // Drawing the ice measurement onto the frame it was taken from.
 //
 // The measurement is bare pixel rows, and a row number says nothing about which
-// way is up: "ice visible at row 606, stop row 565" reads like the glass is
-// full when it is 41 px short, because rows grow downward. A picture settles
+// way is up: "ice visible at row 606, stop row 595" reads like the glass is
+// full when it is 11 px short, because rows grow downward. A picture settles
 // that, and it is the only way to check a stop row against a real seating.
 //
 // One frame is drawn per hand-run ice action that asks for it; see

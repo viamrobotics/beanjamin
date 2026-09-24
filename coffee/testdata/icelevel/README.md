@@ -14,19 +14,28 @@ so all five agree on the rim to the pixel.
 23 mm — lower. Nothing bounds that difference: `fetch_glass` grabs at whatever
 centroid segmentation returned.
 
-With the shipping band (window 48, `ice_min_contrast` 25, `ice_stop_row_px` 565,
-so rows 517-670):
+With the shipping band (window 48, `ice_min_contrast` 25, `ice_stop_row_px` 595,
+so rows 547-670, of which the step can name only 595-622):
 
 | fixture | surface | note |
 |---|---|---|
 | `fill_0.jpg` | none | empty |
 | `fill_30.jpg` | none | the ledge occludes the glass base |
-| `fill_40.jpg` | row 595, step 58 | below the stop row: not yet |
+| `fill_40.jpg` | row 595, step 58 | at the stop row: not yet |
 | `fill_80.jpg` | none | risen past the stop row (real surface 434) |
 | `fill_100.jpg` | none | risen past the stop row (real surface 335) |
 | `rim379_empty.jpg` | none | **the important one**: the rim sits at 379 with a step of 56, stronger than any real ice surface, and is excluded by position alone |
-| `rim379_rising.jpg` | row 567, step 49 | +13.5s into the run, just below the stop row |
+| `rim379_rising.jpg` | row 595, step 32 | +13.5s into the run; its real surface is at 567, above what the band can name — see below |
 | `rim379_passed.jpg` | none | +16.5s, risen past it — the frame the loop stops on |
+
+`rim379_rising` is worth reading twice. Its surface sits at row 567, which at
+`ice_stop_row_px` 595 has already passed the stop row — but 567 is outside the
+nameable range, so the step reports the tail of that same edge at the boundary
+row 595, a step of 32 against a floor of 25. A found row means "not yet" to the
+loop, so this frame keeps the pin open on a glass that is already full, and only
+`rim379_passed` three seconds later drops the tail under the floor and stops it.
+At `ice_stop_row_px` 565 the same frame reads row 567, step 49. The fixture is
+the cost of the higher stop row, in one frame.
 
 Single-frame values; the plan quotes 5-frame means for the `fill_*` set, so small
 differences there are per-frame noise.
