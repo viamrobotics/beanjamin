@@ -41,7 +41,6 @@ func (s *beanjaminCoffee) milkPickupTarget() *pickupTarget {
 	return &pickupTarget{
 		label:            pickupLabelMilk,
 		vision:           s.milkVision,
-		cameraName:       s.cupCameraName,
 		observeSw:        s.milkObserveSw,
 		observeHomePose:  milkPoseObserve,
 		approachRel:      s.cfg.MilkApproachRelativePose,

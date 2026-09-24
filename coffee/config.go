@@ -11,7 +11,6 @@ import (
 
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/board"
-	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/components/gripper"
 	"go.viam.com/rdk/components/sensor"
 	toggleswitch "go.viam.com/rdk/components/switch"
@@ -167,7 +166,6 @@ type Config struct {
 	// Vision-driven cup pickup
 	// The fields below configure that pipeline and are required.
 	CupVisionServiceName          string        `json:"cup_vision_service_name,omitempty"`
-	SrcCameraName                 string        `json:"src_camera_name,omitempty"`
 	CupApproachRelativePose       *RelativePose `json:"cup_approach_relative_pose,omitempty"`
 	CupGrabRelativePose           *RelativePose `json:"cup_grab_relative_pose,omitempty"`
 	CameraObservePoseSwitcherName string        `json:"camera_observe_pose_switcher_name,omitempty"`
@@ -442,7 +440,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		"gripper_name", cfg.GripperName,
 		// Cup pickup is always vision-driven, so its pipeline is required too.
 		"cup_vision_service_name", cfg.CupVisionServiceName,
-		"src_camera_name", cfg.SrcCameraName,
 		"camera_observe_pose_switcher_name", cfg.CameraObservePoseSwitcherName,
 		"cup_approach_relative_pose", cfg.CupApproachRelativePose,
 		"cup_grab_relative_pose", cfg.CupGrabRelativePose,
@@ -484,7 +481,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 	reqDeps = append(reqDeps,
 		vision.Named(cfg.CupVisionServiceName).String(),
-		camera.Named(cfg.SrcCameraName).String(),
 		cfg.CameraObservePoseSwitcherName,
 	)
 
