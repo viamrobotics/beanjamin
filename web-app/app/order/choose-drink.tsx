@@ -62,7 +62,7 @@ export function ChooseDrink({
   };
 
   return (
-    <main className="relative h-full bg-white flex flex-col overflow-y-auto font-sans">
+    <main className="@container relative h-full bg-white flex flex-col overflow-y-auto font-sans">
       <header className="sticky top-0 z-10 w-full bg-white px-10 pt-6 pb-2">
         <button
           type="button"
@@ -85,8 +85,8 @@ export function ChooseDrink({
           </svg>
         </button>
       </header>
-      <div className="my-auto flex flex-col gap-6 w-full max-w-[900px] mx-auto px-10 pb-6">
-        <div className="anim-in flex items-center justify-between gap-4">
+      <div className="my-auto flex flex-col gap-6 w-full max-w-[900px] mx-auto px-10">
+        <div className="anim-in flex flex-wrap items-center justify-between gap-x-4">
           <h1 className="text-3xl tracking-tight font-semibold text-[#0a0a0a] whitespace-nowrap">
             Choose your drink
           </h1>
@@ -96,7 +96,7 @@ export function ChooseDrink({
             role="switch"
             aria-checked={decaf}
             onClick={() => handleDecaf(!decaf)}
-            className="flex items-center gap-3 p-4 transition-colors"
+            className="ml-auto flex items-center gap-3 p-4 transition-colors"
           >
             <svg
               aria-hidden="true"
@@ -130,62 +130,66 @@ export function ChooseDrink({
           </button>
         </div>
 
-        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3">
+        <div className="grid gap-3 grid-cols-2 @md:grid-cols-3 @lg:grid-cols-4">
           {GRID_DRINKS.map((drink, i) => renderDrinkCard(drink, i))}
         </div>
 
-        <div
-          className="anim-in flex justify-center"
-          style={{ animationDelay: "500ms" }}
-        >
+        {/* Sticky so the fulfillment choice and Next stay reachable when the
+            grid overflows a short screen; the fade marks cards scrolling under it. */}
+        <div className="sticky bottom-0 z-10 -mx-10 flex flex-col gap-6 bg-white px-10 pb-6 before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-6 before:bg-linear-to-t before:from-white before:to-transparent">
           <div
-            role="radiogroup"
-            aria-label="How would you like to receive your drink?"
-            className="inline-flex rounded-full bg-neutral-100 p-1"
+            className="anim-in flex justify-center"
+            style={{ animationDelay: "500ms" }}
           >
-            {(
-              [
-                { id: "pickup", label: "Pickup" },
-                { id: "delivery", label: "Delivery" },
-              ] as const
-            ).map((mode) => (
-              <button
-                key={mode.id}
-                type="button"
-                role="radio"
-                aria-checked={fulfillment === mode.id}
-                onClick={() => onFulfillmentChange(mode.id)}
-                className={`px-8 py-2.5 rounded-full font-mono font-semibold text-sm uppercase tracking-wider transition-colors duration-150 ${
-                  fulfillment === mode.id
-                    ? "bg-black text-white"
-                    : "text-neutral-500 hover:text-neutral-900"
-                }`}
-              >
-                {mode.label}
-              </button>
-            ))}
+            <div
+              role="radiogroup"
+              aria-label="How would you like to receive your drink?"
+              className="inline-flex rounded-full bg-neutral-100 p-1"
+            >
+              {(
+                [
+                  { id: "pickup", label: "Pickup" },
+                  { id: "delivery", label: "Delivery" },
+                ] as const
+              ).map((mode) => (
+                <button
+                  key={mode.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={fulfillment === mode.id}
+                  onClick={() => onFulfillmentChange(mode.id)}
+                  className={`px-8 py-2.5 rounded-full font-mono font-semibold text-sm uppercase tracking-wider transition-colors duration-150 ${
+                    fulfillment === mode.id
+                      ? "bg-black text-white"
+                      : "text-neutral-500 hover:text-neutral-900"
+                  }`}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
           </div>
+
+          {rejection && (
+            <p className="anim-in text-neutral-500 text-center text-sm -mt-2">
+              {rejection}
+            </p>
+          )}
+
+          {!connected && !rejection && (
+            <p className="anim-in text-neutral-500 text-center text-sm -mt-4">
+              Waiting to reconnect to the machine…
+            </p>
+          )}
+          <button
+            onClick={onNext}
+            disabled={!selectedDrink || !connected}
+            className="anim-in press w-full py-4 text-base font-mono font-semibold uppercase tracking-wider bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
+            style={{ animationDelay: "600ms" }}
+          >
+            Next
+          </button>
         </div>
-
-        {rejection && (
-          <p className="anim-in text-neutral-500 text-center text-sm -mt-2">
-            {rejection}
-          </p>
-        )}
-
-        {!connected && !rejection && (
-          <p className="anim-in text-neutral-500 text-center text-sm -mt-4">
-            Waiting to reconnect to the machine…
-          </p>
-        )}
-        <button
-          onClick={onNext}
-          disabled={!selectedDrink || !connected}
-          className="anim-in press w-full py-4 text-base font-mono font-semibold uppercase tracking-wider bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
-          style={{ animationDelay: "600ms" }}
-        >
-          Next
-        </button>
       </div>
     </main>
   );
