@@ -41,11 +41,12 @@ jobs:
       - name: Install dependencies
         run: make setup
 
-      - name: Install golangci-lint
-        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v2.11.4
-
-      - name: Lint
-        run: make lint
+      # Runs golangci-lint directly rather than `make lint`, whose `gofmt -w`
+      # would rewrite unformatted files in the runner and let them pass.
+      # golangci/golangci-lint-action@v9.3.0
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a
+        with:
+          version: v2.11.4
 
   test:
     runs-on: ubuntu-24.04
@@ -62,4 +63,4 @@ jobs:
         run: make setup
 
       - name: Test
-        run: go test ./...
+        run: go test -race ./...
