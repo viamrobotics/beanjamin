@@ -236,10 +236,8 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	logger := s.logger
 
 	// Merge both contexts so cancellation from either stops planning/execution.
-	ctx, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(cancelCtx, func() { cancel() })
-	defer stop()
-	defer cancel()
+	ctx, done := mergedCancelContext(ctx, cancelCtx)
+	defer done()
 
 	if s.cfg.DoorApproachRelativePose == nil {
 		return fmt.Errorf("%s requires door_approach_relative_pose", action)

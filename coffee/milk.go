@@ -196,10 +196,8 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 	// Merge cancelCtx into ctx so operator cancel interrupts the raw moves and
 	// the gripper calls (the same merge pickDynamic does — these are raw-pose
 	// moves, not executeStep, so nothing else checks cancelCtx for us).
-	ctx, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(cancelCtx, func() { cancel() })
-	defer stop()
-	defer cancel()
+	ctx, done := mergedCancelContext(ctx, cancelCtx)
+	defer done()
 
 	centroid := *s.milkGraspCentroid
 	approachPose, placePose := s.milkReturnPoses(centroid)

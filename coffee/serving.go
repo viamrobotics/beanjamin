@@ -124,7 +124,7 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context,
 	for off := 0; off < n; off++ {
 		idx := slotIndex(start+uint64(off), n)
 		logger.Infof("place_in_serving_area: trying slot %d/%d", idx+1, n)
-		err := s.tryDropCupInSlot(ctx, slots[idx], shelfTopZ, contents)
+		err := s.tryDropCupInSlot(ctx, cancelCtx, slots[idx], shelfTopZ, contents)
 		if err == nil {
 			// Next placement starts at the slot after the one just used.
 			s.servingAreaSlotCounter.Store(start + uint64(off) + 1)
@@ -166,9 +166,17 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context,
 //     caller can try the next slot.
 //   - anything else → an execution error, or any failure after the cup was
 //     released; bubble up (do not try another slot with an empty gripper).
-func (s *beanjaminCoffee) tryDropCupInSlot(ctx context.Context, tileWorld r3.Vector, shelfTopZ float64,
+//
+// The raw-pose moves, the level carry and the gripper calls here do not see
+// cancelCtx on their own, so it is merged into ctx up front: an operator cancel
+// landing during planning, gripper actuation or a gripperPause stops the rest of
+// the descent, release and retreat instead of only the trajectory in flight.
+func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, tileWorld r3.Vector, shelfTopZ float64,
 	contents heldContents,
 ) error {
+	ctx, done := mergedCancelContext(ctx, cancelCtx)
+	defer done()
+
 	logger := s.activeOrderLogger()
 	dropAnchor := r3.Vector{
 		X: tileWorld.X,

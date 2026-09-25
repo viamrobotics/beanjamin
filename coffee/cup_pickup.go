@@ -738,11 +738,9 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 	defer span.End()
 
 	// Merge cancelCtx into ctx so operator cancel interrupts moveToRawPose
-	// and gripper calls. Mirrors motion.go executePivot / executeCircularMotion.
-	ctx, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(cancelCtx, func() { cancel() })
-	defer stop()
-	defer cancel()
+	// and gripper calls.
+	ctx, done := mergedCancelContext(ctx, cancelCtx)
+	defer done()
 
 	if s.gripper == nil {
 		return r3.Vector{}, fmt.Errorf("dynamic_%s_pickup: no gripper configured", t.label)
