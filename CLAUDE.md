@@ -72,7 +72,7 @@ Build the bundled web-app Viam module from repo root: `make web-app-module` (run
 
 `coffee/motion.go` wraps Viam's motion-planning APIs. Poses are resolved through `multi-poses-execution-switch` components (one for the filter, one for the claws, configured via `pose_switcher_name` / `claws_pose_switcher_name`). Each `Step` declares a pose name, optional linear constraint, optional circular motion (used for grinding/cleaning), and optional allowed collisions for contact phases.
 
-Every plan goes through `planMotion` (which also persists the request/response pair and tags planning failures with `errMotionPlanning`) and, for the paths that execute straight away, `planTrajectory`. Put anything that must apply to all four motion kinds — direct move, pivot, circular, no-spill carry — there rather than in the individual callers. `save_motion_requests_dir`, if set, dumps motion-request JSON per plan for offline debugging. Motion planning also attempts to stream the frame system to a locally-running motion-tools viz server (v2, `localhost:3030`) before each plan; if none is running, viz self-disables after a few consecutive draw failures.
+Every plan goes through `planMotion` (which also persists the request/response pair and tags planning failures with `errMotionPlanning`) and, for the paths that execute straight away, `planTrajectory`. Put anything that must apply to all four motion kinds — direct move, pivot, circular, no-spill carry — there rather than in the individual callers. `save_motion_requests_dir`, if set, dumps motion-request JSON per plan for offline debugging.
 
 ### Config pattern
 

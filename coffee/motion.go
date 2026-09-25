@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/golang/geo/r3"
-	viz "github.com/viam-labs/motion-tools/client/api"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/motionplan"
 	"go.viam.com/rdk/motionplan/armplanning"
@@ -290,51 +289,7 @@ func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.Fr
 	logger.Debugf("currentInputs: arm=%q, armInputsLen=%d", s.cfg.ArmName, len(armInputs))
 	fsInputs[s.cfg.ArmName] = armInputs
 
-	if s.vizEnabled {
-		s.drawViz(fsInputs)
-	}
-
 	return s.cachedFS, fsInputs, nil
-}
-
-const (
-	vizTimeout     = 2 * time.Second
-	vizMaxFailures = 3
-)
-
-// drawViz sends the current frame system to the visualizer with a timeout.
-// After vizMaxFailures consecutive failures the visualizer is automatically
-// disabled so that an unreachable server does not slow down every motion call.
-func (s *beanjaminCoffee) drawViz(fsInputs referenceframe.FrameSystemInputs) {
-	logger := s.activeOrderLogger()
-	done := make(chan error, 1)
-	go func() {
-		_, err := viz.DrawFrameSystem(viz.DrawFrameSystemOptions{
-			FrameSystem: s.cachedFS,
-			Inputs:      fsInputs,
-		})
-		done <- err
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			s.vizConsecutiveFailures++
-			logger.Warnf("viz: failed to draw frame system (%d/%d): %v",
-				s.vizConsecutiveFailures, vizMaxFailures, err)
-		} else {
-			s.vizConsecutiveFailures = 0
-		}
-	case <-time.After(vizTimeout):
-		s.vizConsecutiveFailures++
-		logger.Warnf("viz: draw timed out after %v (%d/%d)",
-			vizTimeout, s.vizConsecutiveFailures, vizMaxFailures)
-	}
-
-	if s.vizConsecutiveFailures >= vizMaxFailures {
-		logger.Warnf("viz: disabling visualizer after %d consecutive failures", vizMaxFailures)
-		s.vizEnabled = false
-	}
 }
 
 // lockFilterFrame re-parents the "filter" frame from the arm subtree to the

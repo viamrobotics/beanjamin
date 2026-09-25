@@ -3,11 +3,11 @@ package coffee
 // Detection debug snapshots.
 //
 // Every vision observation during dynamic cup/glass pickup (observeVantage) can
-// write a motion-tools snapshot to SaveMotionRequestsDir: the whole frame system
+// write a visualization snapshot to SaveMotionRequestsDir: the whole frame system
 // resolved at the joint configuration the arm held when the photo was taken, plus
 // — per detection — the point cloud the vision service returned and the
 // world-frame bounding box the grasp was derived from. Drop the file onto a
-// motion-tools visualizer to replay exactly what the robot saw and where it
+// visualization viewer to replay exactly what the robot saw and where it
 // thought the items were.
 
 import (
@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/viam-labs/motion-tools/draw"
+	"github.com/viamrobotics/visualization/draw"
 	"go.viam.com/rdk/pointcloud"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
@@ -28,7 +28,7 @@ import (
 const detectionSnapshotPrefix = "visualization_snapshot"
 
 // detectionBoxColor sets the detected bounding boxes apart from the frame
-// system's own geometries, which motion-tools draws magenta.
+// system's own geometries, which the visualization viewer draws magenta.
 const detectionBoxColor = "limegreen"
 
 // detectionSnapshotItem is one vision detection as it goes into the snapshot: the
@@ -40,7 +40,7 @@ type detectionSnapshotItem struct {
 	box   spatialmath.Geometry
 }
 
-// buildDetectionSnapshot assembles the motion-tools scene: every frame-system
+// buildDetectionSnapshot assembles the visualization scene: every frame-system
 // geometry resolved at fsInputs (so the arm, gripper and camera appear where they
 // actually were, not at rest), then each detection's point cloud — placed by
 // camToWorld, the camera frame's world pose at those same inputs — and its
