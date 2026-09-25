@@ -470,30 +470,25 @@ func waterDelta(drink string) float64 {
 	return 1
 }
 
-func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err error) {
+// prepareDrink runs the brew cycle for one order. The caller must hold the
+// running gate (the queue consumer claims it in claimArm) and pass the
+// cancelCtx it snapshotted when it took the gate.
+func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, order Order) (err error) {
 	drink, customerName := order.Drink, order.DisplayName()
 	batchIndex, batchSize := order.BatchIndex, order.BatchSize
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::prepareDrink["+drink+"]")
 	defer span.End()
 
-	if !s.running.CompareAndSwap(false, true) {
-		return errors.New("a sequence is already running")
-	}
-	defer s.running.Store(false)
-	// Capture the step the order errored at before `running` flips false above
-	// (LIFO defers: this runs first). Cancel and rewind wait for idle and then
-	// mutate currentStep, so reading it any later would race with them.
+	// Capture the step the order errored at while the caller still holds
+	// `running`. Cancel and rewind wait for idle and then mutate currentStep, so
+	// reading it after the gate is released would race with them.
 	defer func() {
 		if err != nil {
 			step, _ := s.currentStep.Load().(string)
 			s.failedStep.Store(step)
 		}
 	}()
-
-	s.mu.Lock()
-	cancelCtx := s.cancelCtx
-	s.mu.Unlock()
 
 	// Pick up any out-of-band frame-system edits (e.g. portafilter handle geometry
 	// changed during calibration) before planning. Guarded so an in-flight held

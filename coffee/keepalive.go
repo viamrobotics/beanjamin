@@ -345,15 +345,24 @@ func (s *beanjaminCoffee) purge(ctx, cancelCtx context.Context) error {
 	return nil
 }
 
-// runPurge is the loop's entry point. It takes the same `running` gate
-// prepareDrink takes, so the queue treats a purge like an order; releasing that
-// gate on every path is load-bearing, since holding it would stall the queue
-// permanently.
+// runPurge is the loop's entry point. It takes the same `running` gate the
+// queue consumer claims for every order, so an order that arrives mid-purge
+// waits for the purge to finish instead of failing; releasing that gate on every
+// path is load-bearing, since holding it would stall the queue permanently.
 func (s *beanjaminCoffee) runPurge(ctx context.Context) error {
 	if !s.running.CompareAndSwap(false, true) {
 		return errors.New("keepalive: a sequence is already running")
 	}
 	defer s.running.Store(false)
+
+	// shouldPurge saw an empty queue, but an order can land between that tick
+	// and the claim. Yield to it: the order resets the machine's timer anyway,
+	// and purging first would keep the customer waiting through the warning and
+	// the whole purge.
+	if n := s.queue.Len(); n > 0 {
+		s.logger.Infof("keepalive: %d order(s) arrived before the purge started — skipping it", n)
+		return nil
+	}
 
 	// Snapshot cancelCtx under the mutex, as every other sequence does, so an
 	// operator cancel interrupts the moves mid-trajectory.

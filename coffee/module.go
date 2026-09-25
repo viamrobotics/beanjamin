@@ -80,7 +80,7 @@ type beanjaminCoffee struct {
 	running                atomic.Bool
 	currentStep            atomic.Value // string: current step label for the active order (debug)
 	// failedStep holds the step label the most recent order errored at,
-	// captured inside prepareDrink before `running` flips false so cancel
+	// captured inside prepareDrink while the queue holds `running` so cancel
 	// recovery can't overwrite it. "" when the order succeeded. Reported on
 	// the order sensor; reset at the start of each order.
 	failedStep atomic.Value
