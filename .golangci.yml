@@ -15,3 +15,12 @@ linters:
         - "-ST1020" # comment on exported function should be of the form "Foo does X."
         - "-ST1021" # comment on exported type should be of the form "Foo is X."
         - "-ST1022" # comment on exported variable should be of the form "Foo is X."
+
+formatters:
+  # Reported as issues by `golangci-lint run`, so CI fails on unformatted code
+  # instead of `make lint`'s `gofmt -w` silently fixing it inside the runner.
+  enable:
+    - gofmt
+  settings:
+    gofmt:
+      simplify: true
