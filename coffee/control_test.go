@@ -686,3 +686,99 @@ func TestClearQueueOnIdleQueueClearsEverythingPending(t *testing.T) {
 		t.Errorf("Len after clear_queue = %d, want 0", got)
 	}
 }
+
+// faultingGripper is a gripper whose position read always fails, so
+// prepareDrink faults at normalizeGripperAtStart — before any motion — with
+// whatever world state the test recorded still in place.
+func faultingGripper() *inject.Gripper {
+	g := inject.NewGripper("g")
+	g.DoFunc = func(context.Context, map[string]any) (map[string]any, error) {
+		return nil, errors.New("gripper unreachable")
+	}
+	return g
+}
+
+// TestFaultWithStrandedStatePausesQueue pins that a genuine fault leaving the
+// machine mid-cycle holds the next order back for rewind → proceed, instead of
+// letting it start from the stranded state.
+func TestFaultWithStrandedStatePausesQueue(t *testing.T) {
+	s, _, _ := coffeeWithDirtyWorld(t, nil)
+	s.portafilterInMachine.Store(true)
+	s.gripper = faultingGripper()
+	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
+
+	if err := s.prepareDrink(context.Background(), NewOrder("espresso", "Alice", "", "")); err == nil {
+		t.Fatal("prepareDrink should fail on the unreadable gripper")
+	}
+	if !s.paused.Load() {
+		t.Error("a fault that stranded state must pause the queue")
+	}
+	if s.running.Load() {
+		t.Error("running must be released after the fault")
+	}
+}
+
+// TestFaultWithCleanWorldKeepsQueueRunning covers the fault that left nothing
+// behind: the next order starts from a clean machine, so there is nothing for
+// an operator to recover and the queue keeps going.
+func TestFaultWithCleanWorldKeepsQueueRunning(t *testing.T) {
+	s, _, _ := coffeeWithDirtyWorld(t, nil)
+	s.heldItemAttached = false
+	s.filterFrameLocked = false
+	s.stagedGlassPlaced = false
+	s.gripper = faultingGripper()
+	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
+
+	if err := s.prepareDrink(context.Background(), NewOrder("espresso", "Alice", "", "")); err == nil {
+		t.Fatal("prepareDrink should fail on the unreadable gripper")
+	}
+	if s.paused.Load() {
+		t.Error("a fault that stranded nothing must not pause the queue")
+	}
+}
+
+// TestOperatorCancelLeavesPauseToCancel pins that an interrupted order is not
+// treated as a fault: the pause belongs to the cancel (or reset_world, which
+// releases it), so the fault path must not raise one of its own.
+func TestOperatorCancelLeavesPauseToCancel(t *testing.T) {
+	s, _, _ := coffeeWithDirtyWorld(t, nil)
+	s.portafilterHasGrounds.Store(true)
+	s.gripper = faultingGripper()
+	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
+	s.cancelFunc()
+
+	if err := s.prepareDrink(context.Background(), NewOrder("espresso", "Alice", "", "")); err == nil {
+		t.Fatal("prepareDrink should fail on the unreadable gripper")
+	}
+	if s.paused.Load() {
+		t.Error("the fault path must leave an operator-cancelled order's pause to the cancel")
+	}
+}
+
+// TestPauseIfFaultStrandedStateFlags checks that each piece of mid-cycle state
+// on its own is enough to pause the queue.
+func TestPauseIfFaultStrandedStateFlags(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(s *beanjaminCoffee)
+		want  bool
+	}{
+		{name: "clean", setup: func(*beanjaminCoffee) {}, want: false},
+		{name: "portafilter in machine", setup: func(s *beanjaminCoffee) { s.portafilterInMachine.Store(true) }, want: true},
+		{name: "grounds in portafilter", setup: func(s *beanjaminCoffee) { s.portafilterHasGrounds.Store(true) }, want: true},
+		{name: "filter frame locked", setup: func(s *beanjaminCoffee) { s.filterFrameLocked = true }, want: true},
+		{name: "item in gripper", setup: func(s *beanjaminCoffee) { s.heldItemAttached = true }, want: true},
+		{name: "glass staged", setup: func(s *beanjaminCoffee) { s.stagedGlassPlaced = true }, want: true},
+		{name: "fridge door open", setup: func(s *beanjaminCoffee) { s.doorOpenDegs = 90 }, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newTestCoffee(t, nil)
+			tc.setup(s)
+			s.pauseIfFaultStrandedState(s.logger, errors.New("boom"))
+			if got := s.paused.Load(); got != tc.want {
+				t.Errorf("paused = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
