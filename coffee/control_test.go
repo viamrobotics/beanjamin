@@ -514,6 +514,109 @@ func TestProceedRebuildFailureKeepsQueuePaused(t *testing.T) {
 	}
 }
 
+// TestResetWorldRefusesWhileASequenceHoldsTheArm covers the ownership gate: a
+// cancelled sequence that never unwinds is still planning against cachedFS, so
+// reset_world must give up without clearing the queue, the portafilter flags,
+// the door angle or the frame system — and must not release a gate it never
+// held.
+func TestResetWorldRefusesWhileASequenceHoldsTheArm(t *testing.T) {
+	s, dirty, rebuilds := coffeeWithDirtyWorld(t, nil)
+	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
+	s.queue.Enqueue(Order{ID: "next", Drink: "espresso"})
+	s.portafilterInMachine.Store(true)
+	s.portafilterHasGrounds.Store(true)
+	s.doorOpenDegs = 90
+	s.running.Store(true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := s.resetWorld(ctx); err == nil {
+		t.Fatal("reset_world should fail while a sequence is still running")
+	}
+	if *rebuilds != 0 {
+		t.Errorf("frame system rebuilt %d times, want 0", *rebuilds)
+	}
+	if s.cachedFS != dirty {
+		t.Error("a refused reset_world must leave the cached frame system alone")
+	}
+	if !s.heldItemAttached || !s.filterFrameLocked || !s.stagedGlassPlaced {
+		t.Errorf("a refused reset_world must keep the mutation flags: held=%v locked=%v staged=%v",
+			s.heldItemAttached, s.filterFrameLocked, s.stagedGlassPlaced)
+	}
+	if got := s.queue.Len(); got != 1 {
+		t.Errorf("queue Len = %d, want 1 — a refused reset_world must not clear the queue", got)
+	}
+	if !s.portafilterInMachine.Load() || !s.portafilterHasGrounds.Load() {
+		t.Error("a refused reset_world must keep the portafilter state flags")
+	}
+	if s.doorOpenDegs != 90 {
+		t.Errorf("doorOpenDegs = %v, want 90", s.doorOpenDegs)
+	}
+	if !s.running.Load() {
+		t.Error("reset_world released a running gate it never claimed")
+	}
+}
+
+// TestResetWorldHoldsTheGateWhileRebuilding pins that the frame-system swap
+// happens with the arm claimed, so no keepalive purge or manual action can plan
+// against a half-rebuilt world, and that the gate is handed back afterwards.
+// The world is reset from under a running sequence to cover the cancel-then-
+// claim ordering as well.
+func TestResetWorldHoldsTheGateWhileRebuilding(t *testing.T) {
+	s, dirty, _ := coffeeWithDirtyWorld(t, nil)
+	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
+	s.running.Store(true)
+	seqCtx := s.cancelCtx
+	go func() {
+		<-seqCtx.Done()
+		s.running.Store(false)
+	}()
+
+	var claimedDuringRebuild, heldDuringRebuild bool
+	fsSvc := inject.NewFrameSystemService("fs")
+	fsSvc.FrameSystemConfigFunc = func(context.Context) (*framesystem.Config, error) {
+		heldDuringRebuild = s.running.Load()
+		claimedDuringRebuild = s.running.CompareAndSwap(false, true)
+		return &framesystem.Config{}, nil
+	}
+	s.fsSvc = fsSvc
+
+	resp, err := s.resetWorld(context.Background())
+	if err != nil {
+		t.Fatalf("reset_world error: %v", err)
+	}
+	if resp["cancelled"] != true || resp["unpaused"] != true {
+		t.Errorf("resp = %v, want cancelled=true unpaused=true", resp)
+	}
+	if !heldDuringRebuild || claimedDuringRebuild {
+		t.Errorf("rebuild ran with gate held=%v, competing claim succeeded=%v — want held and refused",
+			heldDuringRebuild, claimedDuringRebuild)
+	}
+	if s.cachedFS == dirty {
+		t.Error("cached frame system should have been replaced by the rebuild")
+	}
+	if s.running.Load() {
+		t.Error("reset_world must hand the arm back after rebuilding")
+	}
+}
+
+// TestResetWorldReleasesTheGateOnRebuildFailure: a failed rebuild must not leave
+// the running gate claimed, or every later sequence would be refused as busy.
+func TestResetWorldReleasesTheGateOnRebuildFailure(t *testing.T) {
+	s, _, _ := pausedCoffeeWithDirtyWorld(t, errors.New("boom"))
+	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
+
+	if _, err := s.resetWorld(context.Background()); err == nil {
+		t.Fatal("reset_world should fail when the frame system can't be rebuilt")
+	}
+	if s.running.Load() {
+		t.Error("a failed reset_world must still hand the arm back")
+	}
+	if !s.paused.Load() {
+		t.Error("queue should still be paused after a failed rebuild")
+	}
+}
+
 // TestClearQueueKeepsInFlightOrder is the regression test for clear_queue
 // having wiped the order being brewed along with the backlog: the webapp, which
 // renders whatever get_queue returns, lost the in-flight order mid-brew while
