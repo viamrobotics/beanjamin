@@ -89,7 +89,7 @@ export const DRINKS: Drink[] = [
     id: "iced_latte",
     label: "Iced Latte",
     description: "Espresso + ice + cold milk",
-    image: "./latte.png",
+    image: "./iced-latte.png",
     available: true,
   },
   {
