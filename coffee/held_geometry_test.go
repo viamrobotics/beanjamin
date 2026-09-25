@@ -146,15 +146,15 @@ func TestAttachRoundTrip(t *testing.T) {
 	requireVecEqual(t, got, worldCenter, 1e-4)
 }
 
-// geometryToWorldInverse expresses a world-frame geometry in the gripper frame —
-// the transform attachDetectedGeometry performs before caching. Defined here so
-// the round-trip test doesn't need a live arm (attachDetectedGeometry's only
-// extra step is reading current joint inputs from the arm).
+// geometryToWorldInverse expresses a world-frame geometry in the grip-point
+// frame — the transform attachDetectedGeometry performs before caching. Defined
+// here so the round-trip test doesn't need a live arm (attachDetectedGeometry's
+// only extra step is reading current joint inputs from the arm).
 func geometryToWorldInverse(fs *referenceframe.FrameSystem, inputs referenceframe.FrameSystemInputs, worldGeom spatialmath.Geometry) (spatialmath.Geometry, error) {
 	tf, err := fs.Transform(
 		inputs.ToLinearInputs(),
 		referenceframe.NewGeometriesInFrame(referenceframe.World, []spatialmath.Geometry{worldGeom}),
-		componentClaws,
+		gripPoint,
 	)
 	if err != nil {
 		return nil, err
@@ -214,19 +214,19 @@ func TestHeldItemTracksGripper(t *testing.T) {
 	fs := clawsRevoluteFS(t)
 	s := heldGeomService(t, fs)
 
-	// Geometry at the gripper origin (gripper-local zero pose).
+	// Geometry at the grip point (grip-point-local zero pose).
 	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
 		t.Fatalf("addHeldItemFrame: %v", err)
 	}
 
-	// At j0=0 the gripper sits at world (100,0,0).
+	// At j0=0 the claws sit at world (100,0,0), the grip point above them.
 	at0 := referenceframe.NewZeroInputs(fs)
-	requireVecEqual(t, heldItemWorldCenter(t, fs, at0), r3.Vector{X: 100}, 1e-4)
+	requireVecEqual(t, heldItemWorldCenter(t, fs, at0), r3.Vector{X: 100, Z: gripPointOffsetMm}, 1e-4)
 
-	// At j0=+90° the gripper (and held item) rotate to world (0,100,0).
+	// At j0=+90° the gripper (and held item) rotate to world (0,100,·).
 	at90 := referenceframe.NewZeroInputs(fs)
 	at90["j0"] = []referenceframe.Input{math.Pi / 2}
-	requireVecEqual(t, heldItemWorldCenter(t, fs, at90), r3.Vector{Y: 100}, 1e-4)
+	requireVecEqual(t, heldItemWorldCenter(t, fs, at90), r3.Vector{Y: 100, Z: gripPointOffsetMm}, 1e-4)
 }
 
 func TestDetachRemovesFrame(t *testing.T) {
