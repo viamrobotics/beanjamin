@@ -95,7 +95,10 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		"can_serve_decaf": s.cfg.CanServeDecaf,
 		"fault_active":    s.faultActive.Load(),
 	}
-	s.logger.Debugw("Status", "response", resp)
+	// Logs are cloud-synced and this runs on every kiosk poll, so log only the
+	// queue shape, never the orders' customer names.
+	s.logger.Debugw("Status", "count", resp["count"], "orders", len(orderMaps),
+		"is_paused", resp["is_paused"], "is_busy", resp["is_busy"], "current_step", step)
 	return resp, nil
 }
 

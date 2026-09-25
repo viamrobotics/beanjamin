@@ -45,8 +45,21 @@ func formatClipTimestampUTC(t time.Time) string {
 // pendingSave is written to disk when an order starts and removed when it completes,
 // so a scheduled job can recover the video save for any order that was interrupted.
 type pendingSave struct {
-	Order     Order     `json:"order"`
-	VideoFrom time.Time `json:"video_from"`
+	Order     pendingClipOrder `json:"order"`
+	VideoFrom time.Time        `json:"video_from"`
+}
+
+// pendingClipOrder is the slice of an Order the recovery path needs. The record
+// sits on disk for as long as a save stays unrecovered, so it deliberately
+// carries no customer name, email, or greeting. The json keys match Order's,
+// so records holding a full marshalled Order still decode.
+type pendingClipOrder struct {
+	ID    string `json:"id"`
+	Drink string `json:"drink"`
+}
+
+func (p pendingClipOrder) order() Order {
+	return Order{ID: p.ID, Drink: p.Drink}
 }
 
 func (s *beanjaminCoffee) writePendingSave(order Order, videoFrom time.Time) {
@@ -54,12 +67,15 @@ func (s *beanjaminCoffee) writePendingSave(order Order, videoFrom time.Time) {
 		return
 	}
 	logger := s.activeOrderLogger()
-	data, err := json.Marshal(pendingSave{Order: order, VideoFrom: videoFrom})
+	data, err := json.Marshal(pendingSave{
+		Order:     pendingClipOrder{ID: order.ID, Drink: order.Drink},
+		VideoFrom: videoFrom,
+	})
 	if err != nil {
 		logger.Warnf("cam storage: failed to marshal pending save: %v", err)
 		return
 	}
-	if err := os.WriteFile(filepath.Join(s.pendingOrderClipsDir, order.ID+".json"), data, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(s.pendingOrderClipsDir, order.ID+".json"), data, 0o600); err != nil {
 		logger.Warnf("cam storage: failed to write pending save: %v", err)
 	}
 }
@@ -133,12 +149,12 @@ func (s *beanjaminCoffee) cleanupPendingClips() (map[string]any, error) {
 		// runs off any order goroutine, so build the tagged logger from the
 		// record rather than activeOrderLogger().
 		orderLogger := s.logger.WithFields("order_id", ps.Order.ID)
-		orderLogger.Infof("cam storage: cleanup: attempting save for interrupted order (%s)", ps.Order.CustomerName)
+		orderLogger.Infof("cam storage: cleanup: attempting save for interrupted %s order", ps.Order.Drink)
 		clipFrom := ps.VideoFrom.Add(-clipLead)
 		// The skip gate above guarantees this is already ≥ segmentDuration in the past,
 		// so it lands in closed segments and never exceeds now.
 		clipTo := ps.VideoFrom.Add(maxBrewDuration + clipLead)
-		if !s.issueVideoSave(ps.Order, clipFrom, clipTo, fmt.Errorf("interrupted: recovered by scheduled cleanup"), orderLogger) {
+		if !s.issueVideoSave(ps.Order.order(), clipFrom, clipTo, fmt.Errorf("interrupted: recovered by scheduled cleanup"), orderLogger) {
 			// Keep the record so the next sweep retries the save.
 			failed++
 			continue

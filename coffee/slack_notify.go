@@ -3,6 +3,7 @@ package coffee
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -59,14 +60,15 @@ func (s *beanjaminCoffee) notifyOrderFailureSlack(r orderReading) {
 // distinct wording so readers can tell a deliberate stop from a real fault at a
 // glance.
 func slackFailureText(r orderReading) string {
+	drink := escapeSlackMrkdwn(r.order.Drink)
 	customer := slackCustomer(r)
 	step := slackStep(r)
 	if r.operatorCancelled {
 		return fmt.Sprintf(":warning: Order %s (%s) for %s was cancelled by an operator at %q.",
-			r.order.ID, r.order.Drink, customer, step)
+			r.order.ID, drink, customer, step)
 	}
 	return fmt.Sprintf(":x: Order %s (%s) for %s failed at %q: %s",
-		r.order.ID, r.order.Drink, customer, step, slackErrMsg(r))
+		r.order.ID, drink, customer, step, slackErrMsg(r))
 }
 
 // slackFailureBlocks builds a Slack Block Kit layout for a failed or cancelled
@@ -100,7 +102,7 @@ func slackFailureBlocks(r orderReading, machineLogsURL, clipDataURL, planRequest
 		map[string]any{
 			"type": "section",
 			"fields": []any{
-				slackField("*Drink:*", r.order.Drink),
+				slackField("*Drink:*", escapeSlackMrkdwn(r.order.Drink)),
 				slackField("*Customer:*", slackCustomer(r)),
 				slackField(stepLabel, slackStep(r)),
 				slackField("*Duration:*", duration.String()),
@@ -207,6 +209,19 @@ func slackField(label, value string) map[string]any {
 	return map[string]any{"type": "mrkdwn", "text": fmt.Sprintf("%s\n%s", label, value)}
 }
 
+// slackMrkdwnEscaper applies Slack's three control-character escapes. Slack
+// parses <...> in mrkdwn and in a message's top-level text as a mention or a
+// link, so an unescaped "<!channel>" pings the channel and "<https://x|Click
+// here>" renders a disguised link.
+var slackMrkdwnEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+
+// escapeSlackMrkdwn makes a value safe to embed in Slack mrkdwn or fallback
+// text. Apply it to every value a customer or peer can influence; markup this
+// package builds itself (links, dates) must stay raw.
+func escapeSlackMrkdwn(s string) string {
+	return slackMrkdwnEscaper.Replace(s)
+}
+
 func slackBool(b bool) string {
 	if b {
 		return "yes"
@@ -214,11 +229,12 @@ func slackBool(b bool) string {
 	return "no"
 }
 
+// slackCustomer is the name typed at the kiosk, escaped for mrkdwn.
 func slackCustomer(r orderReading) string {
 	if r.order.CustomerName == "" {
 		return "an unnamed customer"
 	}
-	return r.order.CustomerName
+	return escapeSlackMrkdwn(r.order.CustomerName)
 }
 
 func slackStep(r orderReading) string {
@@ -228,9 +244,11 @@ func slackStep(r orderReading) string {
 	return r.failedStep
 }
 
+// slackErrMsg is escaped because an error can wrap arbitrary strings, such as
+// a peer's response or a request value.
 func slackErrMsg(r orderReading) string {
 	if r.execErr != nil {
-		return r.execErr.Error()
+		return escapeSlackMrkdwn(r.execErr.Error())
 	}
 	return "unknown error"
 }

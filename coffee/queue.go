@@ -397,8 +397,7 @@ func (s *beanjaminCoffee) processQueue() {
 			orderLogger := s.logger.WithFields("order_id", order.ID)
 
 			remaining := s.queue.Len() - 1 // Len counts the current order; drop it
-			orderLogger.Infof("processing order for %s (%s) — %d order(s) waiting behind it",
-				order.CustomerName, order.Drink, remaining)
+			orderLogger.Infof("processing %s order — %d order(s) waiting behind it", order.Drink, remaining)
 
 			// Publish the tagged logger so the whole brew lifecycle — and
 			// out-of-goroutine entry points like cancel — pick it up via
@@ -480,8 +479,7 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 			execErr = fmt.Errorf("panic: %v", r)
 			step, _ := s.currentStep.Load().(string)
 			s.failedStep.Store(step)
-			logger.Errorf("panic while processing order for %s: %v — queue will still save video and order reading",
-				order.CustomerName, r)
+			logger.Errorf("panic while processing order: %v — queue will still save video and order reading", r)
 		}
 		failedStep, _ := s.failedStep.Load().(string)
 		s.notifyOrderReading(orderReading{
@@ -528,8 +526,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) e
 	ctx, span := trace.StartSpan(ctx, "beanjamin::executeQueuedOrder")
 	defer span.End()
 	waitTime := time.Since(order.EnqueuedAt).Round(time.Second)
-	logger.Infof("starting order for %s (%s) — waited %s in queue",
-		order.CustomerName, order.Drink, waitTime)
+	logger.Infof("starting %s order — waited %s in queue", order.Drink, waitTime)
 
 	if order.Greeting != "" {
 		if err := s.say(ctx, order.Greeting); err != nil {
@@ -538,7 +535,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) e
 	}
 
 	if err := s.prepareDrink(ctx, order); err != nil {
-		logger.Errorf("order for %s failed: %v", order.CustomerName, err)
+		logger.Errorf("order failed: %v", err)
 		return err
 	}
 
@@ -553,7 +550,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) e
 	// processQueue is about to move into the recent buffer; the frontend
 	// renders any order with completed_at set as the green "Ready!" card
 	// regardless of raw_step value.
-	logger.Infof("order complete for %s", order.CustomerName)
+	logger.Infof("order complete")
 	return nil
 }
 
@@ -597,13 +594,13 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 	customerName = strings.TrimSpace(customerName)
 	modifiedCustomerName, _ := order["modified_customer_name"].(string)
 	customerEmail, _ := order["customer_email"].(string)
-	s.logger.Infof("order request: drink=%q customer=%q", drink, customerName)
+	s.logger.Infof("order request: drink=%q named=%t recognized=%t", drink, customerName != "", customerEmail != "")
 
 	switch drink {
 	case "espresso", "lungo":
 	case "decaf", "decaf_lungo":
 		if !s.cfg.CanServeDecaf {
-			s.logger.Infof("rejected decaf order %q from %s (can_serve_decaf=false)", drink, customerName)
+			s.logger.Infof("rejected decaf order %q (can_serve_decaf=false)", drink)
 			msg := pickUnsupportedDrink(drink)
 			if err := s.say(ctx, msg); err != nil {
 				s.logger.Warnf("failed to say rejection: %v", err)
@@ -612,7 +609,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		}
 	case "iced_coffee":
 		if !s.cfg.CanServeIced {
-			s.logger.Infof("rejected iced order %q from %s (can_serve_iced=false)", drink, customerName)
+			s.logger.Infof("rejected iced order %q (can_serve_iced=false)", drink)
 			msg := pickUnsupportedDrink(drink)
 			if err := s.say(ctx, msg); err != nil {
 				s.logger.Warnf("failed to say rejection: %v", err)
@@ -623,7 +620,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		// can_serve_iced_latte implies can_serve_iced (Validate rejects it
 		// otherwise), so the one flag is the whole gate.
 		if !s.cfg.CanServeIcedLatte {
-			s.logger.Infof("rejected iced latte order %q from %s (can_serve_iced_latte=false)", drink, customerName)
+			s.logger.Infof("rejected iced latte order %q (can_serve_iced_latte=false)", drink)
 			msg := pickUnsupportedDrink(drink)
 			if err := s.say(ctx, msg); err != nil {
 				s.logger.Warnf("failed to say rejection: %v", err)
@@ -631,7 +628,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 			return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
 		}
 	default:
-		s.logger.Infof("rejected order for unsupported drink %q from %s", drink, customerName)
+		s.logger.Infof("rejected order for unsupported drink %q", drink)
 		msg := pickUnsupportedDrink(drink)
 		if err := s.say(ctx, msg); err != nil {
 			s.logger.Warnf("failed to say rejection: %v", err)
@@ -693,8 +690,8 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 			firstPos = pos
 		}
 		ids = append(ids, o.ID)
-		s.logger.Infof("order %s queued at position %d for %s (batch %d/%d)",
-			o.ID, pos, customerName, i+1, count)
+		s.logger.Infof("order %s (%s) queued at position %d (batch %d/%d)",
+			o.ID, drink, pos, i+1, count)
 	}
 
 	// Single-order path keeps the original "Order received…" announcement
