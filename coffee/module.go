@@ -52,33 +52,31 @@ type beanjaminCoffee struct {
 	// handler — without one the query fails at call time rather than here.
 	module.ResourceDataConsumer
 
-	name                   resource.Name
-	logger                 logging.Logger
-	cfg                    *Config
-	filterSw               toggleswitch.Switch
-	clawsSw                toggleswitch.Switch
-	cameraObserveSw        toggleswitch.Switch // holds the camera observation vantages for cup pickup.
-	arm                    arm.Arm
-	fsSvc                  framesystem.Service
-	cachedFS               *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
-	speech                 resource.Resource           // nil when speech_service_name is not configured
-	vizEnabled             bool                        // starts true; auto-disables after repeated failures reaching a motion-tools viz server on localhost
-	vizConsecutiveFailures int                         // counts consecutive draw failures
-	gripper                gripper.Gripper
-	camStorage             generic.Service // optional; mux over video stores; nil if cam_storage_mux_name unset
-	iceBoard               board.Board     // optional; drives the ice-machine GPIO pin; nil if ice_board_name unset
-	slackNotifier          generic.Service // optional; viam:notifications:slack; nil if slack_notifier_name unset
-	customerDetector       generic.Service // optional; viam:beanjamin:customer-detector; nil if customer_detector_name unset
-	deliveryHandler        generic.Service // optional; peer-machine service reached via a remote; nil if delivery_handler_name unset
-	machineLogsURL         string          // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
-	dataLocationID         string          // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
-	primaryOrgID           string          // VIAM_PRIMARY_ORG_ID env; scopes app.viam.com deep-links to the owning org; "" when unavailable
-	pendingOrderClipsDir   string          // optional; directory for pending-clip records to survive restarts
-	mu                     sync.Mutex
-	cancelCtx              context.Context
-	cancelFunc             func()
-	running                atomic.Bool
-	currentStep            atomic.Value // string: current step label for the active order (debug)
+	name                 resource.Name
+	logger               logging.Logger
+	cfg                  *Config
+	filterSw             toggleswitch.Switch
+	clawsSw              toggleswitch.Switch
+	cameraObserveSw      toggleswitch.Switch // holds the camera observation vantages for cup pickup.
+	arm                  arm.Arm
+	fsSvc                framesystem.Service
+	cachedFS             *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
+	speech               resource.Resource           // nil when speech_service_name is not configured
+	gripper              gripper.Gripper
+	camStorage           generic.Service // optional; mux over video stores; nil if cam_storage_mux_name unset
+	iceBoard             board.Board     // optional; drives the ice-machine GPIO pin; nil if ice_board_name unset
+	slackNotifier        generic.Service // optional; viam:notifications:slack; nil if slack_notifier_name unset
+	customerDetector     generic.Service // optional; viam:beanjamin:customer-detector; nil if customer_detector_name unset
+	deliveryHandler      generic.Service // optional; peer-machine service reached via a remote; nil if delivery_handler_name unset
+	machineLogsURL       string          // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
+	dataLocationID       string          // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
+	primaryOrgID         string          // VIAM_PRIMARY_ORG_ID env; scopes app.viam.com deep-links to the owning org; "" when unavailable
+	pendingOrderClipsDir string          // optional; directory for pending-clip records to survive restarts
+	mu                   sync.Mutex
+	cancelCtx            context.Context
+	cancelFunc           func()
+	running              atomic.Bool
+	currentStep          atomic.Value // string: current step label for the active order (debug)
 	// failedStep holds the step label the most recent order errored at,
 	// captured inside prepareDrink before `running` flips false so cancel
 	// recovery can't overwrite it. "" when the order succeeded. Reported on
@@ -387,7 +385,6 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		primaryOrgID:         os.Getenv("VIAM_PRIMARY_ORG_ID"),
 		pendingOrderClipsDir: pendingOrderClipsDir,
 		gripper:              gripperComp,
-		vizEnabled:           true,
 		cancelCtx:            cancelCtx,
 		cancelFunc:           cancelFunc,
 		queue:                NewOrderQueue(),
