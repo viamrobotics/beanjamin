@@ -378,8 +378,8 @@ func (s *beanjaminCoffee) processQueue() {
 
 		// Drain orders one by one.
 		for {
-			// Honour a cancel-induced pause before every order, not just after
-			// the one that was cancelled: a cancel that interrupted a manual
+			// Honour a pause before every order, not just after the one that
+			// was cancelled or faulted: a cancel that interrupted a manual
 			// execute_action or a keepalive purge pauses the queue too, and that
 			// pause has to hold the next order back just the same.
 			if !s.waitForProceed() {
@@ -417,8 +417,8 @@ func (s *beanjaminCoffee) processQueue() {
 	}
 }
 
-// waitForProceed blocks while an operator cancel has the queue paused, and
-// reports false when the service is shutting down.
+// waitForProceed blocks while a cancel or an order fault has the queue paused,
+// and reports false when the service is shutting down.
 //
 // The paused flag is never cleared here. It is the single source of truth that
 // proceedQueue, resetWorld, Status and the keepalive loop all read, so only the
@@ -435,7 +435,7 @@ func (s *beanjaminCoffee) waitForProceed() bool {
 		return true
 	}
 	logger := s.activeOrderLogger()
-	logger.Infof("queue paused by a cancel — send 'proceed' to resume")
+	logger.Infof("queue paused — send 'proceed' to resume")
 	for s.paused.Load() {
 		select {
 		case <-s.queue.proceed:

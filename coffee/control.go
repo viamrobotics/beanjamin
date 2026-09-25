@@ -15,16 +15,17 @@ import (
 )
 
 // proceedQueue re-syncs the recorded world with the real one and, when a cancel
-// left the queue paused, releases the pause so processQueue starts the next
-// order.
+// or an order fault left the queue paused, releases the pause so processQueue
+// starts the next order.
 //
 // The rebuild is unconditional: any idle state can hold mid-cycle mutations (a
 // reparented filter frame, a held cup geometry, a staged glass) that no longer
-// describe a machine an operator has since tidied up. An order that fails on its
-// own leaves them behind without pausing the queue, and refreshFrameSystemIfClean
-// declines to rebuild precisely because they are present — so without this every
-// order after a failure would inherit the stale world. The running gate is
-// required because cachedFS may only be swapped while no sequence owns the arm.
+// describe a machine an operator has since tidied up, and
+// refreshFrameSystemIfClean declines to rebuild precisely because they are
+// present. A faulted order pauses the queue for this, but a
+// manually-stepped execute_action that fails leaves them behind with the queue
+// running. The running gate is required because cachedFS may only be swapped
+// while no sequence owns the arm.
 //
 // It clears the recorded fridge-door angle too: proceed is the operator saying
 // the machine has been put right, fridge included. A rebuild cannot shut a real
@@ -310,6 +311,53 @@ func (s *beanjaminCoffee) cancelOrder(ctx context.Context, v any) (map[string]an
 		"drink":         order.Drink,
 		"remaining":     float64(remaining),
 	}, nil
+}
+
+// strandedState names the mid-cycle state still recorded for the machine: a
+// portafilter left in the group head or holding grounds, a filter frame locked
+// to world, an item modeled in the gripper, a glass staged as an obstacle, or a
+// fridge door modeled open. Empty means the recorded world is the one a brew
+// cycle starts from. The non-atomic fields are owned by the running gate, so
+// the caller must hold it.
+func (s *beanjaminCoffee) strandedState() []string {
+	var stranded []string
+	if s.portafilterInMachine.Load() {
+		stranded = append(stranded, "portafilter in machine")
+	}
+	if s.portafilterHasGrounds.Load() {
+		stranded = append(stranded, "grounds in portafilter")
+	}
+	if s.filterFrameLocked {
+		stranded = append(stranded, "filter frame locked")
+	}
+	if s.heldItemAttached {
+		stranded = append(stranded, "item in gripper")
+	}
+	if s.stagedGlassPlaced {
+		stranded = append(stranded, "glass staged")
+	}
+	if s.doorOpenDegs != 0 {
+		stranded = append(stranded, fmt.Sprintf("fridge door open %.0f°", s.doorOpenDegs))
+	}
+	return stranded
+}
+
+// pauseOnFault pauses the queue after a genuine fault, so the next order waits
+// for the same rewind → proceed recovery a cancel gets. The recorded state
+// cannot be trusted to show everything a fault left behind — a cup knocked over
+// or a half-finished pour is never modeled — so the operator looks before any
+// further order runs. The log names whatever mid-cycle state is recorded, since
+// that is what rewind has to undo. Must be called while holding the running
+// gate, like strandedState.
+func (s *beanjaminCoffee) pauseOnFault(logger logging.Logger, fault error) {
+	s.paused.Store(true)
+	left := "no mid-cycle state recorded"
+	if stranded := s.strandedState(); len(stranded) > 0 {
+		left = "state left behind: " + strings.Join(stranded, ", ")
+	}
+	logger.Errorf("order faulted (%v), %s — queue paused; "+
+		"run 'rewind' to recover the arm (and shut the fridge by hand if it is open), then 'proceed'",
+		fault, left)
 }
 
 // queueState renders the paused flag for a command response.

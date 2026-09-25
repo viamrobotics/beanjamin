@@ -282,7 +282,7 @@ type keepAliveState struct {
 	now          time.Time
 	lastActivity time.Time
 	busy         bool // an order or another sequence holds the running flag
-	paused       bool // the operator cancelled; nothing moves until 'proceed'
+	paused       bool // a cancel or an order fault; nothing moves until 'proceed'
 	queued       int
 }
 

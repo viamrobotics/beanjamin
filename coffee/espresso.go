@@ -494,6 +494,14 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 	s.mu.Lock()
 	cancelCtx := s.cancelCtx
 	s.mu.Unlock()
+	// Runs before `running` flips false, because a rewind taking the gate
+	// afterward starts clearing the very state this inspects. A cancelled
+	// cancelCtx means an operator cancel or reset_world, which own the pause.
+	defer func() {
+		if err != nil && cancelCtx.Err() == nil {
+			s.pauseOnFault(logger, err)
+		}
+	}()
 
 	// Pick up any out-of-band frame-system edits (e.g. portafilter handle geometry
 	// changed during calibration) before planning. Guarded so an in-flight held
