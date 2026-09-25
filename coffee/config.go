@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/board"
 	"go.viam.com/rdk/components/camera"
@@ -228,6 +229,15 @@ type Config struct {
 	// modeled from (see ContainerDimensions). Required when can_serve_iced is set.
 	GlassDimensions *ContainerDimensions `json:"glass_dimensions,omitempty"`
 
+	// Pour offsets from the center of the staged glass's rim, resolved against
+	// the staged glass in the frame system (glass_relative_poses.go). The
+	// espresso pair is required when can_serve_iced is set, the milk pair when
+	// can_serve_iced_latte is set.
+	PourApproachRelativePose     *RelativePose `json:"pour_approach_relative_pose,omitempty"`
+	PourRelativePose             *RelativePose `json:"pour_relative_pose,omitempty"`
+	MilkPourApproachRelativePose *RelativePose `json:"milk_pour_approach_relative_pose,omitempty"`
+	MilkPourRelativePose         *RelativePose `json:"milk_pour_relative_pose,omitempty"`
+
 	// Milk-bottle pickup (iced latte) mirrors cup and glass pickup with its own
 	// vision service and observe-pose switch, whose vantages look into the open
 	// fridge. These fields are required when can_serve_iced_latte is set.
@@ -427,6 +437,23 @@ func (d *ContainerDimensions) validate(path, field string) error {
 	return nil
 }
 
+// validatePourPair checks a required staged-glass-relative pour pair
+// (<name>_approach_relative_pose / <name>_relative_pose): both present, and at
+// the same offset, since the tilt between them is a fixed-point pivot that
+// refuses to run between two different points.
+func validatePourPair(path, name string, approach, pour *RelativePose) error {
+	approachField, pourField := name+"_approach_relative_pose", name+"_relative_pose"
+	if err := requireFields(path, approachField, approach, pourField, pour); err != nil {
+		return err
+	}
+	offset := r3.Vector{X: approach.X - pour.X, Y: approach.Y - pour.Y, Z: approach.Z - pour.Z}
+	if dist := offset.Norm(); dist > pivotPositionToleranceMm {
+		return fmt.Errorf("%s: %s and %s must share the same x/y/z (the pour is a pivot in place), but differ by %.2f mm",
+			path, approachField, pourField, dist)
+	}
+	return nil
+}
+
 // KeepAlive configures the idle-purge loop that holds the espresso machine at
 // brew temperature (keepalive.go). Presence enables the loop; nil disables it.
 //
@@ -547,6 +574,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		if err := cfg.GlassDimensions.validate(path, "glass_dimensions"); err != nil {
 			return nil, nil, err
 		}
+		if err := validatePourPair(path, "pour", cfg.PourApproachRelativePose, cfg.PourRelativePose); err != nil {
+			return nil, nil, err
+		}
 		reqDeps = append(reqDeps,
 			vision.Named(cfg.GlassVisionServiceName).String(),
 			cfg.GlassObservePoseSwitcherName,
@@ -572,6 +602,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 			return nil, nil, err
 		}
 		if err := cfg.MilkBottleDimensions.validate(path, "milk_bottle_dimensions"); err != nil {
+			return nil, nil, err
+		}
+		if err := validatePourPair(path, "milk_pour", cfg.MilkPourApproachRelativePose, cfg.MilkPourRelativePose); err != nil {
 			return nil, nil, err
 		}
 		reqDeps = append(reqDeps,

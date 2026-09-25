@@ -250,43 +250,61 @@ func (s *beanjaminCoffee) swapFilterForGlass(ctx context.Context) (func(), error
 
 // heldItemFramePose returns the transform the held-item frame is attached at,
 // relative to the gripper, for a container geometry already expressed in
-// gripper-local coordinates.
+// gripper-local coordinates. gripPointInClaws is the grip point's pose in the
+// gripper frame.
 //
 // The frame adopts the geometry's own orientation. containerBox builds the
 // container box world-axis-aligned with its height on Z, so this makes the
 // frame's +Z the container's vertical axis: upright in the world at the moment of
 // the grab, and tilting with the container afterwards as the wrist moves.
 // carryHeldLevel depends on that — the no-spill orientation bound only bounds
-// the drink's tilt if the frame it is measured against is the container's own.
+// the drink's tilt if the frame it is measured against is the container's own —
+// and so do the pour poses, which are authored as the container's orientation
+// (glass_relative_poses.go).
+//
+// The frame sits on the grip point, so a held-item pose places the same point a
+// grip-point pose would, and a pivot of the held item turns about the grip point.
 //
 // The geometry stays in gripper-local coordinates and is deliberately not
-// re-expressed in the rotated frame. RDK attaches a frame's geometry at the
-// frame's parent, never at the frame itself (the GeometriesInFrame special case
-// in referenceframe.FrameSystem.Transform, and FrameSystemGeometriesForFrames),
-// so this rotation cannot move the collision box; it only changes the pose the
-// frame system reports for — and the planner drives — the held-item frame.
-//
-// The translation stays zero so the frame origin remains the gripper's, so the
-// rotation changes only the orientation the carry is planned against, never the
-// point it drives to.
-func heldItemFramePose(gripperLocal spatialmath.Geometry) spatialmath.Pose {
-	return spatialmath.NewPoseFromOrientation(gripperLocal.Pose().Orientation())
+// re-expressed in this frame. RDK attaches a frame's geometry at the frame's
+// parent, never at the frame itself (the GeometriesInFrame special case in
+// referenceframe.FrameSystem.Transform, and FrameSystemGeometriesForFrames), so
+// neither the rotation nor the translation can move the collision box; they only
+// change the pose the frame system reports for — and the planner drives — the
+// held-item frame.
+func heldItemFramePose(gripperLocal spatialmath.Geometry, gripPointInClaws spatialmath.Pose) spatialmath.Pose {
+	return spatialmath.NewPose(gripPointInClaws.Point(), gripperLocal.Pose().Orientation())
+}
+
+// gripPointInClaws returns the grip point's pose in the gripper frame. Both hang
+// rigidly off the gripper, so the transform is the same at any joint inputs.
+func (s *beanjaminCoffee) gripPointInClaws() (spatialmath.Pose, error) {
+	tf, err := s.cachedFS.Transform(referenceframe.NewZeroInputs(s.cachedFS).ToLinearInputs(),
+		referenceframe.NewPoseInFrame(gripPoint, spatialmath.NewZeroPose()), componentClaws)
+	if err != nil {
+		return nil, fmt.Errorf("transform %q into %q: %w", gripPoint, componentClaws, err)
+	}
+	return tf.(*referenceframe.PoseInFrame).Pose(), nil
 }
 
 // addHeldItemFrame adds the held-item static frame under the gripper frame,
 // carrying gripperLocal (geometry already expressed in gripper-local
-// coordinates) and rotated onto the container's axes (heldItemFramePose). Any
-// existing held-item frame is removed first so attach is idempotent. Sets
-// heldItemAttached on success.
+// coordinates), placed on the grip point and rotated onto the container's axes
+// (heldItemFramePose). Any existing held-item frame is removed first so attach
+// is idempotent. Sets heldItemAttached on success.
 func (s *beanjaminCoffee) addHeldItemFrame(gripperLocal spatialmath.Geometry) error {
 	gripperFrame := s.cachedFS.Frame(componentClaws)
 	if gripperFrame == nil {
 		return fmt.Errorf("gripper frame %q not found in frame system", componentClaws)
 	}
+	gp, err := s.gripPointInClaws()
+	if err != nil {
+		return fmt.Errorf("place held-item frame: %w", err)
+	}
 	if existing := s.cachedFS.Frame(heldItemFrameName); existing != nil {
 		s.cachedFS.RemoveFrame(existing)
 	}
-	frame, err := referenceframe.NewStaticFrameWithGeometry(heldItemFrameName, heldItemFramePose(gripperLocal), gripperLocal)
+	frame, err := referenceframe.NewStaticFrameWithGeometry(heldItemFrameName, heldItemFramePose(gripperLocal, gp), gripperLocal)
 	if err != nil {
 		return fmt.Errorf("create held-item frame: %w", err)
 	}

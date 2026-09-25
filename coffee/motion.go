@@ -216,7 +216,7 @@ func (s *beanjaminCoffee) moveToPose(ctx, cancelCtx context.Context, step Step) 
 	ctx, done := mergedCancelContext(ctx, cancelCtx)
 	defer done()
 
-	pd, err := s.fetchPose(ctx, step.PoseSwitch, step.PoseName)
+	pd, err := s.resolvePose(ctx, step.PoseSwitch, step.PoseName)
 	if err != nil {
 		return err
 	}
@@ -827,6 +827,10 @@ func (s *beanjaminCoffee) withArmInputs(base referenceframe.FrameSystemInputs, a
 	return out
 }
 
+// pivotPositionToleranceMm is how far apart a pivot's start and end poses may
+// be: a pivot is a pure rotation about one fixed point.
+const pivotPositionToleranceMm = 0.5
+
 // executePivot fetches start and end poses, computes interpolated waypoints,
 // plans a single multi-goal trajectory through all of them, and executes it
 // in one MoveThroughJointPositions call.
@@ -835,11 +839,11 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	ctx, done := mergedCancelContext(ctx, cancelCtx)
 	defer done()
 
-	startPD, err := s.fetchPose(ctx, step.PoseSwitch, step.PivotFromPose)
+	startPD, err := s.resolvePose(ctx, step.PoseSwitch, step.PivotFromPose)
 	if err != nil {
 		return fmt.Errorf("pivot start: %w", err)
 	}
-	endPD, err := s.fetchPose(ctx, step.PoseSwitch, step.PoseName)
+	endPD, err := s.resolvePose(ctx, step.PoseSwitch, step.PoseName)
 	if err != nil {
 		return fmt.Errorf("pivot end: %w", err)
 	}
@@ -850,10 +854,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	}
 	// The authored poses must describe the same point (a pivot is a pure
 	// rotation), and the arm must already be standing on it.
-	const (
-		pivotPositionToleranceMm = 0.5
-		pivotStartToleranceMm    = 2.0
-	)
+	const pivotStartToleranceMm = 2.0
 	if dist := startPD.pose.Point().Sub(endPD.pose.Point()).Norm(); dist > pivotPositionToleranceMm {
 		return fmt.Errorf("pivot %q → %q: positions differ by %.2f mm (max %.1f mm) — pivot assumes a fixed point",
 			step.PivotFromPose, step.PoseName, dist, pivotPositionToleranceMm)
@@ -956,7 +957,7 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 	ctx, done := mergedCancelContext(ctx, cancelCtx)
 	defer done()
 
-	centerPD, err := s.fetchPose(ctx, step.PoseSwitch, step.PoseName)
+	centerPD, err := s.resolvePose(ctx, step.PoseSwitch, step.PoseName)
 	if err != nil {
 		return fmt.Errorf("circular center: %w", err)
 	}
@@ -1043,11 +1044,11 @@ func withNoSpillOrientationConstraint(constraints *motionplan.Constraints) *moti
 // into the world pose moveFrame must reach for that component to land on dest.
 // Returns dest's world pose unchanged when moveFrame is the authored component.
 //
-// The two frames are rigidly linked but neither coincident nor co-oriented:
-// held-item hangs off the claws, short of the grip point along the tool axis and
-// rotated onto the container's axes (heldItemFramePose). Commanding the container
-// straight at a grip-point goal leaves the gripper past it and mis-rotated — the
-// offset alone trips executePivot's start-position check on the following step.
+// The two frames are rigidly linked but not co-oriented: held-item sits on the
+// grip point but is rotated onto the container's axes (heldItemFramePose).
+// Commanding the container straight at a grip-point goal leaves the gripper
+// mis-rotated. The conversion goes through the frame system rather than assuming
+// the frames share an origin, so it holds for any rigid offset between them.
 func carryGoalForMoveFrame(
 	fs *referenceframe.FrameSystem,
 	inputs *referenceframe.LinearInputs,
@@ -1092,8 +1093,9 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, al
 	}
 	linearInputs := fsInputs.ToLinearInputs()
 
-	// dest targets the grip-point frame. When an item is held, move the
-	// held-item frame instead: it is the container that must stay level.
+	// dest targets its own component (grip-point for a switch pose, held-item
+	// for a pour pose). When an item is held, move the held-item frame: it is
+	// the container that must stay level.
 	moveFrame := gripPoint
 	if s.heldItemAttached {
 		moveFrame = heldItemFrameName

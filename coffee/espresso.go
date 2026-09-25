@@ -67,14 +67,15 @@ const (
 	clawPoseIceMachineDispense = "ice_machine_dispense" // glass held under the chute while the pin pulses
 	clawPoseStagingApproach    = "staging_approach"     // above the staging area
 	clawPoseStaging            = "staging"              // down in the staging area, ready to release the glass
-	clawPosePourApproach       = "pour_approach"        // espresso cup upright above the staged glass
-	clawPosePour               = "pour"                 // espresso cup tilted to pour over the ice
+	clawPosePourApproach       = "pour_approach"        // espresso cup upright above the staged glass (pour_approach_relative_pose)
+	clawPosePour               = "pour"                 // espresso cup tilted to pour over the ice (pour_relative_pose)
 
-	// iced-latte claw poses (only required when can_serve_iced_latte is set; the
-	// milk bottle itself is vision-detected via the milk observe switch, and it
-	// goes back to the spot it was detected at, so the fridge needs no poses).
-	clawPoseMilkPourApproach = "milk_pour_approach" // milk bottle upright above the staged glass
-	clawPoseMilkPour         = "milk_pour"          // milk bottle tilted to pour into the glass
+	// iced-latte pour poses, resolved against the staged glass rather than read
+	// from the switch (the milk bottle itself is vision-detected via the milk
+	// observe switch, and it goes back to the spot it was detected at, so the
+	// fridge needs no poses).
+	clawPoseMilkPourApproach = "milk_pour_approach" // milk bottle upright above the staged glass (milk_pour_approach_relative_pose)
+	clawPoseMilkPour         = "milk_pour"          // milk bottle tilted to pour into the glass (milk_pour_relative_pose)
 
 	// camera pose switches (extra vantages live on
 	// the same switch and are enumerated at runtime).
@@ -188,25 +189,24 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 
 	if s.cfg.CanServeIced {
 		// serveIcedCoffee dispenses ice, stages the glass, and pours the
-		// espresso over the ice (the cup-retrieval poses above always run).
+		// espresso over the ice (the cup-retrieval poses above always run). The
+		// pour poses are resolved against the staged glass, not read from the
+		// switch (glass_relative_poses.go).
 		poses = append(poses,
 			requiredPose{s.clawsSw, clawPoseIceMachineApproach},
 			requiredPose{s.clawsSw, clawPoseIceMachineDispense},
 			requiredPose{s.clawsSw, clawPoseStagingApproach},
 			requiredPose{s.clawsSw, clawPoseStaging},
-			requiredPose{s.clawsSw, clawPosePourApproach},
-			requiredPose{s.clawsSw, clawPosePour},
 			requiredPose{s.glassObserveSw, glassPoseObserve},
 		)
 	}
 
 	if s.cfg.CanServeIcedLatte {
-		// Only the pour is authored: the bottle is vision-detected inside the
-		// fridge and set back down at the centroid it was grasped at, and the door
-		// is tracked through its hinge arc rather than driven to switch poses.
+		// Nothing on the claws switch: the bottle is vision-detected inside the
+		// fridge and set back down at the centroid it was grasped at, the door is
+		// tracked through its hinge arc, and the pour is resolved against the
+		// staged glass (glass_relative_poses.go).
 		poses = append(poses,
-			requiredPose{s.clawsSw, clawPoseMilkPourApproach},
-			requiredPose{s.clawsSw, clawPoseMilkPour},
 			requiredPose{s.milkObserveSw, milkPoseObserve},
 		)
 	}

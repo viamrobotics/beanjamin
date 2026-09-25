@@ -31,7 +31,25 @@ func heldGeomService(t *testing.T, fs *referenceframe.FrameSystem) *beanjaminCof
 	}
 }
 
-// clawsStaticFS returns world -> coffee-claws-middle (static at clawsPose).
+// gripPointOffsetMm is how far past the claws the grip point sits along the tool
+// axis, as on the real machine (see gripperFSWithHeldItem).
+const gripPointOffsetMm = 25.0
+
+// addGripPoint hangs grip-point off the claws at gripPointOffsetMm along the
+// tool axis — the frame addHeldItemFrame places the held item on.
+func addGripPoint(t *testing.T, fs *referenceframe.FrameSystem) {
+	t.Helper()
+	gp, err := referenceframe.NewStaticFrame(gripPoint, spatialmath.NewPoseFromPoint(r3.Vector{Z: gripPointOffsetMm}))
+	if err != nil {
+		t.Fatalf("new grip-point frame: %v", err)
+	}
+	if err := fs.AddFrame(gp, fs.Frame(componentClaws)); err != nil {
+		t.Fatalf("add grip-point frame: %v", err)
+	}
+}
+
+// clawsStaticFS returns world -> coffee-claws-middle (static at clawsPose) ->
+// grip-point.
 func clawsStaticFS(t *testing.T, clawsPose spatialmath.Pose) *referenceframe.FrameSystem {
 	t.Helper()
 	fs := referenceframe.NewEmptyFrameSystem("test")
@@ -42,11 +60,13 @@ func clawsStaticFS(t *testing.T, clawsPose spatialmath.Pose) *referenceframe.Fra
 	if err := fs.AddFrame(claws, fs.World()); err != nil {
 		t.Fatalf("add claws frame: %v", err)
 	}
+	addGripPoint(t, fs)
 	return fs
 }
 
 // clawsRevoluteFS returns world -> j0 (revolute about Z) -> coffee-claws-middle
-// (static offset +100mm along X from j0), so the gripper position depends on j0.
+// (static offset +100mm along X from j0) -> grip-point, so the gripper position
+// depends on j0.
 func clawsRevoluteFS(t *testing.T) *referenceframe.FrameSystem {
 	t.Helper()
 	fs := referenceframe.NewEmptyFrameSystem("test")
@@ -65,6 +85,7 @@ func clawsRevoluteFS(t *testing.T) *referenceframe.FrameSystem {
 	if err := fs.AddFrame(claws, j0); err != nil {
 		t.Fatalf("add claws frame: %v", err)
 	}
+	addGripPoint(t, fs)
 	return fs
 }
 
@@ -141,10 +162,11 @@ func geometryToWorldInverse(fs *referenceframe.FrameSystem, inputs referencefram
 	return tf.(*referenceframe.GeometriesInFrame).Geometries()[0], nil
 }
 
-// TestHeldItemFrameIsContainerAligned verifies the frame is attached rotated onto
-// the container's axes — world-aligned, +Z up, at the grab — while the geometry
-// stays exactly where it was. The rotation is what the no-spill goal cloud
-// measures tilt against; it must not move the collision box.
+// TestHeldItemFrameIsContainerAligned verifies the frame is attached on the grip
+// point and rotated onto the container's axes — world-aligned, +Z up, at the
+// grab — while the geometry stays exactly where it was. The rotation is what the
+// no-spill goal cloud measures tilt against and the placement is what the pour
+// poses command; neither may move the collision box.
 func TestHeldItemFrameIsContainerAligned(t *testing.T) {
 	// Claws well away from world-aligned: tool axis along world +X, plus a roll.
 	clawsPose := spatialmath.NewPose(
@@ -176,10 +198,13 @@ func TestHeldItemFrameIsContainerAligned(t *testing.T) {
 		t.Errorf("held-item world orientation = %v, want world-aligned",
 			framePose.Orientation().OrientationVectorDegrees())
 	}
-	// Its origin is still the gripper's, so carry waypoints are unmoved.
-	requireVecEqual(t, framePose.Point(), clawsPose.Point(), 1e-6)
-	// And the geometry is unmoved by the rotation: RDK places a frame's geometry
-	// at the frame's parent, so it stays where the gripper-local pose puts it.
+	// Its origin is the grip point's, so a held-item pose places the same point a
+	// grip-point pose would.
+	gripPointWorld := spatialmath.Compose(clawsPose, spatialmath.NewPoseFromPoint(r3.Vector{Z: gripPointOffsetMm})).Point()
+	requireVecEqual(t, framePose.Point(), gripPointWorld, 1e-6)
+	// And the geometry is unmoved by the frame's pose: RDK places a frame's
+	// geometry at the frame's parent, so it stays where the gripper-local pose
+	// puts it.
 	requireVecEqual(t, heldItemWorldCenter(t, fs, inputs), worldCenter, 1e-4)
 }
 
@@ -500,19 +525,11 @@ func TestSwapFilterForGlassKeepsAttachedItem(t *testing.T) {
 }
 
 // glassSwapService builds a service swapFilterForGlass can run against: a
-// portafilter on the claws, a grip point to recover the grasp centroid from, and
-// an arm with no joints to read inputs off.
+// portafilter on the claws, a grip point to recover the grasp centroid from
+// (clawsStaticFS's), and an arm with no joints to read inputs off.
 func glassSwapService(t *testing.T) *beanjaminCoffee {
 	t.Helper()
-	fs := filterOnArmFS(t)
-	gp, err := referenceframe.NewStaticFrame(gripPoint, spatialmath.NewPoseFromPoint(r3.Vector{Z: 200}))
-	if err != nil {
-		t.Fatalf("new grip-point frame: %v", err)
-	}
-	if err := fs.AddFrame(gp, fs.Frame(componentClaws)); err != nil {
-		t.Fatalf("add grip-point frame: %v", err)
-	}
-	s := heldGeomService(t, fs)
+	s := heldGeomService(t, filterOnArmFS(t))
 	s.cfg.GlassDimensions = &ContainerDimensions{DiameterMm: 75, HeightMm: 140}
 	s.cfg.GlassGrabRelativePose = &RelativePose{}
 	s.arm = &inject.Arm{CurrentInputsFunc: func(context.Context) ([]referenceframe.Input, error) {
