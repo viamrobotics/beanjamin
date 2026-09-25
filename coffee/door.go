@@ -230,8 +230,8 @@ func nearestTheta(actual []referenceframe.Input, positions [][]referenceframe.In
 // is the honest answer — the operator, not this function, knows where the door
 // ended up.
 //
-// Runs behind executeAction, which takes the running gate, captures cancelCtx,
-// and refreshes the frame system before this runs.
+// Runs behind executeAction, which takes the arm lease, passes its context as
+// cancelCtx, and refreshes the frame system before this runs.
 func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, stepLabel string, toDeg float64) error {
 	logger := s.logger
 

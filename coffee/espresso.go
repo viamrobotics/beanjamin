@@ -2,7 +2,6 @@ package coffee
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -391,21 +390,18 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string, withGl
 		return nil, fmt.Errorf("unknown action %q, available actions: %v", name, names)
 	}
 
-	// Before the run gate, so a rejected flag costs no state.
+	// Before the arm lease, so a rejected flag costs no state.
 	if withGlass {
 		if err := checkWithGlassAllowed(name); err != nil {
 			return nil, err
 		}
 	}
 
-	if !s.running.CompareAndSwap(false, true) {
-		return nil, errors.New("a sequence is already running")
+	cancelCtx, release, err := s.lease.tryAcquire("execute_action " + name)
+	if err != nil {
+		return nil, err
 	}
-	defer s.running.Store(false)
-
-	s.mu.Lock()
-	cancelCtx := s.cancelCtx
-	s.mu.Unlock()
+	defer release()
 
 	// Pick up any out-of-band frame-system edits before planning. Guarded so a
 	// held item or locked filter established by a prior action call (manual
@@ -470,36 +466,22 @@ func waterDelta(drink string) float64 {
 	return 1
 }
 
-func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err error) {
+// prepareDrink runs the brew cycle for one order. The caller holds the arm
+// lease for the whole call and passes the lease context as cancelCtx.
+func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, order Order) (err error) {
 	drink, customerName := order.Drink, order.DisplayName()
 	batchIndex, batchSize := order.BatchIndex, order.BatchSize
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::prepareDrink["+drink+"]")
 	defer span.End()
 
-	if !s.running.CompareAndSwap(false, true) {
-		return errors.New("a sequence is already running")
-	}
-	defer s.running.Store(false)
-	// Capture the step the order errored at before `running` flips false above
-	// (LIFO defers: this runs first). Cancel and rewind wait for idle and then
-	// mutate currentStep, so reading it any later would race with them.
+	// Capture the step the order errored at while the queue still holds the
+	// lease. Cancel and rewind wait for its release and then mutate currentStep,
+	// so reading it any later would race with them.
 	defer func() {
 		if err != nil {
 			step, _ := s.currentStep.Load().(string)
 			s.failedStep.Store(step)
-		}
-	}()
-
-	s.mu.Lock()
-	cancelCtx := s.cancelCtx
-	s.mu.Unlock()
-	// Runs before `running` flips false, because a rewind taking the gate
-	// afterward starts clearing the very state this inspects. A cancelled
-	// cancelCtx means an operator cancel or reset_world, which own the pause.
-	defer func() {
-		if err != nil && cancelCtx.Err() == nil {
-			s.pauseOnFault(logger, err)
 		}
 	}()
 

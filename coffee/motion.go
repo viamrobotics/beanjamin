@@ -449,7 +449,7 @@ func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 // during calibration) instead of planning against a stale snapshot. When an item
 // is held, the filter is locked, or a glass is staged, cachedFS carries state that
 // must persist across separate DoCommand calls, so it is left untouched. Must be
-// called on the motion sequence goroutine (gated by the running flag), like
+// called on the motion sequence goroutine (gated by the arm lease), like
 // resetFrameSystem.
 func (s *beanjaminCoffee) refreshFrameSystemIfClean(ctx context.Context) error {
 	if s.heldItemAttached || s.filterFrameLocked || s.stagedGlassPlaced {

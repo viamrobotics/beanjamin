@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -72,14 +71,13 @@ type beanjaminCoffee struct {
 	dataLocationID       string          // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
 	primaryOrgID         string          // VIAM_PRIMARY_ORG_ID env; scopes app.viam.com deep-links to the owning org; "" when unavailable
 	pendingOrderClipsDir string          // optional; directory for pending-clip records to survive restarts
-	mu                   sync.Mutex
-	cancelCtx            context.Context
-	cancelFunc           func()
-	running              atomic.Bool
-	currentStep          atomic.Value // string: current step label for the active order (debug)
+	// lease owns the arm: who holds it, how to cancel them, and the queue
+	// pause (arm_lease.go).
+	lease       armLease
+	currentStep atomic.Value // string: current step label for the active order (debug)
 	// failedStep holds the step label the most recent order errored at,
-	// captured inside prepareDrink before `running` flips false so cancel
-	// recovery can't overwrite it. "" when the order succeeded. Reported on
+	// captured inside prepareDrink while the queue still holds the arm lease so
+	// cancel recovery can't overwrite it. "" when the order succeeded. Reported on
 	// the order sensor; reset at the start of each order.
 	failedStep atomic.Value
 	// faultActive is raised for faultWindow after a genuine fault and surfaced
@@ -93,7 +91,6 @@ type beanjaminCoffee struct {
 	activeLogger atomic.Pointer[logging.Logger]
 	queue        *OrderQueue
 	queueStop    chan struct{}
-	paused       atomic.Bool
 	// portafilterInMachine is true between releaseFilter and grabFilter:
 	// the bayonet holds the filter and the arm is free. Rewind uses this
 	// to decide whether recovery (re-grip + clean + home) is required.
@@ -133,7 +130,7 @@ type beanjaminCoffee struct {
 	// of the cup / glass / milk bottle detected at pickup so a re-grab can restore
 	// it; heldItemAttached tracks whether the held-item frame is currently present
 	// in cachedFS. These are mutated only on the motion sequence goroutine (like
-	// cachedFS, gated by the running flag), so they need no extra locking.
+	// cachedFS, gated by the arm lease), so they need no extra locking.
 	heldCupGeom      spatialmath.Geometry
 	heldGlassGeom    spatialmath.Geometry
 	heldMilkGeom     spatialmath.Geometry
@@ -360,10 +357,6 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger.Infof("usage sensor %q connected", conf.UsageSensorName)
 	}
 
-	// Created last: every failure above returns before there is a context to
-	// cancel, so only the two checks below have to tear it down.
-	cancelCtx, cancelFunc := context.WithCancel(context.Background())
-
 	s := &beanjaminCoffee{
 		name:                 name,
 		logger:               logger,
@@ -385,8 +378,6 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		primaryOrgID:         os.Getenv("VIAM_PRIMARY_ORG_ID"),
 		pendingOrderClipsDir: pendingOrderClipsDir,
 		gripper:              gripperComp,
-		cancelCtx:            cancelCtx,
-		cancelFunc:           cancelFunc,
 		queue:                NewOrderQueue(),
 		queueStop:            make(chan struct{}),
 		orderSensorSink:      sink,
@@ -403,7 +394,6 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	// Fail fast if the enabled configuration references poses that are missing
 	// from (or unset on) the switches, rather than discovering it mid-order.
 	if err := s.validateConfiguredPoses(ctx); err != nil {
-		cancelFunc()
 		return nil, err
 	}
 
@@ -412,7 +402,6 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	if conf.KeepAlive != nil {
 		window, err := newKeepAliveWindow(conf.KeepAlive)
 		if err != nil {
-			cancelFunc()
 			return nil, fmt.Errorf("keepalive: %w", err)
 		}
 		s.machineActivity = newMachineActivityStore(logger)
@@ -440,7 +429,7 @@ const rewindAnnouncement = "Rewinding to a clean start. I'll clean up if needed 
 
 func (s *beanjaminCoffee) Close(context.Context) error {
 	close(s.queueStop)
-	s.cancelFunc()
+	s.lease.shutdown()
 	// Cancelling the sequence context is not the same as closing the ice pin: a
 	// rebuild or a crash mid-dispense would otherwise leave the ice machine
 	// running until somebody notices.

@@ -269,7 +269,7 @@ func (s *beanjaminCoffee) purgeSteps() []Step {
 }
 
 // keepAlivePurgeTimeout bounds one purge: if it is hit, something is wedged and
-// the loop must not keep holding the `running` flag the order queue waits on.
+// the loop must not keep holding the arm lease the order queue waits on.
 const keepAlivePurgeTimeout = 2 * time.Minute
 
 // keepAlivePurgeWarningDelay gives anyone at the machine a moment to step back.
@@ -281,7 +281,7 @@ const keepAlivePurgeAnnouncement = "Heads up — I'm about to move to keep the c
 type keepAliveState struct {
 	now          time.Time
 	lastActivity time.Time
-	busy         bool // an order or another sequence holds the running flag
+	busy         bool // an order or another sequence holds the arm lease
 	paused       bool // a cancel or an order fault; nothing moves until 'proceed'
 	queued       int
 }
@@ -308,10 +308,10 @@ func shouldPurge(w *keepAliveWindow, threshold time.Duration, st keepAliveState)
 	return true, ""
 }
 
-// purge is the motion only — the caller owns the `running` gate, the cancel
+// purge is the motion only — the caller owns the arm lease, its cancel
 // context, and the step label. The signature matches the execute_action map,
-// which already holds that gate before dispatching, so a purge taking the gate
-// itself would deadlock against it.
+// which already holds the lease before dispatching, so a purge taking it
+// itself would be refused as busy.
 func (s *beanjaminCoffee) purge(ctx, cancelCtx context.Context) error {
 	// A purge fires on a timer, so whoever is at the machine has no reason to
 	// expect it. sayAlways, not say: a safety notice, not status narration, so
@@ -345,21 +345,26 @@ func (s *beanjaminCoffee) purge(ctx, cancelCtx context.Context) error {
 	return nil
 }
 
-// runPurge is the loop's entry point. It takes the same `running` gate
-// prepareDrink takes, so the queue treats a purge like an order; releasing that
-// gate on every path is load-bearing, since holding it would stall the queue
-// permanently.
+// runPurge is the loop's entry point. It takes the arm lease like every other
+// sequence, so an order that arrives mid-purge waits for the purge to finish
+// instead of failing, and an operator cancel interrupts the moves
+// mid-trajectory. Releasing the lease on every path is load-bearing, since
+// holding it would stall the queue permanently.
 func (s *beanjaminCoffee) runPurge(ctx context.Context) error {
-	if !s.running.CompareAndSwap(false, true) {
-		return errors.New("keepalive: a sequence is already running")
+	cancelCtx, release, err := s.lease.tryAcquire("keepalive purge")
+	if err != nil {
+		return fmt.Errorf("keepalive: %w", err)
 	}
-	defer s.running.Store(false)
+	defer release()
 
-	// Snapshot cancelCtx under the mutex, as every other sequence does, so an
-	// operator cancel interrupts the moves mid-trajectory.
-	s.mu.Lock()
-	cancelCtx := s.cancelCtx
-	s.mu.Unlock()
+	// shouldPurge saw an empty queue, but an order can land between that tick
+	// and the claim. Yield to it: the order resets the machine's timer anyway,
+	// and purging first would keep the customer waiting through the warning and
+	// the whole purge.
+	if n := s.queue.Len(); n > 0 {
+		s.logger.Infof("keepalive: %d order(s) arrived before the purge started — skipping it", n)
+		return nil
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, keepAlivePurgeTimeout)
 	defer cancel()
@@ -382,9 +387,8 @@ func (s *beanjaminCoffee) recordMachineActivity() {
 // keepAliveLoop runs for the life of the service, started by NewCoffee only when
 // keepalive is configured.
 //
-// It watches queueStop rather than cancelCtx: a cancel pauses the queue rather
-// than shutting down, shouldPurge already declines while paused, and cancelCtx is
-// rotated under s.mu so reading it here would race.
+// It watches queueStop rather than any lease context: a cancel pauses the queue
+// rather than shutting down, and shouldPurge already declines while paused.
 func (s *beanjaminCoffee) keepAliveLoop(w *keepAliveWindow) {
 	ka := s.cfg.KeepAlive
 	interval := ka.checkInterval()
@@ -406,8 +410,8 @@ func (s *beanjaminCoffee) keepAliveLoop(w *keepAliveWindow) {
 		st := keepAliveState{
 			now:          time.Now(),
 			lastActivity: s.machineActivity.get(),
-			busy:         s.running.Load(),
-			paused:       s.paused.Load(),
+			busy:         s.lease.busy(),
+			paused:       s.lease.paused(),
 			queued:       s.queue.Len(),
 		}
 		ok, why := shouldPurge(w, threshold, st)
