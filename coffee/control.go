@@ -136,6 +136,12 @@ func (s *beanjaminCoffee) clearQueue() (map[string]any, error) {
 // orders. Each step is best-effort and skipped when not applicable, so it is
 // safe to call from any state.
 //
+// Everything between the cancel and the unpause runs holding the running gate:
+// the rebuild swaps cachedFS and the mutation flags, which only the gate holder
+// may touch, and without it a keepalive purge or execute_action could start
+// planning against a half-swapped world. The gate is released before the
+// unpause, as in proceed, so the order the resume lets through can claim it.
+//
 // Because it declares the world to be exactly as configured, run it only when
 // that is true — in particular, shut the fridge door by hand first, or the arm
 // will plan straight through a panel the model now believes is closed.
@@ -145,6 +151,13 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 		if err := s.waitForIdle(ctx, resetCancelWaitTimeout); err != nil {
 			return nil, fmt.Errorf("reset_world: %w", err)
 		}
+	}
+
+	// A sequence can start after the cancel check — once the cancelled one has
+	// unwound, or when there was nothing running to cancel — so the arm has to
+	// be claimed, not assumed.
+	if !s.running.CompareAndSwap(false, true) {
+		return nil, errors.New("reset_world: another sequence started before reset could take over — try again")
 	}
 
 	removed := s.queue.Clear()
@@ -160,7 +173,9 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 	// closed itself.
 	s.doorOpenDegs = 0
 
-	if err := s.resetFrameSystem(ctx); err != nil {
+	err := s.resetFrameSystem(ctx)
+	s.running.Store(false)
+	if err != nil {
 		return nil, fmt.Errorf("reset_world: %w", err)
 	}
 
