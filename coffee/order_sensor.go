@@ -37,8 +37,9 @@ type orderReading struct {
 	order      Order
 	execErr    error  // nil on success
 	failedStep string // step the order errored at; "" on success
-	// operatorCancelled is true when the failure was an operator cancel
-	// (context.Canceled propagated from cancelCtx), not a genuine fault.
+	// operatorCancelled is true when the order's arm lease was cancelled
+	// from outside (cancel, rewind, reset_world, or shutdown), not a genuine
+	// fault.
 	// Filter these out of step error-rate metrics.
 	operatorCancelled bool
 	traceID           string // OTel trace ID; links the reading to the order's full trace

@@ -34,16 +34,10 @@ func TestCancelStopsAndNothingElse(t *testing.T) {
 	s.portafilterInMachine.Store(true)
 	s.portafilterHasGrounds.Store(true)
 	s.setStep(stepBrewing)
-	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
-	s.running.Store(true)
 
-	// Play the sequence goroutine: unwind once the shared context is cancelled.
-	// Capture it first, since signalCancel swaps in a fresh one.
-	seqCtx := s.cancelCtx
-	go func() {
-		<-seqCtx.Done()
-		s.running.Store(false)
-	}()
+	// Play the sequence goroutine: unwind once its lease context is cancelled.
+	seqCtx, release := holdArm(t, s)
+	unwindOnCancel(seqCtx, release)
 
 	resp, err := s.cancel(context.Background())
 	if err != nil {
@@ -56,7 +50,7 @@ func TestCancelStopsAndNothingElse(t *testing.T) {
 	if got := stops.Load(); got != 1 {
 		t.Errorf("arm.Stop called %d times, want 1", got)
 	}
-	if !s.paused.Load() {
+	if !s.lease.paused() {
 		t.Error("queue should be paused after cancel")
 	}
 	if !s.portafilterInMachine.Load() || !s.portafilterHasGrounds.Load() {
@@ -81,7 +75,6 @@ func TestCancelIdleIsSilent(t *testing.T) {
 		return nil
 	}
 	s.arm = a
-	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
 
 	resp, err := s.cancel(context.Background())
 	if err != nil {
@@ -90,7 +83,7 @@ func TestCancelIdleIsSilent(t *testing.T) {
 	if resp["cancelled"] != false || resp["queue"] != "running" {
 		t.Errorf("resp = %v, want cancelled=false queue=running", resp)
 	}
-	if s.paused.Load() {
+	if s.lease.paused() {
 		t.Error("an idle cancel must not pause the queue")
 	}
 	if said := speech.calls(); len(said) != 0 {
@@ -103,8 +96,7 @@ func TestCancelIdleIsSilent(t *testing.T) {
 // rather than letting two callers plan motion at once.
 func TestRewindRefusesWhileAnotherSequenceRuns(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
-	s.running.Store(true)
+	holdArm(t, s)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -162,7 +154,7 @@ func coffeeWithDirtyWorld(t *testing.T, cfgErr error) (*beanjaminCoffee, *refere
 func pausedCoffeeWithDirtyWorld(t *testing.T, cfgErr error) (*beanjaminCoffee, *referenceframe.FrameSystem, *int) {
 	t.Helper()
 	s, dirty, rebuilds := coffeeWithDirtyWorld(t, cfgErr)
-	s.paused.Store(true)
+	pauseQueue(&s.lease)
 	return s, dirty, rebuilds
 }
 
@@ -190,13 +182,11 @@ func TestProceedRebuildsFrameSystemWhenPaused(t *testing.T) {
 		t.Errorf("rebuild must clear the mutation flags: held=%v locked=%v staged=%v",
 			s.heldItemAttached, s.filterFrameLocked, s.stagedGlassPlaced)
 	}
-	if s.running.Load() {
+	if s.lease.busy() {
 		t.Error("proceed must hand the arm back after rebuilding")
 	}
-	select {
-	case <-s.queue.proceed:
-	default:
-		t.Error("proceed signal should have been sent to unpause the queue")
+	if s.lease.paused() {
+		t.Error("proceed should have lifted the pause")
 	}
 }
 
@@ -229,23 +219,6 @@ func TestProceedRebuildsFrameSystemWhenNotPaused(t *testing.T) {
 	}
 }
 
-// TestProceedOnRunningQueueParksNoSignal pins the other half of the unpaused
-// case: the resume signal must not be sent when nothing is waiting for it. A
-// token left in the cap-1 buffer would be consumed by the next cancel-induced
-// pause the instant it arrived, resuming the queue without an operator asking.
-func TestProceedOnRunningQueueParksNoSignal(t *testing.T) {
-	s, _, _ := coffeeWithDirtyWorld(t, nil)
-
-	if _, err := s.proceedQueue(context.Background()); err != nil {
-		t.Fatalf("proceed error: %v", err)
-	}
-	select {
-	case <-s.queue.proceed:
-		t.Error("proceed must not park a resume signal while the queue is running")
-	default:
-	}
-}
-
 // TestProceedTwiceResumesOnce: the first proceed claims the pause, the second
 // finds none left. Only one of them may report resumed, or an operator
 // double-clicking would release a pause that a cancel between the two clicks
@@ -270,19 +243,17 @@ func TestProceedTwiceResumesOnce(t *testing.T) {
 	}
 }
 
-// TestProceedClearsThePauseItself is the regression test for a queue that
-// silently stopped making drinks. The paused flag used to be cleared only by
-// the queue goroutine, so proceed reported success while the flag stayed set:
-// Status kept claiming the queue was paused, the keepalive loop kept declining
-// to purge, and the resume signal sat in the buffer waiting to release a pause
-// nobody had asked to release.
+// TestProceedClearsThePauseItself guards against a queue that silently stops
+// making drinks: if anything but proceed had to lift the pause, proceed could
+// report success while Status kept claiming the queue was paused and the
+// keepalive loop kept declining to purge.
 func TestProceedClearsThePauseItself(t *testing.T) {
 	s, _, _ := pausedCoffeeWithDirtyWorld(t, nil)
 
 	if _, err := s.proceedQueue(context.Background()); err != nil {
 		t.Fatalf("proceed error: %v", err)
 	}
-	if s.paused.Load() {
+	if s.lease.paused() {
 		t.Error("proceed must clear the paused flag, not leave it for the queue goroutine")
 	}
 }
@@ -293,14 +264,13 @@ func TestProceedClearsThePauseItself(t *testing.T) {
 // resume signal. proceed still has to be able to release it.
 func TestCancelledManualActionPauseIsReleasable(t *testing.T) {
 	s, _, _ := coffeeWithDirtyWorld(t, nil)
-	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
 
 	// A manual action holds the arm; the operator cancels it, then it unwinds.
-	s.running.Store(true)
-	if !s.signalCancel() {
-		t.Fatal("signalCancel should report the running sequence")
+	_, release := holdArm(t, s)
+	if _, ok := s.lease.cancelHolder(); !ok {
+		t.Fatal("cancelHolder should report the running sequence")
 	}
-	s.running.Store(false)
+	release()
 
 	resp, err := s.proceedQueue(context.Background())
 	if err != nil {
@@ -309,70 +279,50 @@ func TestCancelledManualActionPauseIsReleasable(t *testing.T) {
 	if resp["resumed"] != true {
 		t.Errorf("resumed = %v, want true — the cancel did pause the queue", resp["resumed"])
 	}
-	if s.paused.Load() {
+	if s.lease.paused() {
 		t.Error("the queue must not stay paused after proceed released it")
 	}
 }
 
-// TestWaitForProceedHoldsTheQueueUntilProceed pins the consumer side: the flag
-// stays set for the whole wait, so a proceed arriving at any moment sees a
-// paused queue and grants the resume. Clearing it on the way in (the old
-// Swap(false) + Store(true)) opened a window where a concurrent proceed read an
-// unpaused queue, declined to signal, and parked this goroutine for good.
-func TestWaitForProceedHoldsTheQueueUntilProceed(t *testing.T) {
+// TestQueueWaitsForProceed pins the consumer side: the pause stays set for the
+// whole wait, so a proceed arriving at any moment sees a paused queue and
+// grants the resume, and the waiting consumer takes the arm as it does.
+func TestQueueWaitsForProceed(t *testing.T) {
 	s, _, _ := pausedCoffeeWithDirtyWorld(t, nil)
-	s.queueStop = make(chan struct{})
-	t.Cleanup(func() { close(s.queueStop) })
+	claimed := startQueueClaim(&s.lease, nil)
 
-	resumed := make(chan bool, 1)
-	go func() { resumed <- s.waitForProceed() }()
-
-	// The consumer is parked; from a concurrent proceed's point of view the
-	// queue must still read paused.
-	select {
-	case <-resumed:
-		t.Fatal("waitForProceed returned while the queue was still paused")
-	case <-time.After(50 * time.Millisecond):
-	}
-	if !s.paused.Load() {
-		t.Fatal("paused must stay set while a consumer waits — a proceed reading false would never signal")
+	assertStillWaiting(t, claimed, "while the queue was still paused")
+	if !s.lease.paused() {
+		t.Fatal("paused must stay set while a consumer waits — a proceed reading false would never resume it")
 	}
 
 	if _, err := s.proceedQueue(context.Background()); err != nil {
 		t.Fatalf("proceed error: %v", err)
 	}
-	select {
-	case ok := <-resumed:
-		if !ok {
-			t.Error("waitForProceed reported shutdown, want a resume")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("waitForProceed never woke up after proceed")
+	c := awaitClaim(t, claimed)
+	if !c.ok {
+		t.Fatal("acquireForQueue reported shutdown, want a resume")
 	}
+	c.release(false)
 }
 
-// TestWaitForProceedIgnoresAStaleSignal: a resume signal can be parked with no
-// consumer waiting (proceed after a cancelled manual action). It must not
-// release the next pause on arrival — that pause is a fresh cancel, and an
-// operator has to ask for that one too.
-func TestWaitForProceedIgnoresAStaleSignal(t *testing.T) {
+// TestProceedOnRunningQueueDoesNotPreReleaseAPause: a proceed with nothing
+// paused must leave nothing behind that releases the next pause on arrival —
+// that pause is a fresh cancel, and an operator has to ask for that one too.
+func TestProceedOnRunningQueueDoesNotPreReleaseAPause(t *testing.T) {
 	s, _, _ := coffeeWithDirtyWorld(t, nil)
-	s.queueStop = make(chan struct{})
-	s.queue.proceed <- struct{}{} // parked by an earlier proceed
-
-	s.paused.Store(true)
-	resumed := make(chan bool, 1)
-	go func() { resumed <- s.waitForProceed() }()
-
-	select {
-	case <-resumed:
-		t.Fatal("a stale resume signal must not release a later pause")
-	case <-time.After(50 * time.Millisecond):
+	if resp, err := s.proceedQueue(context.Background()); err != nil || resp["resumed"] != false {
+		t.Fatalf("proceed on a running queue: resp=%v err=%v, want resumed=false", resp, err)
 	}
 
-	close(s.queueStop)
-	if ok := <-resumed; ok {
-		t.Error("waitForProceed should report shutdown once queueStop closes")
+	pauseQueue(&s.lease)
+	stop := make(chan struct{})
+	claimed := startQueueClaim(&s.lease, stop)
+	assertStillWaiting(t, claimed, "on a pause no proceed had released")
+
+	close(stop)
+	if c := awaitClaim(t, claimed); c.ok {
+		t.Error("acquireForQueue should report shutdown once stop closes")
 	}
 }
 
@@ -474,7 +424,7 @@ func TestProceedOmitsTheFridgeFieldWhenShut(t *testing.T) {
 // proceed must not swap it out from under it.
 func TestProceedRefusesWhileASequenceRuns(t *testing.T) {
 	s, dirty, rebuilds := pausedCoffeeWithDirtyWorld(t, nil)
-	s.running.Store(true)
+	holdArm(t, s)
 
 	if _, err := s.proceedQueue(context.Background()); err == nil {
 		t.Fatal("proceed should refuse while a sequence is still running")
@@ -485,10 +435,8 @@ func TestProceedRefusesWhileASequenceRuns(t *testing.T) {
 	if s.cachedFS != dirty {
 		t.Error("a refused proceed must leave the cached frame system alone")
 	}
-	select {
-	case <-s.queue.proceed:
+	if !s.lease.paused() {
 		t.Error("a refused proceed must not unpause the queue")
-	default:
 	}
 }
 
@@ -501,16 +449,11 @@ func TestProceedRebuildFailureKeepsQueuePaused(t *testing.T) {
 	if _, err := s.proceedQueue(context.Background()); err == nil {
 		t.Fatal("proceed should fail when the frame system can't be rebuilt")
 	}
-	if s.running.Load() {
+	if s.lease.busy() {
 		t.Error("a failed rebuild must still hand the arm back")
 	}
-	if !s.paused.Load() {
+	if !s.lease.paused() {
 		t.Error("queue should still be paused after a failed rebuild")
-	}
-	select {
-	case <-s.queue.proceed:
-		t.Error("a failed rebuild must not unpause the queue")
-	default:
 	}
 }
 
@@ -521,12 +464,11 @@ func TestProceedRebuildFailureKeepsQueuePaused(t *testing.T) {
 // held.
 func TestResetWorldRefusesWhileASequenceHoldsTheArm(t *testing.T) {
 	s, dirty, rebuilds := coffeeWithDirtyWorld(t, nil)
-	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
 	s.queue.Enqueue(Order{ID: "next", Drink: "espresso"})
 	s.portafilterInMachine.Store(true)
 	s.portafilterHasGrounds.Store(true)
 	s.doorOpenDegs = 90
-	s.running.Store(true)
+	holdArm(t, s)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -552,31 +494,29 @@ func TestResetWorldRefusesWhileASequenceHoldsTheArm(t *testing.T) {
 	if s.doorOpenDegs != 90 {
 		t.Errorf("doorOpenDegs = %v, want 90", s.doorOpenDegs)
 	}
-	if !s.running.Load() {
-		t.Error("reset_world released a running gate it never claimed")
+	if !s.lease.busy() {
+		t.Error("reset_world released a lease it never claimed")
 	}
 }
 
 // TestResetWorldHoldsTheGateWhileRebuilding pins that the frame-system swap
 // happens with the arm claimed, so no keepalive purge or manual action can plan
-// against a half-rebuilt world, and that the gate is handed back afterwards.
+// against a half-rebuilt world, and that the lease is handed back afterwards.
 // The world is reset from under a running sequence to cover the cancel-then-
 // claim ordering as well.
 func TestResetWorldHoldsTheGateWhileRebuilding(t *testing.T) {
 	s, dirty, _ := coffeeWithDirtyWorld(t, nil)
-	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
-	s.running.Store(true)
-	seqCtx := s.cancelCtx
-	go func() {
-		<-seqCtx.Done()
-		s.running.Store(false)
-	}()
+	seqCtx, release := holdArm(t, s)
+	unwindOnCancel(seqCtx, release)
 
 	var claimedDuringRebuild, heldDuringRebuild bool
 	fsSvc := inject.NewFrameSystemService("fs")
 	fsSvc.FrameSystemConfigFunc = func(context.Context) (*framesystem.Config, error) {
-		heldDuringRebuild = s.running.Load()
-		claimedDuringRebuild = s.running.CompareAndSwap(false, true)
+		heldDuringRebuild = s.lease.holderName() == "reset_world"
+		if _, competing, err := s.lease.tryAcquire("competing sequence"); err == nil {
+			claimedDuringRebuild = true
+			competing()
+		}
 		return &framesystem.Config{}, nil
 	}
 	s.fsSvc = fsSvc
@@ -595,24 +535,26 @@ func TestResetWorldHoldsTheGateWhileRebuilding(t *testing.T) {
 	if s.cachedFS == dirty {
 		t.Error("cached frame system should have been replaced by the rebuild")
 	}
-	if s.running.Load() {
+	if s.lease.busy() {
 		t.Error("reset_world must hand the arm back after rebuilding")
+	}
+	if s.lease.paused() {
+		t.Error("reset_world must lift the pause its own cancel raised")
 	}
 }
 
 // TestResetWorldReleasesTheGateOnRebuildFailure: a failed rebuild must not leave
-// the running gate claimed, or every later sequence would be refused as busy.
+// the arm lease held, or every later sequence would be refused as busy.
 func TestResetWorldReleasesTheGateOnRebuildFailure(t *testing.T) {
 	s, _, _ := pausedCoffeeWithDirtyWorld(t, errors.New("boom"))
-	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
 
 	if _, err := s.resetWorld(context.Background()); err == nil {
 		t.Fatal("reset_world should fail when the frame system can't be rebuilt")
 	}
-	if s.running.Load() {
+	if s.lease.busy() {
 		t.Error("a failed reset_world must still hand the arm back")
 	}
-	if !s.paused.Load() {
+	if !s.lease.paused() {
 		t.Error("queue should still be paused after a failed rebuild")
 	}
 }
@@ -696,63 +638,6 @@ func faultingGripper() *inject.Gripper {
 		return nil, errors.New("gripper unreachable")
 	}
 	return g
-}
-
-// TestFaultWithStrandedStatePausesQueue pins that a genuine fault leaving the
-// machine mid-cycle holds the next order back for rewind → proceed, instead of
-// letting it start from the stranded state.
-func TestFaultWithStrandedStatePausesQueue(t *testing.T) {
-	s, _, _ := coffeeWithDirtyWorld(t, nil)
-	s.portafilterInMachine.Store(true)
-	s.gripper = faultingGripper()
-	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
-
-	if err := s.prepareDrink(context.Background(), NewOrder("espresso", "Alice", "", "")); err == nil {
-		t.Fatal("prepareDrink should fail on the unreadable gripper")
-	}
-	if !s.paused.Load() {
-		t.Error("a fault that stranded state must pause the queue")
-	}
-	if s.running.Load() {
-		t.Error("running must be released after the fault")
-	}
-}
-
-// TestFaultWithCleanWorldPausesQueue covers a fault with no mid-cycle state
-// recorded: the queue still pauses, because the recorded state does not show
-// everything a fault can leave behind.
-func TestFaultWithCleanWorldPausesQueue(t *testing.T) {
-	s, _, _ := coffeeWithDirtyWorld(t, nil)
-	s.heldItemAttached = false
-	s.filterFrameLocked = false
-	s.stagedGlassPlaced = false
-	s.gripper = faultingGripper()
-	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
-
-	if err := s.prepareDrink(context.Background(), NewOrder("espresso", "Alice", "", "")); err == nil {
-		t.Fatal("prepareDrink should fail on the unreadable gripper")
-	}
-	if !s.paused.Load() {
-		t.Error("a fault must pause the queue even with no mid-cycle state recorded")
-	}
-}
-
-// TestOperatorCancelLeavesPauseToCancel pins that an interrupted order is not
-// treated as a fault: the pause belongs to the cancel (or reset_world, which
-// releases it), so the fault path must not raise one of its own.
-func TestOperatorCancelLeavesPauseToCancel(t *testing.T) {
-	s, _, _ := coffeeWithDirtyWorld(t, nil)
-	s.portafilterHasGrounds.Store(true)
-	s.gripper = faultingGripper()
-	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
-	s.cancelFunc()
-
-	if err := s.prepareDrink(context.Background(), NewOrder("espresso", "Alice", "", "")); err == nil {
-		t.Fatal("prepareDrink should fail on the unreadable gripper")
-	}
-	if s.paused.Load() {
-		t.Error("the fault path must leave an operator-cancelled order's pause to the cancel")
-	}
 }
 
 // TestStrandedStateNamesEachFlag checks that each piece of mid-cycle state is

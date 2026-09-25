@@ -2,6 +2,7 @@ package coffee
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"go.viam.com/rdk/logging"
@@ -88,15 +89,15 @@ func TestDoCommandDispatch(t *testing.T) {
 		t.Error("run_cup_flow with count 0 should error")
 	}
 
-	// open_door is an execute_action action; executeAction's running-gate is the
-	// first thing it checks — so with a sequence already "running" it rejects
-	// without touching the arm. This confirms the action is wired without needing
-	// hardware.
-	s.running.Store(true)
-	if _, err := s.DoCommand(ctx, map[string]any{"execute_action": "open_door"}); err == nil {
-		t.Error("open_door action should error when a sequence is already running")
+	// open_door is an execute_action action; executeAction's arm lease is the
+	// first thing it takes — so with a sequence already holding the arm it
+	// rejects without touching it. This confirms the action is wired without
+	// needing hardware.
+	_, release := holdArm(t, s)
+	if _, err := s.DoCommand(ctx, map[string]any{"execute_action": "open_door"}); !errors.Is(err, errArmBusy) {
+		t.Errorf("open_door action err = %v, want errArmBusy while a sequence holds the arm", err)
 	}
-	s.running.Store(false)
+	release()
 
 	if _, err := s.DoCommand(ctx, map[string]any{"action": "teleport"}); err == nil {
 		t.Error("unknown action should error")

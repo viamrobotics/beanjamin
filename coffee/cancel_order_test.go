@@ -118,7 +118,7 @@ func TestCancelOrder_DropsQueuedOrderAndAnnounces(t *testing.T) {
 		t.Errorf("speech = %v, want one line naming Bob", said)
 	}
 	// Cancelling a queued order is not an operator stop: nothing pauses.
-	if c.paused.Load() {
+	if c.lease.paused() {
 		t.Error("cancel_order must not pause the queue")
 	}
 }

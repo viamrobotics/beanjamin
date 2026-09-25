@@ -66,7 +66,7 @@ Build the bundled web-app Viam module from repo root: `make web-app-module` (run
 4. On completion/failure, the order is moved to `recent` for `RecentDisplayDuration` (15s) so the UI can render "Ready!" without diffing polls.
 5. A single reading per attempt is pushed to the optional order-sensor sink, and an async clip save is requested on the optional `cam_storage_mux_name` video-store multiplexer.
 
-`cancel`, `clear_queue`, and `proceed` manipulate the same state. Only one routine runs at a time, gated by `running atomic.Bool`; a shared `cancelCtx` is captured under `mu` so cancellation can interrupt motion.
+`cancel`, `clear_queue`, and `proceed` manipulate the same state. Only one routine runs at a time, gated by the arm lease (`armLease` in `coffee/arm_lease.go`), the single owner of who holds the arm, that holder's cancel func, and the queue pause. Operator commands, manual actions and the keep-alive purge take it with `tryAcquire` (refused at once when busy); the queue consumer blocks in `acquireForQueue` until the arm is free and the queue unpaused, and releases with `release(pause)` so a genuine fault pauses in the same step that frees the arm. The lease context is what gets passed around as `cancelCtx`; `cancel`/`rewind`/`reset_world` cancel it with cause `errOperatorCancel`, which is how an interrupted order is told apart from a fault.
 
 ### Motion layer
 
