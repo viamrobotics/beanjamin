@@ -551,13 +551,13 @@ Returns `{"status": "resumed", "resumed": true, "frame_system_reset": true}`, or
 
 Returns `{"status": "cleared", "removed": 2, "kept_current": false}`. When an order was being brewed, `kept_current` is `true` and `kept_current_order_id` names the order that was spared.
 
-**`cleanup_pending_clips`** - Attempt a video save for any remaining pending-clip records under `data_dir`, then remove them. Catches clips whose live save was interrupted (process died during the post-roll wait) or failed (e.g. cam storage unavailable). Records younger than one full clip window plus a segment-flush margin are skipped, so an in-progress order is not double-saved. Intended to be invoked via a Viam scheduled job.
+**`cleanup_pending_clips`** - Attempt a video save for any remaining pending-clip records under `data_dir`, removing each record only once its save succeeds; a failed save (including one that exceeds the 60s save timeout) keeps the record for the next run. Catches clips whose live save was interrupted (process died during the post-roll wait) or failed (e.g. cam storage unavailable). Records younger than one full clip window plus a segment-flush margin are skipped, so an in-progress order is not double-saved. If records exist but `cam_storage_mux_name` is unset, the command returns an error and leaves them in place so they can be recovered once the mux is configured again. Intended to be invoked via a Viam scheduled job.
 
 ```json
 {"cleanup_pending_clips": true}
 ```
 
-Returns `{"saved": 1, "skipped": 0}`.
+Returns `{"saved": 1, "failed": 0, "skipped": 0}`.
 
 **`send_delivery_message`** - Run a DoCommand on the peer machine's service named by `delivery_handler_name` and return its response — the manual test hook for the delivery channel. The value is forwarded to the peer **verbatim**, so it must be a non-empty object using the command vocabulary the peer's own service understands. Errors when `delivery_handler_name` is unset, the value isn't an object, or the peer is unreachable (10s timeout).
 
