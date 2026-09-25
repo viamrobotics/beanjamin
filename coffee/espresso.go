@@ -499,7 +499,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 	// cancelCtx means an operator cancel or reset_world, which own the pause.
 	defer func() {
 		if err != nil && cancelCtx.Err() == nil {
-			s.pauseIfFaultStrandedState(logger, err)
+			s.pauseOnFault(logger, err)
 		}
 	}()
 

@@ -417,9 +417,8 @@ func (s *beanjaminCoffee) processQueue() {
 	}
 }
 
-// waitForProceed blocks while a cancel, or a fault that stranded mid-cycle
-// state, has the queue paused, and reports false when the service is shutting
-// down.
+// waitForProceed blocks while a cancel or an order fault has the queue paused,
+// and reports false when the service is shutting down.
 //
 // The paused flag is never cleared here. It is the single source of truth that
 // proceedQueue, resetWorld, Status and the keepalive loop all read, so only the

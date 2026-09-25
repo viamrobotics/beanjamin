@@ -718,10 +718,10 @@ func TestFaultWithStrandedStatePausesQueue(t *testing.T) {
 	}
 }
 
-// TestFaultWithCleanWorldKeepsQueueRunning covers the fault that left nothing
-// behind: the next order starts from a clean machine, so there is nothing for
-// an operator to recover and the queue keeps going.
-func TestFaultWithCleanWorldKeepsQueueRunning(t *testing.T) {
+// TestFaultWithCleanWorldPausesQueue covers a fault with no mid-cycle state
+// recorded: the queue still pauses, because the recorded state does not show
+// everything a fault can leave behind.
+func TestFaultWithCleanWorldPausesQueue(t *testing.T) {
 	s, _, _ := coffeeWithDirtyWorld(t, nil)
 	s.heldItemAttached = false
 	s.filterFrameLocked = false
@@ -732,8 +732,8 @@ func TestFaultWithCleanWorldKeepsQueueRunning(t *testing.T) {
 	if err := s.prepareDrink(context.Background(), NewOrder("espresso", "Alice", "", "")); err == nil {
 		t.Fatal("prepareDrink should fail on the unreadable gripper")
 	}
-	if s.paused.Load() {
-		t.Error("a fault that stranded nothing must not pause the queue")
+	if !s.paused.Load() {
+		t.Error("a fault must pause the queue even with no mid-cycle state recorded")
 	}
 }
 
@@ -755,29 +755,35 @@ func TestOperatorCancelLeavesPauseToCancel(t *testing.T) {
 	}
 }
 
-// TestPauseIfFaultStrandedStateFlags checks that each piece of mid-cycle state
-// on its own is enough to pause the queue.
-func TestPauseIfFaultStrandedStateFlags(t *testing.T) {
+// TestStrandedStateNamesEachFlag checks that each piece of mid-cycle state is
+// named in the fault log on its own, and that a clean machine names nothing.
+func TestStrandedStateNamesEachFlag(t *testing.T) {
 	cases := []struct {
 		name  string
 		setup func(s *beanjaminCoffee)
-		want  bool
+		want  string
 	}{
-		{name: "clean", setup: func(*beanjaminCoffee) {}, want: false},
-		{name: "portafilter in machine", setup: func(s *beanjaminCoffee) { s.portafilterInMachine.Store(true) }, want: true},
-		{name: "grounds in portafilter", setup: func(s *beanjaminCoffee) { s.portafilterHasGrounds.Store(true) }, want: true},
-		{name: "filter frame locked", setup: func(s *beanjaminCoffee) { s.filterFrameLocked = true }, want: true},
-		{name: "item in gripper", setup: func(s *beanjaminCoffee) { s.heldItemAttached = true }, want: true},
-		{name: "glass staged", setup: func(s *beanjaminCoffee) { s.stagedGlassPlaced = true }, want: true},
-		{name: "fridge door open", setup: func(s *beanjaminCoffee) { s.doorOpenDegs = 90 }, want: true},
+		{name: "clean", setup: func(*beanjaminCoffee) {}},
+		{name: "portafilter in machine", setup: func(s *beanjaminCoffee) { s.portafilterInMachine.Store(true) }, want: "portafilter in machine"},
+		{name: "grounds in portafilter", setup: func(s *beanjaminCoffee) { s.portafilterHasGrounds.Store(true) }, want: "grounds in portafilter"},
+		{name: "filter frame locked", setup: func(s *beanjaminCoffee) { s.filterFrameLocked = true }, want: "filter frame locked"},
+		{name: "item in gripper", setup: func(s *beanjaminCoffee) { s.heldItemAttached = true }, want: "item in gripper"},
+		{name: "glass staged", setup: func(s *beanjaminCoffee) { s.stagedGlassPlaced = true }, want: "glass staged"},
+		{name: "fridge door open", setup: func(s *beanjaminCoffee) { s.doorOpenDegs = 90 }, want: "fridge door open 90°"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := newTestCoffee(t, nil)
 			tc.setup(s)
-			s.pauseIfFaultStrandedState(s.logger, errors.New("boom"))
-			if got := s.paused.Load(); got != tc.want {
-				t.Errorf("paused = %v, want %v", got, tc.want)
+			got := s.strandedState()
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Errorf("strandedState() = %v, want none", got)
+				}
+				return
+			}
+			if len(got) != 1 || got[0] != tc.want {
+				t.Errorf("strandedState() = %v, want [%s]", got, tc.want)
 			}
 		})
 	}
