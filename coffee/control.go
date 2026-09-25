@@ -281,8 +281,8 @@ func (s *beanjaminCoffee) cancelOrder(ctx context.Context, v any) (map[string]an
 	}
 
 	remaining := s.queue.Len()
-	s.logger.Infof("cancel_order: dropped queued order %s (%s) — %d order(s) still queued",
-		order.ID, order.Drink, remaining)
+	s.logger.Infof("cancel_order: dropped queued order %s (%s for %s) — %d order(s) still queued",
+		order.ID, order.Drink, order.CustomerName, remaining)
 
 	if err := s.say(ctx, pickOrderCancelled(order.Drink, order.DisplayName())); err != nil {
 		s.logger.Warnf("cancel_order: failed to announce cancellation: %v", err)
