@@ -40,6 +40,13 @@ var defaultApproachConstraint = &StepLinearConstraint{
 // returned func must be deferred.
 func mergedCancelContext(ctx, cancelCtx context.Context) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(ctx)
+	// AfterFunc runs cancel on its own goroutine even when cancelCtx is already
+	// done, so without this check the first call made with the merged context
+	// could still see it live after the operator has cancelled.
+	if cancelCtx.Err() != nil {
+		cancel()
+		return ctx, cancel
+	}
 	stop := context.AfterFunc(cancelCtx, cancel)
 	return ctx, func() {
 		stop()
