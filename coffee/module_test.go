@@ -43,6 +43,8 @@ func validCanServeIcedConfig() *Config {
 	cfg.GlassApproachRelativePose = &RelativePose{}
 	cfg.GlassGrabRelativePose = &RelativePose{}
 	cfg.GlassDimensions = &ContainerDimensions{DiameterMm: 70, HeightMm: 140}
+	cfg.PourApproachRelativePose = &RelativePose{}
+	cfg.PourRelativePose = &RelativePose{}
 	return cfg
 }
 
@@ -59,6 +61,8 @@ func validCanServeIcedLatteConfig() *Config {
 	cfg.MilkApproachRelativePose = &RelativePose{}
 	cfg.MilkGrabRelativePose = &RelativePose{}
 	cfg.MilkBottleDimensions = &ContainerDimensions{DiameterMm: 90, HeightMm: 250}
+	cfg.MilkPourApproachRelativePose = &RelativePose{}
+	cfg.MilkPourRelativePose = &RelativePose{}
 	return cfg
 }
 
@@ -236,6 +240,8 @@ func TestValidate_CanServeIcedLatte_RequiresMilkFields(t *testing.T) {
 		{"milk_grab_relative_pose", func(c *Config) { c.MilkGrabRelativePose = nil }},
 		{"milk_bottle_dimensions", func(c *Config) { c.MilkBottleDimensions = nil }},
 		{"milk_bottle_dimensions.height_mm", func(c *Config) { c.MilkBottleDimensions = &ContainerDimensions{DiameterMm: 90} }},
+		{"milk_pour_approach_relative_pose", func(c *Config) { c.MilkPourApproachRelativePose = nil }},
+		{"milk_pour_relative_pose", func(c *Config) { c.MilkPourRelativePose = nil }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.field, func(t *testing.T) {
@@ -255,6 +261,8 @@ func TestValidate_IgnoresMilkFieldsWhenNotServingLatte(t *testing.T) {
 	cfg := validCanServeIcedConfig()
 	cfg.MilkBottleDimensions = nil
 	cfg.MilkVisionServiceName = ""
+	cfg.MilkPourApproachRelativePose = nil
+	cfg.MilkPourRelativePose = nil
 	if _, _, err := cfg.Validate(""); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -361,6 +369,25 @@ func TestValidate_CanServeIced_RequiresGlassApproachRelativePose(t *testing.T) {
 	_, _, err := cfg.Validate("")
 	if err == nil || !strings.Contains(err.Error(), "glass_approach_relative_pose") {
 		t.Fatalf("expected glass_approach_relative_pose required error, got %v", err)
+	}
+}
+
+func TestValidate_CanServeIced_RequiresPourRelativePoses(t *testing.T) {
+	for _, tt := range []struct {
+		field string
+		clear func(*Config)
+	}{
+		{"pour_approach_relative_pose", func(c *Config) { c.PourApproachRelativePose = nil }},
+		{"pour_relative_pose", func(c *Config) { c.PourRelativePose = nil }},
+	} {
+		t.Run(tt.field, func(t *testing.T) {
+			cfg := validCanServeIcedConfig()
+			tt.clear(cfg)
+			_, _, err := cfg.Validate("")
+			if err == nil || !strings.Contains(err.Error(), tt.field) {
+				t.Fatalf("expected %s required error, got %v", tt.field, err)
+			}
+		})
 	}
 }
 
