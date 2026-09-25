@@ -480,7 +480,8 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 			execErr = fmt.Errorf("panic: %v", r)
 			step, _ := s.currentStep.Load().(string)
 			s.failedStep.Store(step)
-			logger.Errorf("panic while processing order: %v — queue will still save video and order reading", r)
+			logger.Errorf("panic while processing order for %s: %v — queue will still save video and order reading",
+				order.CustomerName, r)
 		}
 		failedStep, _ := s.failedStep.Load().(string)
 		s.notifyOrderReading(orderReading{
@@ -537,7 +538,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) e
 	}
 
 	if err := s.prepareDrink(ctx, order); err != nil {
-		logger.Errorf("order failed: %v", err)
+		logger.Errorf("order for %s failed: %v", order.CustomerName, err)
 		return err
 	}
 

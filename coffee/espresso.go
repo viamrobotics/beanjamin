@@ -290,7 +290,7 @@ func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order Order) {
 			"drink": order.Drink,
 		},
 	}); err != nil {
-		s.activeOrderLogger().Warnf("failed to record order history: %v", err)
+		s.activeOrderLogger().Warnf("failed to record order history for %q: %v", order.CustomerEmail, err)
 	}
 }
 
