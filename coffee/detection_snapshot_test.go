@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/golang/geo/r3"
-	"github.com/viam-labs/motion-tools/draw"
-	drawv1 "github.com/viam-labs/motion-tools/draw/v1"
+	"github.com/viamrobotics/visualization/draw"
+	drawv1 "github.com/viamrobotics/visualization/draw/v1"
 	commonv1 "go.viam.com/api/common/v1"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/pointcloud"

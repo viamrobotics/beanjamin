@@ -229,7 +229,7 @@ func collectOrderFiles(dataRoot, orderID string) ([]orderFile, error) {
 			return err
 		}
 		// Non-JSON payloads keep their base name: the camera clips carry the
-		// order status the video store stamped into theirs, and a motion-tools
+		// order status the video store stamped into theirs, and a
 		// visualization snapshot's loader keys off its name prefix.
 		if !strings.EqualFold(filepath.Ext(rel), ".json") {
 			files = append(files, orderFile{rel: rel, name: filepath.Base(rel)})

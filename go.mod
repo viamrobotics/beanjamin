@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/golang/geo v0.0.0-20230421003525-6adc56603217
 	github.com/google/uuid v1.6.0
-	github.com/viam-labs/motion-tools v1.45.2-0.20260825171254-94549756064c
+	github.com/viamrobotics/visualization v1.45.2-0.20260923153413-0f4faf2c4e70
 	go.viam.com/api v0.1.585
 	go.viam.com/rdk v1.9.1-0.20260924144548-4e5b4de40655
 	go.viam.com/utils v0.13.0

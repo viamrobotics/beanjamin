@@ -354,9 +354,9 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 		candidates = append(candidates, pickupCandidate{centroid: world, geom: geomWorld})
 	}
 
-	// Persist a motion-tools snapshot of this observation to the motion-requests
+	// Persist a visualization snapshot of this observation to the motion-requests
 	// dir: the frame system at these inputs plus every detection's point cloud and
-	// bounding box, replayable in a local motion-tools visualizer.
+	// bounding box, replayable in a local visualization viewer.
 	s.saveDetectionSnapshot(t.label, fs, fsInputs, camToWorld, detections)
 	return candidates, nil
 }

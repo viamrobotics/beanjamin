@@ -820,6 +820,8 @@ github.com/viamrobotics/evdev v0.1.3 h1:mR4HFafvbc5Wx4Vp1AUJp6/aITfVx9AKyXWx+rWj
 github.com/viamrobotics/evdev v0.1.3/go.mod h1:N6nuZmPz7HEIpM7esNWwLxbYzqWqLSZkfI/1Sccckqk=
 github.com/viamrobotics/ice/v2 v2.3.40 h1:H9r4ztsKkxWSn42R4fLvYlaPtpBys1Yj7/MERBtZY0k=
 github.com/viamrobotics/ice/v2 v2.3.40/go.mod h1:MFqB81U1pliDKaXJx2hGHvYKg1PepyEYwEY10828Ve0=
+github.com/viamrobotics/visualization v1.45.2-0.20260923153413-0f4faf2c4e70 h1:0fbo2ajf9jAZbpk+EA8ZyWPE5y66A6656yVP6VyFlgk=
+github.com/viamrobotics/visualization v1.45.2-0.20260923153413-0f4faf2c4e70/go.mod h1:p9oOfAY6MGyFowSo+tsnMbvwREPBZIyYZnSg7jEgZjk=
 github.com/viamrobotics/webrtc/v3 v3.99.16 h1:N3OQoWnV9Zg68mTDOq8ymsx2AMpbEjuo1gHWaVd7wB0=
 github.com/viamrobotics/webrtc/v3 v3.99.16/go.mod h1:w1LmHsQFaq7vqLh06ybQ5kmYXo8myQq+3Pj073RL0f0=
 github.com/viamrobotics/zeroconf v1.0.13 h1:b3SzT1OrWjAWa/IReeehU++NWVp6r9K9/qBbjPZVFXw=
