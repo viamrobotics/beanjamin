@@ -176,3 +176,127 @@ func TestIssueVideoSave_RequestShape(t *testing.T) {
 		t.Errorf("metadata order_status = %q, want failed (execErr was set)", meta["order_status"])
 	}
 }
+
+// writeStalePendingSave writes a pending record old enough to pass the cleanup skip gate
+// and returns its path.
+func writeStalePendingSave(t *testing.T, c *beanjaminCoffee, dir string) string {
+	t.Helper()
+	order := NewOrder("espresso", "Ada", "hi", "bye")
+	c.writePendingSave(order, time.Now().UTC().Add(-time.Hour))
+	path := filepath.Join(dir, order.ID+".json")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("pending record was not written: %v", err)
+	}
+	return path
+}
+
+// TestCleanupPendingClips_NoStorageKeepsRecords covers a record left behind after
+// cam_storage_mux_name was removed: the sweep must report the misconfiguration without
+// dereferencing the nil mux, and keep the record so the clip is recoverable later.
+func TestCleanupPendingClips_NoStorageKeepsRecords(t *testing.T) {
+	c, _, dir := newCamStorageTestCoffee(t)
+	path := writeStalePendingSave(t, c, dir)
+	c.camStorage = nil
+
+	resp, err := c.cleanupPendingClips()
+	if err == nil {
+		t.Fatalf("expected error for pending records with no cam storage, got resp %v", resp)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("pending record should be kept when no cam storage, stat err: %v", err)
+	}
+}
+
+// TestCleanupPendingClips_NoStorageNoRecords keeps the no-mux, nothing-pending case a
+// quiet success so the scheduled job doesn't report a spurious failure.
+func TestCleanupPendingClips_NoStorageNoRecords(t *testing.T) {
+	c := &beanjaminCoffee{
+		logger:               logging.NewTestLogger(t),
+		pendingOrderClipsDir: t.TempDir(),
+	}
+	resp, err := c.cleanupPendingClips()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp["saved"] != 0 || resp["failed"] != 0 || resp["skipped"] != 0 {
+		t.Errorf("resp = %v, want all zero counts", resp)
+	}
+}
+
+// TestCleanupPendingClips_RemovesOnlyOnSuccess verifies a recovered record is deleted
+// and counted as saved only when its save succeeds; a failed save keeps it for retry.
+func TestCleanupPendingClips_RemovesOnlyOnSuccess(t *testing.T) {
+	cases := []struct {
+		name        string
+		doFunc      func(ctx context.Context, cmd map[string]any) (map[string]any, error)
+		wantSaved   int
+		wantFailed  int
+		wantRemoved bool
+	}{
+		{
+			name: "success removes record",
+			doFunc: func(_ context.Context, _ map[string]any) (map[string]any, error) {
+				return map[string]any{"filename": "clip.mp4"}, nil
+			},
+			wantSaved:   1,
+			wantRemoved: true,
+		},
+		{
+			name: "transport error keeps record",
+			doFunc: func(_ context.Context, _ map[string]any) (map[string]any, error) {
+				return nil, context.DeadlineExceeded
+			},
+			wantFailed: 1,
+		},
+		{
+			name: "per-store errors keep record",
+			doFunc: func(_ context.Context, _ map[string]any) (map[string]any, error) {
+				return map[string]any{"errors": map[string]any{"store0": "filename too long"}}, nil
+			},
+			wantFailed: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, cam, dir := newCamStorageTestCoffee(t)
+			cam.DoFunc = tc.doFunc
+			path := writeStalePendingSave(t, c, dir)
+
+			resp, err := c.cleanupPendingClips()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resp["saved"] != tc.wantSaved || resp["failed"] != tc.wantFailed || resp["skipped"] != 0 {
+				t.Errorf("resp = %v, want saved=%d failed=%d skipped=0", resp, tc.wantSaved, tc.wantFailed)
+			}
+			_, statErr := os.Stat(path)
+			if removed := os.IsNotExist(statErr); removed != tc.wantRemoved {
+				t.Fatalf("record removed = %v, want %v (stat err: %v)", removed, tc.wantRemoved, statErr)
+			}
+		})
+	}
+}
+
+// TestIssueVideoSave_BoundedByTimeout ensures a wedged video store can't hang the save:
+// the DoCommand context must carry a deadline no later than clipSaveTimeout.
+func TestIssueVideoSave_BoundedByTimeout(t *testing.T) {
+	c, cam, _ := newCamStorageTestCoffee(t)
+	var deadline time.Time
+	var hasDeadline bool
+	cam.DoFunc = func(ctx context.Context, _ map[string]any) (map[string]any, error) {
+		deadline, hasDeadline = ctx.Deadline()
+		return map[string]any{}, nil
+	}
+
+	start := time.Now()
+	order := NewOrder("espresso", "Ada", "hi", "bye")
+	c.issueVideoSave(order, start.Add(-clipLead), start.Add(clipTrail), nil, c.logger)
+
+	if !hasDeadline {
+		t.Fatal("save DoCommand context has no deadline")
+	}
+	if deadline.After(start.Add(clipSaveTimeout + time.Second)) {
+		t.Errorf("deadline %s exceeds clipSaveTimeout (%s) from start", deadline.Sub(start), clipSaveTimeout)
+	}
+}
