@@ -110,6 +110,17 @@ func TestRankedCounts(t *testing.T) {
 	}
 }
 
+// Keys come back out of cloud data, so they are escaped like any other value
+// that reaches a mrkdwn section.
+func TestRankedLists_EscapeKeys(t *testing.T) {
+	if got, want := rankedCounts(map[string]int{"<!channel>": 1}), "• &lt;!channel&gt; — 1"; got != want {
+		t.Errorf("rankedCounts() = %q, want %q", got, want)
+	}
+	if got, want := rankedDrinks(map[string]drinkStats{"<!here>": {ordered: 1}}), "• &lt;!here&gt; — 1"; got != want {
+		t.Errorf("rankedDrinks() = %q, want %q", got, want)
+	}
+}
+
 func TestRankedDrinks(t *testing.T) {
 	got := rankedDrinks(map[string]drinkStats{
 		// Ordered most, so it ranks first despite being the quickest.
@@ -306,6 +317,10 @@ func TestTopCustomers(t *testing.T) {
 		// named rather than one of them picked arbitrarily.
 		{"a tie", map[string]int{"Bob": 3, "Alice": 3, "Carol": 1}, "Alice, Bob — 3 each"},
 		{"everyone tied", map[string]int{"Bob": 1, "Alice": 1}, "Alice, Bob — 1 each"},
+		// Names are typed at the kiosk; unescaped, this one would ping the
+		// whole channel from the digest.
+		{"mention escaped", map[string]int{"<!channel>": 2}, "&lt;!channel&gt; — 2"},
+		{"tied mentions escaped", map[string]int{"<!here>": 1, "A & B": 1}, "&lt;!here&gt;, A &amp; B — 1 each"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := topCustomers(tc.customers); got != tc.want {

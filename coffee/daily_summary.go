@@ -352,12 +352,14 @@ func topCustomers(customers map[string]int) string {
 	names := rankedKeys(customers, func(n int) int { return n })
 	top := customers[names[0]]
 
-	tied := names[:1]
+	// Names are typed at the kiosk, so each one is escaped before it lands in
+	// the mrkdwn section.
+	tied := []string{escapeSlackMrkdwn(names[0])}
 	for _, name := range names[1:] {
 		if customers[name] != top {
 			break
 		}
-		tied = append(tied, name)
+		tied = append(tied, escapeSlackMrkdwn(name))
 	}
 
 	// "2 orders each" only makes sense once there is someone to share it with.
@@ -440,7 +442,7 @@ func rankedCounts(counts map[string]int) string {
 	keys := rankedKeys(counts, func(n int) int { return n })
 	lines := make([]string, len(keys))
 	for i, k := range keys {
-		lines[i] = fmt.Sprintf("• %s — %d", k, counts[k])
+		lines[i] = fmt.Sprintf("• %s — %d", escapeSlackMrkdwn(k), counts[k])
 	}
 	return strings.Join(lines, "\n")
 }
@@ -453,7 +455,7 @@ func rankedDrinks(drinks map[string]drinkStats) string {
 	lines := make([]string, len(keys))
 	for i, k := range keys {
 		stats := drinks[k]
-		lines[i] = fmt.Sprintf("• %s — %d", k, stats.ordered)
+		lines[i] = fmt.Sprintf("• %s — %d", escapeSlackMrkdwn(k), stats.ordered)
 		if avg, ok := stats.avgBrew(); ok {
 			lines[i] += fmt.Sprintf(" _(avg %s)_", avg)
 		}

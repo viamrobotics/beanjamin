@@ -123,6 +123,23 @@ func TestCancelOrder_DropsQueuedOrderAndAnnounces(t *testing.T) {
 	}
 }
 
+// Spoken text uses the name the customer was shown, like every other line
+// the machine says about an order.
+func TestCancelOrder_SpeaksDisplayName(t *testing.T) {
+	c, speech := newTestCoffee(t, &Config{CanServeDecaf: true, Conversational: true})
+	o := NewOrder("lungo", "Realname", "", "")
+	o.ModifiedCustomerName = "Shownname"
+	c.queue.Enqueue(o)
+
+	if _, err := c.cancelOrder(context.Background(), o.ID); err != nil {
+		t.Fatalf("cancelOrder error: %v", err)
+	}
+	said := speech.calls()
+	if len(said) != 1 || !strings.Contains(said[0], "Shownname") || strings.Contains(said[0], "Realname") {
+		t.Errorf("speech = %v, want one line naming Shownname and not Realname", said)
+	}
+}
+
 func TestCancelOrder_RefusesInFlightOrder(t *testing.T) {
 	c, _ := newTestCoffee(t, nil)
 	alice := NewOrder("espresso", "Alice", "", "")

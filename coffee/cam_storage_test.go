@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -298,5 +299,77 @@ func TestIssueVideoSave_BoundedByTimeout(t *testing.T) {
 	}
 	if deadline.After(start.Add(clipSaveTimeout + time.Second)) {
 		t.Errorf("deadline %s exceeds clipSaveTimeout (%s) from start", deadline.Sub(start), clipSaveTimeout)
+	}
+}
+
+// The pending record outlives the order when a save can't run, so it holds only
+// what recovery needs and is readable by the module's user alone.
+func TestWritePendingSave_StoresNoCustomerDataAndIsPrivate(t *testing.T) {
+	c, _, dir := newCamStorageTestCoffee(t)
+	order := NewOrder("espresso", "Placeholder Name", "hello Placeholder Name", "bye")
+	order.ModifiedCustomerName = "Placeholdr Name"
+	order.CustomerEmail = "customer@example.com"
+	videoFrom := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+
+	c.writePendingSave(order, videoFrom)
+
+	path := filepath.Join(dir, order.ID+".json")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("pending record was not written: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("record mode = %o, want 600", perm)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read record: %v", err)
+	}
+	for _, leaked := range []string{"Placeholder", "Placeholdr", "customer@example.com", "hello"} {
+		if strings.Contains(string(data), leaked) {
+			t.Errorf("record contains %q: %s", leaked, data)
+		}
+	}
+	var ps pendingSave
+	if err := json.Unmarshal(data, &ps); err != nil {
+		t.Fatalf("decode record: %v", err)
+	}
+	if ps.Order.ID != order.ID || ps.Order.Drink != "espresso" || !ps.VideoFrom.Equal(videoFrom) {
+		t.Errorf("record = %+v, want order %s / espresso / %s", ps, order.ID, videoFrom)
+	}
+}
+
+// Records holding a whole marshalled Order must still decode, so the cleanup
+// sweep recovers clips for orders interrupted before an upgrade.
+func TestCleanupPendingClips_RecoversFullOrderRecord(t *testing.T) {
+	c, cam, dir := newCamStorageTestCoffee(t)
+	var tags []string
+	cam.DoFunc = func(_ context.Context, cmd map[string]any) (map[string]any, error) {
+		tags, _ = cmd["tags"].([]string)
+		return map[string]any{}, nil
+	}
+
+	order := NewOrder("lungo", "Placeholder Name", "hi", "bye")
+	order.CustomerEmail = "customer@example.com"
+	fullRecord, err := json.Marshal(struct {
+		Order     Order     `json:"order"`
+		VideoFrom time.Time `json:"video_from"`
+	}{order, time.Now().UTC().Add(-time.Hour)})
+	if err != nil {
+		t.Fatalf("marshal full-order record: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, order.ID+".json"), fullRecord, 0o600); err != nil {
+		t.Fatalf("write full-order record: %v", err)
+	}
+
+	resp, err := c.cleanupPendingClips()
+	if err != nil {
+		t.Fatalf("cleanupPendingClips error: %v", err)
+	}
+	if resp["saved"] != 1 {
+		t.Errorf("saved = %v, want 1 (resp %v)", resp["saved"], resp)
+	}
+	if len(tags) != 1 || tags[0] != order.ID {
+		t.Errorf("save tags = %v, want [%s]", tags, order.ID)
 	}
 }
