@@ -314,10 +314,10 @@ func shouldPurge(w *keepAliveWindow, threshold time.Duration, st keepAliveState)
 // itself would deadlock against it.
 func (s *beanjaminCoffee) purge(ctx, cancelCtx context.Context) error {
 	// A purge fires on a timer, so whoever is at the machine has no reason to
-	// expect it. sayAlways, not say: a safety notice, not status narration, so
+	// expect it. SayAlways, not Say: a safety notice, not status narration, so
 	// conversational mode must not silence it. say_async returns on queueing, so
 	// the delay starts when the line is accepted, not when it finishes playing.
-	if err := s.sayAlways(ctx, keepAlivePurgeAnnouncement); err != nil {
+	if err := s.speaker.SayAlways(ctx, keepAlivePurgeAnnouncement); err != nil {
 		s.logger.Warnf("keepalive: purge announcement failed: %v", err)
 	}
 	select {

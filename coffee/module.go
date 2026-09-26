@@ -30,6 +30,7 @@ import (
 	"go.viam.com/rdk/spatialmath"
 
 	"beanjamin/coffee/order"
+	"beanjamin/coffee/speech"
 	// Register the multi-poses-execution-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
 )
@@ -64,7 +65,7 @@ type beanjaminCoffee struct {
 	arm                  arm.Arm
 	fsSvc                framesystem.Service
 	cachedFS             *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
-	speech               resource.Resource           // nil when speech_service_name is not configured
+	speaker              *speech.Speaker             // says nothing when speech_service_name is not configured
 	gripper              gripper.Gripper
 	camStorage           generic.Service // optional; mux over video stores; nil if cam_storage_mux_name unset
 	iceBoard             board.Board     // optional; drives the ice-machine GPIO pin; nil if ice_board_name unset
@@ -85,9 +86,8 @@ type beanjaminCoffee struct {
 	// recovery can't overwrite it. "" when the order succeeded. Reported on
 	// the order sensor; reset at the start of each order.
 	failedStep atomic.Value
-	// faultActive is raised for faultWindow after a genuine fault and surfaced
-	// in Status() as fault_active (fault_alert.go).
-	faultActive atomic.Bool
+	// faultAlarm raises fault_active in Status() after a genuine fault.
+	faultAlarm *speech.FaultAlarm
 	// activeLogger holds the order-scoped logger (tagged with order_id) for the
 	// order currently being processed; set by processQueue and cleared when it
 	// finishes. Entry points that run outside the queue goroutine — cancel and
@@ -293,15 +293,16 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 
 	// Speech is the one optional dependency a missing resource does not fail on:
 	// the service stays usable without a voice.
-	var speech resource.Resource
+	var speechRes resource.Resource
 	if conf.SpeechServiceName != "" {
-		if speechRes, ok := deps[generic.Named(conf.SpeechServiceName)]; ok {
-			speech = speechRes
+		if res, ok := deps[generic.Named(conf.SpeechServiceName)]; ok {
+			speechRes = res
 			logger.Infof("speech service %q connected", conf.SpeechServiceName)
 		} else {
 			logger.Warnf("speech service %q configured but not available", conf.SpeechServiceName)
 		}
 	}
+	speaker := speech.NewSpeaker(speechRes, conf.Conversational)
 
 	camStorage, err := optionalGenericDep(deps, logger, "cam_storage_mux_name", conf.CamStorageMuxName, "")
 	if err != nil {
@@ -381,7 +382,8 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		arm:                  armComp,
 		fsSvc:                fsSvc,
 		cachedFS:             cachedFS,
-		speech:               speech,
+		speaker:              speaker,
+		faultAlarm:           speech.NewFaultAlarm(speaker, logger),
 		camStorage:           camStorage,
 		iceBoard:             iceBoard,
 		slackNotifier:        slackNotifier,
