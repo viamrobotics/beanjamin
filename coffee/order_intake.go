@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"beanjamin/coffee/order"
+	"beanjamin/coffee/speech"
 )
 
 // menu is the set of optional drinks this machine's config lets it serve.
@@ -36,8 +37,8 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 
 	if ok, reason := s.menu().Supports(drink); !ok {
 		s.logger.Infof("rejected order for drink %q from %s (%s)", drink, customerName, reason)
-		msg := pickUnsupportedDrink(drink)
-		if err := s.say(ctx, msg); err != nil {
+		msg := speech.UnsupportedDrink(drink)
+		if err := s.speaker.Say(ctx, msg); err != nil {
 			s.logger.Warnf("failed to say rejection: %v", err)
 		}
 		return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
@@ -79,7 +80,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		// noise. (executeQueuedOrder skips the speech when Greeting is "".)
 		greeting := req.InitialGreeting
 		if greeting == "" && count == 1 {
-			greeting = pickGreeting(drink, displayName)
+			greeting = speech.Greeting(drink, displayName)
 		}
 		o := order.NewOrder(drink, customerName, greeting, req.CompletionStatement)
 		o.ModifiedCustomerName = req.ModifiedCustomerName
@@ -104,11 +105,11 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 	// and covers it.
 	switch {
 	case count == 1 && firstPos > 1:
-		if err := s.say(ctx, pickOrderReceived(drink, displayName)); err != nil {
+		if err := s.speaker.Say(ctx, speech.OrderReceived(drink, displayName)); err != nil {
 			s.logger.Warnf("failed to announce order %s: %v", ids[0], err)
 		}
 	case count > 1:
-		if err := s.say(ctx, pickOrderReceivedBatch(drink, displayName, count)); err != nil {
+		if err := s.speaker.Say(ctx, speech.OrderReceivedBatch(drink, displayName, count)); err != nil {
 			s.logger.Warnf("failed to announce batch: %v", err)
 		}
 	}

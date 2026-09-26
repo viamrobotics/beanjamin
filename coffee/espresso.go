@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"beanjamin/coffee/order"
+	"beanjamin/coffee/speech"
 
 	"github.com/golang/geo/r3"
 	toggleswitch "go.viam.com/rdk/components/switch"
@@ -237,33 +238,6 @@ func (s *beanjaminCoffee) validateConfiguredPoses(ctx context.Context) error {
 	return nil
 }
 
-// say queues text for the speech service when conversational mode is
-// enabled, otherwise no-ops. Use this for status-narrating lines (greetings,
-// progress prompts, rejections) that an external orchestrator may want to
-// own instead. For lines that must always be spoken regardless of mode
-// (e.g. the drink-ready handoff), use sayAlways.
-func (s *beanjaminCoffee) say(ctx context.Context, text string) error {
-	if !s.cfg.Conversational {
-		return nil
-	}
-	return s.sayAlways(ctx, text)
-}
-
-// sayAlways queues text for the speech service via the non-blocking
-// say_async DoCommand, regardless of the Conversational config. It
-// returns as soon as the text is accepted by the speech service's async
-// queue; the audio will be played once any in-flight speech has finished.
-// No-op when no speech service is configured.
-func (s *beanjaminCoffee) sayAlways(ctx context.Context, text string) error {
-	if s.speech == nil {
-		return nil
-	}
-	_, err := s.speech.DoCommand(ctx, map[string]any{
-		"say_async": text,
-	})
-	return err
-}
-
 // readyForDelivery handles the cup-handoff moment for delivery-fulfillment
 // orders, replacing the pickup drink-ready announcement: it sends the
 // delivery_request to the delivery machine and waits for its acknowledgment
@@ -272,12 +246,12 @@ func (s *beanjaminCoffee) sayAlways(ctx context.Context, text string) error {
 // The caller sets order.PickupPosition from the serving step.
 func (s *beanjaminCoffee) readyForDelivery(ctx context.Context, order order.Order) error {
 	s.notifyDeliveryRequest(ctx, order)
-	drink := speakableDrink(order.Drink)
+	drink := speech.SpeakableDrink(order.Drink)
 	text := fmt.Sprintf("%s ready for delivery!", drink)
 	if name := order.DisplayName(); name != "" {
 		text = fmt.Sprintf("%s for %s, ready for delivery!", drink, name)
 	}
-	return s.sayAlways(ctx, text)
+	return s.speaker.SayAlways(ctx, text)
 }
 
 // recordOrderHistory credits a completed drink to the customer's history; no-op
@@ -552,7 +526,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, o order.Order) (err 
 			return nil
 		}
 	}
-	if err := s.say(ctx, pickAlmostReady()); err != nil {
+	if err := s.speaker.Say(ctx, speech.AlmostReady()); err != nil {
 		logger.Warnf("failed to say almost-ready: %v", err)
 	}
 	if err := runPhase(stepBrewing, "brewing", brewProgress, brewPhase); err != nil {
@@ -590,7 +564,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, o order.Order) (err 
 		if err := s.readyForDelivery(ctx, o); err != nil {
 			logger.Warnf("failed to announce ready-for-delivery: %v", err)
 		}
-	} else if err := s.sayAlways(ctx, pickDrinkReady(drink, customerName, batchIndex, batchSize)); err != nil {
+	} else if err := s.speaker.SayAlways(ctx, speech.DrinkReady(drink, customerName, batchIndex, batchSize)); err != nil {
 		logger.Warnf("failed to say drink-ready: %v", err)
 	}
 

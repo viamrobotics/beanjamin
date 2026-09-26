@@ -305,7 +305,7 @@ func (s *beanjaminCoffee) iceDispenseTimedOut(ctx context.Context, res iceDwellR
 		limit = fmt.Sprintf("the %v cap on the time since ice first appeared", secondsToDuration(s.iceAfterFirstSeenMaxSec()))
 	}
 	logger.Warnf("dispensing ice: hit %s: %s. Serving the glass as it is.", limit, reason)
-	if err := s.say(ctx, "I couldn't tell when the glass was full, so this one might be light on ice."); err != nil {
+	if err := s.speaker.Say(ctx, "I couldn't tell when the glass was full, so this one might be light on ice."); err != nil {
 		logger.Warnf("dispensing ice: announcing the timeout failed: %v", err)
 	}
 	s.incrementSensorReading(ctx, s.usageSensor, "ice machine", "ice_dispense_timeouts", 1)
