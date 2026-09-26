@@ -34,7 +34,7 @@ const (
 )
 
 // planTagPrefixes are the tag= value prefixes savePlanRequestAndResponse writes
-// (see coffee/motion.go). They are redundant once the tag value is a field in
+// (see coffee/plan_debug.go). They are redundant once the tag value is a field in
 // the file name, so they get stripped.
 var planTagPrefixes = []string{"step_", "motion_", "planning_"}
 

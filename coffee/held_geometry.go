@@ -23,7 +23,7 @@ package coffee
 // at the same pose — so the gripper-local geometry cached at pickup is reused
 // verbatim on the re-grab.
 //
-// This mirrors lockFilterFrame's frame-system mutation in motion.go, but the
+// This mirrors lockFilterFrame's frame-system mutation in frame_system.go, but the
 // parent is the moving gripper rather than the world, and the geometry comes
 // from vision rather than a part config.
 
