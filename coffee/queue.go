@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/module/trace"
 
 	"beanjamin/coffee/order"
@@ -243,4 +244,15 @@ func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order order.Or
 	}); err != nil {
 		s.activeOrderLogger().Warnf("failed to record order history for %q: %v", order.CustomerEmail, err)
 	}
+}
+
+// activeOrderLogger returns the order-scoped logger for the in-flight order
+// when one is being processed, otherwise the base service logger. Used by
+// entry points (cancel, rewind) that run outside the queue goroutine and so
+// don't receive the tagged logger as a parameter. Never returns nil.
+func (s *beanjaminCoffee) activeOrderLogger() logging.Logger {
+	if l := s.activeLogger.Load(); l != nil {
+		return *l
+	}
+	return s.logger
 }
