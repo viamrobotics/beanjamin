@@ -1,4 +1,4 @@
-package coffee
+package geom
 
 import (
 	"math"
@@ -12,7 +12,7 @@ import (
 func TestSurfaceTopZUnder(t *testing.T) {
 	// A low table (top 700) and a taller ledge (top 900) both under the origin,
 	// plus a shelf off to the side that does not cover the origin.
-	boxes := []surfaceBox{
+	boxes := []SurfaceBox{
 		{minX: -100, maxX: 100, minY: -100, maxY: 100, topZ: 700}, // table under origin
 		{minX: -50, maxX: 50, minY: -50, maxY: 50, topZ: 900},     // ledge under origin
 		{minX: 500, maxX: 700, minY: 500, maxY: 700, topZ: 800},   // shelf elsewhere
@@ -33,7 +33,7 @@ func TestSurfaceTopZUnder(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gotZ, gotFound := surfaceTopZUnder(boxes, tc.x, tc.y, tc.refZ)
+			gotZ, gotFound := SurfaceTopZUnder(boxes, tc.x, tc.y, tc.refZ)
 			if gotFound != tc.wantFound {
 				t.Fatalf("found = %v, want %v", gotFound, tc.wantFound)
 			}
@@ -98,15 +98,15 @@ func TestWorldAnchoredSurfaceBoxes(t *testing.T) {
 		t.Fatalf("add ball frame: %v", err)
 	}
 
-	boxes, err := worldAnchoredSurfaceBoxes(fs, referenceframe.NewZeroInputs(fs))
+	boxes, err := WorldAnchoredSurfaceBoxes(fs, referenceframe.NewZeroInputs(fs))
 	if err != nil {
-		t.Fatalf("worldAnchoredSurfaceBoxes: %v", err)
+		t.Fatalf("WorldAnchoredSurfaceBoxes: %v", err)
 	}
 	if len(boxes) != 1 {
 		t.Fatalf("got %d surface box(es), want 1 (the shelf); got %+v", len(boxes), boxes)
 	}
 	got := boxes[0]
-	want := surfaceBox{minX: 0, maxX: 400, minY: -50, maxY: 250, topZ: 710}
+	want := SurfaceBox{minX: 0, maxX: 400, minY: -50, maxY: 250, topZ: 710}
 	const tol = 1e-6
 	if math.Abs(got.minX-want.minX) > tol || math.Abs(got.maxX-want.maxX) > tol ||
 		math.Abs(got.minY-want.minY) > tol || math.Abs(got.maxY-want.maxY) > tol ||
@@ -116,10 +116,10 @@ func TestWorldAnchoredSurfaceBoxes(t *testing.T) {
 
 	// The moving arm-link box, at zero inputs, sits over (200,100). It must not
 	// be treated as the surface there.
-	if _, ok := surfaceTopZUnder(boxes, 200, 100, 1000); !ok {
+	if _, ok := SurfaceTopZUnder(boxes, 200, 100, 1000); !ok {
 		t.Fatalf("expected the shelf to be found under (200,100)")
 	}
-	if z, _ := surfaceTopZUnder(boxes, 200, 100, 1000); z != 710 {
+	if z, _ := SurfaceTopZUnder(boxes, 200, 100, 1000); z != 710 {
 		t.Fatalf("surface under (200,100) = %g, want 710 (shelf, not the moving arm-link)", z)
 	}
 }

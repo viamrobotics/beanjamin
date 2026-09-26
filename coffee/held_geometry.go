@@ -33,6 +33,8 @@ import (
 
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
+
+	"beanjamin/coffee/geom"
 )
 
 // heldItemFrameName is the static frame added under componentClaws carrying the
@@ -110,9 +112,9 @@ func (s *beanjaminCoffee) reattachGeometry(label string) error {
 // grip-point move, so motion plans wouldn't route the cup around the staged glass
 // or the machine.
 //
-// The cup is modeled exactly as containerBox models it at pickup: an upright box
+// The cup is modeled exactly as geom.ContainerBox models it at pickup: an upright box
 // of the configured size centered on the grasp centroid. The centroid is
-// recovered by inverting the composeCupPose the grab used — the grab sends the
+// recovered by inverting the geom.ComposeCupPose the grab used — the grab sends the
 // grip point to centroid + cup_grab_relative_pose, so the centroid is the current
 // grip-point world position minus that offset.
 func (s *beanjaminCoffee) attachConfiguredCupGeometry(ctx context.Context) error {
@@ -146,7 +148,7 @@ func (s *beanjaminCoffee) attachConfiguredGeometry(
 
 // configuredContainerBox builds the world-frame container box from the given
 // dimensions, centered on the grasp centroid recovered from the current
-// grip-point world pose. It inverts composeCupPose: the grab sends the grip point
+// grip-point world pose. It inverts geom.ComposeCupPose: the grab sends the grip point
 // to centroid + the grab offset, so the centroid is the grip-point world position
 // minus that offset. Split from attachConfiguredGeometry (which reads the arm's
 // joint inputs) so the centroid math is unit-testable against a static frame
@@ -165,7 +167,7 @@ func (s *beanjaminCoffee) configuredContainerBox(
 	// The grab poses are required by Validate wherever their pickup is configured,
 	// so they are non-nil on any machine that reaches the matching flow.
 	grabOffset := relativePoseToSpatial(grabRel).Point()
-	return containerBox(gripPointWorld.Sub(grabOffset), dims, label)
+	return geom.ContainerBox(gripPointWorld.Sub(grabOffset), dims.boxDims(), label)
 }
 
 // withGlassActions are the actions with_glass may be passed to: the steps run
@@ -252,7 +254,7 @@ func (s *beanjaminCoffee) swapFilterForGlass(ctx context.Context) (func(), error
 // relative to the gripper, for a container geometry already expressed in
 // gripper-local coordinates.
 //
-// The frame adopts the geometry's own orientation. containerBox builds the
+// The frame adopts the geometry's own orientation. geom.ContainerBox builds the
 // container box world-axis-aligned with its height on Z, so this makes the
 // frame's +Z the container's vertical axis: upright in the world at the moment of
 // the grab, and tilting with the container afterwards as the wrist moves.
@@ -491,7 +493,7 @@ func (s *beanjaminCoffee) heldItemSurfaceCollisions(pairs []AllowedCollision) []
 
 // heldItemHalfHeightMm returns half the vertical (Z) extent, in mm, of the
 // currently tracked held-item geometry, and true when an item is attached and
-// its geometry is a Box. The held-item box is modeled upright (containerBox
+// its geometry is a Box. The held-item box is modeled upright (geom.ContainerBox
 // builds it with OZ=1 and Z = container height) and a Box keeps
 // its dims under the transform into the gripper frame, so its Z dimension is the
 // container's vertical extent once placed upright at the drop pose. Returns false
