@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/board"
 	"go.viam.com/rdk/components/camera"
@@ -17,6 +18,7 @@ import (
 	"go.viam.com/rdk/robot/framesystem"
 	generic "go.viam.com/rdk/services/generic"
 	"go.viam.com/rdk/services/vision"
+	"go.viam.com/rdk/spatialmath"
 
 	"beanjamin/coffee/report"
 )
@@ -228,7 +230,7 @@ type Config struct {
 	// DoorApproachRelativePose is a RelativePose offset composed onto the grasp
 	// frame's center to produce the pre-grasp standoff (like
 	// cup_approach_relative_pose onto a detected cup centroid — see
-	// composeCupPose), but resolved against the live grasp frame. Its
+	// geom.ComposeCupPose), but resolved against the live grasp frame. Its
 	// orientation is the base grasp orientation, which DoorGraspYawRatio then
 	// yaws through the swing. Required to run open_door.
 	DoorApproachRelativePose *RelativePose `json:"door_approach_relative_pose,omitempty"`
@@ -350,6 +352,16 @@ type RelativePose struct {
 	Theta float64 `json:"theta"`
 }
 
+// relativePoseToSpatial converts a Config RelativePose into a spatialmath.Pose
+// suitable for geom.ComposeCupPose. Translation is millimeters; orientation is
+// OrientationVectorDegrees.
+func relativePoseToSpatial(r *RelativePose) spatialmath.Pose {
+	return spatialmath.NewPose(
+		r3.Vector{X: r.X, Y: r.Y, Z: r.Z},
+		&spatialmath.OrientationVectorDegrees{OX: r.OX, OY: r.OY, OZ: r.OZ, Theta: r.Theta},
+	)
+}
+
 // ContainerDimensions is the operator-supplied size of a picked-up container
 // (cup or glass), configured as cup_dimensions / glass_dimensions. It defines
 // the held-item bounding box: width = depth = DiameterMm and height = HeightMm,
@@ -363,6 +375,13 @@ type RelativePose struct {
 type ContainerDimensions struct {
 	DiameterMm float64 `json:"diameter_mm"`
 	HeightMm   float64 `json:"height_mm"`
+}
+
+// boxDims converts a diameter/height override into axis-aligned box extents:
+// width and depth both equal the diameter (a square footprint approximating the
+// round container), height equals the height.
+func (d *ContainerDimensions) boxDims() r3.Vector {
+	return r3.Vector{X: d.DiameterMm, Y: d.DiameterMm, Z: d.HeightMm}
 }
 
 // validate checks a required ContainerDimensions: it must be present, with a

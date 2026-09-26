@@ -18,6 +18,8 @@ import (
 	"go.viam.com/rdk/motionplan/armplanning"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
+
+	"beanjamin/coffee/geom"
 )
 
 const (
@@ -248,7 +250,7 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	//    derive approach + grasp from it. door_approach_relative_pose is a
 	//    RelativePose offset composed onto the grasp frame's center (the door
 	//    analog of cup_approach_relative_pose onto a detected cup, via
-	//    composeCupPose, but resolved against a live frame). Its orientation is
+	//    geom.ComposeCupPose, but resolved against a live frame). Its orientation is
 	//    the base grasp orientation, yawed by doorGraspYawRatio as the door swings.
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
@@ -279,7 +281,7 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	// close are exact inverses and the configured pose is the SHUT-door one.
 	yawRatio := s.doorGraspYawRatio()
 	approachRel := yawAboutWorldZ(relativePoseToSpatial(s.cfg.DoorApproachRelativePose), yawRatio*fromDeg)
-	approachWorld := composeCupPose(ballBase.Point(), approachRel)
+	approachWorld := geom.ComposeCupPose(ballBase.Point(), approachRel)
 	graspOrient := approachRel.Orientation()
 	graspWorld := spatialmath.NewPose(ballBase.Point(), graspOrient)
 	collisions := s.filterFakeModeCollisions(doorOpenCollisions(s.doorGraspFrameName()))
@@ -418,9 +420,9 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	if err != nil {
 		return err
 	}
-	// composeCupPose applies approachRel's translation in world axes, so a
+	// geom.ComposeCupPose applies approachRel's translation in world axes, so a
 	// standoff left at the start angle would back out into the swung panel.
-	retractWorld := composeCupPose(ballEnd.Point(), yawAboutWorldZ(approachRel, yawRatio*(toDeg-fromDeg)))
+	retractWorld := geom.ComposeCupPose(ballEnd.Point(), yawAboutWorldZ(approachRel, yawRatio*(toDeg-fromDeg)))
 	if err := s.moveToRawPose(ctx,
 		&poseData{pose: retractWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
 		defaultApproachConstraint, collisions, nil); err != nil {

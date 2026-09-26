@@ -1,4 +1,4 @@
-package coffee
+package geom
 
 import (
 	"testing"
@@ -9,7 +9,7 @@ import (
 )
 
 func TestRankCentroidsByProximity_Empty(t *testing.T) {
-	got := rankCentroidsByProximity(nil, r3.Vector{})
+	got := RankCentroidsByProximity(nil, r3.Vector{})
 	if len(got) != 0 {
 		t.Fatalf("expected empty slice, got %v", got)
 	}
@@ -17,7 +17,7 @@ func TestRankCentroidsByProximity_Empty(t *testing.T) {
 
 func TestRankCentroidsByProximity_Single(t *testing.T) {
 	c := []r3.Vector{{X: 110, Y: 0, Z: 0}}
-	got := rankCentroidsByProximity(c, r3.Vector{X: 100, Y: 0, Z: 0})
+	got := RankCentroidsByProximity(c, r3.Vector{X: 100, Y: 0, Z: 0})
 	if len(got) != 1 || got[0] != c[0] {
 		t.Fatalf("expected [%v], got %v", c[0], got)
 	}
@@ -30,7 +30,7 @@ func TestRankCentroidsByProximity_SortsClosestFirst(t *testing.T) {
 		{X: 150, Y: 0, Z: 0}, // 50mm
 	}
 	gripper := r3.Vector{X: 100, Y: 0, Z: 0}
-	got := rankCentroidsByProximity(c, gripper)
+	got := RankCentroidsByProximity(c, gripper)
 	want := []r3.Vector{c[1], c[2], c[0]}
 	if len(got) != len(want) {
 		t.Fatalf("expected %d candidates, got %d (%v)", len(want), len(got), got)
@@ -47,7 +47,7 @@ func TestRankCentroidsByProximity_KeepsAllNoCutoff(t *testing.T) {
 		{X: 1e6, Y: 0, Z: 0},
 		{X: 100, Y: 0, Z: 0},
 	}
-	got := rankCentroidsByProximity(c, r3.Vector{})
+	got := RankCentroidsByProximity(c, r3.Vector{})
 	if len(got) != 2 {
 		t.Fatalf("expected all candidates kept (no cutoff), got %d", len(got))
 	}
@@ -62,7 +62,7 @@ func TestRankCentroidsByProximity_TiesStable(t *testing.T) {
 		{X: 90, Y: 0, Z: 0},  // 10mm — tie
 	}
 	gripper := r3.Vector{X: 100, Y: 0, Z: 0}
-	got := rankCentroidsByProximity(c, gripper)
+	got := RankCentroidsByProximity(c, gripper)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 candidates, got %d", len(got))
 	}
@@ -78,7 +78,7 @@ func TestRankCentroidsByProximity_DoesNotMutateInput(t *testing.T) {
 		{X: 150, Y: 0, Z: 0},
 	}
 	orig := append([]r3.Vector(nil), c...)
-	_ = rankCentroidsByProximity(c, r3.Vector{X: 100, Y: 0, Z: 0})
+	_ = RankCentroidsByProximity(c, r3.Vector{X: 100, Y: 0, Z: 0})
 	for i := range orig {
 		if c[i] != orig[i] {
 			t.Fatalf("input mutated at index %d: got %v, want %v", i, c[i], orig[i])
@@ -87,7 +87,7 @@ func TestRankCentroidsByProximity_DoesNotMutateInput(t *testing.T) {
 }
 
 func TestMergeNearbyCentroids_Empty(t *testing.T) {
-	got := mergeNearbyCentroids(nil, 40)
+	got := MergeNearbyCentroids(nil, 40)
 	if len(got) != 0 {
 		t.Fatalf("expected empty, got %v", got)
 	}
@@ -95,7 +95,7 @@ func TestMergeNearbyCentroids_Empty(t *testing.T) {
 
 func TestMergeNearbyCentroids_NoNearDuplicates(t *testing.T) {
 	in := []r3.Vector{{X: 0}, {X: 100}, {X: 200}}
-	got := mergeNearbyCentroids(in, 40)
+	got := MergeNearbyCentroids(in, 40)
 	if len(got) != 3 {
 		t.Fatalf("expected all kept, got %v", got)
 	}
@@ -108,7 +108,7 @@ func TestMergeNearbyCentroids_AveragesWithinRadius(t *testing.T) {
 		{X: 100, Y: 0, Z: 0},
 		{X: 110, Y: 0, Z: 0}, // within 40 of cluster 1 -> merged
 	}
-	got := mergeNearbyCentroids(in, 40)
+	got := MergeNearbyCentroids(in, 40)
 	// Each cluster collapses to the mean of its members, not the first hit.
 	want := []r3.Vector{{X: 15}, {X: 105}}
 	if len(got) != len(want) {
@@ -125,7 +125,7 @@ func TestMergeNearbyCentroids_SeparatesBeyondRadius(t *testing.T) {
 	// 0, 35, 70: 35 is within 40 of cluster {0}, so it merges and the
 	// running mean moves to 17.5; 70 is >40 from 17.5, so it stays separate.
 	in := []r3.Vector{{X: 0}, {X: 35}, {X: 70}}
-	got := mergeNearbyCentroids(in, 40)
+	got := MergeNearbyCentroids(in, 40)
 	want := []r3.Vector{{X: 17.5}, {X: 70}}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("expected %v, got %v", want, got)
@@ -134,7 +134,7 @@ func TestMergeNearbyCentroids_SeparatesBeyondRadius(t *testing.T) {
 
 func TestMergeNearbyCentroids_ZeroRadiusDisables(t *testing.T) {
 	in := []r3.Vector{{X: 0}, {X: 0}, {X: 0}}
-	got := mergeNearbyCentroids(in, 0)
+	got := MergeNearbyCentroids(in, 0)
 	if len(got) != 3 {
 		t.Fatalf("zero radius should keep all, got %v", got)
 	}
@@ -143,7 +143,7 @@ func TestMergeNearbyCentroids_ZeroRadiusDisables(t *testing.T) {
 func TestMergeNearbyCentroids_DoesNotMutateInput(t *testing.T) {
 	in := []r3.Vector{{X: 0}, {X: 10}, {X: 100}}
 	orig := append([]r3.Vector(nil), in...)
-	_ = mergeNearbyCentroids(in, 40)
+	_ = MergeNearbyCentroids(in, 40)
 	for i := range orig {
 		if in[i] != orig[i] {
 			t.Fatalf("input mutated at %d: %v != %v", i, in[i], orig[i])
@@ -154,7 +154,7 @@ func TestMergeNearbyCentroids_DoesNotMutateInput(t *testing.T) {
 func TestComposeCupPose_IdentityRelative(t *testing.T) {
 	centroid := r3.Vector{X: 100, Y: 200, Z: 300}
 	relative := spatialmath.NewZeroPose()
-	got := composeCupPose(centroid, relative)
+	got := ComposeCupPose(centroid, relative)
 	if got.Point() != centroid {
 		t.Fatalf("expected centroid preserved %v, got %v", centroid, got.Point())
 	}
@@ -166,7 +166,7 @@ func TestComposeCupPose_IdentityRelative(t *testing.T) {
 func TestComposeCupPose_PureTranslation(t *testing.T) {
 	centroid := r3.Vector{X: 100, Y: 200, Z: 300}
 	relative := spatialmath.NewPoseFromPoint(r3.Vector{X: 10, Y: 0, Z: 0})
-	got := composeCupPose(centroid, relative)
+	got := ComposeCupPose(centroid, relative)
 	want := r3.Vector{X: 110, Y: 200, Z: 300}
 	if got.Point() != want {
 		t.Fatalf("expected %v, got %v", want, got.Point())
@@ -177,7 +177,7 @@ func TestComposeCupPose_PureRotation(t *testing.T) {
 	centroid := r3.Vector{X: 100, Y: 200, Z: 300}
 	orient := &spatialmath.OrientationVectorDegrees{OX: 1, OY: 0, OZ: 0, Theta: 90}
 	relative := spatialmath.NewPose(r3.Vector{}, orient)
-	got := composeCupPose(centroid, relative)
+	got := ComposeCupPose(centroid, relative)
 	if got.Point() != centroid {
 		t.Fatalf("expected centroid preserved %v, got %v", centroid, got.Point())
 	}
@@ -191,33 +191,33 @@ func TestCentroidsOf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new box: %v", err)
 	}
-	cands := []pickupCandidate{
-		{centroid: r3.Vector{X: 1}, geom: box},
-		{centroid: r3.Vector{X: 2}},
+	cands := []Candidate{
+		{Centroid: r3.Vector{X: 1}, Geom: box},
+		{Centroid: r3.Vector{X: 2}},
 	}
-	got := centroidsOf(cands)
+	got := Centroids(cands)
 	want := []r3.Vector{{X: 1}, {X: 2}}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("centroidsOf = %v, want %v", got, want)
+		t.Fatalf("Centroids = %v, want %v", got, want)
 	}
 }
 
 func TestNearestGeometry(t *testing.T) {
 	near, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 100}), r3.Vector{X: 10, Y: 10, Z: 10}, "near")
 	far, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 200}), r3.Vector{X: 10, Y: 10, Z: 10}, "far")
-	originals := []pickupCandidate{
-		{centroid: r3.Vector{X: 200}, geom: far},
-		{centroid: r3.Vector{X: 100}, geom: near},
-		{centroid: r3.Vector{X: 150}, geom: nil}, // skipped — no geometry
+	originals := []Candidate{
+		{Centroid: r3.Vector{X: 200}, Geom: far},
+		{Centroid: r3.Vector{X: 100}, Geom: near},
+		{Centroid: r3.Vector{X: 150}, Geom: nil}, // skipped — no geometry
 	}
 	// Closest original to (110) is the one at (100) -> "near".
-	got := nearestGeometry(r3.Vector{X: 110}, originals)
+	got := NearestGeometry(r3.Vector{X: 110}, originals)
 	if got == nil || got.Label() != "near" {
 		t.Fatalf("expected nearest geometry 'near', got %v", got)
 	}
 
 	// No originals carry geometry -> nil.
-	if g := nearestGeometry(r3.Vector{}, []pickupCandidate{{centroid: r3.Vector{X: 1}}}); g != nil {
+	if g := NearestGeometry(r3.Vector{}, []Candidate{{Centroid: r3.Vector{X: 1}}}); g != nil {
 		t.Fatalf("expected nil when no geometry available, got %v", g)
 	}
 }
@@ -225,21 +225,21 @@ func TestNearestGeometry(t *testing.T) {
 func TestCandidatesForCentroids(t *testing.T) {
 	a, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 0}), r3.Vector{X: 10, Y: 10, Z: 10}, "a")
 	b, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 100}), r3.Vector{X: 10, Y: 10, Z: 10}, "b")
-	originals := []pickupCandidate{
-		{centroid: r3.Vector{X: 0}, geom: a},
-		{centroid: r3.Vector{X: 100}, geom: b},
+	originals := []Candidate{
+		{Centroid: r3.Vector{X: 0}, Geom: a},
+		{Centroid: r3.Vector{X: 100}, Geom: b},
 	}
 	// Ranked order swaps the two; each ranked centroid should keep its own geom.
 	ranked := []r3.Vector{{X: 100}, {X: 0}}
-	got := candidatesForCentroids(ranked, originals)
+	got := CandidatesForCentroids(ranked, originals)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 candidates, got %d", len(got))
 	}
-	if got[0].centroid != (r3.Vector{X: 100}) || got[0].geom.Label() != "b" {
-		t.Fatalf("candidate[0] = %v/%v, want centroid (100) geom 'b'", got[0].centroid, got[0].geom)
+	if got[0].Centroid != (r3.Vector{X: 100}) || got[0].Geom.Label() != "b" {
+		t.Fatalf("candidate[0] = %v/%v, want centroid (100) geom 'b'", got[0].Centroid, got[0].Geom)
 	}
-	if got[1].centroid != (r3.Vector{X: 0}) || got[1].geom.Label() != "a" {
-		t.Fatalf("candidate[1] = %v/%v, want centroid (0) geom 'a'", got[1].centroid, got[1].geom)
+	if got[1].Centroid != (r3.Vector{X: 0}) || got[1].Geom.Label() != "a" {
+		t.Fatalf("candidate[1] = %v/%v, want centroid (0) geom 'a'", got[1].Centroid, got[1].Geom)
 	}
 }
 
@@ -259,7 +259,7 @@ func cameraToWorldTestFS(t *testing.T, camPose spatialmath.Pose) *referenceframe
 func TestCameraToWorldPose_Identity(t *testing.T) {
 	fs := cameraToWorldTestFS(t, spatialmath.NewZeroPose())
 	fsInputs := referenceframe.NewZeroInputs(fs)
-	camToWorld, err := cameraToWorldPose(fs, fsInputs, "camera")
+	camToWorld, err := CameraToWorldPose(fs, fsInputs, "camera")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -274,7 +274,7 @@ func TestCameraToWorldPose_Translated(t *testing.T) {
 	camPose := spatialmath.NewPose(r3.Vector{X: 100, Y: 0, Z: 0}, spatialmath.NewZeroOrientation())
 	fs := cameraToWorldTestFS(t, camPose)
 	fsInputs := referenceframe.NewZeroInputs(fs)
-	camToWorld, err := cameraToWorldPose(fs, fsInputs, "camera")
+	camToWorld, err := CameraToWorldPose(fs, fsInputs, "camera")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -288,22 +288,22 @@ func TestCameraToWorldPose_Translated(t *testing.T) {
 func TestCameraToWorldPose_MissingFrame(t *testing.T) {
 	fs := referenceframe.NewEmptyFrameSystem("test")
 	fsInputs := referenceframe.NewZeroInputs(fs)
-	_, err := cameraToWorldPose(fs, fsInputs, "no-such-camera")
+	_, err := CameraToWorldPose(fs, fsInputs, "no-such-camera")
 	if err == nil {
 		t.Fatalf("expected error for missing camera frame")
 	}
 }
 
-// TestContainerBox verifies that containerBox builds an axis-aligned box of the
-// configured size (width = depth = diameter, height = height) centered on the
-// grasp centroid — not on any point-cloud-derived midpoint.
+// TestContainerBox verifies that ContainerBox builds an axis-aligned box of the
+// configured size centered on the grasp centroid — not on any
+// point-cloud-derived midpoint.
 func TestContainerBox(t *testing.T) {
 	centroid := r3.Vector{X: 110, Y: 20, Z: 40}
-	dims := &ContainerDimensions{DiameterMm: 70, HeightMm: 140}
+	dims := r3.Vector{X: 70, Y: 70, Z: 140}
 
-	box, err := containerBox(centroid, dims, "glass")
+	box, err := ContainerBox(centroid, dims, "glass")
 	if err != nil {
-		t.Fatalf("containerBox: %v", err)
+		t.Fatalf("ContainerBox: %v", err)
 	}
 	if box == nil {
 		t.Fatal("expected a box, got nil")

@@ -23,6 +23,8 @@ import (
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
+
+	"beanjamin/coffee/geom"
 )
 
 // milkAreaShieldFrameName is the optional obstacle enclosing the fridge
@@ -170,8 +172,8 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 // the recorded grasp centroid, so the bottle is set down exactly where the grab
 // lifted it from and the descent retraces the retreat.
 func (s *beanjaminCoffee) milkReturnPoses(centroid r3.Vector) (approach, place spatialmath.Pose) {
-	return composeCupPose(centroid, relativePoseToSpatial(s.cfg.MilkApproachRelativePose)),
-		composeCupPose(centroid, relativePoseToSpatial(s.cfg.MilkGrabRelativePose))
+	return geom.ComposeCupPose(centroid, relativePoseToSpatial(s.cfg.MilkApproachRelativePose)),
+		geom.ComposeCupPose(centroid, relativePoseToSpatial(s.cfg.MilkGrabRelativePose))
 }
 
 // returnMilkBottle puts the bottle back on the fridge shelf at the centroid

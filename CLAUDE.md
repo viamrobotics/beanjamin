@@ -17,7 +17,7 @@ Each model lives in its own package. The coffee service is `coffee/` (`package c
 | Lifecycle and command API | `module.go`, `config.go`, `api.go`, `control.go` |
 | Brew cycle | `espresso.go`, `brew_steps.go`, `order_intake.go`, `queue.go`, `troubleshooting.go` |
 | Serving and drink variants | `serving.go`, `served_shelf.go`, `iced.go`, `milk.go`, `door.go` |
-| Motion planning | `motion.go`, `held_geometry.go`, `collisions.go`, `joints.go`, `resting_surface.go` |
+| Motion planning | `motion.go`, `held_geometry.go`, `collisions.go`, `joints.go` |
 | Vision-driven pickup | `cup_pickup.go`, `gripper_state.go`, `detection_snapshot.go` |
 | Peripheral integrations | `slack_notify.go`, `daily_summary.go`, `chore_wheel.go`, `sensor_usage.go`, `delivery_messaging.go`, `keepalive.go` |
 | Order model (`coffee/order/`, `package order`) | `order.go` (`Order`), `queue.go` (`Queue`), `request.go` (`prepare_order` decoding), `drinks.go` (drink catalog and `Menu`), `reading.go` (`Reading` for the order sensor) |
@@ -25,8 +25,9 @@ Each model lives in its own package. The coffee service is `coffee/` (`package c
 | Slack reports (`coffee/report/`, `package report`) | `notifier.go` (`Notifier`, the one Slack send path), `failure.go` (failed-order alert), `daily_summary.go` (order digest), `chore_wheel.go` (weekly rota and `ChoreWheelConfig`), `links.go` (app.viam.com deep-links) |
 | Camera clips (`coffee/clips/`, `package clips`) | `saver.go` (`Saver`: per-order clip saves through the video-store multiplexer, pending-clip records, and the `cleanup_pending_clips` recovery sweep) |
 | Ice vision (`coffee/icevision/`, `package icevision`) | `detector.go` (`Detector` over the arm camera, `Params`), `level.go` (contrast-step surface measurement, `check_ice_level`), `brightness.go` (brightness shadow), `annotate.go` and `dispense_frame.go` (annotated ice frames saved under `save_motion_requests_dir`); the dwell loop that drives the ice pin is `coffee/ice_dwell.go`, which calls into it |
+| Spatial math (`coffee/geom/`, `package geom`) | `pickup.go` (`Candidate`, centroid merge/rank and geometry match-back, `ComposeCupPose`, `CameraToWorldPose`, `ContainerBox`), `shelf.go` (`ShelfTileCenters`, `SlotIndex`), `surface.go` (`SurfaceBox`, `WorldAnchoredSurfaceBoxes`, `SurfaceTopZUnder`); pure functions with no service state, called from `cup_pickup.go`, `served_shelf.go`, `serving.go`, `held_geometry.go`, `milk.go` and `door.go` |
 
-`coffee/order`, `coffee/speech`, `coffee/report`, `coffee/clips`, and `coffee/icevision` depend on nothing in `coffee`, so they must never import it. The other models are sibling packages: `ordersensor/`, `maintenancesensor/`, `customerdetector/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`. There is no top-level Go package; `cmd/module/main.go` registers every model.
+`coffee/order`, `coffee/speech`, `coffee/report`, `coffee/clips`, `coffee/icevision`, and `coffee/geom` depend on nothing in `coffee`, so they must never import it. The other models are sibling packages: `ordersensor/`, `maintenancesensor/`, `customerdetector/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`. There is no top-level Go package; `cmd/module/main.go` registers every model.
 
 ## Common commands
 

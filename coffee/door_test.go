@@ -7,6 +7,8 @@ import (
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
+
+	"beanjamin/coffee/geom"
 )
 
 func TestComputeDoorSweep_StepCountAndEndpoints(t *testing.T) {
@@ -348,7 +350,7 @@ func TestDoorApproachFromBall(t *testing.T) {
 		t.Errorf("grasp point = %v, want ball center %v", grasp.Point(), ballPoint)
 	}
 
-	approach := composeCupPose(ballPoint, relSpatial)
+	approach := geom.ComposeCupPose(ballPoint, relSpatial)
 	wantApproach := r3.Vector{X: 200, Y: -70, Z: 400} // ball + (0,-120,0)
 	if approach.Point().Sub(wantApproach).Norm() > 0.01 {
 		t.Errorf("approach point = %v, want %v", approach.Point(), wantApproach)
