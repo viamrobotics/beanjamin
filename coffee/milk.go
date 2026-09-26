@@ -242,3 +242,14 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 	time.Sleep(gripperPause)
 	return nil
 }
+
+// defaultMilkPourSec is how long the bottle is held tilted over the glass when
+// milk_pour_sec is unset.
+const defaultMilkPourSec = 4.0
+
+// milkPourDwell returns how long the tilted bottle is held over the glass —
+// the configured pour time or the default. This is what sets the milk dose, so
+// it is tuned on the machine against the bottle and the glass in use.
+func (s *beanjaminCoffee) milkPourDwell() time.Duration {
+	return time.Duration(orDefault(s.cfg.MilkPourSec, defaultMilkPourSec) * float64(time.Second))
+}

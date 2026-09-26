@@ -1,12 +1,11 @@
 package coffee
 
 // Coffee service configuration: the Config struct and its validation, the typed
-// values it carries (relative poses, container dimensions), and the small
-// helpers that resolve configured values to their defaults.
+// values it carries (relative poses, container dimensions), and orDefault, which
+// the feature files' getters use to resolve configured values to their defaults.
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/components/arm"
@@ -246,68 +245,6 @@ type Config struct {
 	DoorGraspYawRatio *float64 `json:"door_grasp_yaw_ratio,omitempty"`
 }
 
-// defaultMaxBatchSize is used when Config.MaxBatchSize is unset or zero.
-const defaultMaxBatchSize = 10
-
-// defaultDoorOpenAngleDegs is the fridge-door swing angle when unset.
-const defaultDoorOpenAngleDegs = 90
-
-// defaultDoorPivotDegreesPerStep is the per-step θ increment for the door
-// sweep when unset.
-const defaultDoorPivotDegreesPerStep = 10
-
-// doorOpenAngleDegs returns the configured fridge-door swing angle, defaulting
-// to defaultDoorOpenAngleDegs.
-func (s *beanjaminCoffee) doorOpenAngleDegs() float64 {
-	return orDefault(s.cfg.DoorOpenAngleDegs, defaultDoorOpenAngleDegs)
-}
-
-// doorPivotDegreesPerStep returns the configured per-step θ increment for the
-// door sweep, defaulting to defaultDoorPivotDegreesPerStep.
-func (s *beanjaminCoffee) doorPivotDegreesPerStep() float64 {
-	return orDefault(s.cfg.DoorPivotDegreesPerStep, defaultDoorPivotDegreesPerStep)
-}
-
-// defaultDoorGraspYawRatio counter-rotates the gripper as the door swings.
-//
-// Reachability sets this sign, not grasp mechanics: the handle is a ball, so the
-// grasp does not constrain wrist roll. The gripper sits behind its tool center
-// along -OV, so co-rotating drives the wrist into +y just as the handle travels
-// there. Replanning a failed 75-degree sweep offline put +1 out of IK solutions
-// at theta=47 and 0 out by theta=75; only -1 reached full open.
-const defaultDoorGraspYawRatio = -1
-
-// doorGraspYawRatio returns the configured world-Z yaw ratio for the door sweep.
-// It cannot use orDefault: that helper treats any non-positive value as unset,
-// and 0 (hold orientation fixed) and -1 (counter-rotate) are both real settings.
-func (s *beanjaminCoffee) doorGraspYawRatio() float64 {
-	if s.cfg.DoorGraspYawRatio != nil {
-		return *s.cfg.DoorGraspYawRatio
-	}
-	return defaultDoorGraspYawRatio
-}
-
-// doorGraspFrameName returns the frame the gripper aims at (its center is the
-// grasp target), tracks through the sweep, and is allowed to contact. Defaults
-// to frameFridgeHandleBall.
-func (s *beanjaminCoffee) doorGraspFrameName() string {
-	if s.cfg.DoorGraspFrameName != "" {
-		return s.cfg.DoorGraspFrameName
-	}
-	return frameFridgeHandleBall
-}
-
-// defaultMilkPourSec is how long the bottle is held tilted over the glass when
-// milk_pour_sec is unset.
-const defaultMilkPourSec = 4.0
-
-// milkPourDwell returns how long the tilted bottle is held over the glass —
-// the configured pour time or the default. This is what sets the milk dose, so
-// it is tuned on the machine against the bottle and the glass in use.
-func (s *beanjaminCoffee) milkPourDwell() time.Duration {
-	return time.Duration(orDefault(s.cfg.MilkPourSec, defaultMilkPourSec) * float64(time.Second))
-}
-
 // orDefault returns v when it is positive, otherwise def. It backs the
 // "configured tunable or default constant" pattern used by the numeric getters.
 func orDefault[T ~int | ~float64](v, def T) T {
@@ -315,23 +252,6 @@ func orDefault[T ~int | ~float64](v, def T) T {
 		return v
 	}
 	return def
-}
-
-// maxBatchSize returns the configured cap on prepare_order count, falling
-// back to defaultMaxBatchSize.
-func (s *beanjaminCoffee) maxBatchSize() int {
-	return orDefault(s.cfg.MaxBatchSize, defaultMaxBatchSize)
-}
-
-// defaultCupPickupMaxAttempts is used when Config.CupPickupMaxAttempts is
-// unset or zero.
-const defaultCupPickupMaxAttempts = 3
-
-// pickupMaxAttempts returns the configured cap on full observe-and-grab
-// attempts (cup or glass), falling back to defaultCupPickupMaxAttempts when
-// unset or non-positive.
-func pickupMaxAttempts(configured int) int {
-	return orDefault(configured, defaultCupPickupMaxAttempts)
 }
 
 // RelativePose is a 6-DoF offset (translation in millimeters + orientation as
