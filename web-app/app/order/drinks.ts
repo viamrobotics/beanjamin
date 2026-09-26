@@ -25,8 +25,8 @@ export const GRID_DRINK_IDS = [
   "cappuccino",
 ] as const;
 
-// decaf has a real brew path only for espresso/lungo (see isDecafDrink in
-// espresso.go). Every other drink ignores the toggle.
+// decaf has a real brew path only for espresso/lungo (see IsDecaf in
+// coffee/order/drinks.go). Every other drink ignores the toggle.
 const DECAF_VARIANT: Record<string, string> = {
   espresso: "decaf",
   lungo: "decaf_lungo",

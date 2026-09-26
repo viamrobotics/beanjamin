@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"beanjamin/coffee/order"
+
 	"go.viam.com/rdk/components/board"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/testutils/inject"
@@ -73,7 +75,7 @@ func iceTestService(t *testing.T, cfg *Config) (*beanjaminCoffee, *recordingPin)
 	return &beanjaminCoffee{
 		logger:   logging.NewTestLogger(t),
 		cfg:      cfg,
-		queue:    NewOrderQueue(),
+		queue:    order.NewQueue(),
 		iceBoard: brd,
 	}, pin
 }

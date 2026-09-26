@@ -76,7 +76,7 @@ func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, err
 		s.logger.Info("proceed: frame system rebuilt, queue was not paused")
 		return proceedResponse("reset", false, doorOpenDegs), nil
 	}
-	wakeQueue(s.queue)
+	s.queue.WakeProceed()
 
 	s.logger.Info("proceed: frame system rebuilt, queue resumed")
 	return proceedResponse("resumed", true, doorOpenDegs), nil
@@ -98,26 +98,12 @@ func proceedResponse(status string, resumed bool, doorClearedDegs float64) map[s
 	return resp
 }
 
-// wakeQueue nudges a consumer parked in waitForProceed. The flag the caller has
-// just cleared is what actually releases the queue; this only saves a parked
-// goroutine from sleeping until the next order arrives, and is a no-op when
-// nothing is parked — a cancel that interrupted a manual action or a keepalive
-// purge pauses the queue with no consumer waiting. A token that goes unclaimed
-// is harmless: waitForProceed re-checks the flag after every wakeup rather than
-// treating one as permission to run.
-func wakeQueue(q *OrderQueue) {
-	select {
-	case q.proceed <- struct{}{}:
-	default:
-	}
-}
-
 // clearQueue drops the backlog of orders still waiting to be made. The order
 // currently being brewed is deliberately spared: clear_queue means "stop making
 // more drinks", not "abandon the one on the arm right now" — cancel and
 // reset_world are the commands that stop a running sequence. Recently-completed
 // orders are left alone for the same reason, being drinks already sitting in the
-// serving area; they self-prune after RecentDisplayDuration.
+// serving area; they self-prune after order.RecentDisplayDuration.
 func (s *beanjaminCoffee) clearQueue() (map[string]any, error) {
 	removed, currentID := s.queue.ClearPending()
 	s.logger.Infof("cleared %d pending orders from queue (in-flight order kept: %v)", removed, currentID != "")
@@ -182,7 +168,7 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 
 	unpaused := s.paused.CompareAndSwap(true, false)
 	if unpaused {
-		wakeQueue(s.queue)
+		s.queue.WakeProceed()
 	}
 
 	s.logger.Infof("reset_world: cancelled=%v cleared=%d unpaused=%v frame_system_reset=true",

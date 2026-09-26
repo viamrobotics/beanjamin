@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"beanjamin/coffee/order"
+
 	"go.viam.com/rdk/components/sensor"
 	"go.viam.com/rdk/data"
 	"go.viam.com/rdk/logging"
@@ -32,10 +34,10 @@ func TestOrderSensor_Readings_Success(t *testing.T) {
 	s := newTestOrderSensor(t)
 	start := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
 	end := start.Add(1234 * time.Millisecond)
-	order := Order{
+	o := order.Order{
 		ID: "o1", Drink: "latte", CustomerName: "Ada",
 	}
-	s.pushOrderReading(orderReading{order: order, startedAt: start, endedAt: end})
+	s.pushOrderReading(order.Reading{Order: o, StartedAt: start, EndedAt: end})
 
 	r, err := s.Readings(context.Background(), nil)
 	if err != nil {
@@ -75,15 +77,15 @@ func TestOrderSensor_Readings_Failure(t *testing.T) {
 	s := newTestOrderSensor(t)
 	start := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
 	end := start.Add(time.Millisecond)
-	order := Order{ID: "o2", Drink: "decaf", CustomerName: "Bob"}
-	s.pushOrderReading(orderReading{
-		order:      order,
-		execErr:    errors.New("grinder jam"),
-		failedStep: "Grinding",
-		traceID:    "abc123",
-		decaf:      true,
-		startedAt:  start,
-		endedAt:    end,
+	o := order.Order{ID: "o2", Drink: "decaf", CustomerName: "Bob"}
+	s.pushOrderReading(order.Reading{
+		Order:      o,
+		ExecErr:    errors.New("grinder jam"),
+		FailedStep: "Grinding",
+		TraceID:    "abc123",
+		Decaf:      true,
+		StartedAt:  start,
+		EndedAt:    end,
 	})
 
 	r, err := s.Readings(context.Background(), nil)
@@ -113,13 +115,13 @@ func TestOrderSensor_Readings_Failure(t *testing.T) {
 func TestOrderSensor_Readings_OperatorCancelled(t *testing.T) {
 	s := newTestOrderSensor(t)
 	t0 := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
-	s.pushOrderReading(orderReading{
-		order:             Order{ID: "o3", Drink: "latte"},
-		execErr:           context.Canceled,
-		failedStep:        "Brewing",
-		operatorCancelled: true,
-		startedAt:         t0,
-		endedAt:           t0,
+	s.pushOrderReading(order.Reading{
+		Order:             order.Order{ID: "o3", Drink: "latte"},
+		ExecErr:           context.Canceled,
+		FailedStep:        "Brewing",
+		OperatorCancelled: true,
+		StartedAt:         t0,
+		EndedAt:           t0,
 	})
 
 	r, err := s.Readings(context.Background(), nil)
@@ -141,8 +143,8 @@ func TestOrderSensor_Readings_OperatorCancelled(t *testing.T) {
 func TestOrderSensor_Readings_FIFO(t *testing.T) {
 	s := newTestOrderSensor(t)
 	t0 := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
-	s.pushOrderReading(orderReading{order: Order{ID: "first"}, startedAt: t0, endedAt: t0})
-	s.pushOrderReading(orderReading{order: Order{ID: "second"}, startedAt: t0, endedAt: t0})
+	s.pushOrderReading(order.Reading{Order: order.Order{ID: "first"}, StartedAt: t0, EndedAt: t0})
+	s.pushOrderReading(order.Reading{Order: order.Order{ID: "second"}, StartedAt: t0, EndedAt: t0})
 
 	r1, err := s.Readings(context.Background(), nil)
 	if err != nil {
@@ -163,25 +165,25 @@ func TestOrderSensor_Readings_FIFO(t *testing.T) {
 func TestOrderSensor_Readings_CustomerNames(t *testing.T) {
 	tests := []struct {
 		name         string
-		order        Order
+		order        order.Order
 		wantName     string
 		wantModified string
 	}{
 		{
 			name:         "kiosk order carries both the real name and the misspelling",
-			order:        Order{CustomerName: "Vijay", ModifiedCustomerName: "Vijoy"},
+			order:        order.Order{CustomerName: "Vijay", ModifiedCustomerName: "Vijoy"},
 			wantName:     "Vijay",
 			wantModified: "Vijoy",
 		},
 		{
 			name:         "caller that does not misspell reports no modified name",
-			order:        Order{CustomerName: "Ada"},
+			order:        order.Order{CustomerName: "Ada"},
 			wantName:     "Ada",
 			wantModified: "",
 		},
 		{
 			name:         "anonymous order stays anonymous",
-			order:        Order{},
+			order:        order.Order{},
 			wantName:     "",
 			wantModified: "",
 		},
@@ -189,7 +191,7 @@ func TestOrderSensor_Readings_CustomerNames(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newTestOrderSensor(t)
-			s.pushOrderReading(orderReading{order: tc.order})
+			s.pushOrderReading(order.Reading{Order: tc.order})
 
 			r, err := s.Readings(context.Background(), nil)
 			if err != nil {

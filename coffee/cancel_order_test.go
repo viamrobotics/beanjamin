@@ -5,95 +5,14 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"beanjamin/coffee/order"
 )
-
-func TestQueue_Remove_DropsWaitingOrderAndKeepsFIFO(t *testing.T) {
-	q := NewOrderQueue()
-	a := NewOrder("espresso", "Alice", "", "")
-	b := NewOrder("lungo", "Bob", "", "")
-	c := NewOrder("espresso", "Carol", "", "")
-	q.Enqueue(a)
-	q.Enqueue(b)
-	q.Enqueue(c)
-
-	got, err := q.Remove(b.ID)
-	if err != nil {
-		t.Fatalf("Remove(b) error: %v", err)
-	}
-	if got.ID != b.ID || got.CustomerName != "Bob" {
-		t.Errorf("removed order = %+v, want Bob's", got)
-	}
-	if q.Len() != 2 {
-		t.Errorf("Len = %d, want 2", q.Len())
-	}
-	list := q.List()
-	if len(list) != 2 || list[0].ID != a.ID || list[1].ID != c.ID {
-		t.Errorf("remaining orders = %+v, want Alice then Carol", list)
-	}
-}
-
-// The order on the arm lives in the current slot, not the backlog, so Remove
-// cannot reach it by accident. It still has to say so rather than report a
-// miss: the drink is real, and `cancel` is what stops it.
-func TestQueue_Remove_RefusesTheOrderOnTheArm(t *testing.T) {
-	q := NewOrderQueue()
-	a := NewOrder("espresso", "Alice", "", "")
-	b := NewOrder("lungo", "Bob", "", "")
-	q.Enqueue(a)
-	q.Enqueue(b)
-
-	started, ok := q.Start()
-	if !ok || started.ID != a.ID {
-		t.Fatalf("Start = %+v, %v; want Alice's order", started, ok)
-	}
-
-	if _, err := q.Remove(a.ID); !errors.Is(err, errOrderInFlight) {
-		t.Errorf("Remove(current) error = %v, want errOrderInFlight", err)
-	}
-	if q.Len() != 2 {
-		t.Errorf("Len = %d, want 2 — the order on the arm must survive", q.Len())
-	}
-	// The order waiting behind it is still fair game.
-	if _, err := q.Remove(b.ID); err != nil {
-		t.Errorf("Remove(waiting) error = %v, want nil", err)
-	}
-}
-
-// Once the current order retires into recent it is no longer in flight, so a
-// cancel for it reports "already made" rather than pointing at `cancel`.
-func TestQueue_Remove_AfterCompleteReportsCompleted(t *testing.T) {
-	q := NewOrderQueue()
-	a := NewOrder("espresso", "Alice", "", "")
-	q.Enqueue(a)
-	q.Start()
-	q.Complete()
-
-	if _, err := q.Remove(a.ID); !errors.Is(err, errOrderCompleted) {
-		t.Errorf("Remove(completed) error = %v, want errOrderCompleted", err)
-	}
-}
-
-func TestQueue_Remove_UnknownAndEmptyID(t *testing.T) {
-	q := NewOrderQueue()
-	q.Enqueue(NewOrder("espresso", "Alice", "", ""))
-
-	if _, err := q.Remove("not-a-real-id"); !errors.Is(err, errOrderNotQueued) {
-		t.Errorf("Remove(unknown) error = %v, want errOrderNotQueued", err)
-	}
-	// Every order carries a UUID, so an empty ID is a miss like any other
-	// rather than something that matches an empty slot.
-	if _, err := q.Remove(""); !errors.Is(err, errOrderNotQueued) {
-		t.Errorf(`Remove("") error = %v, want errOrderNotQueued`, err)
-	}
-	if q.Len() != 1 {
-		t.Errorf("Len = %d, want 1", q.Len())
-	}
-}
 
 func TestCancelOrder_DropsQueuedOrderAndAnnounces(t *testing.T) {
 	c, speech := newTestCoffee(t, &Config{CanServeDecaf: true, Conversational: true})
-	alice := NewOrder("espresso", "Alice", "", "")
-	bob := NewOrder("lungo", "Bob", "", "")
+	alice := order.NewOrder("espresso", "Alice", "", "")
+	bob := order.NewOrder("lungo", "Bob", "", "")
 	c.queue.Enqueue(alice)
 	c.queue.Enqueue(bob)
 
@@ -127,7 +46,7 @@ func TestCancelOrder_DropsQueuedOrderAndAnnounces(t *testing.T) {
 // the machine says about an order.
 func TestCancelOrder_SpeaksDisplayName(t *testing.T) {
 	c, speech := newTestCoffee(t, &Config{CanServeDecaf: true, Conversational: true})
-	o := NewOrder("lungo", "Realname", "", "")
+	o := order.NewOrder("lungo", "Realname", "", "")
 	o.ModifiedCustomerName = "Shownname"
 	c.queue.Enqueue(o)
 
@@ -142,13 +61,13 @@ func TestCancelOrder_SpeaksDisplayName(t *testing.T) {
 
 func TestCancelOrder_RefusesInFlightOrder(t *testing.T) {
 	c, _ := newTestCoffee(t, nil)
-	alice := NewOrder("espresso", "Alice", "", "")
+	alice := order.NewOrder("espresso", "Alice", "", "")
 	c.queue.Enqueue(alice)
 	c.queue.Start()
 
 	_, err := c.cancelOrder(context.Background(), alice.ID)
-	if !errors.Is(err, errOrderInFlight) {
-		t.Fatalf("error = %v, want errOrderInFlight", err)
+	if !errors.Is(err, order.ErrInFlight) {
+		t.Fatalf("error = %v, want order.ErrInFlight", err)
 	}
 	if c.queue.CurrentID() != alice.ID {
 		t.Error("the order on the arm must still be current after a refused cancel")
@@ -168,7 +87,7 @@ func TestCancelOrder_RejectsBadValues(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c, _ := newTestCoffee(t, nil)
-			c.queue.Enqueue(NewOrder("espresso", "Alice", "", ""))
+			c.queue.Enqueue(order.NewOrder("espresso", "Alice", "", ""))
 			if _, err := c.cancelOrder(context.Background(), tc.v); err == nil {
 				t.Fatalf("expected an error for %v, got nil", tc.v)
 			}
@@ -184,9 +103,9 @@ func TestCancelOrder_RejectsBadValues(t *testing.T) {
 // ones the recent buffer is still showing.
 func TestStatus_CancellableFlag(t *testing.T) {
 	c, _ := newTestCoffee(t, nil)
-	done := NewOrder("espresso", "Zoe", "", "")
-	alice := NewOrder("espresso", "Alice", "", "")
-	bob := NewOrder("lungo", "Bob", "", "")
+	done := order.NewOrder("espresso", "Zoe", "", "")
+	alice := order.NewOrder("espresso", "Alice", "", "")
+	bob := order.NewOrder("lungo", "Bob", "", "")
 	c.queue.Enqueue(done)
 	c.queue.Start()
 	c.queue.Complete()

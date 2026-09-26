@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"beanjamin/coffee/order"
+
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
 )
@@ -105,7 +107,7 @@ func TestNotifyDeliveryRequest(t *testing.T) {
 		deliveryHandler: peer,
 	}
 	enqueued := time.Date(2026, 7, 16, 15, 4, 5, 0, time.UTC)
-	order := Order{
+	o := order.Order{
 		ID:             "order-123",
 		Drink:          "iced_coffee",
 		CustomerName:   "Alice",
@@ -115,7 +117,7 @@ func TestNotifyDeliveryRequest(t *testing.T) {
 	}
 
 	// Synchronous: the request has been sent (and acknowledged) by return.
-	c.notifyDeliveryRequest(context.Background(), order)
+	c.notifyDeliveryRequest(context.Background(), o)
 
 	got := peer.commands()
 	if len(got) != 1 {
@@ -143,7 +145,7 @@ func TestNotifyDeliveryRequest(t *testing.T) {
 }
 
 func TestBuildDeliveryRequest_HotDrinkUsesCup(t *testing.T) {
-	req := buildDeliveryRequest(Order{ID: "x", Drink: "espresso"})["delivery_request"].(map[string]any)
+	req := buildDeliveryRequest(order.Order{ID: "x", Drink: "espresso"})["delivery_request"].(map[string]any)
 	if req["cup_type"] != "cup" {
 		t.Errorf("cup_type = %v, want %q for espresso", req["cup_type"], "cup")
 	}
@@ -153,7 +155,7 @@ func TestNotifyDeliveryRequest_NotConfigured(t *testing.T) {
 	c := &beanjaminCoffee{logger: logging.NewTestLogger(t)}
 	// Must be a warn-and-continue no-op, not a panic — delivery orders still
 	// brew fine on machines without a delivery bot.
-	c.notifyDeliveryRequest(context.Background(), Order{ID: "x"})
+	c.notifyDeliveryRequest(context.Background(), order.Order{ID: "x"})
 }
 
 func TestNotifyDeliveryRequest_PeerErrorDoesNotPanic(t *testing.T) {
@@ -163,7 +165,7 @@ func TestNotifyDeliveryRequest_PeerErrorDoesNotPanic(t *testing.T) {
 		deliveryHandler: peer,
 	}
 	// A failed send is logged, never fatal — the drink is already served.
-	c.notifyDeliveryRequest(context.Background(), Order{ID: "x"})
+	c.notifyDeliveryRequest(context.Background(), order.Order{ID: "x"})
 }
 
 func TestSendDeliveryMessage_PeerError(t *testing.T) {
