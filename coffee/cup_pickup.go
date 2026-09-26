@@ -641,3 +641,14 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 	}
 	return r3.Vector{}, fmt.Errorf("dynamic_%s_pickup: exhausted %d attempt(s); last error: %w", t.label, maxAttempts, lastErr)
 }
+
+// defaultCupPickupMaxAttempts is used when Config.CupPickupMaxAttempts is
+// unset or zero.
+const defaultCupPickupMaxAttempts = 3
+
+// pickupMaxAttempts returns the configured cap on full observe-and-grab
+// attempts (cup or glass), falling back to defaultCupPickupMaxAttempts when
+// unset or non-positive.
+func pickupMaxAttempts(configured int) int {
+	return orDefault(configured, defaultCupPickupMaxAttempts)
+}
