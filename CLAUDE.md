@@ -19,11 +19,12 @@ Each model lives in its own package. The coffee service is `coffee/` (`package c
 | Serving and drink variants | `serving.go`, `served_shelf.go`, `iced.go`, `milk.go`, `door.go` |
 | Motion planning | `motion.go`, `held_geometry.go`, `collisions.go`, `joints.go`, `resting_surface.go` |
 | Vision-driven pickup | `cup_pickup.go`, `gripper_state.go`, `detection_snapshot.go` |
-| Peripheral integrations | `cam_storage.go`, `slack_notify.go`, `sensor_usage.go`, `delivery_messaging.go`, `keepalive.go` |
+| Peripheral integrations | `cam_storage.go`, `slack_notify.go`, `daily_summary.go`, `chore_wheel.go`, `sensor_usage.go`, `delivery_messaging.go`, `keepalive.go` |
 | Order model (`coffee/order/`, `package order`) | `order.go` (`Order`), `queue.go` (`Queue`), `request.go` (`prepare_order` decoding), `drinks.go` (drink catalog and `Menu`), `reading.go` (`Reading` for the order sensor) |
 | Speech (`coffee/speech/`, `package speech`) | `phrases.go` (spoken line tables and pickers), `speaker.go` (`Speaker`, `say_async` to the speech service), `fault_alarm.go` (`FaultAlarm`, the `fault_active` flag and failure line) |
+| Slack reports (`coffee/report/`, `package report`) | `notifier.go` (`Notifier`, the one Slack send path), `failure.go` (failed-order alert), `daily_summary.go` (order digest), `chore_wheel.go` (weekly rota and `ChoreWheelConfig`), `links.go` (app.viam.com deep-links) |
 
-`coffee/order` and `coffee/speech` depend on nothing in `coffee`, so they must never import it. The other models are sibling packages: `ordersensor/`, `maintenancesensor/`, `customerdetector/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`. There is no top-level Go package; `cmd/module/main.go` registers every model.
+`coffee/order`, `coffee/speech`, and `coffee/report` depend on nothing in `coffee`, so they must never import it. The other models are sibling packages: `ordersensor/`, `maintenancesensor/`, `customerdetector/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`. There is no top-level Go package; `cmd/module/main.go` registers every model.
 
 ## Common commands
 
