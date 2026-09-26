@@ -12,6 +12,8 @@ import (
 
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/referenceframe"
+
+	"beanjamin/coffee/geom"
 )
 
 // servingAreaShieldCollisions returns the allowed-collision pairs that let the
@@ -122,7 +124,7 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context,
 	start := s.servingAreaSlotCounter.Load()
 	var lastErr error
 	for off := 0; off < n; off++ {
-		idx := slotIndex(start+uint64(off), n)
+		idx := geom.SlotIndex(start+uint64(off), n)
 		logger.Infof("place_in_serving_area: trying slot %d/%d", idx+1, n)
 		err := s.tryDropCupInSlot(ctx, cancelCtx, slots[idx], shelfTopZ, contents)
 		if err == nil {
@@ -183,8 +185,8 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, tileW
 		Y: tileWorld.Y,
 		Z: shelfTopZ + s.servingAreaDropZOffset(),
 	}
-	dropPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.ServingGrabRelativePose))
-	approachPose := composeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.ServingApproachRelativePose))
+	dropPose := geom.ComposeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.ServingGrabRelativePose))
+	approachPose := geom.ComposeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.ServingApproachRelativePose))
 
 	approachPD := &poseData{pose: approachPose, refFrame: referenceframe.World, componentName: gripPoint}
 	dropPD := &poseData{pose: dropPose, refFrame: referenceframe.World, componentName: gripPoint}

@@ -7,6 +7,8 @@ import (
 
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/testutils/inject"
+
+	"beanjamin/coffee/geom"
 )
 
 // The return is the pickup replayed: the same offsets composed onto the recorded
@@ -21,8 +23,8 @@ func TestMilkReturnPosesReplayThePickupOffsets(t *testing.T) {
 
 	approach, place := s.milkReturnPoses(centroid)
 
-	wantApproach := composeCupPose(centroid, relativePoseToSpatial(s.cfg.MilkApproachRelativePose))
-	wantPlace := composeCupPose(centroid, relativePoseToSpatial(s.cfg.MilkGrabRelativePose))
+	wantApproach := geom.ComposeCupPose(centroid, relativePoseToSpatial(s.cfg.MilkApproachRelativePose))
+	wantPlace := geom.ComposeCupPose(centroid, relativePoseToSpatial(s.cfg.MilkGrabRelativePose))
 	if approach.Point() != wantApproach.Point() {
 		t.Errorf("approach point = %v, want %v", approach.Point(), wantApproach.Point())
 	}
@@ -83,11 +85,11 @@ func TestMilkActionsRegistered(t *testing.T) {
 // cached shape by label.
 func TestHeldGeometryCachePerLabel(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{}}
-	cup, err := containerBox(r3.Vector{}, &ContainerDimensions{DiameterMm: 80, HeightMm: 95}, pickupLabelCup)
+	cup, err := geom.ContainerBox(r3.Vector{}, (&ContainerDimensions{DiameterMm: 80, HeightMm: 95}).boxDims(), pickupLabelCup)
 	if err != nil {
 		t.Fatal(err)
 	}
-	milk, err := containerBox(r3.Vector{}, &ContainerDimensions{DiameterMm: 90, HeightMm: 250}, pickupLabelMilk)
+	milk, err := geom.ContainerBox(r3.Vector{}, (&ContainerDimensions{DiameterMm: 90, HeightMm: 250}).boxDims(), pickupLabelMilk)
 	if err != nil {
 		t.Fatal(err)
 	}

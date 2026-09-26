@@ -261,7 +261,7 @@ func gripPointStaticFS(t *testing.T, gpPose spatialmath.Pose) *referenceframe.Fr
 
 // TestConfiguredContainerBox verifies the modeled box is centered on the grasp
 // centroid — the grip-point world position minus the grab offset, inverting
-// composeCupPose — and sized from the configured dimensions. The glass case is
+// geom.ComposeCupPose — and sized from the configured dimensions. The glass case is
 // what the with_glass override models.
 func TestConfiguredContainerBox(t *testing.T) {
 	for _, tc := range []struct {

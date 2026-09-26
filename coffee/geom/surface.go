@@ -1,14 +1,11 @@
-package coffee
+package geom
 
 // Resting-surface detection for dynamic pickup.
 //
 // A detected cup/glass stands on a surface (a shelf or table). Rather than
 // trusting the raw detected centroid Z — which depth noise pushes above or below
-// the true base — pickup seats the container on that surface: with the
-// container's known height it places the base surfaceRestClearanceMm above the
-// top of the highest *static* box directly beneath the detection (see
-// observeVantage). The small clearance keeps the base just off the surface so the
-// grasp does not begin already in collision with it.
+// the true base — pickup seats the container on that surface, placing its base
+// just above the top of the highest *static* box directly beneath the detection.
 //
 // "Static" means world-anchored: SharesRigidMotion(frame, World) is true, so the
 // moving arm/gripper/camera/held-item chain is never mistaken for a surface. Only
@@ -25,36 +22,31 @@ import (
 	"go.viam.com/rdk/spatialmath"
 )
 
-// surfaceRestClearanceMm is how far above the resting surface the container's
-// base is seated at pickup, so the grasp does not start in contact with the
-// surface.
-const surfaceRestClearanceMm = 1.0
-
-// surfaceBox is the world axis-aligned footprint (X/Y bounds) and top-face Z of
+// SurfaceBox is the world axis-aligned footprint (X/Y bounds) and top-face Z of
 // one static box in the frame system — a candidate resting surface.
-type surfaceBox struct {
+type SurfaceBox struct {
 	minX, maxX float64
 	minY, maxY float64
 	topZ       float64
 }
 
 // contains reports whether (x, y) falls within the box's world footprint.
-func (b surfaceBox) contains(x, y float64) bool {
+func (b SurfaceBox) contains(x, y float64) bool {
 	return x >= b.minX && x <= b.maxX && y >= b.minY && y <= b.maxY
 }
 
-// worldAnchoredSurfaceBoxes returns the footprint + top Z of every static
+// WorldAnchoredSurfaceBoxes returns the footprint + top Z of every static
 // (world-anchored) box in the frame system, evaluated at fsInputs. Frames that
 // move with the arm — SharesRigidMotion(frame, World) is false — are skipped so a
 // moving link, the gripper, the camera, or a held item is never treated as a
 // surface; non-box geometries are ignored.
-func worldAnchoredSurfaceBoxes(fs *referenceframe.FrameSystem, fsInputs referenceframe.FrameSystemInputs) ([]surfaceBox, error) {
+func WorldAnchoredSurfaceBoxes(fs *referenceframe.FrameSystem, fsInputs referenceframe.FrameSystemInputs) ([]SurfaceBox, error) {
 	geoms, err := referenceframe.FrameSystemGeometries(fs, fsInputs)
 	if err != nil {
 		return nil, fmt.Errorf("enumerate frame-system geometries: %w", err)
 	}
 	world := fs.World()
-	var boxes []surfaceBox
+	var boxes []SurfaceBox
 	for name, gif := range geoms {
 		frame := fs.Frame(name)
 		if frame == nil || !fs.SharesRigidMotion(frame, world) {
@@ -65,7 +57,7 @@ func worldAnchoredSurfaceBoxes(fs *referenceframe.FrameSystem, fsInputs referenc
 				continue
 			}
 			min, max := boxWorldAABB(g)
-			boxes = append(boxes, surfaceBox{
+			boxes = append(boxes, SurfaceBox{
 				minX: min.X, maxX: max.X,
 				minY: min.Y, maxY: max.Y,
 				topZ: max.Z,
@@ -75,12 +67,12 @@ func worldAnchoredSurfaceBoxes(fs *referenceframe.FrameSystem, fsInputs referenc
 	return boxes, nil
 }
 
-// surfaceTopZUnder returns the highest surface top strictly below refZ whose
+// SurfaceTopZUnder returns the highest surface top strictly below refZ whose
 // footprint contains (x, y), and true when such a surface exists. refZ is the
 // detected container's centroid Z: the surface it rests on necessarily lies below
 // the container's center, so tops at or above refZ are not underneath it. Returns
 // (0, false) when nothing qualifies, so the caller falls back to the detected Z.
-func surfaceTopZUnder(boxes []surfaceBox, x, y, refZ float64) (float64, bool) {
+func SurfaceTopZUnder(boxes []SurfaceBox, x, y, refZ float64) (float64, bool) {
 	best := math.Inf(-1)
 	found := false
 	for _, b := range boxes {

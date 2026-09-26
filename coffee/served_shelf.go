@@ -19,11 +19,12 @@ package coffee
 import (
 	"context"
 	"fmt"
-	"math"
 
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
+
+	"beanjamin/coffee/geom"
 )
 
 const (
@@ -49,55 +50,6 @@ const (
 	// CupGrabRelativePose to derive the world-frame grip-point pose for the drop.
 	shelfDropZOffsetMm = 30.0
 )
-
-// computeShelfTileCenters returns world-frame tile centers spaced spacingMm
-// apart along the shelf's long axis (the larger of dimsMm.X / dimsMm.Y in
-// shelf-local frame), centered on the midline, at the top face
-// (Z = +dimsMm.Z/2 in shelf-local frame).
-//
-// Tiles are returned in ascending order along the long axis. Returns nil
-// when the shelf is shorter than 2*marginMm along its long axis.
-func computeShelfTileCenters(shelfWorldPose spatialmath.Pose, dimsMm r3.Vector, spacingMm, marginMm float64) []r3.Vector {
-	xLong := dimsMm.X >= dimsMm.Y
-	longDim := dimsMm.X
-	if !xLong {
-		longDim = dimsMm.Y
-	}
-
-	usable := longDim - 2*marginMm
-	if usable < 0 {
-		return nil
-	}
-
-	n := int(math.Floor(usable/spacingMm)) + 1
-	span := float64(n-1) * spacingMm
-	startOffset := -span / 2
-	topZ := dimsMm.Z / 2
-
-	out := make([]r3.Vector, n)
-	for i := range n {
-		offset := startOffset + float64(i)*spacingMm
-		var local r3.Vector
-		if xLong {
-			local = r3.Vector{X: offset, Y: 0, Z: topZ}
-		} else {
-			local = r3.Vector{X: 0, Y: offset, Z: topZ}
-		}
-		world := spatialmath.Compose(shelfWorldPose, spatialmath.NewPoseFromPoint(local))
-		out[i] = world.Point()
-	}
-	return out
-}
-
-// slotIndex maps a monotonically increasing placement counter onto a tile
-// index in [0, n) by wrapping (round-robin). Panics-free for n <= 0 by
-// returning 0, though callers guard against an empty tile set first.
-func slotIndex(counter uint64, n int) int {
-	if n <= 0 {
-		return 0
-	}
-	return int(counter % uint64(n))
-}
 
 // shelfTopGeometry returns the world-frame center pose and box dimensions of
 // the served-drinks serving-area obstacle. Looks for a Box geometry under
@@ -185,7 +137,7 @@ func (s *beanjaminCoffee) servingAreaSlots(ctx context.Context) ([]r3.Vector, fl
 		return nil, 0, fmt.Errorf("shelf placement: %w", err)
 	}
 
-	tiles := computeShelfTileCenters(shelfWorldPose, dimsMm, shelfTileSpacingMm, shelfTileMarginMm)
+	tiles := geom.ShelfTileCenters(shelfWorldPose, dimsMm, shelfTileSpacingMm, shelfTileMarginMm)
 	if len(tiles) == 0 {
 		return nil, 0, fmt.Errorf("shelf placement: serving-area dimensions %v leave no room for slots (margin=%.0fmm, spacing=%.0fmm)",
 			dimsMm, shelfTileMarginMm, shelfTileSpacingMm)
