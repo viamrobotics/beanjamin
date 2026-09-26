@@ -1,4 +1,7 @@
-package coffee
+// Package ordersensor registers a viam:beanjamin:order-sensor model that
+// implements the rdk:component:sensor API. The coffee service hands it one
+// order.Reading per order attempt, and each is returned once from Readings.
+package ordersensor
 
 import (
 	"context"
@@ -14,12 +17,12 @@ import (
 	"beanjamin/coffee/order"
 )
 
-// OrderSensor queues one reading per order when processing finishes.
+// Model queues one reading per order when processing finishes.
 // When the queue is empty, Readings returns data.ErrNoCaptureToStore (for Data Management capture filtering).
-var OrderSensor = resource.NewModel("viam", "beanjamin", "order-sensor")
+var Model = resource.NewModel("viam", "beanjamin", "order-sensor")
 
 func init() {
-	resource.RegisterComponent(sensor.API, OrderSensor,
+	resource.RegisterComponent(sensor.API, Model,
 		resource.Registration[sensor.Sensor, *OrderSensorConfig]{
 			Constructor: newOrderSensor,
 		})
@@ -28,13 +31,9 @@ func init() {
 // OrderSensorConfig has no attributes; name the component in the coffee service config instead.
 type OrderSensorConfig struct{}
 
+// Validate accepts any config; the model has no attributes.
 func (cfg *OrderSensorConfig) Validate(string) ([]string, []string, error) {
 	return nil, nil, nil
-}
-
-// Implemented by orderSensor; coffee calls this after each order attempt.
-type orderSensorSink interface {
-	pushOrderReading(r order.Reading)
 }
 
 type orderSensor struct {
@@ -90,7 +89,9 @@ func (*orderSensor) Close(context.Context) error {
 	return nil
 }
 
-func (s *orderSensor) pushOrderReading(r order.Reading) {
+// PushOrderReading queues r as the payload of a future Readings call. The
+// coffee service calls it after each order attempt.
+func (s *orderSensor) PushOrderReading(r order.Reading) {
 	ok := r.ExecErr == nil
 	errMsg := ""
 	if r.ExecErr != nil {

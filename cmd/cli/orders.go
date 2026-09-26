@@ -17,7 +17,7 @@ import (
 const defaultOrgID = "e76d1b3b-0468-4efd-bb7f-fb1d2b352fcb"
 
 // orderSensorComponent is the component_name the coffee service's optional
-// order sensor writes its per-attempt readings under (see coffee/order_sensor.go).
+// order sensor writes its per-attempt readings under (see ordersensor/order_sensor.go).
 const orderSensorComponent = "order-events"
 
 // Outcome labels. An order that isn't ok is either a genuine fault or an
