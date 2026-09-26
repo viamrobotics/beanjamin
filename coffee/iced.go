@@ -378,12 +378,18 @@ func (s *beanjaminCoffee) holdIcePin(ctx, cancelCtx context.Context) (res iceDwe
 
 	if s.cfg.IceVisionEnabled {
 		logger.Infof("dispensing ice: pin %q HIGH, watching for the surface to pass row %d (ceiling %.0fs)",
-			pinName, s.iceStopRowPx(), s.iceDispenseMaxSec())
-		return s.dwellUntilFull(ctx, cancelCtx, s.measureIceSurface)
+			pinName, s.iceVision.Params().StopRow(), s.iceDispenseMaxSec())
+		return s.dwellUntilFull(ctx, cancelCtx, s.iceVision.Measure)
 	}
 	dwell := secondsToDuration(s.iceDispenseSec())
 	logger.Infof("dispensing ice: pin %q HIGH for %s", pinName, dwell)
 	return res, s.waitOrCancel(ctx, cancelCtx, dwell)
+}
+
+// checkIceLevel is the check_ice_level action: one logged measurement at the
+// arm's current pose (icevision.Detector.CheckLevel).
+func (s *beanjaminCoffee) checkIceLevel(ctx, _ context.Context) error {
+	return s.iceVision.CheckLevel(ctx, s.activeOrderLogger(), s.queue.CurrentID())
 }
 
 // stageGlass sets the held glass down in the staging area and releases it,

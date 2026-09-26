@@ -1,4 +1,4 @@
-package coffee
+package icevision
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"image/jpeg"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"go.viam.com/rdk/components/camera"
@@ -36,7 +35,7 @@ func loadFixture(t *testing.T, name string) image.Image {
 // yet" or "risen past the stop row" — which is why the loop, not the
 // measurement, carries the latch that tells those apart.
 func TestIceSurfaceRowFixtures(t *testing.T) {
-	b := iceBandFromConfig(&Config{})
+	b := Params{}.Band()
 	for _, tc := range []struct {
 		name    string
 		fixture string
@@ -57,18 +56,18 @@ func TestIceSurfaceRowFixtures(t *testing.T) {
 		{"risen past the stop row", "rim379_passed.jpg", false, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := iceSurfaceRow(loadFixture(t, tc.fixture), b)
+			got, err := surfaceRow(loadFixture(t, tc.fixture), b)
 			if err != nil {
-				t.Fatalf("iceSurfaceRow: %v", err)
+				t.Fatalf("surfaceRow: %v", err)
 			}
-			if got.found != tc.found {
-				t.Fatalf("found = %v (row %d, step %.1f), want %v", got.found, got.row, got.step, tc.found)
+			if got.Found != tc.found {
+				t.Fatalf("found = %v (row %d, step %.1f), want %v", got.Found, got.Row, got.Step, tc.found)
 			}
-			if got.found && got.row != tc.row {
-				t.Errorf("row = %d, want %d", got.row, tc.row)
+			if got.Found && got.Row != tc.row {
+				t.Errorf("row = %d, want %d", got.Row, tc.row)
 			}
-			if got.found && got.row < b.y0+b.window {
-				t.Errorf("row %d is above the stop row %d — the band must not nominate one", got.row, b.y0+b.window)
+			if got.Found && got.Row < b.Y0+b.Window {
+				t.Errorf("row %d is above the stop row %d — the band must not nominate one", got.Row, b.Y0+b.Window)
 			}
 		})
 	}
@@ -79,28 +78,28 @@ func TestIceSurfaceRowFixtures(t *testing.T) {
 // fails toward serving a drink with a second of ice in it. The contrast step
 // must hold across the lighting range.
 func TestIceSurfaceRowIgnoresBrightness(t *testing.T) {
-	b := iceBandFromConfig(&Config{})
+	b := Params{}.Band()
 	for _, fixture := range []string{"fill_0.jpg", "rim379_empty.jpg"} {
 		for _, scale := range []float64{0.5, 1.4, 1.8} {
 			t.Run(fmt.Sprintf("%s at %.1fx", fixture, scale), func(t *testing.T) {
-				got, err := iceSurfaceRow(scaleLuminance(loadFixture(t, fixture), scale), b)
+				got, err := surfaceRow(scaleLuminance(loadFixture(t, fixture), scale), b)
 				if err != nil {
-					t.Fatalf("iceSurfaceRow: %v", err)
+					t.Fatalf("surfaceRow: %v", err)
 				}
-				if got.found {
+				if got.Found {
 					t.Errorf("empty glass at %.1fx brightness reported ice at row %d (step %.1f), want no surface",
-						scale, got.row, got.step)
+						scale, got.Row, got.Step)
 				}
 			})
 		}
 	}
 	// The other half of the same claim: a real surface survives the dim end,
 	// where the step shrinks for want of contrast.
-	got, err := iceSurfaceRow(scaleLuminance(loadFixture(t, "fill_40.jpg"), 0.5), b)
+	got, err := surfaceRow(scaleLuminance(loadFixture(t, "fill_40.jpg"), 0.5), b)
 	if err != nil {
-		t.Fatalf("iceSurfaceRow: %v", err)
+		t.Fatalf("surfaceRow: %v", err)
 	}
-	if !got.found {
+	if !got.Found {
 		t.Error("a 40 percent full glass at half brightness reported no surface, want one")
 	}
 }
@@ -110,25 +109,25 @@ func TestIceSurfaceRowIgnoresBrightness(t *testing.T) {
 // out — rim steps (55-90 in the fixtures) overlap real ice surfaces (33-58), so
 // no magnitude test could separate them.
 func TestIceSurfaceRowExcludesTheRim(t *testing.T) {
-	b := iceBandFromConfig(&Config{})
-	for _, edge := range []int{100, 300, b.y0 - 1} {
+	b := Params{}.Band()
+	for _, edge := range []int{100, 300, b.Y0 - 1} {
 		img := stepImage(1280, 720, edge, 20, 200)
-		got, err := iceSurfaceRow(img, b)
+		got, err := surfaceRow(img, b)
 		if err != nil {
-			t.Fatalf("iceSurfaceRow: %v", err)
+			t.Fatalf("surfaceRow: %v", err)
 		}
-		if got.found {
-			t.Errorf("a step at row %d (above the band top %d) was reported at row %d", edge, b.y0, got.row)
+		if got.Found {
+			t.Errorf("a step at row %d (above the band top %d) was reported at row %d", edge, b.Y0, got.Row)
 		}
 	}
 	// The same step inside the band is found, so the test above is about where
 	// it sits and not about the step being invisible.
-	got, err := iceSurfaceRow(stepImage(1280, 720, 600, 20, 200), b)
+	got, err := surfaceRow(stepImage(1280, 720, 600, 20, 200), b)
 	if err != nil {
-		t.Fatalf("iceSurfaceRow: %v", err)
+		t.Fatalf("surfaceRow: %v", err)
 	}
-	if !got.found || got.row != 600 {
-		t.Errorf("step inside the band: found=%v row=%d, want true 600", got.found, got.row)
+	if !got.Found || got.Row != 600 {
+		t.Errorf("step inside the band: found=%v row=%d, want true 600", got.Found, got.Row)
 	}
 }
 
@@ -142,7 +141,7 @@ func TestIceScanBandReportsTheStopRowFirst(t *testing.T) {
 		{400, 20, 500},
 		{900, 64, 1080},
 	} {
-		top, bottom, firstRow, lastRow := iceScanBand(tc.stopRow, tc.window, tc.roiY1)
+		top, bottom, firstRow, lastRow := ScanBand(tc.stopRow, tc.window, tc.roiY1)
 		if firstRow != tc.stopRow {
 			t.Errorf("stop row %d, window %d: first reportable row %d, want the stop row", tc.stopRow, tc.window, firstRow)
 		}
@@ -154,10 +153,10 @@ func TestIceScanBandReportsTheStopRowFirst(t *testing.T) {
 
 	// The config path has to agree with it, or the exported helper describes a
 	// band nothing scans.
-	b := iceBandFromConfig(&Config{})
-	top, bottom, _, _ := iceScanBand(defaultIceStopRowPx, defaultIceContrastWindow, defaultIceROIY1)
-	if b.y0 != top || b.y1 != bottom {
-		t.Errorf("config band rows %d..%d, iceScanBand %d..%d", b.y0, b.y1, top, bottom)
+	b := Params{}.Band()
+	top, bottom, _, _ := ScanBand(defaultIceStopRowPx, defaultIceContrastWindow, defaultIceROIY1)
+	if b.Y0 != top || b.Y1 != bottom {
+		t.Errorf("config band rows %d..%d, ScanBand %d..%d", b.Y0, b.Y1, top, bottom)
 	}
 }
 
@@ -165,13 +164,13 @@ func TestIceScanBandReportsTheStopRowFirst(t *testing.T) {
 // resolution they were measured at, so a reconfigured camera has to fail loudly
 // rather than measure a different part of the glass.
 func TestIceSurfaceRowRejectsWrongResolution(t *testing.T) {
-	if _, err := iceSurfaceRow(image.NewRGBA(image.Rect(0, 0, 640, 480)), iceBandFromConfig(&Config{})); err == nil {
+	if _, err := surfaceRow(image.NewRGBA(image.Rect(0, 0, 640, 480)), Params{}.Band()); err == nil {
 		t.Error("measuring a 640x480 frame with 1280x720 bounds succeeded, want an error")
 	}
 }
 
 func TestStrongestStepAboveBandFindsTheRim(t *testing.T) {
-	b := iceBandFromConfig(&Config{})
+	b := Params{}.Band()
 	for _, tc := range []struct {
 		fixture string
 		row     int
@@ -183,8 +182,8 @@ func TestStrongestStepAboveBandFindsTheRim(t *testing.T) {
 		if err != nil {
 			t.Fatalf("strongestStepAboveBand: %v", err)
 		}
-		if !got.found || got.row != tc.row {
-			t.Errorf("%s: found=%v row=%d, want true %d", tc.fixture, got.found, got.row, tc.row)
+		if !got.Found || got.Row != tc.row {
+			t.Errorf("%s: found=%v row=%d, want true %d", tc.fixture, got.Found, got.Row, tc.row)
 		}
 	}
 }
@@ -231,80 +230,6 @@ func stepImage(w, h, edge int, dark, bright uint8) image.Image {
 	return img
 }
 
-// TestValidateIceVisionRejectsSilentGeometry: every case here would otherwise
-// run, log nothing unusual, and either stop the dispense immediately or never
-// stop it at all.
-func TestValidateIceVisionRejectsSilentGeometry(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		mutfn func(*Config)
-		want  string
-	}{
-		{"transposed x pair", func(c *Config) { c.IceROIX0, c.IceROIX1 = 910, 700 }, "ice_roi_x0"},
-		{"stop row above the window", func(c *Config) { c.IceStopRowPx = 10 }, "ice_stop_row_px"},
-		{"band bottom inside the window", func(c *Config) { c.IceROIY1 = 600 }, "ice_roi_y1"},
-		{"negative contrast", func(c *Config) { c.IceMinContrast = -1 }, "must not be negative"},
-		{"negative stop row", func(c *Config) { c.IceStopRowPx = -565 }, "must not be negative"},
-		{"min dwell past the ceiling", func(c *Config) { c.IceDispenseMinSec, c.IceDispenseMaxSec = 40, 30 }, "ice_dispense_min_sec"},
-		// A cap inside one poll ends every dispense on the tick after ice appears.
-		{"cap at the poll interval", func(c *Config) { c.IceAfterFirstSeenMaxSec, c.IceCheckIntervalSec = 0.5, 0.5 }, "ice_after_first_seen_max_sec"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := validCanServeIcedConfig()
-			tc.mutfn(cfg)
-			_, _, err := cfg.Validate("path")
-			if err == nil {
-				t.Fatalf("Validate accepted %s", tc.name)
-			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("error %q does not mention %q", err, tc.want)
-			}
-		})
-	}
-}
-
-func TestCheckIceLevelRegisteredWithIced(t *testing.T) {
-	iced := (&beanjaminCoffee{cfg: &Config{CanServeIced: true}}).actionFuncs()
-	if _, ok := iced["check_ice_level"]; !ok {
-		t.Error("check_ice_level is not registered on an iced machine")
-	}
-	plain := (&beanjaminCoffee{cfg: &Config{}}).actionFuncs()
-	if _, ok := plain["check_ice_level"]; ok {
-		t.Error("check_ice_level is registered on a machine that cannot serve iced drinks")
-	}
-}
-
-// The band is checked on every machine, not only the ones serving iced drinks:
-// ice_roi_* is reachable config either way, and a band that scans nothing has to
-// be rejected rather than measuring silently.
-func TestValidateIceVisionAppliesWithoutIced(t *testing.T) {
-	cfg := validBaseConfig()
-	cfg.IceROIX0, cfg.IceROIX1 = 910, 700
-
-	_, _, err := cfg.Validate("path")
-	if err == nil {
-		t.Fatal("Validate accepted a transposed ice band on a machine without can_serve_iced")
-	}
-	if !strings.Contains(err.Error(), "ice_roi_x0") {
-		t.Errorf("error %q does not mention ice_roi_x0", err)
-	}
-}
-
-// The defaults have to survive their own validator, and the band they derive
-// has to be able to nominate the stop row itself.
-func TestValidateIceVisionAcceptsDefaults(t *testing.T) {
-	if _, _, err := validCanServeIcedConfig().Validate("path"); err != nil {
-		t.Fatalf("Validate rejected the defaults: %v", err)
-	}
-	b := iceBandFromConfig(&Config{})
-	if b.y0+b.window != defaultIceStopRowPx {
-		t.Errorf("band top %d + window %d = %d, want the stop row %d", b.y0, b.window, b.y0+b.window, defaultIceStopRowPx)
-	}
-	if b.y0+2*b.window >= b.y1 {
-		t.Errorf("band y %d..%d cannot reach the stop row with window %d", b.y0, b.y1, b.window)
-	}
-}
-
 // TestFirstDecodableImageNeedsTheColorSource: the depth payload reads as a
 // perfectly good brightness profile, so picking it would produce a stop row out
 // of nothing. A camera serving one stream is the ordinary case and is taken
@@ -325,7 +250,8 @@ func TestFirstDecodableImageNeedsTheColorSource(t *testing.T) {
 		wantErr bool
 	}{
 		{"one unnamed stream", []string{""}, false},
-		{"color among several", []string{"depth", iceColorSourceName}, false},
+		{"color among several", []string{"depth", colorSourceName}, false},
+
 		{"several, none of them color", []string{"depth", "rgb"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
