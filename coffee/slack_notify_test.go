@@ -1,95 +1,88 @@
 package coffee
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"go.viam.com/rdk/logging"
+	"go.viam.com/rdk/testutils/inject"
+
 	"beanjamin/coffee/order"
+	"beanjamin/coffee/report"
 )
 
-func TestEscapeSlackMrkdwn(t *testing.T) {
-	for _, tc := range []struct {
-		name, in, want string
-	}{
-		{"plain name", "Jane Doe", "Jane Doe"},
-		{"empty", "", ""},
-		{"channel mention", "<!channel>", "&lt;!channel&gt;"},
-		{"disguised link", "<https://example.com|Click here>", "&lt;https://example.com|Click here&gt;"},
-		// & must become &amp; exactly once, including when it is already part
-		// of an entity, or "&lt;" typed at the kiosk would render as "<".
-		{"ampersand", "Tom & Jerry", "Tom &amp; Jerry"},
-		{"pre-escaped entity", "&lt;", "&amp;lt;"},
-		// Formatting characters are not control characters; Slack has no
-		// escape for them, and they cannot ping anyone or forge a link.
-		{"formatting left alone", "*bold* _it_ ~s~", "*bold* _it_ ~s~"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := escapeSlackMrkdwn(tc.in); got != tc.want {
-				t.Errorf("escapeSlackMrkdwn(%q) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
+// newSlackTestCoffee wires a coffee service to a fake Slack service that hands
+// every DoCommand payload to the returned channel.
+func newSlackTestCoffee(t *testing.T) (*beanjaminCoffee, <-chan map[string]any) {
+	t.Helper()
+	sent := make(chan map[string]any, 1)
+	slack := inject.NewGenericService("slack")
+	slack.DoFunc = func(_ context.Context, cmd map[string]any) (map[string]any, error) {
+		sent <- cmd
+		return map[string]any{}, nil
+	}
+	return &beanjaminCoffee{
+		logger:         logging.NewTestLogger(t),
+		cfg:            &Config{},
+		slackNotifier:  report.NewNotifier(slack),
+		machineLogsURL: "https://app.viam.com/machine/m1/logs?org=o1",
+		dataLocationID: "loc1",
+		primaryOrgID:   "o1",
+	}, sent
+}
+
+func awaitSlack(t *testing.T, sent <-chan map[string]any) map[string]any {
+	t.Helper()
+	select {
+	case cmd := <-sent:
+		return cmd
+	case <-time.After(5 * time.Second):
+		t.Fatal("no Slack DoCommand was sent")
+		return nil
 	}
 }
 
-// A kiosk name is free text, so every place it reaches a failure notification
-// (the Block Kit fields and the fallback text) must carry it escaped.
-func TestSlackFailure_EscapesCustomerControlledValues(t *testing.T) {
+// The failure alert's DoCommand payload is exactly command, text, and blocks.
+func TestNotifyOrderFailureSlackPayload(t *testing.T) {
+	s, sent := newSlackTestCoffee(t)
 	started := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
 	r := order.Reading{
-		Order:      order.Order{ID: "order-1", Drink: "espresso", CustomerName: "<!channel> <https://example.com|Click here>"},
-		ExecErr:    errors.New("peer said <!here>"),
-		FailedStep: "brewing",
+		Order:      order.Order{ID: "order-1", Drink: "espresso", CustomerName: "Jane"},
+		ExecErr:    errors.New("grinder jammed"),
+		FailedStep: stepGrinding,
 		StartedAt:  started,
 		EndedAt:    started.Add(time.Minute),
 	}
 
-	raw, err := json.Marshal(slackFailureBlocks(r, "", "", ""))
-	if err != nil {
-		t.Fatalf("marshal blocks: %v", err)
-	}
-	// Decode the JSON escapes back so the assertions see the text Slack gets.
-	var blocks []any
-	if err := json.Unmarshal(raw, &blocks); err != nil {
-		t.Fatalf("unmarshal blocks: %v", err)
-	}
-	var texts []string
-	collectSlackText(blocks, &texts)
-	payload := strings.Join(texts, "\n") + "\n" + slackFailureText(r)
+	s.notifyOrderFailureSlack(r)
 
-	for _, forbidden := range []string{"<!channel>", "<https://example.com|", "<!here>"} {
-		if strings.Contains(payload, forbidden) {
-			t.Errorf("payload contains unescaped %q:\n%s", forbidden, payload)
-		}
+	planURL := report.PlanRequestDataURL("loc1", "o1", "order-1")
+	want := map[string]any{
+		"command": "send",
+		"text":    report.FailureText(r),
+		"blocks":  report.FailureBlocks(r, s.machineLogsURL, "", planURL),
 	}
-	for _, want := range []string{"&lt;!channel&gt;", "&lt;!here&gt;"} {
-		if !strings.Contains(payload, want) {
-			t.Errorf("payload is missing escaped %q:\n%s", want, payload)
-		}
-	}
-	// The footer's own <!date> markup is built here, not typed by a customer,
-	// so it must survive escaping untouched.
-	if !strings.Contains(payload, "<!date^") {
-		t.Errorf("payload lost the footer's date markup:\n%s", payload)
+	if got := awaitSlack(t, sent); !reflect.DeepEqual(got, want) {
+		t.Errorf("payload = %#v, want %#v", got, want)
 	}
 }
 
-// collectSlackText gathers every "text" string in a decoded Block Kit payload.
-func collectSlackText(v any, out *[]string) {
-	switch x := v.(type) {
-	case map[string]any:
-		for k, child := range x {
-			if s, ok := child.(string); ok && k == "text" {
-				*out = append(*out, s)
-				continue
-			}
-			collectSlackText(child, out)
-		}
-	case []any:
-		for _, child := range x {
-			collectSlackText(child, out)
-		}
+// The keep-alive notice is plain text: the payload carries no blocks key.
+func TestNotifyKeepAliveFailureSlackPayload(t *testing.T) {
+	s, sent := newSlackTestCoffee(t)
+
+	s.notifyKeepAliveFailureSlack(errors.New("arm busy"))
+
+	got := awaitSlack(t, sent)
+	if len(got) != 2 || got["command"] != "send" {
+		t.Fatalf("payload = %#v, want only command and text", got)
+	}
+	text, _ := got["text"].(string)
+	if !strings.HasPrefix(text, ":warning: Keep-alive purge failed") || !strings.HasSuffix(text, "Error: arm busy") {
+		t.Errorf("text = %q", text)
 	}
 }

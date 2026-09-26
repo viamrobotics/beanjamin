@@ -1,4 +1,4 @@
-package coffee
+package report
 
 import (
 	"context"
@@ -147,32 +147,22 @@ func TestChoreWheelWeekUsesLocalDate(t *testing.T) {
 	}
 	mondayNY := time.Date(2026, time.September, 21, 9, 0, 0, 0, ny)
 	mondayUTC := time.Date(2026, time.September, 21, 9, 0, 0, 0, time.UTC)
-	if choreWheelWeek(mondayNY) != choreWheelWeek(mondayUTC) {
+	if ChoreWheelWeek(mondayNY) != ChoreWheelWeek(mondayUTC) {
 		t.Errorf("same Monday in NY and UTC gave weeks %d and %d",
-			choreWheelWeek(mondayNY), choreWheelWeek(mondayUTC))
+			ChoreWheelWeek(mondayNY), ChoreWheelWeek(mondayUTC))
 	}
 
 	// 11pm Sunday in New York is 3am Monday UTC, but it is still last week.
 	sundayNightNY := time.Date(2026, time.September, 20, 23, 0, 0, 0, ny)
-	if choreWheelWeek(sundayNightNY) != choreWheelWeek(mondayNY)-1 {
+	if ChoreWheelWeek(sundayNightNY) != ChoreWheelWeek(mondayNY)-1 {
 		t.Errorf("Sunday 11pm NY is week %d, Monday 9am NY is week %d; want consecutive",
-			choreWheelWeek(sundayNightNY), choreWheelWeek(mondayNY))
+			ChoreWheelWeek(sundayNightNY), ChoreWheelWeek(mondayNY))
 	}
 
 	// Consecutive Mondays are consecutive weeks.
-	if choreWheelWeek(mondayNY.AddDate(0, 0, 7)) != choreWheelWeek(mondayNY)+1 {
+	if ChoreWheelWeek(mondayNY.AddDate(0, 0, 7)) != ChoreWheelWeek(mondayNY)+1 {
 		t.Error("a Monday and the next Monday are not consecutive weeks")
 	}
-}
-
-type fakeSlack struct {
-	sent []map[string]any
-	err  error
-}
-
-func (f *fakeSlack) DoCommand(_ context.Context, cmd map[string]any) (map[string]any, error) {
-	f.sent = append(f.sent, cmd)
-	return nil, f.err
 }
 
 func TestPostChoreWheelRendersAndReports(t *testing.T) {
@@ -185,7 +175,7 @@ func TestPostChoreWheelRendersAndReports(t *testing.T) {
 
 	// A Tuesday: the message must still be dated by its Monday.
 	tuesday := time.Date(2026, time.September, 22, 14, 0, 0, 0, ny)
-	res, err := postChoreWheel(context.Background(), slack, cfg, tuesday)
+	res, err := PostChoreWheel(context.Background(), NewNotifier(slack), cfg, tuesday)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +226,7 @@ func TestPostChoreWheelNoFreeWeeks(t *testing.T) {
 	people := []string{"A", "B", "C"}
 	chores := []string{"x", "y", "z"}
 	slack := &fakeSlack{}
-	if _, err := postChoreWheel(context.Background(), slack,
+	if _, err := PostChoreWheel(context.Background(), NewNotifier(slack),
 		&ChoreWheelConfig{People: people, Chores: chores}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +238,7 @@ func TestPostChoreWheelNoFreeWeeks(t *testing.T) {
 
 func TestPostChoreWheelPropagatesSendError(t *testing.T) {
 	slack := &fakeSlack{err: errors.New("channel_not_found")}
-	_, err := postChoreWheel(context.Background(), slack,
+	_, err := PostChoreWheel(context.Background(), NewNotifier(slack),
 		&ChoreWheelConfig{People: testPeople, Chores: testChores}, time.Now())
 	if err == nil || !strings.Contains(err.Error(), "channel_not_found") {
 		t.Errorf("err = %v, want the slack error wrapped", err)
@@ -258,20 +248,20 @@ func TestPostChoreWheelPropagatesSendError(t *testing.T) {
 func TestParseChoreWheelTime(t *testing.T) {
 	now := time.Date(2026, time.September, 16, 12, 0, 0, 0, time.UTC)
 
-	if got, err := parseChoreWheelTime(true, now); err != nil || !got.Equal(now) {
+	if got, err := ParseChoreWheelTime(true, now); err != nil || !got.Equal(now) {
 		t.Errorf("true -> (%v, %v), want now", got, err)
 	}
-	if got, err := parseChoreWheelTime(map[string]any{}, now); err != nil || !got.Equal(now) {
+	if got, err := ParseChoreWheelTime(map[string]any{}, now); err != nil || !got.Equal(now) {
 		t.Errorf("{} -> (%v, %v), want now", got, err)
 	}
-	got, err := parseChoreWheelTime(map[string]any{"date": "2026-10-05"}, now)
+	got, err := ParseChoreWheelTime(map[string]any{"date": "2026-10-05"}, now)
 	if err != nil || got.Format("2006-01-02") != "2026-10-05" {
 		t.Errorf("date override -> (%v, %v), want 2026-10-05", got, err)
 	}
-	if _, err := parseChoreWheelTime(map[string]any{"date": "next monday"}, now); err == nil {
+	if _, err := ParseChoreWheelTime(map[string]any{"date": "next monday"}, now); err == nil {
 		t.Error("unparseable date should error")
 	}
-	if _, err := parseChoreWheelTime("yes", now); err == nil {
+	if _, err := ParseChoreWheelTime("yes", now); err == nil {
 		t.Error("a string value should error")
 	}
 }
@@ -291,9 +281,9 @@ func TestChoreWheelConfigValidate(t *testing.T) {
 		{"blank chore", ChoreWheelConfig{People: []string{"A", "B"}, Chores: []string{" "}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := tc.cfg.validate("test")
+			err := tc.cfg.Validate("test")
 			if (err != nil) != tc.bad {
-				t.Errorf("validate() = %v, want error=%v", err, tc.bad)
+				t.Errorf("Validate() = %v, want error=%v", err, tc.bad)
 			}
 		})
 	}
