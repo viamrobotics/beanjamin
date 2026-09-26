@@ -2,6 +2,8 @@ package coffee
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -45,29 +47,18 @@ func decodePrepareOrder(raw any) (prepareOrderRequest, error) {
 	if !ok {
 		return req, fmt.Errorf("prepare_order value must be an object with keys: %s", strings.Join(prepareOrderKeys, ", "))
 	}
-	rv := reflect.ValueOf(&req).Elem()
-	for i, key := range prepareOrderKeys {
-		v, present := m[key]
-		if !present || v == nil {
-			continue
+	// A JSON round trip gives encoding/json's field matching and type checks;
+	// the payload is a handful of keys, so the copy costs nothing.
+	b, err := json.Marshal(m)
+	if err != nil {
+		return req, fmt.Errorf("prepare_order: %w", err)
+	}
+	if err := json.Unmarshal(b, &req); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) {
+			return req, fmt.Errorf("prepare_order field %q must be a %s, got %s", typeErr.Field, typeErr.Type, typeErr.Value)
 		}
-		field := rv.Field(i)
-		switch field.Kind() {
-		case reflect.String:
-			s, ok := v.(string)
-			if !ok {
-				return req, fmt.Errorf("prepare_order field %q must be a string, got %T", key, v)
-			}
-			field.SetString(s)
-		case reflect.Pointer:
-			f, ok := v.(float64)
-			if !ok {
-				return req, fmt.Errorf("prepare_order field %q must be a number, got %T", key, v)
-			}
-			field.Set(reflect.ValueOf(&f))
-		default:
-			return req, fmt.Errorf("prepare_order field %q has no decoder for %s", key, field.Type())
-		}
+		return req, fmt.Errorf("prepare_order: %w", err)
 	}
 	return req, nil
 }
