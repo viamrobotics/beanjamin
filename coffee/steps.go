@@ -2,6 +2,7 @@ package coffee
 
 // Arm steps: the Step description each brew phase is built from, and
 // executeStep, which turns one into a direct move, pivot or circular motion.
+// Also the step labels a running sequence publishes through setStep.
 
 import (
 	"context"
@@ -126,4 +127,33 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 		}
 	}
 	return nil
+}
+
+// Step labels surfaced through setStep -> get_queue, the order sensor's
+// failed_step, and the web tracker. Constants so the brew sequence
+// (prepare.go) and rewind recovery reference the same strings.
+const (
+	stepGrinding             = "Grinding"
+	stepTamping              = "Tamping"
+	stepLockingPortafilter   = "Locking portafilter"
+	stepReleasingFilter      = "Releasing filter"
+	stepPlacingCup           = "Placing cup"
+	stepBrewing              = "Brewing"
+	stepServing              = "Serving"
+	stepGrabbingFilter       = "Grabbing filter"
+	stepUnlockingPortafilter = "Unlocking portafilter"
+	stepCleaning             = "Cleaning"
+	stepAddingMilk           = "Adding milk"
+	stepFinishingUp          = "Finishing up"
+	stepRecoveringFilter     = "Recovering filter"
+	// stepKeepAlive is published while a keep-alive purge runs. No order is
+	// active, so it surfaces through Status/get_queue only, never on an order.
+	stepKeepAlive = "Keep-alive purge"
+)
+
+func (s *beanjaminCoffee) setStep(step string) {
+	s.currentStep.Store(step)
+	// No-op when nothing is on the arm, which is what a keep-alive purge wants:
+	// its step is service-global and belongs to no order.
+	s.queue.SetCurrentStep(step)
 }
