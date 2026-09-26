@@ -30,6 +30,7 @@ import (
 	"go.viam.com/rdk/spatialmath"
 
 	"beanjamin/coffee/clips"
+	"beanjamin/coffee/icevision"
 	"beanjamin/coffee/order"
 	"beanjamin/coffee/report"
 	"beanjamin/coffee/speech"
@@ -119,10 +120,10 @@ type beanjaminCoffee struct {
 	machineActivity *machineActivityStore
 	cupVision       vision.Service // vision service for cup pickup (always configured)
 	cupCameraName   string         // SrcCameraName, validated to exist in cachedFS
-	// srcCamera is the same camera as cupCameraName, held as a resource so the
-	// ice-level measurement (ice_level.go) can read frames directly. The vision
-	// pipelines reach it by name through their own services instead.
-	srcCamera      camera.Camera
+	// iceVision reads the same camera as cupCameraName, held as a resource so
+	// the ice-level measurement (coffee/icevision) can read frames directly. The
+	// vision pipelines reach it by name through their own services instead.
+	iceVision      *icevision.Detector
 	glassVision    vision.Service // optional; nil unless CanServeIced
 	glassObserveSw toggleswitch.Switch
 	milkVision     vision.Service // optional; nil unless CanServeIcedLatte
@@ -402,7 +403,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		usageSensor:      usageSensor,
 		cupVision:        cupVision,
 		cupCameraName:    conf.SrcCameraName,
-		srcCamera:        srcCamera,
+		iceVision:        icevision.NewDetector(srcCamera, iceVisionParams(conf)),
 		glassVision:      glassVision,
 		glassObserveSw:   glassObserveSw,
 		milkVision:       milkVision,

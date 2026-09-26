@@ -1,4 +1,4 @@
-package coffee
+package icevision
 
 // Drawing the ice measurement onto the frame it was taken from.
 //
@@ -8,7 +8,7 @@ package coffee
 // that, and it is the only way to check a stop row against a real seating.
 //
 // One frame is drawn per hand-run ice action that asks for it; see
-// saveIceDispenseFrame. It draws the band the loop actually scanned and the
+// SaveFrame. It draws the band the loop actually scanned and the
 // readings the loop actually took, so the picture cannot describe a band or a
 // measurement that nothing ran.
 
@@ -38,16 +38,16 @@ var (
 // too wide for the frame is pulled back to.
 const annotLeftMargin = 20
 
-// annotateIceFrame draws a measurement onto a copy of the frame it was taken
+// annotateFrame draws a measurement onto a copy of the frame it was taken
 // from. It draws only: the readings come from the loop, so the picture and the
 // caption beside it can never disagree about what was measured, and a saved
 // frame costs no second pass over the pixels.
-func annotateIceFrame(b iceBand, m iceMeasurement, caption string) (*image.RGBA, error) {
-	stopRow := b.y0 + b.window
-	_, _, _, lastRow := iceScanBand(stopRow, b.window, b.y1)
+func annotateFrame(b Band, m Measurement, caption string) (*image.RGBA, error) {
+	stopRow := b.Y0 + b.Window
+	_, _, _, lastRow := ScanBand(stopRow, b.Window, b.Y1)
 
-	out := image.NewRGBA(m.frame.Bounds())
-	draw.Draw(out, m.frame.Bounds(), m.frame, m.frame.Bounds().Min, draw.Src)
+	out := image.NewRGBA(m.Frame.Bounds())
+	draw.Draw(out, m.Frame.Bounds(), m.Frame, m.Frame.Bounds().Min, draw.Src)
 	an := &annotator{img: out, width: out.Bounds().Max.X}
 	if err := an.loadFonts(out.Bounds().Max.Y); err != nil {
 		return nil, err
@@ -55,13 +55,13 @@ func annotateIceFrame(b iceBand, m iceMeasurement, caption string) (*image.RGBA,
 
 	an.drawBand(b, lastRow)
 	an.drawRow(stopRow, annotStop, fmt.Sprintf("row %d  STOP ROW — the pin closes once the surface is ABOVE this", stopRow))
-	if m.contrast.found {
-		an.drawReading(b, m.contrast.row, annotSurface, rightOfBand,
-			fmt.Sprintf("contrast step: row %d (step %.0f)", m.contrast.row, m.contrast.step))
+	if m.Contrast.Found {
+		an.drawReading(b, m.Contrast.Row, annotSurface, rightOfBand,
+			fmt.Sprintf("contrast step: row %d (step %.0f)", m.Contrast.Row, m.Contrast.Step))
 	}
-	if m.shadow && m.brightness.found {
-		an.drawReading(b, m.brightness.row, annotShadow, leftOfBand,
-			fmt.Sprintf("brightness shadow: row %d (%.0f)", m.brightness.row, m.brightness.step))
+	if m.Shadow && m.Brightness.Found {
+		an.drawReading(b, m.Brightness.Row, annotShadow, leftOfBand,
+			fmt.Sprintf("brightness shadow: row %d (%.0f)", m.Brightness.Row, m.Brightness.Step))
 	}
 	if caption != "" {
 		an.label(an.big, annotLeftMargin, 34, caption, annotText)
@@ -102,17 +102,17 @@ func (a *annotator) loadFonts(height int) error {
 // lowest row the contrast step can nominate. That edge is what explains a "no
 // surface" frame: a real surface below it is invisible to the step — and
 // visible to the shadow, which is the comparison being drawn.
-func (a *annotator) drawBand(b iceBand, lastRow int) {
-	a.tint(b.x0, b.y0, b.x1, b.y1, color.RGBA{60, 140, 255, 255}, 0.18)
-	a.vline(b.x0, b.y0, b.y1, annotShadow, 2)
-	a.vline(b.x1-2, b.y0, b.y1, annotShadow, 2)
+func (a *annotator) drawBand(b Band, lastRow int) {
+	a.tint(b.X0, b.Y0, b.X1, b.Y1, color.RGBA{60, 140, 255, 255}, 0.18)
+	a.vline(b.X0, b.Y0, b.Y1, annotShadow, 2)
+	a.vline(b.X1-2, b.Y0, b.Y1, annotShadow, 2)
 
-	a.hline(b.y0, 0, a.width, annotEdge, 1, dashed)
-	a.label(a.face, annotLeftMargin, b.y0-8, fmt.Sprintf("row %d  band top (stop row − window)", b.y0), annotEdge)
+	a.hline(b.Y0, 0, a.width, annotEdge, 1, dashed)
+	a.label(a.face, annotLeftMargin, b.Y0-8, fmt.Sprintf("row %d  band top (stop row − window)", b.Y0), annotEdge)
 	a.hline(lastRow, 0, a.width, annotEdge, 1, dashed)
 	a.label(a.face, a.width*3/4, lastRow+20, fmt.Sprintf("row %d  lowest row the step can report", lastRow), annotEdge)
-	a.hline(b.y1, 0, a.width, annotEdge, 1, dashed)
-	a.label(a.face, a.width*3/4, b.y1-8, fmt.Sprintf("row %d  band bottom", b.y1), annotEdge)
+	a.hline(b.Y1, 0, a.width, annotEdge, 1, dashed)
+	a.label(a.face, a.width*3/4, b.Y1-8, fmt.Sprintf("row %d  band bottom", b.Y1), annotEdge)
 }
 
 // readingSide keeps the two methods' labels on opposite sides of the band, so
@@ -131,14 +131,14 @@ func (a *annotator) drawRow(row int, c color.RGBA, text string) {
 
 // drawReading marks a measured row inside the band only — it is a claim about
 // the band, and a line across the whole frame would read as another threshold.
-func (a *annotator) drawReading(b iceBand, row int, c color.RGBA, s readingSide, text string) {
-	a.hline(row, b.x0-30, b.x1+30, c, 3, solid)
+func (a *annotator) drawReading(b Band, row int, c color.RGBA, s readingSide, text string) {
+	a.hline(row, b.X0-30, b.X1+30, c, 3, solid)
 	if s == leftOfBand {
 		w := font.MeasureString(a.face, text).Ceil()
-		a.label(a.face, b.x0-36-w, row+6, text, c)
+		a.label(a.face, b.X0-36-w, row+6, text, c)
 		return
 	}
-	a.label(a.face, b.x1+36, row+6, text, c)
+	a.label(a.face, b.X1+36, row+6, text, c)
 }
 
 type stroke bool

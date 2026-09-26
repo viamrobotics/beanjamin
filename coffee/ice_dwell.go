@@ -8,6 +8,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"beanjamin/coffee/icevision"
 )
 
 const (
@@ -54,6 +56,120 @@ func (s *beanjaminCoffee) iceAfterFirstSeenMaxSec() float64 {
 	return orDefault(s.cfg.IceAfterFirstSeenMaxSec, defaultIceAfterFirstSeenMaxSec)
 }
 
+// iceVisionParams carries the measurement's tunables from the config.
+func iceVisionParams(cfg *Config) icevision.Params {
+	return icevision.Params{
+		StopRowPx:        cfg.IceStopRowPx,
+		ContrastWindow:   cfg.IceContrastWindow,
+		MinContrast:      cfg.IceMinContrast,
+		ROIX0:            cfg.IceROIX0,
+		ROIX1:            cfg.IceROIX1,
+		ROIY1:            cfg.IceROIY1,
+		BrightnessThresh: cfg.IceBrightnessThresh,
+		BrightRun:        cfg.IceBrightRun,
+		SaveDir:          cfg.SaveMotionRequestsDir,
+	}
+}
+
+// validateIceVision rejects ice geometry that would fail silently rather than
+// loudly. At ice_min_contrast 0 every frame reports a surface, so the first
+// tick after the first sighting ends the dispense; a transposed x pair scans
+// nothing, never sees a surface, and rides to the ceiling. Both look like
+// working config from the outside.
+//
+// Negative values are rejected rather than left to fall back to their defaults,
+// which is how a typo would otherwise disappear.
+func validateIceVision(cfg *Config, path string) error {
+	for _, f := range []struct {
+		name string
+		v    float64
+	}{
+		{"ice_stop_row_px", float64(cfg.IceStopRowPx)},
+		{"ice_contrast_window", float64(cfg.IceContrastWindow)},
+		{"ice_min_contrast", cfg.IceMinContrast},
+		{"ice_roi_x0", float64(cfg.IceROIX0)},
+		{"ice_roi_x1", float64(cfg.IceROIX1)},
+		{"ice_roi_y1", float64(cfg.IceROIY1)},
+		{"ice_dispense_max_sec", cfg.IceDispenseMaxSec},
+		{"ice_dispense_min_sec", cfg.IceDispenseMinSec},
+		{"ice_after_first_seen_max_sec", cfg.IceAfterFirstSeenMaxSec},
+		{"ice_check_interval_sec", cfg.IceCheckIntervalSec},
+		{"ice_brightness_thresh", cfg.IceBrightnessThresh},
+		{"ice_bright_run", float64(cfg.IceBrightRun)},
+	} {
+		if f.v < 0 {
+			return fmt.Errorf("%s: %s must not be negative, got %v", path, f.name, f.v)
+		}
+	}
+
+	p := iceVisionParams(cfg)
+	b := p.Band()
+	if b.X0 >= b.X1 {
+		return fmt.Errorf(
+			"%s: ice_roi_x0 (%d) must be left of ice_roi_x1 (%d) — a band with no width scans nothing, never sees a surface, and every dispense runs to ice_dispense_max_sec",
+			path,
+			b.X0,
+			b.X1,
+		)
+	}
+	if b.Y0 < 0 {
+		return fmt.Errorf(
+			"%s: ice_stop_row_px (%d) must be at least ice_contrast_window (%d) — the band opens a full window above the stop row",
+			path,
+			b.Y0+b.Window,
+			b.Window,
+		)
+	}
+	// The topmost candidate row needs a full window of rows on each side, so the
+	// stop row itself is only reachable when the band extends a window below it.
+	if b.Y0+2*b.Window >= b.Y1 {
+		return fmt.Errorf(
+			"%s: ice_roi_y1 (%d) must be more than one contrast window (%d) below ice_stop_row_px (%d) — otherwise the ice surface can never be found at the stop row",
+			path,
+			b.Y1,
+			b.Window,
+			b.Y0+b.Window,
+		)
+	}
+	if b.MinContrast <= 0 {
+		return fmt.Errorf(
+			"%s: ice_min_contrast must be greater than 0 — at 0 every frame reports an ice surface and the first check ends the dispense",
+			path,
+		)
+	}
+	if maxSec, minSec := orDefault(cfg.IceDispenseMaxSec, defaultIceDispenseMaxSec), orDefault(cfg.IceDispenseMinSec, defaultIceDispenseMinSec); minSec >= maxSec {
+		return fmt.Errorf("%s: ice_dispense_min_sec (%v) must be less than ice_dispense_max_sec (%v)", path, minSec, maxSec)
+	}
+	// The cap runs from the first sighting, which itself takes iceConfirmations
+	// polls to latch. At or below one interval it fires on the poll right after,
+	// ending every dispense the moment ice becomes visible.
+	if capSec, interval := orDefault(cfg.IceAfterFirstSeenMaxSec, defaultIceAfterFirstSeenMaxSec), orDefault(cfg.IceCheckIntervalSec, defaultIceCheckIntervalSec); capSec <= interval {
+		return fmt.Errorf(
+			"%s: ice_after_first_seen_max_sec (%v) must be more than ice_check_interval_sec (%v) — otherwise the dispense ends on the first poll after ice becomes visible",
+			path,
+			capSec,
+			interval,
+		)
+	}
+	// The shadow decides nothing, so its settings are only rejected where they
+	// would make it silently useless rather than visibly wrong: a cutoff no
+	// 8-bit row mean can reach, or a run longer than the band it scans, both
+	// report "no ice" on every frame for the life of the machine.
+	if cfg.IceBrightnessThresh > 0 {
+		if cfg.IceBrightnessThresh >= 255 {
+			return fmt.Errorf(
+				"%s: ice_brightness_thresh (%v) must be below 255 — row brightness is an 8-bit mean, so nothing ever reaches it and the shadow reports no ice on every frame",
+				path,
+				cfg.IceBrightnessThresh,
+			)
+		}
+		if run := p.ShadowRun(); run > b.Y1-b.Y0 {
+			return fmt.Errorf("%s: ice_bright_run (%d) must fit inside the %d-row scan band", path, run, b.Y1-b.Y0)
+		}
+	}
+	return nil
+}
+
 // dwellUntilFull holds the pin open — the caller owns it — until the ice
 // surface has risen past the stop row, then returns so the caller can close it.
 // timedOut reports that the ceiling ran out instead; sawSurface, whether ice was
@@ -72,27 +188,28 @@ func (s *beanjaminCoffee) iceAfterFirstSeenMaxSec() float64 {
 // arm the latch and let the next empty reading stop a dispense on an empty glass.
 //
 // Alongside all of that, the brightness shadow reads the same frames and logs
-// what the other method would have done (coffee/ice_brightness.go). It decides
-// nothing here; it is the evidence for whether it ever should.
+// what the other method would have done (coffee/icevision/brightness.go). It
+// decides nothing here; it is the evidence for whether it ever should.
 //
 // measure is a parameter so the loop tests without a camera.
 func (s *beanjaminCoffee) dwellUntilFull(
-	ctx, cancelCtx context.Context, measure func(context.Context) (iceMeasurement, error),
+	ctx, cancelCtx context.Context, measure func(context.Context) (icevision.Measurement, error),
 ) (iceDwellResult, error) {
 	logger := s.activeOrderLogger()
-	stopRow := s.iceStopRowPx()
+	params := s.iceVision.Params()
+	stopRow := params.StopRow()
 	start := time.Now()
 	deadline := start.Add(secondsToDuration(s.iceDispenseMaxSec()))
-	shadow := s.newBrightnessShadow()
-	if shadow.on {
-		b := s.iceBand()
-		_, _, first, last := iceScanBand(stopRow, b.window, b.y1)
+	shadow := params.NewShadow()
+	if shadow.On() {
+		b := params.Band()
+		_, _, first, last := icevision.ScanBand(stopRow, b.Window, b.Y1)
 		logger.Infof(
 			"dispensing ice: brightness shadow on (threshold %.0f over %d rows, scanning rows %d-%d against the step's %d-%d) — the contrast step still decides",
 			s.cfg.IceBrightnessThresh,
-			s.iceBrightRun(),
-			b.y0,
-			b.y1-s.iceBrightRun(),
+			params.ShadowRun(),
+			b.Y0,
+			b.Y1-params.ShadowRun(),
 			first,
 			last,
 		)
@@ -103,7 +220,7 @@ func (s *beanjaminCoffee) dwellUntilFull(
 	// a camera failure or a cancel still leaves the last thing the loop actually
 	// saw — captioned with its age, because a frame from before the failure is
 	// evidence about the run, not a picture of how it ended.
-	var last iceMeasurement
+	var last icevision.Measurement
 	var lastAt time.Duration
 
 	// Reporting is handed back on every exit rather than done here: holdIcePin's
@@ -133,10 +250,10 @@ func (s *beanjaminCoffee) dwellUntilFull(
 	afterFirstSeen := secondsToDuration(s.iceAfterFirstSeenMaxSec())
 	for {
 		measurement, err := measure(ctx)
-		reading := measurement.contrast
+		reading := measurement.Contrast
 		if err == nil {
 			last, lastAt = measurement, time.Since(start)
-			shadow.observe(measurement.brightness, lastAt, describeContrast(reading, sawSurface, stopRow), logger)
+			shadow.Observe(measurement.Brightness, lastAt, describeContrast(reading, sawSurface, stopRow), logger)
 		}
 		switch {
 		case err != nil:
@@ -153,13 +270,13 @@ func (s *beanjaminCoffee) dwellUntilFull(
 				return result("vision_fallback", elapsed, staleness(lastAt, elapsed)),
 					s.waitOrCancel(ctx, cancelCtx, remaining)
 			}
-		case reading.found:
+		case reading.Found:
 			visionErrors, misses = 0, 0
 			sightings++
 			if !sawSurface && sightings >= iceConfirmations {
 				sawSurface, firstSeen = true, time.Since(start)
 				logger.Infof("dispensing ice: surface visible at row %d (step %.0f), stop row %d — %s after the pin opened",
-					reading.row, reading.step, stopRow, firstSeen.Round(time.Millisecond))
+					reading.Row, reading.Step, stopRow, firstSeen.Round(time.Millisecond))
 			}
 		default:
 			visionErrors, sightings = 0, 0
@@ -209,13 +326,13 @@ type iceDwellResult struct {
 	// on ice that flowed without ever being confirmed past the stop row.
 	cappedAfterFirstSeen bool
 
-	shadow    *brightnessShadow
+	shadow    *icevision.Shadow
 	compare   bool // log the shadow comparison — only where a comparison means anything
 	stopped   bool
 	elapsed   time.Duration
 	firstSeen time.Duration
 
-	frame   iceMeasurement
+	frame   icevision.Measurement
 	outcome string // tag slug for the saved frame
 	note    string // what the frame cannot be trusted on by itself
 }
@@ -236,7 +353,7 @@ func (s *beanjaminCoffee) reportIceDispense(ctx context.Context, res iceDwellRes
 	if res.compare {
 		s.reportShadow(ctx, res.shadow, res.stopped, res.elapsed, res.firstSeen)
 	}
-	s.saveIceDispenseFrame(s.iceFrameSavingCtx(ctx), res.frame, res.outcome, res.note, res.elapsed)
+	s.iceVision.SaveFrame(s.iceFrameSavingCtx(ctx), s.activeOrderLogger(), s.queue.CurrentID(), res.frame, res.outcome, res.note, res.elapsed)
 }
 
 // staleness notes how far before the end of the run a frame was taken, for the
@@ -251,21 +368,21 @@ func staleness(takenAt, endedAt time.Duration) string {
 // iceFrameSavingCtx carries the intent to save onto a fresh context, so a frame
 // still lands when the dispense was cancelled.
 func (s *beanjaminCoffee) iceFrameSavingCtx(ctx context.Context) context.Context {
-	if !s.iceFramesWanted(ctx) {
+	if !icevision.FramesWanted(ctx, s.queue.CurrentID()) {
 		return ctx
 	}
-	return withIceFrameSaving(context.Background())
+	return icevision.WithFrameSaving(context.Background())
 }
 
 // describeContrast renders what the deciding method saw on one frame, so a
 // shadow log line stands on its own instead of having to be lined up against
 // the step's own lines by timestamp.
-func describeContrast(r iceReading, sawSurface bool, stopRow int) string {
+func describeContrast(r icevision.Reading, sawSurface bool, stopRow int) string {
 	switch {
-	case r.found && r.row > stopRow:
-		return fmt.Sprintf("has it at row %d, %d px short", r.row, r.row-stopRow)
-	case r.found:
-		return fmt.Sprintf("has it at row %d", r.row)
+	case r.Found && r.Row > stopRow:
+		return fmt.Sprintf("has it at row %d, %d px short", r.Row, r.Row-stopRow)
+	case r.Found:
+		return fmt.Sprintf("has it at row %d", r.Row)
 	case sawSurface:
 		return "sees nothing and has already seen ice, so it is about to close the pin"
 	default:
@@ -277,8 +394,8 @@ func describeContrast(r iceReading, sawSurface bool, stopRow int) string {
 // the runs where the two methods differed in kind. The counter is the number
 // worth watching: timing gaps are expected and are what is being gathered, a
 // disagreement is a reason not to swap.
-func (s *beanjaminCoffee) reportShadow(ctx context.Context, shadow *brightnessShadow, stopped bool, elapsed, firstSeen time.Duration) {
-	line, disagreed := shadow.verdict(stopped, elapsed, firstSeen)
+func (s *beanjaminCoffee) reportShadow(ctx context.Context, shadow *icevision.Shadow, stopped bool, elapsed, firstSeen time.Duration) {
+	line, disagreed := shadow.Verdict(stopped, elapsed, firstSeen)
 	if line == "" {
 		return
 	}
