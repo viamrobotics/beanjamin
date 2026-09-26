@@ -15,7 +15,7 @@ Each model lives in its own package. The coffee service is `coffee/` (`package c
 | Concern | Files |
 | --- | --- |
 | Lifecycle and command API | `module.go`, `config.go`, `api.go`, `control.go` |
-| Brew cycle | `espresso.go`, `brew_steps.go`, `queue.go`, `troubleshooting.go` |
+| Brew cycle | `espresso.go`, `brew_steps.go`, `order_intake.go`, `queue.go`, `troubleshooting.go` |
 | Serving and drink variants | `serving.go`, `served_shelf.go`, `iced.go`, `milk.go`, `door.go` |
 | Motion planning | `motion.go`, `held_geometry.go`, `collisions.go`, `joints.go`, `resting_surface.go` |
 | Vision-driven pickup | `cup_pickup.go`, `gripper_state.go`, `detection_snapshot.go` |

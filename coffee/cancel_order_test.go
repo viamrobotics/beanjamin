@@ -150,7 +150,7 @@ func TestCancelOrder_RefusesInFlightOrder(t *testing.T) {
 	if !errors.Is(err, errOrderInFlight) {
 		t.Fatalf("error = %v, want errOrderInFlight", err)
 	}
-	if _, ok := c.queue.Current(); !ok {
+	if c.queue.CurrentID() != alice.ID {
 		t.Error("the order on the arm must still be current after a refused cancel")
 	}
 }
