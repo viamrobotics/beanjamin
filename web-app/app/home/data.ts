@@ -400,7 +400,7 @@ export const VIDEO_MIME = "video/mp4";
 export const PLAN_MIME = "application/json";
 
 // An order's ID tags two very different payloads: its camera clips, and every
-// motion-plan JSON coffee/motion.go's planRequestTagDir saves (one file per
+// motion-plan JSON coffee/plan_debug.go's planRequestTagDir saves (one file per
 // planned motion, dozens per order). Only the mime type separates them —
 // without it the clip list fills with plan files that render as broken video
 // players. The tag match is exact, so no capture-time window is needed.
@@ -499,7 +499,7 @@ export async function loadErrorsLast7Days(
 
 /**
  * One saved motion-plan request/response pair. Everything here is read off the
- * tags and filename that coffee/motion.go writes — see planRequestTagDir.
+ * tags and filename that coffee/plan_debug.go writes — see planRequestTagDir.
  */
 export interface PlanRequestFile {
   binaryDataId: string;

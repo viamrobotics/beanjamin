@@ -60,12 +60,12 @@ func computeDoorSweep(closedDeg, openDeg, degPerStep float64) []float64 {
 // handle subtree hanging off it but leaves the door panel obstacle frozen at its
 // closed pose — the world model claims the fridge is shut while the arm pulls it
 // open. Rotating "<name>_origin" moves the panel and the handle chain together.
-// Same convention lockFilterFrame relies on (motion.go).
+// Same convention lockFilterFrame relies on (frame_system.go).
 func doorOriginFrameName(doorFrameName string) string { return doorFrameName + "_origin" }
 
 // setDoorTheta re-places the door at thetaDeg about the hinge. It composes Rz(θ)
 // onto the door origin frame's original closed transform, then reuses the
-// lockFilterFrame maneuver (motion.go): capture descendants, remove the frame,
+// lockFilterFrame maneuver (frame_system.go): capture descendants, remove the frame,
 // re-add it rotated, and re-attach the descendants (the model frame and the
 // handle chain below it) with their local transforms unchanged so they ride the
 // swing. Because Rz is composed onto the END of the origin transform, the pivot
