@@ -25,7 +25,7 @@ import (
 )
 
 // errMotionPlanning is wrapped around armplanning.PlanMotion failures in
-// moveToRawPose so callers with a recovery path (e.g. dynamic cup pickup
+// planMotion so callers with a recovery path (e.g. dynamic cup pickup
 // falling back to another candidate cup) can use errors.Is to distinguish
 // planning failures from execution errors.
 var errMotionPlanning = errors.New("motion planning failed")

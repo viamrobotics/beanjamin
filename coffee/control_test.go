@@ -270,12 +270,12 @@ func TestProceedTwiceResumesOnce(t *testing.T) {
 	}
 }
 
-// TestProceedClearsThePauseItself is the regression test for a queue that
-// silently stopped making drinks. The paused flag used to be cleared only by
-// the queue goroutine, so proceed reported success while the flag stayed set:
-// Status kept claiming the queue was paused, the keepalive loop kept declining
-// to purge, and the resume signal sat in the buffer waiting to release a pause
-// nobody had asked to release.
+// TestProceedClearsThePauseItself guards against a queue that silently stops
+// making drinks. proceed must clear the paused flag itself rather than leave it
+// to the queue goroutine; otherwise proceed reports success while the flag stays
+// set: Status keeps claiming the queue is paused, the keepalive loop keeps
+// declining to purge, and the resume signal sits in the buffer waiting to
+// release a pause nobody asked to release.
 func TestProceedClearsThePauseItself(t *testing.T) {
 	s, _, _ := pausedCoffeeWithDirtyWorld(t, nil)
 
