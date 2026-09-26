@@ -14,35 +14,6 @@ import (
 	"beanjamin/coffee/icevision"
 )
 
-// Step labels surfaced through setStep -> get_queue, the order sensor's
-// failed_step, and the web tracker. Constants so the brew sequence
-// (espresso.go) and rewind recovery reference the same strings.
-const (
-	stepGrinding             = "Grinding"
-	stepTamping              = "Tamping"
-	stepLockingPortafilter   = "Locking portafilter"
-	stepReleasingFilter      = "Releasing filter"
-	stepPlacingCup           = "Placing cup"
-	stepBrewing              = "Brewing"
-	stepServing              = "Serving"
-	stepGrabbingFilter       = "Grabbing filter"
-	stepUnlockingPortafilter = "Unlocking portafilter"
-	stepCleaning             = "Cleaning"
-	stepAddingMilk           = "Adding milk"
-	stepFinishingUp          = "Finishing up"
-	stepRecoveringFilter     = "Recovering filter"
-	// stepKeepAlive is published while a keep-alive purge runs. No order is
-	// active, so it surfaces through Status/get_queue only, never on an order.
-	stepKeepAlive = "Keep-alive purge"
-)
-
-func (s *beanjaminCoffee) setStep(step string) {
-	s.currentStep.Store(step)
-	// No-op when nothing is on the arm, which is what a keep-alive purge wants:
-	// its step is service-global and belongs to no order.
-	s.queue.SetCurrentStep(step)
-}
-
 func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 	_, span := trace.StartSpan(ctx, "beanjamin::Status")
 	defer span.End()

@@ -14,18 +14,18 @@ Each model lives in its own package. The coffee service is `coffee/` (`package c
 
 | Concern | Files |
 | --- | --- |
-| Lifecycle and command API | `module.go`, `config.go`, `api.go`, `control.go` |
-| Brew cycle | `espresso.go`, `brew_steps.go`, `order_intake.go`, `queue.go`, `troubleshooting.go` |
-| Serving and drink variants | `serving.go`, `served_shelf.go`, `iced.go`, `milk.go`, `door.go` |
+| Lifecycle and command API | `module.go`, `config.go`, `api.go` (DoCommand dispatch, `Status`), `operator.go` (proceed, clear_queue, reset_world, cancel, cancel_order, rewind), `actions.go` (`execute_action`), `cup_flow.go` (`run_cup_flow`) |
+| Brew cycle | `prepare.go` (`prepareDrink` and its fault pause), `steps.go` (`Step`, `runSteps`/`executeStep`, step labels and `setStep`), `brew_steps.go`, `poses.go` (pose and frame names, startup pose validation), `order_intake.go`, `queue.go` |
+| Serving and drink variants | `serving.go`, `serving_slots.go`, `iced.go`, `milk.go`, `door.go` |
 | Motion planning | `motion.go`, `held_geometry.go`, `collisions.go`, `joints.go` |
 | Vision-driven pickup | `cup_pickup.go`, `gripper_state.go`, `detection_snapshot.go` |
-| Peripheral integrations | `slack_notify.go`, `daily_summary.go`, `chore_wheel.go`, `sensor_usage.go`, `delivery_messaging.go`, `keepalive.go` |
+| Peripheral integrations | `slack_notify.go`, `daily_summary.go`, `chore_wheel.go`, `sensor_usage.go`, `delivery_messaging.go`, `keepalive.go` (purge loop), `keepalive_config.go` (`KeepAlive` and its window) |
 | Order model (`coffee/order/`, `package order`) | `order.go` (`Order`), `queue.go` (`Queue`), `request.go` (`prepare_order` decoding), `drinks.go` (drink catalog and `Menu`), `reading.go` (`Reading` for the order sensor) |
 | Speech (`coffee/speech/`, `package speech`) | `phrases.go` (spoken line tables and pickers), `speaker.go` (`Speaker`, `say_async` to the speech service), `fault_alarm.go` (`FaultAlarm`, the `fault_active` flag and failure line) |
 | Slack reports (`coffee/report/`, `package report`) | `notifier.go` (`Notifier`, the one Slack send path), `failure.go` (failed-order alert), `daily_summary.go` (order digest), `chore_wheel.go` (weekly rota and `ChoreWheelConfig`), `links.go` (app.viam.com deep-links) |
 | Camera clips (`coffee/clips/`, `package clips`) | `saver.go` (`Saver`: per-order clip saves through the video-store multiplexer, pending-clip records, and the `cleanup_pending_clips` recovery sweep) |
 | Ice vision (`coffee/icevision/`, `package icevision`) | `detector.go` (`Detector` over the arm camera, `Params`), `level.go` (contrast-step surface measurement, `check_ice_level`), `brightness.go` (brightness shadow), `annotate.go` and `dispense_frame.go` (annotated ice frames saved under `save_motion_requests_dir`); the dwell loop that drives the ice pin is `coffee/ice_dwell.go`, which calls into it |
-| Spatial math (`coffee/geom/`, `package geom`) | `pickup.go` (`Candidate`, centroid merge/rank and geometry match-back, `ComposeCupPose`, `CameraToWorldPose`, `ContainerBox`), `shelf.go` (`ShelfTileCenters`, `SlotIndex`), `surface.go` (`SurfaceBox`, `WorldAnchoredSurfaceBoxes`, `SurfaceTopZUnder`); pure functions with no service state, called from `cup_pickup.go`, `served_shelf.go`, `serving.go`, `held_geometry.go`, `milk.go` and `door.go` |
+| Spatial math (`coffee/geom/`, `package geom`) | `pickup.go` (`Candidate`, centroid merge/rank and geometry match-back, `ComposeCupPose`, `CameraToWorldPose`, `ContainerBox`), `shelf.go` (`ShelfTileCenters`, `SlotIndex`), `surface.go` (`SurfaceBox`, `WorldAnchoredSurfaceBoxes`, `SurfaceTopZUnder`); pure functions with no service state, called from `cup_pickup.go`, `serving_slots.go`, `serving.go`, `held_geometry.go`, `milk.go` and `door.go` |
 
 `coffee/order`, `coffee/speech`, `coffee/report`, `coffee/clips`, `coffee/icevision`, and `coffee/geom` depend on nothing in `coffee`, so they must never import it. The other models are sibling packages: `ordersensor/`, `maintenancesensor/`, `customerdetector/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`. There is no top-level Go package; `cmd/module/main.go` registers every model.
 
@@ -64,15 +64,15 @@ Build the bundled web-app Viam module from repo root: `make web-app-module` (run
 
 ### Coffee service lifecycle
 
-`prepareDrink` in `coffee/espresso.go` is the core orchestrator. An order flows:
+`prepareDrink` in `coffee/prepare.go` is the core orchestrator. An order flows:
 
 1. `DoCommand{"prepare_order": ...}` enqueues an `order.Order` into the `order.Queue` (`coffee/order/queue.go`); `enqueueOrder` in `coffee/order_intake.go` validates it.
 2. A background queue consumer (`beanjaminCoffee.processQueue`, `coffee/queue.go`) pops one order at a time and invokes `prepareDrink`.
-3. `prepareDrink` advances through 9 phases, each run by its `runPhase` closure, which publishes the step label (visible through `get_queue` and the order sensor) and opens a trace span. The phases are small methods (`grindCoffee`, `tampGround`, `brew`, `cleanPortafilter`, etc. in `coffee/brew_steps.go`) that each execute a list of `Step` structs through `executeStep` (`coffee/espresso.go`), which drives the motion layer in `coffee/motion.go`.
+3. `prepareDrink` advances through 9 phases, each run by its `runPhase` closure, which publishes the step label (visible through `get_queue` and the order sensor) and opens a trace span. The phases are small methods (`grindCoffee`, `tampGround`, `brew`, `cleanPortafilter`, etc. in `coffee/brew_steps.go`) that each execute a list of `Step` structs through `executeStep` (`coffee/steps.go`), which drives the motion layer in `coffee/motion.go`.
 4. On completion/failure, the order is moved to `recent` for `order.RecentDisplayDuration` (15s) so the UI can render "Ready!" without diffing polls.
 5. A single reading per attempt is pushed to the optional order-sensor sink (`ordersensor/`, discovered from deps through the `orderSensorSink` interface in `coffee/queue.go`), and an async clip save is requested on the optional `cam_storage_mux_name` video-store multiplexer.
 
-`cancel`, `clear_queue`, and `proceed` manipulate the same state. Only one routine runs at a time, gated by `running atomic.Bool`; a shared `cancelCtx` is captured under `mu` so cancellation can interrupt motion.
+`cancel`, `clear_queue`, and `proceed` (`coffee/operator.go`) manipulate the same state. Only one routine runs at a time, gated by `running atomic.Bool`; a shared `cancelCtx` is captured under `mu` so cancellation can interrupt motion.
 
 ### Motion layer
 

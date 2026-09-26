@@ -441,3 +441,51 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	}
 	return nil
 }
+
+// defaultDoorOpenAngleDegs is the fridge-door swing angle when unset.
+const defaultDoorOpenAngleDegs = 90
+
+// defaultDoorPivotDegreesPerStep is the per-step θ increment for the door
+// sweep when unset.
+const defaultDoorPivotDegreesPerStep = 10
+
+// doorOpenAngleDegs returns the configured fridge-door swing angle, defaulting
+// to defaultDoorOpenAngleDegs.
+func (s *beanjaminCoffee) doorOpenAngleDegs() float64 {
+	return orDefault(s.cfg.DoorOpenAngleDegs, defaultDoorOpenAngleDegs)
+}
+
+// doorPivotDegreesPerStep returns the configured per-step θ increment for the
+// door sweep, defaulting to defaultDoorPivotDegreesPerStep.
+func (s *beanjaminCoffee) doorPivotDegreesPerStep() float64 {
+	return orDefault(s.cfg.DoorPivotDegreesPerStep, defaultDoorPivotDegreesPerStep)
+}
+
+// defaultDoorGraspYawRatio counter-rotates the gripper as the door swings.
+//
+// Reachability sets this sign, not grasp mechanics: the handle is a ball, so the
+// grasp does not constrain wrist roll. The gripper sits behind its tool center
+// along -OV, so co-rotating drives the wrist into +y just as the handle travels
+// there. Replanning a failed 75-degree sweep offline put +1 out of IK solutions
+// at theta=47 and 0 out by theta=75; only -1 reached full open.
+const defaultDoorGraspYawRatio = -1
+
+// doorGraspYawRatio returns the configured world-Z yaw ratio for the door sweep.
+// It cannot use orDefault: that helper treats any non-positive value as unset,
+// and 0 (hold orientation fixed) and -1 (counter-rotate) are both real settings.
+func (s *beanjaminCoffee) doorGraspYawRatio() float64 {
+	if s.cfg.DoorGraspYawRatio != nil {
+		return *s.cfg.DoorGraspYawRatio
+	}
+	return defaultDoorGraspYawRatio
+}
+
+// doorGraspFrameName returns the frame the gripper aims at (its center is the
+// grasp target), tracks through the sweep, and is allowed to contact. Defaults
+// to frameFridgeHandleBall.
+func (s *beanjaminCoffee) doorGraspFrameName() string {
+	if s.cfg.DoorGraspFrameName != "" {
+		return s.cfg.DoorGraspFrameName
+	}
+	return frameFridgeHandleBall
+}

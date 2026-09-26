@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 
 	"go.viam.com/rdk/components/sensor"
+
+	"beanjamin/coffee/order"
 )
 
 // The usage sensor tracks physical consumables and service health by mirroring
@@ -109,4 +111,13 @@ func numericReading(v any) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// waterDelta returns the water-usage increment for a brew: 1.5 for lungo sizes
+// (lungo/decaf_lungo and the iced drinks), 1 otherwise (espresso/decaf).
+func waterDelta(drink string) float64 {
+	if order.IsLungo(drink) {
+		return 1.5
+	}
+	return 1
 }

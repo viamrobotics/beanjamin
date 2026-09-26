@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"beanjamin/coffee/order"
 	"beanjamin/coffee/speech"
@@ -405,5 +406,67 @@ func TestEnqueueOrder_CarriesBothNames(t *testing.T) {
 				t.Errorf("ModifiedCustomerName = %q, want %q", got, tc.wantModified)
 			}
 		})
+	}
+}
+
+// TestWaitForProceedHoldsTheQueueUntilProceed pins the consumer side: the flag
+// stays set for the whole wait, so a proceed arriving at any moment sees a
+// paused queue and grants the resume. Clearing it on the way in (the old
+// Swap(false) + Store(true)) opened a window where a concurrent proceed read an
+// unpaused queue, declined to signal, and parked this goroutine for good.
+func TestWaitForProceedHoldsTheQueueUntilProceed(t *testing.T) {
+	s, _, _ := pausedCoffeeWithDirtyWorld(t, nil)
+	s.queueStop = make(chan struct{})
+	t.Cleanup(func() { close(s.queueStop) })
+
+	resumed := make(chan bool, 1)
+	go func() { resumed <- s.waitForProceed() }()
+
+	// The consumer is parked; from a concurrent proceed's point of view the
+	// queue must still read paused.
+	select {
+	case <-resumed:
+		t.Fatal("waitForProceed returned while the queue was still paused")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if !s.paused.Load() {
+		t.Fatal("paused must stay set while a consumer waits — a proceed reading false would never signal")
+	}
+
+	if _, err := s.proceedQueue(context.Background()); err != nil {
+		t.Fatalf("proceed error: %v", err)
+	}
+	select {
+	case ok := <-resumed:
+		if !ok {
+			t.Error("waitForProceed reported shutdown, want a resume")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waitForProceed never woke up after proceed")
+	}
+}
+
+// TestWaitForProceedIgnoresAStaleSignal: a resume signal can be parked with no
+// consumer waiting (proceed after a cancelled manual action). It must not
+// release the next pause on arrival — that pause is a fresh cancel, and an
+// operator has to ask for that one too.
+func TestWaitForProceedIgnoresAStaleSignal(t *testing.T) {
+	s, _, _ := coffeeWithDirtyWorld(t, nil)
+	s.queueStop = make(chan struct{})
+	s.queue.WakeProceed() // parked by an earlier proceed
+
+	s.paused.Store(true)
+	resumed := make(chan bool, 1)
+	go func() { resumed <- s.waitForProceed() }()
+
+	select {
+	case <-resumed:
+		t.Fatal("a stale resume signal must not release a later pause")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(s.queueStop)
+	if ok := <-resumed; ok {
+		t.Error("waitForProceed should report shutdown once queueStop closes")
 	}
 }
