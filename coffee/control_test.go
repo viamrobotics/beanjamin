@@ -660,8 +660,8 @@ func TestClearQueueKeepsInFlightOrder(t *testing.T) {
 	// Step updates must keep landing on the spared order, so the tracker
 	// carries on following the brew instead of freezing.
 	s.setStep(stepServing)
-	if cur, ok := s.queue.Current(); !ok || cur.RawStep != stepServing {
-		t.Errorf("in-flight raw_step = %q (present=%v), want %q", cur.RawStep, ok, stepServing)
+	if list := s.queue.List(); len(list) != 1 || list[0].ID != s.queue.CurrentID() || list[0].RawStep != stepServing {
+		t.Errorf("queue after setStep = %+v, want only the in-flight order at raw_step %q", list, stepServing)
 	}
 }
 

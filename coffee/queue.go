@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
-	"strings"
 	"sync"
 	"time"
 
@@ -128,18 +126,6 @@ func (q *OrderQueue) Enqueue(order Order) int {
 	return pos
 }
 
-// Peek returns the order at the front of the backlog — the one Start picks up
-// next — without removing it. It never returns the in-flight order; Current
-// does that.
-func (q *OrderQueue) Peek() (Order, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if len(q.pending) == 0 {
-		return Order{}, false
-	}
-	return copyOrder(q.pending[0]), true
-}
-
 // Start moves the front of the backlog into the current slot and returns it,
 // reporting false when the backlog is empty.
 //
@@ -158,16 +144,6 @@ func (q *OrderQueue) Start() (Order, bool) {
 	q.pending = append(q.pending[:0], q.pending[1:]...)
 	q.current = &o
 	return copyOrder(o), true
-}
-
-// Current returns the order being made right now, or false when idle.
-func (q *OrderQueue) Current() (Order, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.current == nil {
-		return Order{}, false
-	}
-	return copyOrder(*q.current), true
 }
 
 // CurrentID returns the ID of the order being made right now, or "" when idle.
@@ -576,193 +552,4 @@ func traceIDFromContext(ctx context.Context) string {
 		return ""
 	}
 	return sc.TraceID().String()
-}
-
-// enqueueOrder validates the order and adds it to the queue.
-// It returns immediately with the queue position. When the optional
-// "count" field is > 1, N identical orders are enqueued back-to-back
-// (each with its own UUID) and the per-order "Order received" line is
-// replaced with a single consolidated batch announcement.
-func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[string]any, error) {
-	s.logger.Infof("received order request")
-
-	order, ok := orderRaw.(map[string]any)
-	if !ok {
-		s.logger.Warnf("rejected order: invalid payload type %T", orderRaw)
-		return nil, fmt.Errorf("prepare_order value must be an object with keys: drink, customer_name, initial_greeting, completion_statement, count, fulfillment")
-	}
-
-	drink, _ := order["drink"].(string)
-	customerName, _ := order["customer_name"].(string)
-	customerName = strings.TrimSpace(customerName)
-	modifiedCustomerName, _ := order["modified_customer_name"].(string)
-	customerEmail, _ := order["customer_email"].(string)
-	s.logger.Infof("order request: drink=%q customer=%q", drink, customerName)
-
-	switch drink {
-	case "espresso", "lungo":
-	case "decaf", "decaf_lungo":
-		if !s.cfg.CanServeDecaf {
-			s.logger.Infof("rejected decaf order %q from %s (can_serve_decaf=false)", drink, customerName)
-			msg := pickUnsupportedDrink(drink)
-			if err := s.say(ctx, msg); err != nil {
-				s.logger.Warnf("failed to say rejection: %v", err)
-			}
-			return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
-		}
-	case "iced_coffee":
-		if !s.cfg.CanServeIced {
-			s.logger.Infof("rejected iced order %q from %s (can_serve_iced=false)", drink, customerName)
-			msg := pickUnsupportedDrink(drink)
-			if err := s.say(ctx, msg); err != nil {
-				s.logger.Warnf("failed to say rejection: %v", err)
-			}
-			return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
-		}
-	case "iced_latte":
-		// can_serve_iced_latte implies can_serve_iced (Validate rejects it
-		// otherwise), so the one flag is the whole gate.
-		if !s.cfg.CanServeIcedLatte {
-			s.logger.Infof("rejected iced latte order %q from %s (can_serve_iced_latte=false)", drink, customerName)
-			msg := pickUnsupportedDrink(drink)
-			if err := s.say(ctx, msg); err != nil {
-				s.logger.Warnf("failed to say rejection: %v", err)
-			}
-			return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
-		}
-	default:
-		s.logger.Infof("rejected order for unsupported drink %q from %s", drink, customerName)
-		msg := pickUnsupportedDrink(drink)
-		if err := s.say(ctx, msg); err != nil {
-			s.logger.Warnf("failed to say rejection: %v", err)
-		}
-		return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
-	}
-
-	initialGreeting, _ := order["initial_greeting"].(string)
-	completionStatement, _ := order["completion_statement"].(string)
-
-	fulfillment, err := parseFulfillment(order["fulfillment"])
-	if err != nil {
-		s.logger.Warnf("rejected order: %v", err)
-		return nil, err
-	}
-	// Delivery orders must be attributable: the delivery bot identifies the
-	// recipient by email, so an anonymous delivery has nowhere to go. Pickup
-	// (the default) stays open to anonymous walk-ups.
-	if fulfillment == FulfillmentDelivery && customerEmail == "" {
-		err := fmt.Errorf("delivery orders require a customer_email")
-		s.logger.Warnf("rejected order: %v", err)
-		return nil, err
-	}
-
-	displayName := modifiedCustomerName
-	if displayName == "" {
-		displayName = customerName
-	}
-
-	count, err := s.parseOrderCount(order["count"])
-	if err != nil {
-		s.logger.Warnf("rejected order: %v", err)
-		return nil, err
-	}
-
-	ids := make([]string, 0, count)
-	var firstPos int
-	for i := 0; i < count; i++ {
-		// For single orders, auto-pick a brew-start greeting if one wasn't
-		// supplied. For batches we deliberately leave Greeting empty: the
-		// consolidated batch announcement at submission already covered
-		// "we got your order", so executeQueuedOrder speaking another
-		// "let me whip up your espresso!" before each of N cups is just
-		// noise. (executeQueuedOrder skips the speech when Greeting is "".)
-		greeting := initialGreeting
-		if greeting == "" && count == 1 {
-			greeting = pickGreeting(drink, displayName)
-		}
-		o := NewOrder(drink, customerName, greeting, completionStatement)
-		o.ModifiedCustomerName = modifiedCustomerName
-		o.CustomerEmail = customerEmail
-		o.Fulfillment = fulfillment
-		if count > 1 {
-			o.BatchIndex = i + 1
-			o.BatchSize = count
-		}
-		pos := s.queue.Enqueue(o)
-		if i == 0 {
-			firstPos = pos
-		}
-		ids = append(ids, o.ID)
-		s.logger.Infof("order %s queued at position %d for %s (batch %d/%d)",
-			o.ID, pos, customerName, i+1, count)
-	}
-
-	// Single-order path keeps the original "Order received…" announcement
-	// gated on pos > 1. Batch path replaces it with one consolidated
-	// pickOrderReceivedBatch line so we don't fire N-1 blocking TTS calls
-	// back-to-back.
-	switch {
-	case count == 1 && firstPos > 1:
-		if err := s.say(ctx, pickOrderReceived(drink, displayName)); err != nil {
-			s.logger.Warnf("failed to announce order %s: %v", ids[0], err)
-		}
-	case count > 1:
-		if err := s.say(ctx, pickOrderReceivedBatch(drink, displayName, count)); err != nil {
-			s.logger.Warnf("failed to announce batch: %v", err)
-		}
-	}
-
-	return map[string]any{
-		"status":         "queued",
-		"order_id":       ids[0],
-		"queue_position": firstPos,
-		"customer_name":  customerName,
-		"order_ids":      ids,
-		"count":          count,
-	}, nil
-}
-
-// parseFulfillment validates the optional "fulfillment" field on a
-// prepare_order payload. Absent/nil/empty → pickup. Anything other than
-// "pickup" or "delivery" → error. Caller should reject before any enqueue.
-func parseFulfillment(v any) (string, error) {
-	if v == nil {
-		return FulfillmentPickup, nil
-	}
-	f, ok := v.(string)
-	if !ok {
-		return "", fmt.Errorf("fulfillment must be a string, got %T", v)
-	}
-	switch f {
-	case "":
-		return FulfillmentPickup, nil
-	case FulfillmentPickup, FulfillmentDelivery:
-		return f, nil
-	default:
-		return "", fmt.Errorf("fulfillment must be %q or %q, got %q", FulfillmentPickup, FulfillmentDelivery, f)
-	}
-}
-
-// parseOrderCount validates and coerces the optional "count" field on a
-// prepare_order payload. Absent/nil → 1. Non-numeric, fractional,
-// out-of-range values → error. Caller should reject before any enqueue.
-func (s *beanjaminCoffee) parseOrderCount(v any) (int, error) {
-	if v == nil {
-		return 1, nil
-	}
-	f, ok := v.(float64)
-	if !ok {
-		return 0, fmt.Errorf("count must be a number, got %T", v)
-	}
-	if math.IsNaN(f) || math.IsInf(f, 0) || f != math.Trunc(f) {
-		return 0, fmt.Errorf("count must be a whole number, got %v", f)
-	}
-	if f < 1 {
-		return 0, fmt.Errorf("count must be >= 1, got %v", f)
-	}
-	limit := s.maxBatchSize()
-	if f > float64(limit) {
-		return 0, fmt.Errorf("count must be <= %d, got %v", limit, f)
-	}
-	return int(f), nil
 }

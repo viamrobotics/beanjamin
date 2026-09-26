@@ -407,11 +407,11 @@ func TestEnqueueOrder_Fulfillment(t *testing.T) {
 			if _, err := c.enqueueOrder(context.Background(), payload); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			o, ok := c.queue.Peek()
-			if !ok {
-				t.Fatal("queue is empty")
+			orders := c.queue.List()
+			if len(orders) != 1 {
+				t.Fatalf("queue length = %d, want 1", len(orders))
 			}
-			if o.Fulfillment != tc.want {
+			if o := orders[0]; o.Fulfillment != tc.want {
 				t.Errorf("Fulfillment = %q, want %q", o.Fulfillment, tc.want)
 			}
 		})
@@ -444,9 +444,9 @@ func TestEnqueueOrder_DeliveryRequiresEmail(t *testing.T) {
 	if resp["status"] != "queued" {
 		t.Errorf("status = %v, want queued", resp["status"])
 	}
-	o, ok := c.queue.Peek()
-	if !ok || o.Fulfillment != FulfillmentDelivery || o.CustomerEmail != "alice@example.com" {
-		t.Errorf("queued order = %+v, want delivery with email", o)
+	orders := c.queue.List()
+	if len(orders) != 1 || orders[0].Fulfillment != FulfillmentDelivery || orders[0].CustomerEmail != "alice@example.com" {
+		t.Errorf("queued orders = %+v, want one delivery with email", orders)
 	}
 }
 
@@ -677,8 +677,8 @@ func TestQueue_ClearPending_SparesCurrentAndRecent(t *testing.T) {
 	if got := q.Len(); got != 1 {
 		t.Fatalf("Len after ClearPending = %d, want 1 (the order on the arm)", got)
 	}
-	if _, ok := q.Peek(); ok {
-		t.Error("backlog should be empty after ClearPending")
+	if got := q.CurrentID(); got != current.ID {
+		t.Errorf("CurrentID after ClearPending = %q, want %q (the only order left is on the arm)", got, current.ID)
 	}
 
 	// Both the order on the arm and the completed one must still be visible to
