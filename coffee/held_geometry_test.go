@@ -13,7 +13,7 @@ import (
 )
 
 // requireVecEqual fails the test unless got is within tol of want. Wraps the
-// shared vecAlmostEqual helper (served_shelf_test.go).
+// shared vecAlmostEqual helper (serving_slots_test.go).
 func requireVecEqual(t *testing.T, got, want r3.Vector, tol float64) {
 	t.Helper()
 	if !vecAlmostEqual(got, want, tol) {
