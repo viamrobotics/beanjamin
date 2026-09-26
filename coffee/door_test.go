@@ -191,7 +191,7 @@ func TestSetDoorTheta_CloseSweepReturnsToClosed(t *testing.T) {
 	if got := worldPoint(t, fs, "ball"); got.Sub(closedBall).Norm() > 0.5 {
 		t.Errorf("ball after close sweep = %v, want closed position %v", got, closedBall)
 	}
-	// sweepDoor's deferred undo restores θ=0 in place rather than rebuilding the
+	// A close sweep re-places the door at θ=0 in place rather than rebuilding the
 	// frame system, so returning to the authored closed pose has to be exact —
 	// otherwise the stale door leaks into whatever action runs next.
 	if got := panelWorldCenter(t, fs); got.Sub(closedPanel).Norm() > 0.5 {
@@ -226,8 +226,7 @@ func TestRecoverBasePoseFromSweptDoor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recovered := spatialmath.Compose(current, spatialmath.PoseInverse(
-		spatialmath.NewPoseFromOrientation(&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: openDegs})))
+	recovered := doorBaseFromSwept(current, openDegs)
 	if !spatialmath.PoseAlmostEqual(recovered, base) {
 		t.Errorf("recovered base = %v, want authored base %v", recovered, base)
 	}
@@ -278,7 +277,7 @@ func TestGraspTracksBallPointFixedOrientation(t *testing.T) {
 	}
 }
 
-// TestNearestTheta pins the mid-sweep abort recovery. The sweep is now one arm
+// TestNearestTheta pins the mid-sweep abort recovery. The sweep is one arm
 // call, so a failure does not say which waypoint it stopped on; the gripper is
 // holding the handle, so the arm's joints do. Getting this wrong leaves the world
 // model believing the panel is at an angle it is not, and the next plan routes the
@@ -402,5 +401,104 @@ func TestYawAboutWorldZ(t *testing.T) {
 	// The opposite sign must mirror it — the counter-rotating setting.
 	if back := yawAboutWorldZ(base, -90); back.Point().Sub(r3.Vector{Y: -100}).Norm() > 1e-6 {
 		t.Errorf("counter-yawed point = %v, want (0,-100,0)", back.Point())
+	}
+}
+
+// toolXAxis returns the world direction of p's local +X axis — enough to tell
+// two orientations sharing a pointing axis apart by their yaw.
+func toolXAxis(p spatialmath.Pose) r3.Vector {
+	return spatialmath.Compose(p, spatialmath.NewPoseFromPoint(r3.Vector{X: 1})).Point().Sub(p.Point())
+}
+
+// TestDoorBaseFromSwept backs a known angle out of a swung transform and must
+// land on the authored shut transform, including when that transform is itself
+// rotated and offset (the hinge frame is not world-aligned on the machine).
+func TestDoorBaseFromSwept(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		base spatialmath.Pose
+		deg  float64
+	}{
+		{"shut door is its own base", spatialmath.NewPoseFromPoint(r3.Vector{X: 500}), 0},
+		{"world-aligned hinge, 90° open", spatialmath.NewPoseFromPoint(r3.Vector{X: 500}), 90},
+		{"yawed and offset hinge, 75° open", spatialmath.NewPose(r3.Vector{X: 480, Y: -120, Z: 300},
+			&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: 30}), 75},
+		{"negative angle", spatialmath.NewPoseFromPoint(r3.Vector{X: 500}), -40},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			swung := spatialmath.Compose(tc.base, spatialmath.NewPoseFromOrientation(
+				&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: tc.deg}))
+			if got := doorBaseFromSwept(swung, tc.deg); !spatialmath.PoseAlmostEqual(got, tc.base) {
+				t.Errorf("doorBaseFromSwept = %v, want %v", got, tc.base)
+			}
+		})
+	}
+}
+
+// TestDoorSweepGoalPose pins the per-waypoint goal: it sits on the ball point,
+// and the grasp orientation yaws about world Z by ratio × travel. With an
+// identity grasp orientation the tool's +X axis starts on world +X, so a yaw of
+// φ puts it at (cos φ, sin φ, 0).
+func TestDoorSweepGoalPose(t *testing.T) {
+	ball := r3.Vector{X: 650, Y: -200, Z: 420}
+	identity := &spatialmath.OrientationVectorDegrees{OZ: 1}
+	for _, tc := range []struct {
+		name          string
+		ratio, travel float64
+		wantToolX     r3.Vector
+	}{
+		{"no travel", 1, 0, r3.Vector{X: 1}},
+		{"ratio 0 holds orientation", 0, 90, r3.Vector{X: 1}},
+		{"ratio 1 follows the door", 1, 90, r3.Vector{Y: 1}},
+		{"ratio 0.5 turns half as far", 0.5, 90, r3.Vector{X: math.Sqrt2 / 2, Y: math.Sqrt2 / 2}},
+		{"ratio -1 counter-rotates", -1, 90, r3.Vector{Y: -1}},
+		{"closing travel is negative", 1, -90, r3.Vector{Y: -1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := doorSweepGoalPose(ball, identity, tc.ratio, tc.travel)
+			if got.Point().Sub(ball).Norm() > 1e-9 {
+				t.Errorf("goal point = %v, want ball %v", got.Point(), ball)
+			}
+			if x := toolXAxis(got); x.Sub(tc.wantToolX).Norm() > 1e-6 {
+				t.Errorf("tool +X = %v, want %v", x, tc.wantToolX)
+			}
+		})
+	}
+
+	// A tool pointing straight down keeps pointing down while it yaws, and its
+	// +X axis turns by Rz(+90): (x, y, z) → (-y, x, z).
+	down := &spatialmath.OrientationVectorDegrees{OZ: -1}
+	got := doorSweepGoalPose(ball, down, 1, 90)
+	if ov := got.Orientation().OrientationVectorDegrees(); math.Abs(ov.OZ+1) > 1e-6 {
+		t.Errorf("down-pointing goal OZ = %v, want -1", ov.OZ)
+	}
+	before := toolXAxis(spatialmath.NewPoseFromOrientation(down))
+	wantX := r3.Vector{X: -before.Y, Y: before.X, Z: before.Z}
+	if x := toolXAxis(got); x.Sub(wantX).Norm() > 1e-6 {
+		t.Errorf("down-pointing tool +X = %v, want %v", x, wantX)
+	}
+}
+
+// TestDoorRetractPose pins the exit standoff: the approach offset swings with
+// the door so the retract backs away from the panel where it now stands. An
+// offset of (0,-120,0) turned +90° about Z is (120,0,0), and -90° is (-120,0,0).
+func TestDoorRetractPose(t *testing.T) {
+	ball := r3.Vector{X: 500, Y: 0, Z: 400}
+	approachRel := spatialmath.NewPoseFromPoint(r3.Vector{Y: -120})
+	for _, tc := range []struct {
+		name          string
+		ratio, travel float64
+		want          r3.Vector
+	}{
+		{"no travel backs out along the approach", 1, 0, r3.Vector{X: 500, Y: -120, Z: 400}},
+		{"opened 90°", 1, 90, r3.Vector{X: 620, Y: 0, Z: 400}},
+		{"closed 90°", 1, -90, r3.Vector{X: 380, Y: 0, Z: 400}},
+		{"ratio 0 keeps the shut-door standoff", 0, 90, r3.Vector{X: 500, Y: -120, Z: 400}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := doorRetractPose(ball, approachRel, tc.ratio, tc.travel).Point(); got.Sub(tc.want).Norm() > 1e-6 {
+				t.Errorf("retract point = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
