@@ -198,7 +198,7 @@ var coffeeCommands = []commandDef{
 		return s.clearQueue()
 	}},
 	{key: "cleanup_pending_clips", run: func(s *beanjaminCoffee, _ context.Context, _ map[string]any) (map[string]any, error) {
-		return s.cleanupPendingClips()
+		return s.clips.CleanupPendingClips()
 	}},
 	{key: "reset_world", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.resetWorld(ctx)

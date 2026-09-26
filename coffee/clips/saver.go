@@ -1,4 +1,7 @@
-package coffee
+// Package clips saves each order's camera clip through the video-store
+// multiplexer and keeps an on-disk pending-clip record per order so a scheduled
+// sweep can recover the clip for any order interrupted before its save ran.
+package clips
 
 import (
 	"context"
@@ -39,6 +42,42 @@ const (
 	clipSaveTimeout = 60 * time.Second
 )
 
+// DoCommander is the one method Saver needs from the video-store multiplexer.
+// Keeping it this small lets tests pass in a fake.
+type DoCommander interface {
+	DoCommand(ctx context.Context, cmd map[string]any) (map[string]any, error)
+}
+
+// Saver requests order clips from the video-store multiplexer and manages the
+// pending-clip records that make interrupted saves recoverable. Configured,
+// WritePendingSave, and SaveOrderVideoAsync treat a nil *Saver as one with no
+// multiplexer and no records directory; CleanupPendingClips needs a real one.
+type Saver struct {
+	mux        DoCommander // nil if cam_storage_mux_name unset
+	recordsDir string      // "" when no data_dir is configured
+	logger     logging.Logger
+}
+
+// NewSaver builds a Saver over mux (nil when cam_storage_mux_name is unset),
+// writing pending-clip records to recordsDir ("" disables them). logger is the
+// service logger the cleanup sweep logs through.
+func NewSaver(mux DoCommander, recordsDir string, logger logging.Logger) *Saver {
+	return &Saver{mux: mux, recordsDir: recordsDir, logger: logger}
+}
+
+// Configured reports whether a video-store multiplexer is wired in, i.e.
+// whether order clips are requested at all.
+func (s *Saver) Configured() bool {
+	return s != nil && s.mux != nil
+}
+
+func (s *Saver) dir() string {
+	if s == nil {
+		return ""
+	}
+	return s.recordsDir
+}
+
 // formatClipTimestampUTC formats t for video-store save/fetch DoCommand (UTC, ...Z).
 func formatClipTimestampUTC(t time.Time) string {
 	return t.UTC().Format("2006-01-02_15-04-05") + "Z"
@@ -64,11 +103,13 @@ func (p pendingClipOrder) order() order.Order {
 	return order.Order{ID: p.ID, Drink: p.Drink}
 }
 
-func (s *beanjaminCoffee) writePendingSave(order order.Order, videoFrom time.Time) {
-	if s.pendingOrderClipsDir == "" {
+// WritePendingSave records that order's clip window opens at videoFrom, so
+// CleanupPendingClips can recover the clip if the order never reaches its save.
+// It is a no-op when no records directory is configured.
+func (s *Saver) WritePendingSave(order order.Order, videoFrom time.Time, logger logging.Logger) {
+	if s.dir() == "" {
 		return
 	}
-	logger := s.activeOrderLogger()
 	data, err := json.Marshal(pendingSave{
 		Order:     pendingClipOrder{ID: order.ID, Drink: order.Drink},
 		VideoFrom: videoFrom,
@@ -77,32 +118,32 @@ func (s *beanjaminCoffee) writePendingSave(order order.Order, videoFrom time.Tim
 		logger.Warnf("cam storage: failed to marshal pending save: %v", err)
 		return
 	}
-	if err := os.WriteFile(filepath.Join(s.pendingOrderClipsDir, order.ID+".json"), data, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(s.recordsDir, order.ID+".json"), data, 0o600); err != nil {
 		logger.Warnf("cam storage: failed to write pending save: %v", err)
 	}
 }
 
-func (s *beanjaminCoffee) clearPendingSave(orderID string, logger logging.Logger) {
-	if s.pendingOrderClipsDir == "" {
+func (s *Saver) clearPendingSave(orderID string, logger logging.Logger) {
+	if s.dir() == "" {
 		return
 	}
-	path := filepath.Join(s.pendingOrderClipsDir, orderID+".json")
+	path := filepath.Join(s.recordsDir, orderID+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		logger.Warnf("cam storage: failed to clear pending save: %v", err)
 	}
 }
 
-// cleanupPendingClips attempts a video save for every remaining pending-clip record,
+// CleanupPendingClips attempts a video save for every remaining pending-clip record,
 // removing each record only once its save succeeds. Intended to be called via a Viam
 // scheduled job to catch any orders interrupted before they could save (e.g. machine
 // restart mid-brew).
-func (s *beanjaminCoffee) cleanupPendingClips() (map[string]any, error) {
+func (s *Saver) CleanupPendingClips() (map[string]any, error) {
 	s.logger.Infof("cam storage: cleanup job starting")
-	if s.pendingOrderClipsDir == "" {
+	if s.recordsDir == "" {
 		s.logger.Infof("cam storage: cleanup job nothing to do — no data_dir configured")
 		return map[string]any{"saved": 0, "failed": 0, "skipped": 0}, nil
 	}
-	entries, err := os.ReadDir(s.pendingOrderClipsDir)
+	entries, err := os.ReadDir(s.recordsDir)
 	if err != nil {
 		return nil, fmt.Errorf("read pending clips dir: %w", err)
 	}
@@ -112,7 +153,7 @@ func (s *beanjaminCoffee) cleanupPendingClips() (map[string]any, error) {
 			records = append(records, entry)
 		}
 	}
-	if s.camStorage == nil {
+	if s.mux == nil {
 		if len(records) == 0 {
 			return map[string]any{"saved": 0, "failed": 0, "skipped": 0}, nil
 		}
@@ -120,11 +161,11 @@ func (s *beanjaminCoffee) cleanupPendingClips() (map[string]any, error) {
 		// mid-order). Leave them on disk: restoring the mux lets the next sweep recover
 		// the clips, and deleting them here would lose footage irrecoverably.
 		return nil, fmt.Errorf("cam storage: %d pending clip record(s) in %s left in place: no cam_storage_mux_name configured",
-			len(records), s.pendingOrderClipsDir)
+			len(records), s.recordsDir)
 	}
 	var saved, failed, skipped int
 	for _, entry := range records {
-		path := filepath.Join(s.pendingOrderClipsDir, entry.Name())
+		path := filepath.Join(s.recordsDir, entry.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
 			s.logger.Warnf("cam storage: cleanup: failed to read %s: %v", entry.Name(), err)
@@ -149,7 +190,7 @@ func (s *beanjaminCoffee) cleanupPendingClips() (map[string]any, error) {
 		}
 		// Recovery for an interrupted order — tag with its ID. The cleanup job
 		// runs off any order goroutine, so build the tagged logger from the
-		// record rather than activeOrderLogger().
+		// record rather than from an in-flight order's logger.
 		orderLogger := s.logger.WithFields("order_id", ps.Order.ID)
 		orderLogger.Infof("cam storage: cleanup: attempting save for interrupted %s order", ps.Order.Drink)
 		clipFrom := ps.VideoFrom.Add(-clipLead)
@@ -169,19 +210,17 @@ func (s *beanjaminCoffee) cleanupPendingClips() (map[string]any, error) {
 	return map[string]any{"saved": saved, "failed": failed, "skipped": skipped}, nil
 }
 
-// saveOrderVideoAsync launches a background goroutine that waits for the trailing segment
+// SaveOrderVideoAsync launches a background goroutine that waits for the trailing segment
 // to close, then asks the cam storage multiplexer to slice the order's [from, to] window.
 // See https://github.com/viam-modules/video-store. The clip window is fixed at call time
 // (≈ order end + clipTrail); we issue a synchronous save once that window is safely inside
 // closed segments, so slice failures (e.g. an over-long filename) surface instead of being
 // silently dropped as they were with async saves.
 // execErr is nil when the order finished the brew sequence; non-nil records failure (including panic) in metadata.
-func (s *beanjaminCoffee) saveOrderVideoAsync(order order.Order, from time.Time, execErr error) {
-	// Capture the order-scoped logger synchronously: the save runs in a
-	// detached goroutine that outlives the order, by which point activeLogger
-	// has been cleared, so we can't source it from activeOrderLogger() there.
-	logger := s.activeOrderLogger()
-	if s.camStorage == nil {
+// logger is the order-scoped logger, captured by the detached goroutine because
+// the save outlives the order.
+func (s *Saver) SaveOrderVideoAsync(order order.Order, from time.Time, execErr error, logger logging.Logger) {
+	if !s.Configured() {
 		logger.Infof("cam storage: skip save — no cam_storage_mux_name configured")
 		// No saver will ever run, so the pending record is unrecoverable noise—drop it.
 		s.clearPendingSave(order.ID, logger)
@@ -204,8 +243,8 @@ func (s *beanjaminCoffee) saveOrderVideoAsync(order order.Order, from time.Time,
 
 // saveOrderVideoAndClear issues the save and clears the pending-clip record only once
 // the save actually succeeds. If the save fails—or the process dies before this runs—the
-// record survives so cleanupPendingClips can recover the clip on the next scheduled sweep.
-func (s *beanjaminCoffee) saveOrderVideoAndClear(order order.Order, clipFrom, clipTo time.Time, execErr error, logger logging.Logger) {
+// record survives so CleanupPendingClips can recover the clip on the next scheduled sweep.
+func (s *Saver) saveOrderVideoAndClear(order order.Order, clipFrom, clipTo time.Time, execErr error, logger logging.Logger) {
 	if s.issueVideoSave(order, clipFrom, clipTo, execErr, logger) {
 		s.clearPendingSave(order.ID, logger)
 	}
@@ -213,8 +252,8 @@ func (s *beanjaminCoffee) saveOrderVideoAndClear(order order.Order, clipFrom, cl
 
 // issueVideoSave performs the synchronous save and reports whether it succeeded.
 // Callers use the result to decide whether to clear the pending-clip record: a
-// failed save keeps the record so cleanupPendingClips can retry it later.
-func (s *beanjaminCoffee) issueVideoSave(order order.Order, clipFrom, clipTo time.Time, execErr error, logger logging.Logger) bool {
+// failed save keeps the record so CleanupPendingClips can retry it later.
+func (s *Saver) issueVideoSave(order order.Order, clipFrom, clipTo time.Time, execErr error, logger logging.Logger) bool {
 	// The video-store bakes this metadata into the clip filename and nothing more (it's
 	// not queryable cloud metadata — clips are linked to orders via the `tags` field, and
 	// failure detail lives queryably on the order sensor). So keep it minimal: just enough
@@ -247,7 +286,7 @@ func (s *beanjaminCoffee) issueVideoSave(order order.Order, clipFrom, clipTo tim
 		formatClipTimestampUTC(clipFrom), formatClipTimestampUTC(clipTo))
 	ctx, cancel := context.WithTimeout(context.Background(), clipSaveTimeout)
 	defer cancel()
-	resp, err := s.camStorage.DoCommand(ctx, cmd)
+	resp, err := s.mux.DoCommand(ctx, cmd)
 	if err != nil {
 		logger.Errorf("cam storage: save failed: %v", err)
 		return false
