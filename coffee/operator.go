@@ -11,8 +11,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"go.viam.com/rdk/logging"
 )
 
 // proceedQueue re-syncs the recorded world with the real one and, when a cancel
@@ -214,17 +212,6 @@ func (s *beanjaminCoffee) waitForIdle(ctx context.Context, timeout time.Duration
 	return nil
 }
 
-// activeOrderLogger returns the order-scoped logger for the in-flight order
-// when one is being processed, otherwise the base service logger. Used by
-// entry points (cancel, rewind) that run outside the queue goroutine and so
-// don't receive the tagged logger as a parameter. Never returns nil.
-func (s *beanjaminCoffee) activeOrderLogger() logging.Logger {
-	if l := s.activeLogger.Load(); l != nil {
-		return *l
-	}
-	return s.logger
-}
-
 // cancel stops the machine and nothing else: it aborts the sequence, halts the
 // arm mid-trajectory and pauses the queue. No motion is planned, no state flag
 // is cleared and the frame system is left alone, so the recorded world still
@@ -298,53 +285,6 @@ func (s *beanjaminCoffee) cancelOrder(ctx context.Context, v any) (map[string]an
 		"drink":         order.Drink,
 		"remaining":     float64(remaining),
 	}, nil
-}
-
-// strandedState names the mid-cycle state still recorded for the machine: a
-// portafilter left in the group head or holding grounds, a filter frame locked
-// to world, an item modeled in the gripper, a glass staged as an obstacle, or a
-// fridge door modeled open. Empty means the recorded world is the one a brew
-// cycle starts from. The non-atomic fields are owned by the running gate, so
-// the caller must hold it.
-func (s *beanjaminCoffee) strandedState() []string {
-	var stranded []string
-	if s.portafilterInMachine.Load() {
-		stranded = append(stranded, "portafilter in machine")
-	}
-	if s.portafilterHasGrounds.Load() {
-		stranded = append(stranded, "grounds in portafilter")
-	}
-	if s.filterFrameLocked {
-		stranded = append(stranded, "filter frame locked")
-	}
-	if s.heldItemAttached {
-		stranded = append(stranded, "item in gripper")
-	}
-	if s.stagedGlassPlaced {
-		stranded = append(stranded, "glass staged")
-	}
-	if s.doorOpenDegs != 0 {
-		stranded = append(stranded, fmt.Sprintf("fridge door open %.0f°", s.doorOpenDegs))
-	}
-	return stranded
-}
-
-// pauseOnFault pauses the queue after a genuine fault, so the next order waits
-// for the same rewind → proceed recovery a cancel gets. The recorded state
-// cannot be trusted to show everything a fault left behind — a cup knocked over
-// or a half-finished pour is never modeled — so the operator looks before any
-// further order runs. The log names whatever mid-cycle state is recorded, since
-// that is what rewind has to undo. Must be called while holding the running
-// gate, like strandedState.
-func (s *beanjaminCoffee) pauseOnFault(logger logging.Logger, fault error) {
-	s.paused.Store(true)
-	left := "no mid-cycle state recorded"
-	if stranded := s.strandedState(); len(stranded) > 0 {
-		left = "state left behind: " + strings.Join(stranded, ", ")
-	}
-	logger.Errorf("order faulted (%v), %s — queue paused; "+
-		"run 'rewind' to recover the arm (and shut the fridge by hand if it is open), then 'proceed'",
-		fault, left)
 }
 
 // queueState renders the paused flag for a command response.
