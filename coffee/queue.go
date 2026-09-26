@@ -228,3 +228,19 @@ func traceIDFromContext(ctx context.Context) string {
 	}
 	return sc.TraceID().String()
 }
+
+// recordOrderHistory credits a completed drink to the customer's history; no-op
+// without an email or detector, best-effort otherwise.
+func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order order.Order) {
+	if s.customerDetector == nil || order.CustomerEmail == "" {
+		return
+	}
+	if _, err := s.customerDetector.DoCommand(ctx, map[string]any{
+		"record_order": map[string]any{
+			"email": order.CustomerEmail,
+			"drink": order.Drink,
+		},
+	}); err != nil {
+		s.activeOrderLogger().Warnf("failed to record order history for %q: %v", order.CustomerEmail, err)
+	}
+}

@@ -337,3 +337,12 @@ func (s *beanjaminCoffee) cleanPortafilter(ctx, cancelCtx context.Context) error
 	s.portafilterHasGrounds.Store(false)
 	return nil
 }
+
+const (
+	defaultEspressoBrewTime = 8 * time.Second
+	defaultLungoBrewTime    = 15 * time.Second
+	defaultGrindTimeSec     = 7.5
+	// defaultIceDispenseSec is how long the ice pin is held HIGH when
+	// ice_dispense_sec is unset.
+	defaultIceDispenseSec = 5.0
+)
