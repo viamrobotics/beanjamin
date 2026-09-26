@@ -1,4 +1,4 @@
-package coffee
+package clips
 
 import (
 	"context"
@@ -15,17 +15,13 @@ import (
 	"go.viam.com/rdk/testutils/inject"
 )
 
-// newCamStorageTestCoffee builds a coffee service wired to a fake cam-storage mux
-// and a temp pending-clips dir, returning the coffee, the fake, and the dir.
-func newCamStorageTestCoffee(t *testing.T) (*beanjaminCoffee, *inject.GenericService, string) {
+// newTestSaver builds a Saver wired to a fake cam-storage mux and a temp
+// pending-clips dir, returning the saver, the fake, and the dir.
+func newTestSaver(t *testing.T) (*Saver, *inject.GenericService, string) {
 	t.Helper()
 	dir := t.TempDir()
 	cam := inject.NewGenericService("cam-mux")
-	c := &beanjaminCoffee{
-		logger:               logging.NewTestLogger(t),
-		camStorage:           cam,
-		pendingOrderClipsDir: dir,
-	}
+	c := NewSaver(cam, dir, logging.NewTestLogger(t))
 	return c, cam, dir
 }
 
@@ -37,7 +33,7 @@ func newCamStorageTestCoffee(t *testing.T) (*beanjaminCoffee, *inject.GenericSer
 func TestCleanupSkipGate_GuaranteesClosedSegmentWindow(t *testing.T) {
 	videoFrom := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
 
-	// Mirrors cleanupPendingClips: the gate it waits past, and the clipTo it then saves.
+	// Mirrors CleanupPendingClips: the gate it waits past, and the clipTo it then saves.
 	gate := videoFrom.Add(maxBrewDuration + clipLead + segmentDuration + clipFlushMargin)
 	clipTo := videoFrom.Add(maxBrewDuration + clipLead)
 
@@ -56,7 +52,7 @@ func TestCleanupSkipGate_GuaranteesClosedSegmentWindow(t *testing.T) {
 }
 
 // TestSaveOrderVideoAndClear_ClearsOnlyOnSuccess is the core regression test for this
-// branch: the pending-clip record must survive a failed save so cleanupPendingClips can
+// branch: the pending-clip record must survive a failed save so CleanupPendingClips can
 // retry it, and must be removed once the save succeeds.
 func TestSaveOrderVideoAndClear_ClearsOnlyOnSuccess(t *testing.T) {
 	now := time.Now().UTC()
@@ -90,11 +86,11 @@ func TestSaveOrderVideoAndClear_ClearsOnlyOnSuccess(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c, cam, dir := newCamStorageTestCoffee(t)
+			c, cam, dir := newTestSaver(t)
 			cam.DoFunc = tc.doFunc
 
 			order := order.NewOrder("espresso", "Ada", "hi", "bye")
-			c.writePendingSave(order, now)
+			c.WritePendingSave(order, now, c.logger)
 			path := filepath.Join(dir, order.ID+".json")
 			if _, err := os.Stat(path); err != nil {
 				t.Fatalf("pending record was not written: %v", err)
@@ -116,19 +112,15 @@ func TestSaveOrderVideoAndClear_ClearsOnlyOnSuccess(t *testing.T) {
 // left to accumulate forever.
 func TestSaveOrderVideoAndClear_NoStorageDropsRecord(t *testing.T) {
 	dir := t.TempDir()
-	c := &beanjaminCoffee{
-		logger:               logging.NewTestLogger(t),
-		camStorage:           nil,
-		pendingOrderClipsDir: dir,
-	}
+	c := NewSaver(nil, dir, logging.NewTestLogger(t))
 	o := order.NewOrder("espresso", "Ada", "hi", "bye")
-	c.writePendingSave(o, time.Now().UTC())
+	c.WritePendingSave(o, time.Now().UTC(), c.logger)
 	path := filepath.Join(dir, o.ID+".json")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("pending record was not written: %v", err)
 	}
 
-	c.saveOrderVideoAsync(o, time.Now().UTC(), nil)
+	c.SaveOrderVideoAsync(o, time.Now().UTC(), nil, c.logger)
 
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("expected pending record dropped when no cam storage, stat err: %v", err)
@@ -139,7 +131,7 @@ func TestSaveOrderVideoAndClear_NoStorageDropsRecord(t *testing.T) {
 // the order ID, and minimal metadata (order_id + order_status only) so an unbounded value
 // can't blow the filename limit.
 func TestIssueVideoSave_RequestShape(t *testing.T) {
-	c, cam, _ := newCamStorageTestCoffee(t)
+	c, cam, _ := newTestSaver(t)
 	var got map[string]any
 	cam.DoFunc = func(_ context.Context, cmd map[string]any) (map[string]any, error) {
 		got = cmd
@@ -182,10 +174,10 @@ func TestIssueVideoSave_RequestShape(t *testing.T) {
 
 // writeStalePendingSave writes a pending record old enough to pass the cleanup skip gate
 // and returns its path.
-func writeStalePendingSave(t *testing.T, c *beanjaminCoffee, dir string) string {
+func writeStalePendingSave(t *testing.T, c *Saver, dir string) string {
 	t.Helper()
 	o := order.NewOrder("espresso", "Ada", "hi", "bye")
-	c.writePendingSave(o, time.Now().UTC().Add(-time.Hour))
+	c.WritePendingSave(o, time.Now().UTC().Add(-time.Hour), c.logger)
 	path := filepath.Join(dir, o.ID+".json")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("pending record was not written: %v", err)
@@ -197,11 +189,11 @@ func writeStalePendingSave(t *testing.T, c *beanjaminCoffee, dir string) string 
 // cam_storage_mux_name was removed: the sweep must report the misconfiguration without
 // dereferencing the nil mux, and keep the record so the clip is recoverable later.
 func TestCleanupPendingClips_NoStorageKeepsRecords(t *testing.T) {
-	c, _, dir := newCamStorageTestCoffee(t)
+	c, _, dir := newTestSaver(t)
 	path := writeStalePendingSave(t, c, dir)
-	c.camStorage = nil
+	c.mux = nil
 
-	resp, err := c.cleanupPendingClips()
+	resp, err := c.CleanupPendingClips()
 	if err == nil {
 		t.Fatalf("expected error for pending records with no cam storage, got resp %v", resp)
 	}
@@ -213,11 +205,8 @@ func TestCleanupPendingClips_NoStorageKeepsRecords(t *testing.T) {
 // TestCleanupPendingClips_NoStorageNoRecords keeps the no-mux, nothing-pending case a
 // quiet success so the scheduled job doesn't report a spurious failure.
 func TestCleanupPendingClips_NoStorageNoRecords(t *testing.T) {
-	c := &beanjaminCoffee{
-		logger:               logging.NewTestLogger(t),
-		pendingOrderClipsDir: t.TempDir(),
-	}
-	resp, err := c.cleanupPendingClips()
+	c := NewSaver(nil, t.TempDir(), logging.NewTestLogger(t))
+	resp, err := c.CleanupPendingClips()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -262,11 +251,11 @@ func TestCleanupPendingClips_RemovesOnlyOnSuccess(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c, cam, dir := newCamStorageTestCoffee(t)
+			c, cam, dir := newTestSaver(t)
 			cam.DoFunc = tc.doFunc
 			path := writeStalePendingSave(t, c, dir)
 
-			resp, err := c.cleanupPendingClips()
+			resp, err := c.CleanupPendingClips()
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -284,7 +273,7 @@ func TestCleanupPendingClips_RemovesOnlyOnSuccess(t *testing.T) {
 // TestIssueVideoSave_BoundedByTimeout ensures a wedged video store can't hang the save:
 // the DoCommand context must carry a deadline no later than clipSaveTimeout.
 func TestIssueVideoSave_BoundedByTimeout(t *testing.T) {
-	c, cam, _ := newCamStorageTestCoffee(t)
+	c, cam, _ := newTestSaver(t)
 	var deadline time.Time
 	var hasDeadline bool
 	cam.DoFunc = func(ctx context.Context, _ map[string]any) (map[string]any, error) {
@@ -307,13 +296,13 @@ func TestIssueVideoSave_BoundedByTimeout(t *testing.T) {
 // The pending record outlives the order when a save can't run, so it holds only
 // what recovery needs and is readable by the module's user alone.
 func TestWritePendingSave_StoresNoCustomerDataAndIsPrivate(t *testing.T) {
-	c, _, dir := newCamStorageTestCoffee(t)
+	c, _, dir := newTestSaver(t)
 	o := order.NewOrder("espresso", "Placeholder Name", "hello Placeholder Name", "bye")
 	o.ModifiedCustomerName = "Placeholdr Name"
 	o.CustomerEmail = "customer@example.com"
 	videoFrom := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
 
-	c.writePendingSave(o, videoFrom)
+	c.WritePendingSave(o, videoFrom, c.logger)
 
 	path := filepath.Join(dir, o.ID+".json")
 	info, err := os.Stat(path)
@@ -344,7 +333,7 @@ func TestWritePendingSave_StoresNoCustomerDataAndIsPrivate(t *testing.T) {
 // Records holding a whole marshalled Order must still decode, so the cleanup
 // sweep recovers clips for orders interrupted before an upgrade.
 func TestCleanupPendingClips_RecoversFullOrderRecord(t *testing.T) {
-	c, cam, dir := newCamStorageTestCoffee(t)
+	c, cam, dir := newTestSaver(t)
 	var tags []string
 	cam.DoFunc = func(_ context.Context, cmd map[string]any) (map[string]any, error) {
 		tags, _ = cmd["tags"].([]string)
@@ -364,9 +353,9 @@ func TestCleanupPendingClips_RecoversFullOrderRecord(t *testing.T) {
 		t.Fatalf("write full-order record: %v", err)
 	}
 
-	resp, err := c.cleanupPendingClips()
+	resp, err := c.CleanupPendingClips()
 	if err != nil {
-		t.Fatalf("cleanupPendingClips error: %v", err)
+		t.Fatalf("CleanupPendingClips error: %v", err)
 	}
 	if resp["saved"] != 1 {
 		t.Errorf("saved = %v, want 1 (resp %v)", resp["saved"], resp)

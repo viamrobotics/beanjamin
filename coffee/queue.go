@@ -107,7 +107,7 @@ func (s *beanjaminCoffee) safeExecuteOrder(o order.Order) {
 	// Reset the per-order failure step; prepareDrink stores the label it
 	// errored at, and a panic below records currentStep directly.
 	s.failedStep.Store("")
-	s.writePendingSave(o, videoFrom)
+	s.clips.WritePendingSave(o, videoFrom, logger)
 
 	// Snapshot the cancel context this order will run under so we can tell an
 	// operator cancel from a genuine fault. signalCancel cancels this exact
@@ -158,9 +158,9 @@ func (s *beanjaminCoffee) safeExecuteOrder(o order.Order) {
 		} else {
 			s.setSensorReading(ctx, s.usageSensor, "consecutive orders", "successful_consecutive_orders", 0)
 		}
-		// saveOrderVideoAsync owns clearing the pending record—only after the save
+		// SaveOrderVideoAsync owns clearing the pending record—only after the save
 		// succeeds—so a crash/restart during the post-roll wait stays recoverable.
-		s.saveOrderVideoAsync(o, videoFrom, execErr)
+		s.clips.SaveOrderVideoAsync(o, videoFrom, execErr, s.activeOrderLogger())
 		span.End()
 	}()
 	execErr = s.executeQueuedOrder(ctx, o)
