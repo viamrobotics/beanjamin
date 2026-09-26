@@ -7,20 +7,22 @@ import (
 	"testing"
 	"time"
 
+	"beanjamin/coffee/order"
+
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/testutils/inject"
 )
 
-func faultReading(execErr error, cancelled bool) orderReading {
-	return orderReading{
-		order:             Order{ID: "order-1", Drink: "espresso", CustomerName: "Sam"},
-		execErr:           execErr,
-		operatorCancelled: cancelled,
+func faultReading(execErr error, cancelled bool) order.Reading {
+	return order.Reading{
+		Order:             order.Order{ID: "order-1", Drink: "espresso", CustomerName: "Sam"},
+		ExecErr:           execErr,
+		OperatorCancelled: cancelled,
 	}
 }
 
 func TestReactToOrderFailure_RaisesTransientFaultFlag(t *testing.T) {
-	c := &beanjaminCoffee{logger: logging.NewTestLogger(t), cfg: &Config{}, queue: NewOrderQueue()}
+	c := &beanjaminCoffee{logger: logging.NewTestLogger(t), cfg: &Config{}, queue: order.NewQueue()}
 	if c.faultActive.Load() {
 		t.Fatal("fault_active raised before any fault")
 	}
@@ -38,7 +40,7 @@ func TestReactToOrderFailure_RaisesTransientFaultFlag(t *testing.T) {
 }
 
 func TestReactToOrderFailure_SkipsSuccessAndOperatorCancel(t *testing.T) {
-	for name, r := range map[string]orderReading{
+	for name, r := range map[string]order.Reading{
 		"success":          faultReading(nil, false),
 		"operator_cancel":  faultReading(errors.New("boom"), true),
 		"cancelled_no_err": faultReading(nil, true),

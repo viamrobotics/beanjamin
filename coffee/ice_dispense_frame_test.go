@@ -4,6 +4,8 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+
+	"beanjamin/coffee/order"
 )
 
 // TestIceFrameTagDir: the tag= segments are what the Viam data manager turns
@@ -57,7 +59,7 @@ func TestSaveIceDispenseFrameIsOptInOffAnOrder(t *testing.T) {
 func TestSaveIceDispenseFrameDuringAnOrder(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := iceTestService(t, &Config{SaveMotionRequestsDir: dir})
-	s.queue.Enqueue(Order{ID: "oid"})
+	s.queue.Enqueue(order.Order{ID: "oid"})
 	if _, ok := s.queue.Start(); !ok {
 		t.Fatal("Start found nothing to make")
 	}

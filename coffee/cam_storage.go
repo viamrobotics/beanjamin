@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"beanjamin/coffee/order"
+
 	"go.viam.com/rdk/logging"
 )
 
@@ -58,11 +60,11 @@ type pendingClipOrder struct {
 	Drink string `json:"drink"`
 }
 
-func (p pendingClipOrder) order() Order {
-	return Order{ID: p.ID, Drink: p.Drink}
+func (p pendingClipOrder) order() order.Order {
+	return order.Order{ID: p.ID, Drink: p.Drink}
 }
 
-func (s *beanjaminCoffee) writePendingSave(order Order, videoFrom time.Time) {
+func (s *beanjaminCoffee) writePendingSave(order order.Order, videoFrom time.Time) {
 	if s.pendingOrderClipsDir == "" {
 		return
 	}
@@ -174,7 +176,7 @@ func (s *beanjaminCoffee) cleanupPendingClips() (map[string]any, error) {
 // closed segments, so slice failures (e.g. an over-long filename) surface instead of being
 // silently dropped as they were with async saves.
 // execErr is nil when the order finished the brew sequence; non-nil records failure (including panic) in metadata.
-func (s *beanjaminCoffee) saveOrderVideoAsync(order Order, from time.Time, execErr error) {
+func (s *beanjaminCoffee) saveOrderVideoAsync(order order.Order, from time.Time, execErr error) {
 	// Capture the order-scoped logger synchronously: the save runs in a
 	// detached goroutine that outlives the order, by which point activeLogger
 	// has been cleared, so we can't source it from activeOrderLogger() there.
@@ -203,7 +205,7 @@ func (s *beanjaminCoffee) saveOrderVideoAsync(order Order, from time.Time, execE
 // saveOrderVideoAndClear issues the save and clears the pending-clip record only once
 // the save actually succeeds. If the save fails—or the process dies before this runs—the
 // record survives so cleanupPendingClips can recover the clip on the next scheduled sweep.
-func (s *beanjaminCoffee) saveOrderVideoAndClear(order Order, clipFrom, clipTo time.Time, execErr error, logger logging.Logger) {
+func (s *beanjaminCoffee) saveOrderVideoAndClear(order order.Order, clipFrom, clipTo time.Time, execErr error, logger logging.Logger) {
 	if s.issueVideoSave(order, clipFrom, clipTo, execErr, logger) {
 		s.clearPendingSave(order.ID, logger)
 	}
@@ -212,7 +214,7 @@ func (s *beanjaminCoffee) saveOrderVideoAndClear(order Order, clipFrom, clipTo t
 // issueVideoSave performs the synchronous save and reports whether it succeeded.
 // Callers use the result to decide whether to clear the pending-clip record: a
 // failed save keeps the record so cleanupPendingClips can retry it later.
-func (s *beanjaminCoffee) issueVideoSave(order Order, clipFrom, clipTo time.Time, execErr error, logger logging.Logger) bool {
+func (s *beanjaminCoffee) issueVideoSave(order order.Order, clipFrom, clipTo time.Time, execErr error, logger logging.Logger) bool {
 	// The video-store bakes this metadata into the clip filename and nothing more (it's
 	// not queryable cloud metadata — clips are linked to orders via the `tags` field, and
 	// failure detail lives queryably on the order sensor). So keep it minimal: just enough

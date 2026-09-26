@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"beanjamin/coffee/order"
 )
 
 func TestEscapeSlackMrkdwn(t *testing.T) {
@@ -36,12 +38,12 @@ func TestEscapeSlackMrkdwn(t *testing.T) {
 // (the Block Kit fields and the fallback text) must carry it escaped.
 func TestSlackFailure_EscapesCustomerControlledValues(t *testing.T) {
 	started := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
-	r := orderReading{
-		order:      Order{ID: "order-1", Drink: "espresso", CustomerName: "<!channel> <https://example.com|Click here>"},
-		execErr:    errors.New("peer said <!here>"),
-		failedStep: "brewing",
-		startedAt:  started,
-		endedAt:    started.Add(time.Minute),
+	r := order.Reading{
+		Order:      order.Order{ID: "order-1", Drink: "espresso", CustomerName: "<!channel> <https://example.com|Click here>"},
+		ExecErr:    errors.New("peer said <!here>"),
+		FailedStep: "brewing",
+		StartedAt:  started,
+		EndedAt:    started.Add(time.Minute),
 	}
 
 	raw, err := json.Marshal(slackFailureBlocks(r, "", "", ""))

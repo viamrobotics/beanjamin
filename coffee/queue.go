@@ -2,344 +2,13 @@ package coffee
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"go.viam.com/rdk/module/trace"
+
+	"beanjamin/coffee/order"
 )
-
-// RecentDisplayDuration is how long a completed order stays visible in
-// List() / Status() before it is pruned. The frontend renders these as
-// "Ready!" green cards, identical to the in-flight cleanup state.
-const RecentDisplayDuration = 15 * time.Second
-
-// Valid values for Order.Fulfillment.
-const (
-	FulfillmentPickup   = "pickup"
-	FulfillmentDelivery = "delivery"
-)
-
-// StepEntry records the start of a single processing step for an order.
-type StepEntry struct {
-	Step      string    `json:"step"`
-	StartedAt time.Time `json:"started_at"`
-}
-
-// Order represents a customer coffee order in the queue.
-//
-// The identity/greeting fields are fixed once the order is enqueued (most by
-// NewOrder; CustomerEmail by enqueueOrder) and never change. RawStep,
-// StepHistory and CompletedAt are mutated as the order moves through the
-// espresso routine; all are guarded by OrderQueue.mu and must only be updated
-// through OrderQueue methods.
-type Order struct {
-	ID    string `json:"id"`
-	Drink string `json:"drink"`
-	// CustomerName is the name the customer gave; per-customer aggregation
-	// groups on it.
-	CustomerName string `json:"customer_name"`
-	// ModifiedCustomerName is the misspelling shown for this order, re-rolled
-	// each time, so it can't double as the aggregation key. Read it through
-	// DisplayName. Empty for callers that don't misspell.
-	ModifiedCustomerName string `json:"modified_customer_name,omitempty"`
-	// CustomerEmail identifies the recognized customer, to credit their history.
-	CustomerEmail string `json:"customer_email,omitempty"`
-	Greeting      string `json:"greeting"`
-	Completion    string `json:"completion"`
-	// Fulfillment is how the customer receives the drink: FulfillmentPickup
-	// (default) or FulfillmentDelivery. Set at enqueue time; immutable afterward.
-	Fulfillment string    `json:"fulfillment"`
-	EnqueuedAt  time.Time `json:"enqueued_at"`
-	// PickupPosition is the 0-based serving-area slot the finished drink was
-	// placed in, returned by the serving step (placeFullCupOnShelf /
-	// serveIcedCoffee) and set on prepareDrink's in-flight copy, then carried
-	// into the delivery_request; the queue's copy never has it.
-	PickupPosition int `json:"pickup_position,omitempty"`
-
-	// BatchIndex / BatchSize identify this order's slot within a multi-drink
-	// batch (1-based, e.g. "2 of 3"). Both zero for single orders. Set at
-	// enqueue time; immutable afterward. Used by the drink-ready announcement
-	// to call out batch position so customers can track progress.
-	BatchIndex int `json:"batch_index,omitempty"`
-	BatchSize  int `json:"batch_size,omitempty"`
-
-	RawStep     string      `json:"raw_step"`
-	StepHistory []StepEntry `json:"step_history"`
-	// CompletedAt is set by Complete() when the espresso routine finishes.
-	// The order then sits in OrderQueue.recent for RecentDisplayDuration
-	// before being pruned. Zero value means the order is still pending.
-	CompletedAt time.Time `json:"completed_at"`
-}
-
-// OrderQueue is a thread-safe order queue. An order moves through three
-// stages, and which stage it is in is the queue's own structure rather than
-// something callers have to infer:
-//
-//	pending → current → recent
-//
-// pending is the FIFO backlog still waiting to be made, current is the single
-// order being made right now, and recent is a short-lived buffer of completed
-// orders so the webapp can render a "Ready!" card without diffing polls. The
-// whole lifecycle is owned by the backend.
-type OrderQueue struct {
-	mu      sync.Mutex
-	pending []Order       // backlog still waiting to be made, FIFO
-	current *Order        // the order being made right now; nil when idle
-	recent  []Order       // completed orders, append-most-recent-last
-	notify  chan struct{} // buffered(1), poked on enqueue to wake consumer
-	proceed chan struct{} // buffered(1), operator signal to resume after inter-order pause
-}
-
-// NewOrderQueue creates a new empty order queue.
-func NewOrderQueue() *OrderQueue {
-	return &OrderQueue{
-		notify:  make(chan struct{}, 1),
-		proceed: make(chan struct{}, 1),
-	}
-}
-
-// Enqueue adds an order to the back of the backlog and returns its 1-based
-// position among the orders still to be made, counting the one on the arm.
-// Position 1 therefore means "nothing ahead of you, this starts next".
-//
-// The in-flight order has to count: callers gate the spoken "Order received"
-// acknowledgement on a position above 1, so leaving it out would meet a
-// customer who ordered mid-brew with silence.
-func (q *OrderQueue) Enqueue(order Order) int {
-	q.mu.Lock()
-	q.pending = append(q.pending, order)
-	pos := len(q.pending)
-	if q.current != nil {
-		pos++
-	}
-	q.mu.Unlock()
-
-	// Non-blocking poke to wake consumer.
-	select {
-	case q.notify <- struct{}{}:
-	default:
-	}
-
-	return pos
-}
-
-// Start moves the front of the backlog into the current slot and returns it,
-// reporting false when the backlog is empty.
-//
-// The queue has a single consumer (processQueue), which pairs every successful
-// Start with a Complete; starting while an order is already current would
-// abandon that order. The returned copy is deep so the consumer can hold it for
-// the length of the brew while SetCurrentStep keeps appending to the queue's
-// own StepHistory.
-func (q *OrderQueue) Start() (Order, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if len(q.pending) == 0 {
-		return Order{}, false
-	}
-	o := q.pending[0]
-	q.pending = append(q.pending[:0], q.pending[1:]...)
-	q.current = &o
-	return copyOrder(o), true
-}
-
-// CurrentID returns the ID of the order being made right now, or "" when idle.
-func (q *OrderQueue) CurrentID() string {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.current == nil {
-		return ""
-	}
-	return q.current.ID
-}
-
-// Errors returned by Remove, distinguishing the three ways a cancel can miss.
-var (
-	errOrderNotQueued = errors.New("no such order in the queue")
-	errOrderInFlight  = errors.New("order is already being made — use 'cancel' to stop the machine")
-	errOrderCompleted = errors.New("order has already been made")
-)
-
-// Remove drops one still-waiting order out of the backlog and returns it,
-// closing the gap so the orders behind it move up.
-//
-// The order on the arm is out of reach by construction — it sits in the
-// current slot, not in pending — which is the same guarantee ClearPending
-// leans on. A cancel aimed at it is refused with errOrderInFlight rather than
-// quietly missing, because removing it would leave the consumer brewing a
-// drink the queue no longer accounts for; `cancel` is what stops that one.
-func (q *OrderQueue) Remove(id string) (Order, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	for i := range q.pending {
-		if q.pending[i].ID != id {
-			continue
-		}
-		o := q.pending[i]
-		q.pending = append(q.pending[:i], q.pending[i+1:]...)
-		return o, nil
-	}
-	if q.current != nil && q.current.ID == id {
-		return Order{}, errOrderInFlight
-	}
-	for i := range q.recent {
-		if q.recent[i].ID == id {
-			return Order{}, errOrderCompleted
-		}
-	}
-	return Order{}, errOrderNotQueued
-}
-
-// Complete retires the current order into the recent buffer with
-// CompletedAt = time.Now(), leaving the queue idle. This is the canonical
-// "the espresso routine finished" transition. No-op when nothing is current.
-func (q *OrderQueue) Complete() {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.current == nil {
-		return
-	}
-	o := *q.current
-	o.CompletedAt = time.Now()
-	q.current = nil
-	q.recent = append(q.recent, o)
-}
-
-// Len returns how many orders still need to be made: the backlog plus the one
-// on the arm. Recently-completed orders do NOT count toward depth.
-func (q *OrderQueue) Len() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	n := len(q.pending)
-	if q.current != nil {
-		n++
-	}
-	return n
-}
-
-// List returns a snapshot of all visible orders in render order: recently
-// completed first (most-recent first), then the order on the arm, then the
-// backlog in FIFO — top to bottom as the UI reads it. Expired entries in recent
-// (CompletedAt older than RecentDisplayDuration) are pruned in the same call.
-// StepHistory is deep-copied so callers can read the snapshot without racing
-// against concurrent SetCurrentStep updates.
-func (q *OrderQueue) List() []Order {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	// Prune expired recent entries in place.
-	cutoff := time.Now().Add(-RecentDisplayDuration)
-	kept := q.recent[:0]
-	for _, o := range q.recent {
-		if o.CompletedAt.After(cutoff) {
-			kept = append(kept, o)
-		}
-	}
-	q.recent = kept
-
-	out := make([]Order, 0, len(q.recent)+1+len(q.pending))
-	// Recent orders rendered most-recent-first (top of the UI).
-	for i := len(q.recent) - 1; i >= 0; i-- {
-		out = append(out, copyOrder(q.recent[i]))
-	}
-	if q.current != nil {
-		out = append(out, copyOrder(*q.current))
-	}
-	for _, o := range q.pending {
-		out = append(out, copyOrder(o))
-	}
-	return out
-}
-
-// copyOrder returns a value-copy of o with StepHistory deep-copied.
-func copyOrder(o Order) Order {
-	out := o
-	if o.StepHistory != nil {
-		out.StepHistory = make([]StepEntry, len(o.StepHistory))
-		copy(out.StepHistory, o.StepHistory)
-	}
-	return out
-}
-
-// SetCurrentStep records a step transition on the order being made right now,
-// updating RawStep and appending to StepHistory.
-//
-// No-op when the queue is idle: a step published with no order on the arm — a
-// keep-alive purge, say — belongs to no order and surfaces through Status only.
-func (q *OrderQueue) SetCurrentStep(rawStep string) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.current == nil {
-		return
-	}
-	q.current.RawStep = rawStep
-	q.current.StepHistory = append(q.current.StepHistory, StepEntry{
-		Step:      rawStep,
-		StartedAt: time.Now(),
-	})
-}
-
-// Clear empties every stage — backlog, the order on the arm, and the recent
-// buffer — returning the total removed. This is the full wipe behind
-// reset_world, which has already cancelled the sequence running the current
-// order. clear_queue wants ClearPending instead.
-func (q *OrderQueue) Clear() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	n := len(q.pending) + len(q.recent)
-	if q.current != nil {
-		n++
-	}
-	q.pending = nil
-	q.current = nil
-	q.recent = nil
-	return n
-}
-
-// ClearPending drops the backlog. It reports how many orders were removed and
-// the ID of the order left running ("" when idle), both read under one lock so
-// a caller can describe what it spared without racing the brew finishing.
-//
-// The order on the arm and the recent buffer are structurally out of reach,
-// which is the point: clear_queue means "make no more drinks", and the drink
-// already being made has to survive it — staying visible in List, still taking
-// SetCurrentStep updates, and still completing into recent as a "Ready!" card.
-func (q *OrderQueue) ClearPending() (removed int, currentID string) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	removed = len(q.pending)
-	q.pending = nil
-	if q.current != nil {
-		currentID = q.current.ID
-	}
-	return removed, currentID
-}
-
-// DisplayName is the name to show and speak: the misspelling when there is one,
-// otherwise the name the customer gave. Not stable across a customer's orders.
-func (o Order) DisplayName() string {
-	if o.ModifiedCustomerName != "" {
-		return o.ModifiedCustomerName
-	}
-	return o.CustomerName
-}
-
-// NewOrder creates an Order with a generated UUID and current timestamp.
-// Fulfillment defaults to pickup; callers override it before enqueueing.
-func NewOrder(drink, customerName, greeting, completion string) Order {
-	return Order{
-		ID:           uuid.New().String(),
-		Drink:        drink,
-		CustomerName: customerName,
-		Greeting:     greeting,
-		Completion:   completion,
-		Fulfillment:  FulfillmentPickup,
-		EnqueuedAt:   time.Now(),
-	}
-}
 
 // processQueue is the background consumer goroutine. It runs orders from the
 // queue one at a time in FIFO order.
@@ -349,7 +18,7 @@ func (s *beanjaminCoffee) processQueue() {
 		select {
 		case <-s.queueStop:
 			return
-		case <-s.queue.notify:
+		case <-s.queue.Notify():
 		}
 
 		// Drain orders one by one.
@@ -384,7 +53,7 @@ func (s *beanjaminCoffee) processQueue() {
 			s.activeLogger.Store(nil)
 			// Retire the order into recent with CompletedAt set. The frontend
 			// renders recent orders as the green "Ready!" card for
-			// RecentDisplayDuration before they're pruned by List().
+			// order.RecentDisplayDuration before they're pruned by List().
 			s.queue.Complete()
 			// Reset the service-global step now that no order is current. The
 			// completed copy in recent keeps its raw_step for debugging.
@@ -414,7 +83,7 @@ func (s *beanjaminCoffee) waitForProceed() bool {
 	logger.Infof("queue paused — send 'proceed' to resume")
 	for s.paused.Load() {
 		select {
-		case <-s.queue.proceed:
+		case <-s.queue.Proceed():
 		case <-s.queueStop:
 			return false
 		}
@@ -426,19 +95,19 @@ func (s *beanjaminCoffee) waitForProceed() bool {
 // safeExecuteOrder wraps executeQueuedOrder with panic recovery so that a
 // single failing order cannot kill the queue-processing goroutine and strand
 // every order behind it. Notifies the optional order sensor and queues a clip from each camera via cam storage when configured.
-func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
+func (s *beanjaminCoffee) safeExecuteOrder(o order.Order) {
 	// Runs entirely within the window where processQueue has published the
 	// order-scoped logger, so activeOrderLogger() returns the tagged logger
 	// here and in everything it calls.
 	logger := s.activeOrderLogger()
-	ctx, span := trace.StartSpan(context.Background(), "beanjamin::order["+order.ID+"/"+order.Drink+"]")
+	ctx, span := trace.StartSpan(context.Background(), "beanjamin::order["+o.ID+"/"+o.Drink+"]")
 	videoFrom := time.Now().UTC()
 	var execErr error
 	startedAt := time.Now()
 	// Reset the per-order failure step; prepareDrink stores the label it
 	// errored at, and a panic below records currentStep directly.
 	s.failedStep.Store("")
-	s.writePendingSave(order, videoFrom)
+	s.writePendingSave(o, videoFrom)
 
 	// Snapshot the cancel context this order will run under so we can tell an
 	// operator cancel from a genuine fault. signalCancel cancels this exact
@@ -457,21 +126,21 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 			step, _ := s.currentStep.Load().(string)
 			s.failedStep.Store(step)
 			logger.Errorf("panic while processing order for %s: %v — queue will still save video and order reading",
-				order.CustomerName, r)
+				o.CustomerName, r)
 		}
 		failedStep, _ := s.failedStep.Load().(string)
-		s.notifyOrderReading(orderReading{
-			order:      order,
-			execErr:    execErr,
-			failedStep: failedStep,
+		s.notifyOrderReading(order.Reading{
+			Order:      o,
+			ExecErr:    execErr,
+			FailedStep: failedStep,
 			// An operator cancel (or reset_world) interrupts the order by
 			// cancelling orderCancelCtx; a genuine fault leaves it un-cancelled.
 			// Only meaningful alongside a failure, hence the execErr guard.
-			operatorCancelled: execErr != nil && orderCancelCtx.Err() != nil,
-			traceID:           traceIDFromContext(ctx),
-			decaf:             isDecafDrink(order.Drink),
-			startedAt:         startedAt,
-			endedAt:           time.Now(),
+			OperatorCancelled: execErr != nil && orderCancelCtx.Err() != nil,
+			TraceID:           traceIDFromContext(ctx),
+			Decaf:             order.IsDecaf(o.Drink),
+			StartedAt:         startedAt,
+			EndedAt:           time.Now(),
 		})
 		// Consecutive-successful-orders streak: bump on success, reset on any
 		// non-successful outcome (fault, panic, or operator cancel). ctx here
@@ -485,21 +154,21 @@ func (s *beanjaminCoffee) safeExecuteOrder(order Order) {
 			// a no-op when the order carries no email or no customer-detector
 			// is wired in. Recording only here (not on faults/cancels) keeps
 			// history to drinks the machine actually made.
-			s.recordOrderHistory(ctx, order)
+			s.recordOrderHistory(ctx, o)
 		} else {
 			s.setSensorReading(ctx, s.usageSensor, "consecutive orders", "successful_consecutive_orders", 0)
 		}
 		// saveOrderVideoAsync owns clearing the pending record—only after the save
 		// succeeds—so a crash/restart during the post-roll wait stays recoverable.
-		s.saveOrderVideoAsync(order, videoFrom, execErr)
+		s.saveOrderVideoAsync(o, videoFrom, execErr)
 		span.End()
 	}()
-	execErr = s.executeQueuedOrder(ctx, order)
+	execErr = s.executeQueuedOrder(ctx, o)
 }
 
 // executeQueuedOrder runs a single order: says greeting, brews, says completion.
 // A non-nil return means the brew sequence failed; the caller still notifies the sensor and saves video via safeExecuteOrder.
-func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) error {
+func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order order.Order) error {
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::executeQueuedOrder")
 	defer span.End()
@@ -533,7 +202,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order Order) e
 	return nil
 }
 
-func (s *beanjaminCoffee) notifyOrderReading(r orderReading) {
+func (s *beanjaminCoffee) notifyOrderReading(r order.Reading) {
 	if s.orderSensorSink != nil {
 		s.orderSensorSink.pushOrderReading(r)
 	}

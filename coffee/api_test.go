@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"beanjamin/coffee/order"
+
 	"go.viam.com/rdk/logging"
 )
 
@@ -17,7 +19,7 @@ func newStatusService(t *testing.T, cfg *Config) *beanjaminCoffee {
 	return &beanjaminCoffee{
 		cfg:    cfg,
 		logger: logging.NewTestLogger(t),
-		queue:  NewOrderQueue(),
+		queue:  order.NewQueue(),
 	}
 }
 
@@ -36,8 +38,8 @@ func TestSetStepReflectedInStatus(t *testing.T) {
 
 func TestStatusReportsQueueAndFlags(t *testing.T) {
 	s := newStatusService(t, &Config{CanServeDecaf: true})
-	s.queue.Enqueue(Order{ID: "o1", Drink: "espresso", CustomerName: "Ada", RawStep: "Grinding"})
-	s.queue.Enqueue(Order{ID: "o2", Drink: "lungo", CustomerName: "Grace"})
+	s.queue.Enqueue(order.Order{ID: "o1", Drink: "espresso", CustomerName: "Ada", RawStep: "Grinding"})
+	s.queue.Enqueue(order.Order{ID: "o2", Drink: "lungo", CustomerName: "Grace"})
 
 	st, err := s.Status(context.Background())
 	if err != nil {
@@ -66,7 +68,7 @@ func TestStatusReportsQueueAndFlags(t *testing.T) {
 func TestDoCommandDispatch(t *testing.T) {
 	ctx := context.Background()
 	s := newStatusService(t, &Config{})
-	s.queue.Enqueue(Order{ID: "o1", Drink: "espresso"})
+	s.queue.Enqueue(order.Order{ID: "o1", Drink: "espresso"})
 
 	res, err := s.DoCommand(ctx, map[string]any{"get_queue": true})
 	if err != nil {

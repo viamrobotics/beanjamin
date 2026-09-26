@@ -20,8 +20,9 @@ Each model lives in its own package. The coffee service is `coffee/` (`package c
 | Motion planning | `motion.go`, `held_geometry.go`, `collisions.go`, `joints.go`, `resting_surface.go` |
 | Vision-driven pickup | `cup_pickup.go`, `gripper_state.go`, `detection_snapshot.go` |
 | Peripheral integrations | `greetings.go`, `cam_storage.go`, `slack_notify.go`, `sensor_usage.go`, `order_sensor.go`, `delivery_messaging.go`, `fault_alert.go`, `keepalive.go` |
+| Order model (`coffee/order/`, `package order`) | `order.go` (`Order`), `queue.go` (`Queue`), `request.go` (`prepare_order` decoding), `drinks.go` (drink catalog and `Menu`), `reading.go` (`Reading` for the order sensor) |
 
-The order-sensor model is bundled in `coffee/` because it shares the coffee `Order` type. The remaining models are sibling packages: `maintenancesensor/`, `customerdetector/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`. There is no top-level Go package; `cmd/module/main.go` registers every model.
+`coffee/order` depends on nothing in `coffee`, so it must never import it. The order-sensor model is bundled in `coffee/`. The remaining models are sibling packages: `maintenancesensor/`, `customerdetector/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`. There is no top-level Go package; `cmd/module/main.go` registers every model.
 
 ## Common commands
 
@@ -60,10 +61,10 @@ Build the bundled web-app Viam module from repo root: `make web-app-module` (run
 
 `prepareDrink` in `coffee/espresso.go` is the core orchestrator. An order flows:
 
-1. `DoCommand{"prepare_order": ...}` enqueues an `Order` into `OrderQueue` (`coffee/queue.go`).
-2. A background queue consumer (`beanjaminCoffee.processQueue`) pops one order at a time and invokes `prepareDrink`.
+1. `DoCommand{"prepare_order": ...}` enqueues an `order.Order` into the `order.Queue` (`coffee/order/queue.go`); `enqueueOrder` in `coffee/order_intake.go` validates it.
+2. A background queue consumer (`beanjaminCoffee.processQueue`, `coffee/queue.go`) pops one order at a time and invokes `prepareDrink`.
 3. `prepareDrink` advances through 9 phases, each run by its `runPhase` closure, which publishes the step label (visible through `get_queue` and the order sensor) and opens a trace span. The phases are small methods (`grindCoffee`, `tampGround`, `brew`, `cleanPortafilter`, etc. in `coffee/brew_steps.go`) that each execute a list of `Step` structs through `executeStep` (`coffee/espresso.go`), which drives the motion layer in `coffee/motion.go`.
-4. On completion/failure, the order is moved to `recent` for `RecentDisplayDuration` (15s) so the UI can render "Ready!" without diffing polls.
+4. On completion/failure, the order is moved to `recent` for `order.RecentDisplayDuration` (15s) so the UI can render "Ready!" without diffing polls.
 5. A single reading per attempt is pushed to the optional order-sensor sink, and an async clip save is requested on the optional `cam_storage_mux_name` video-store multiplexer.
 
 `cancel`, `clear_queue`, and `proceed` manipulate the same state. Only one routine runs at a time, gated by `running atomic.Bool`; a shared `cancelCtx` is captured under `mu` so cancellation can interrupt motion.

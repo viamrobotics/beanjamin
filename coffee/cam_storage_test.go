@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"beanjamin/coffee/order"
+
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/testutils/inject"
 )
@@ -91,7 +93,7 @@ func TestSaveOrderVideoAndClear_ClearsOnlyOnSuccess(t *testing.T) {
 			c, cam, dir := newCamStorageTestCoffee(t)
 			cam.DoFunc = tc.doFunc
 
-			order := NewOrder("espresso", "Ada", "hi", "bye")
+			order := order.NewOrder("espresso", "Ada", "hi", "bye")
 			c.writePendingSave(order, now)
 			path := filepath.Join(dir, order.ID+".json")
 			if _, err := os.Stat(path); err != nil {
@@ -119,14 +121,14 @@ func TestSaveOrderVideoAndClear_NoStorageDropsRecord(t *testing.T) {
 		camStorage:           nil,
 		pendingOrderClipsDir: dir,
 	}
-	order := NewOrder("espresso", "Ada", "hi", "bye")
-	c.writePendingSave(order, time.Now().UTC())
-	path := filepath.Join(dir, order.ID+".json")
+	o := order.NewOrder("espresso", "Ada", "hi", "bye")
+	c.writePendingSave(o, time.Now().UTC())
+	path := filepath.Join(dir, o.ID+".json")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("pending record was not written: %v", err)
 	}
 
-	c.saveOrderVideoAsync(order, time.Now().UTC(), nil)
+	c.saveOrderVideoAsync(o, time.Now().UTC(), nil)
 
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("expected pending record dropped when no cam storage, stat err: %v", err)
@@ -144,11 +146,11 @@ func TestIssueVideoSave_RequestShape(t *testing.T) {
 		return map[string]any{}, nil
 	}
 
-	order := NewOrder("espresso", "Ada", "hi", "bye")
+	o := order.NewOrder("espresso", "Ada", "hi", "bye")
 	from := time.Now().UTC().Add(-clipLead)
 	to := time.Now().UTC().Add(clipTrail)
 
-	if ok := c.issueVideoSave(order, from, to, context.DeadlineExceeded, c.logger); !ok {
+	if ok := c.issueVideoSave(o, from, to, context.DeadlineExceeded, c.logger); !ok {
 		t.Fatalf("issueVideoSave returned false on a clean response")
 	}
 
@@ -159,8 +161,8 @@ func TestIssueVideoSave_RequestShape(t *testing.T) {
 		t.Errorf("async = %v, want false (sync save so failures surface)", got["async"])
 	}
 	tags, _ := got["tags"].([]string)
-	if len(tags) != 1 || tags[0] != order.ID {
-		t.Errorf("tags = %v, want [%s]", got["tags"], order.ID)
+	if len(tags) != 1 || tags[0] != o.ID {
+		t.Errorf("tags = %v, want [%s]", got["tags"], o.ID)
 	}
 
 	var meta map[string]string
@@ -170,8 +172,8 @@ func TestIssueVideoSave_RequestShape(t *testing.T) {
 	if len(meta) != 2 {
 		t.Errorf("metadata has %d keys (%v), want exactly order_id+order_status", len(meta), meta)
 	}
-	if meta["order_id"] != order.ID {
-		t.Errorf("metadata order_id = %q, want %q", meta["order_id"], order.ID)
+	if meta["order_id"] != o.ID {
+		t.Errorf("metadata order_id = %q, want %q", meta["order_id"], o.ID)
 	}
 	if meta["order_status"] != "failed" {
 		t.Errorf("metadata order_status = %q, want failed (execErr was set)", meta["order_status"])
@@ -182,9 +184,9 @@ func TestIssueVideoSave_RequestShape(t *testing.T) {
 // and returns its path.
 func writeStalePendingSave(t *testing.T, c *beanjaminCoffee, dir string) string {
 	t.Helper()
-	order := NewOrder("espresso", "Ada", "hi", "bye")
-	c.writePendingSave(order, time.Now().UTC().Add(-time.Hour))
-	path := filepath.Join(dir, order.ID+".json")
+	o := order.NewOrder("espresso", "Ada", "hi", "bye")
+	c.writePendingSave(o, time.Now().UTC().Add(-time.Hour))
+	path := filepath.Join(dir, o.ID+".json")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("pending record was not written: %v", err)
 	}
@@ -291,8 +293,8 @@ func TestIssueVideoSave_BoundedByTimeout(t *testing.T) {
 	}
 
 	start := time.Now()
-	order := NewOrder("espresso", "Ada", "hi", "bye")
-	c.issueVideoSave(order, start.Add(-clipLead), start.Add(clipTrail), nil, c.logger)
+	o := order.NewOrder("espresso", "Ada", "hi", "bye")
+	c.issueVideoSave(o, start.Add(-clipLead), start.Add(clipTrail), nil, c.logger)
 
 	if !hasDeadline {
 		t.Fatal("save DoCommand context has no deadline")
@@ -306,14 +308,14 @@ func TestIssueVideoSave_BoundedByTimeout(t *testing.T) {
 // what recovery needs and is readable by the module's user alone.
 func TestWritePendingSave_StoresNoCustomerDataAndIsPrivate(t *testing.T) {
 	c, _, dir := newCamStorageTestCoffee(t)
-	order := NewOrder("espresso", "Placeholder Name", "hello Placeholder Name", "bye")
-	order.ModifiedCustomerName = "Placeholdr Name"
-	order.CustomerEmail = "customer@example.com"
+	o := order.NewOrder("espresso", "Placeholder Name", "hello Placeholder Name", "bye")
+	o.ModifiedCustomerName = "Placeholdr Name"
+	o.CustomerEmail = "customer@example.com"
 	videoFrom := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
 
-	c.writePendingSave(order, videoFrom)
+	c.writePendingSave(o, videoFrom)
 
-	path := filepath.Join(dir, order.ID+".json")
+	path := filepath.Join(dir, o.ID+".json")
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("pending record was not written: %v", err)
@@ -334,8 +336,8 @@ func TestWritePendingSave_StoresNoCustomerDataAndIsPrivate(t *testing.T) {
 	if err := json.Unmarshal(data, &ps); err != nil {
 		t.Fatalf("decode record: %v", err)
 	}
-	if ps.Order.ID != order.ID || ps.Order.Drink != "espresso" || !ps.VideoFrom.Equal(videoFrom) {
-		t.Errorf("record = %+v, want order %s / espresso / %s", ps, order.ID, videoFrom)
+	if ps.Order.ID != o.ID || ps.Order.Drink != "espresso" || !ps.VideoFrom.Equal(videoFrom) {
+		t.Errorf("record = %+v, want order %s / espresso / %s", ps, o.ID, videoFrom)
 	}
 }
 
@@ -349,16 +351,16 @@ func TestCleanupPendingClips_RecoversFullOrderRecord(t *testing.T) {
 		return map[string]any{}, nil
 	}
 
-	order := NewOrder("lungo", "Placeholder Name", "hi", "bye")
-	order.CustomerEmail = "customer@example.com"
+	o := order.NewOrder("lungo", "Placeholder Name", "hi", "bye")
+	o.CustomerEmail = "customer@example.com"
 	fullRecord, err := json.Marshal(struct {
-		Order     Order     `json:"order"`
-		VideoFrom time.Time `json:"video_from"`
-	}{order, time.Now().UTC().Add(-time.Hour)})
+		Order     order.Order `json:"order"`
+		VideoFrom time.Time   `json:"video_from"`
+	}{o, time.Now().UTC().Add(-time.Hour)})
 	if err != nil {
 		t.Fatalf("marshal full-order record: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, order.ID+".json"), fullRecord, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, o.ID+".json"), fullRecord, 0o600); err != nil {
 		t.Fatalf("write full-order record: %v", err)
 	}
 
@@ -369,7 +371,7 @@ func TestCleanupPendingClips_RecoversFullOrderRecord(t *testing.T) {
 	if resp["saved"] != 1 {
 		t.Errorf("saved = %v, want 1 (resp %v)", resp["saved"], resp)
 	}
-	if len(tags) != 1 || tags[0] != order.ID {
-		t.Errorf("save tags = %v, want [%s]", tags, order.ID)
+	if len(tags) != 1 || tags[0] != o.ID {
+		t.Errorf("save tags = %v, want [%s]", tags, o.ID)
 	}
 }

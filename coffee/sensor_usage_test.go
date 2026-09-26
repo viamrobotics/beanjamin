@@ -277,6 +277,9 @@ func TestWaterDelta(t *testing.T) {
 		{"decaf", 1},
 		{"lungo", 1.5},
 		{"decaf_lungo", 1.5},
+		{"iced_coffee", 1.5},
+		{"iced_latte", 1.5},
+		{"unknown", 1},
 	} {
 		if got := waterDelta(tc.drink); got != tc.want {
 			t.Errorf("waterDelta(%q) = %v, want %v", tc.drink, got, tc.want)

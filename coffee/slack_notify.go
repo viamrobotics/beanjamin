@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"beanjamin/coffee/order"
 )
 
 // notifySlackTimeout caps how long a single Slack DoCommand may take. The
@@ -17,8 +19,8 @@ const notifySlackTimeout = 10 * time.Second
 // a no-op for successful orders and when no notifier is configured. The send
 // runs in its own goroutine so it never blocks queue processing, and every
 // failure is logged rather than propagated.
-func (s *beanjaminCoffee) notifyOrderFailureSlack(r orderReading) {
-	if s.slackNotifier == nil || r.execErr == nil {
+func (s *beanjaminCoffee) notifyOrderFailureSlack(r order.Reading) {
+	if s.slackNotifier == nil || r.ExecErr == nil {
 		return
 	}
 	text := slackFailureText(r)
@@ -26,15 +28,15 @@ func (s *beanjaminCoffee) notifyOrderFailureSlack(r orderReading) {
 	// configured) and we know the location to filter within.
 	clipURL := ""
 	if s.camStorage != nil {
-		clipURL = buildClipDataURL(s.dataLocationID, s.primaryOrgID, r.order.ID)
+		clipURL = buildClipDataURL(s.dataLocationID, s.primaryOrgID, r.Order.ID)
 	}
-	planRequestURL := buildPlanRequestDataURL(s.dataLocationID, s.primaryOrgID, r.order.ID)
+	planRequestURL := buildPlanRequestDataURL(s.dataLocationID, s.primaryOrgID, r.Order.ID)
 	blocks := slackFailureBlocks(r, s.machineLogsURL, clipURL, planRequestURL)
 	// Tag with the order ID so the send logs join the rest of the order's
 	// trail. The send is queued and runs detached, possibly after the order
 	// has left the queue, so we build the tagged logger from the reading in
 	// hand rather than activeOrderLogger().
-	logger := s.logger.WithFields("order_id", r.order.ID)
+	logger := s.logger.WithFields("order_id", r.Order.ID)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), notifySlackTimeout)
 		defer cancel()
@@ -59,16 +61,16 @@ func (s *beanjaminCoffee) notifyOrderFailureSlack(r orderReading) {
 // and when Block Kit can't render. Operator cancels and genuine faults get
 // distinct wording so readers can tell a deliberate stop from a real fault at a
 // glance.
-func slackFailureText(r orderReading) string {
-	drink := escapeSlackMrkdwn(r.order.Drink)
+func slackFailureText(r order.Reading) string {
+	drink := escapeSlackMrkdwn(r.Order.Drink)
 	customer := slackCustomer(r)
 	step := slackStep(r)
-	if r.operatorCancelled {
+	if r.OperatorCancelled {
 		return fmt.Sprintf(":warning: Order %s (%s) for %s was cancelled by an operator at %q.",
-			r.order.ID, drink, customer, step)
+			r.Order.ID, drink, customer, step)
 	}
 	return fmt.Sprintf(":x: Order %s (%s) for %s failed at %q: %s",
-		r.order.ID, drink, customer, step, slackErrMsg(r))
+		r.Order.ID, drink, customer, step, slackErrMsg(r))
 }
 
 // slackFailureBlocks builds a Slack Block Kit layout for a failed or cancelled
@@ -85,15 +87,15 @@ func slackFailureText(r orderReading) string {
 // non-empty, add clickable app.viam.com deep-links (machine logs, the order's
 // video clip filtered by tag, and the order's plan-request files) to the
 // footer.
-func slackFailureBlocks(r orderReading, machineLogsURL, clipDataURL, planRequestURL string) []any {
+func slackFailureBlocks(r order.Reading, machineLogsURL, clipDataURL, planRequestURL string) []any {
 	header := ":x: Order failed"
 	stepLabel := "*Failed at:*"
-	if r.operatorCancelled {
+	if r.OperatorCancelled {
 		header = ":warning: Order cancelled by operator"
 		stepLabel = "*Cancelled at:*"
 	}
 
-	duration := r.endedAt.Sub(r.startedAt).Round(time.Second)
+	duration := r.EndedAt.Sub(r.StartedAt).Round(time.Second)
 	blocks := []any{
 		map[string]any{
 			"type": "header",
@@ -102,18 +104,18 @@ func slackFailureBlocks(r orderReading, machineLogsURL, clipDataURL, planRequest
 		map[string]any{
 			"type": "section",
 			"fields": []any{
-				slackField("*Drink:*", escapeSlackMrkdwn(r.order.Drink)),
+				slackField("*Drink:*", escapeSlackMrkdwn(r.Order.Drink)),
 				slackField("*Customer:*", slackCustomer(r)),
 				slackField(stepLabel, slackStep(r)),
 				slackField("*Duration:*", duration.String()),
-				slackField("*Decaf:*", slackBool(r.decaf)),
+				slackField("*Decaf:*", slackBool(r.Decaf)),
 			},
 		},
 	}
 
 	// Show the error in a code block for faults; an operator cancel has no
 	// meaningful error to surface.
-	if !r.operatorCancelled {
+	if !r.OperatorCancelled {
 		blocks = append(blocks, map[string]any{
 			"type": "section",
 			"text": map[string]any{
@@ -123,15 +125,15 @@ func slackFailureBlocks(r orderReading, machineLogsURL, clipDataURL, planRequest
 		})
 	}
 
-	footer := fmt.Sprintf("Order `%s`", r.order.ID)
-	if !r.startedAt.IsZero() {
+	footer := fmt.Sprintf("Order `%s`", r.Order.ID)
+	if !r.StartedAt.IsZero() {
 		// Slack renders <!date> in the reader's timezone; the trailing pipe value
 		// is the fallback shown when it can't.
 		footer += fmt.Sprintf(" · started <!date^%d^{date_short_pretty} {time}|%s>",
-			r.startedAt.Unix(), r.startedAt.UTC().Format(time.RFC3339))
+			r.StartedAt.Unix(), r.StartedAt.UTC().Format(time.RFC3339))
 	}
-	if r.traceID != "" {
-		footer += fmt.Sprintf(" · trace `%s`", r.traceID)
+	if r.TraceID != "" {
+		footer += fmt.Sprintf(" · trace `%s`", r.TraceID)
 	}
 	if machineLogsURL != "" {
 		footer += fmt.Sprintf(" · <%s|machine logs>", machineLogsURL)
@@ -230,25 +232,25 @@ func slackBool(b bool) string {
 }
 
 // slackCustomer is the name typed at the kiosk, escaped for mrkdwn.
-func slackCustomer(r orderReading) string {
-	if r.order.CustomerName == "" {
+func slackCustomer(r order.Reading) string {
+	if r.Order.CustomerName == "" {
 		return "an unnamed customer"
 	}
-	return escapeSlackMrkdwn(r.order.CustomerName)
+	return escapeSlackMrkdwn(r.Order.CustomerName)
 }
 
-func slackStep(r orderReading) string {
-	if r.failedStep == "" {
+func slackStep(r order.Reading) string {
+	if r.FailedStep == "" {
 		return "an unknown step"
 	}
-	return r.failedStep
+	return r.FailedStep
 }
 
 // slackErrMsg is escaped because an error can wrap arbitrary strings, such as
 // a peer's response or a request value.
-func slackErrMsg(r orderReading) string {
-	if r.execErr != nil {
-		return escapeSlackMrkdwn(r.execErr.Error())
+func slackErrMsg(r order.Reading) string {
+	if r.ExecErr != nil {
+		return escapeSlackMrkdwn(r.ExecErr.Error())
 	}
 	return "unknown error"
 }

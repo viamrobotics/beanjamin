@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"beanjamin/coffee/order"
+
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/robot/framesystem"
@@ -194,7 +196,7 @@ func TestProceedRebuildsFrameSystemWhenPaused(t *testing.T) {
 		t.Error("proceed must hand the arm back after rebuilding")
 	}
 	select {
-	case <-s.queue.proceed:
+	case <-s.queue.Proceed():
 	default:
 		t.Error("proceed signal should have been sent to unpause the queue")
 	}
@@ -240,7 +242,7 @@ func TestProceedOnRunningQueueParksNoSignal(t *testing.T) {
 		t.Fatalf("proceed error: %v", err)
 	}
 	select {
-	case <-s.queue.proceed:
+	case <-s.queue.Proceed():
 		t.Error("proceed must not park a resume signal while the queue is running")
 	default:
 	}
@@ -358,7 +360,7 @@ func TestWaitForProceedHoldsTheQueueUntilProceed(t *testing.T) {
 func TestWaitForProceedIgnoresAStaleSignal(t *testing.T) {
 	s, _, _ := coffeeWithDirtyWorld(t, nil)
 	s.queueStop = make(chan struct{})
-	s.queue.proceed <- struct{}{} // parked by an earlier proceed
+	s.queue.WakeProceed() // parked by an earlier proceed
 
 	s.paused.Store(true)
 	resumed := make(chan bool, 1)
@@ -486,7 +488,7 @@ func TestProceedRefusesWhileASequenceRuns(t *testing.T) {
 		t.Error("a refused proceed must leave the cached frame system alone")
 	}
 	select {
-	case <-s.queue.proceed:
+	case <-s.queue.Proceed():
 		t.Error("a refused proceed must not unpause the queue")
 	default:
 	}
@@ -508,7 +510,7 @@ func TestProceedRebuildFailureKeepsQueuePaused(t *testing.T) {
 		t.Error("queue should still be paused after a failed rebuild")
 	}
 	select {
-	case <-s.queue.proceed:
+	case <-s.queue.Proceed():
 		t.Error("a failed rebuild must not unpause the queue")
 	default:
 	}
@@ -522,7 +524,7 @@ func TestProceedRebuildFailureKeepsQueuePaused(t *testing.T) {
 func TestResetWorldRefusesWhileASequenceHoldsTheArm(t *testing.T) {
 	s, dirty, rebuilds := coffeeWithDirtyWorld(t, nil)
 	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
-	s.queue.Enqueue(Order{ID: "next", Drink: "espresso"})
+	s.queue.Enqueue(order.Order{ID: "next", Drink: "espresso"})
 	s.portafilterInMachine.Store(true)
 	s.portafilterHasGrounds.Store(true)
 	s.doorOpenDegs = 90
@@ -624,8 +626,8 @@ func TestResetWorldReleasesTheGateOnRebuildFailure(t *testing.T) {
 func TestClearQueueKeepsInFlightOrder(t *testing.T) {
 	ctx := context.Background()
 	s := newStatusService(t, &Config{})
-	s.queue.Enqueue(Order{ID: "current", Drink: "espresso", CustomerName: "Bob"})
-	s.queue.Enqueue(Order{ID: "next", Drink: "lungo", CustomerName: "Cleo"})
+	s.queue.Enqueue(order.Order{ID: "current", Drink: "espresso", CustomerName: "Bob"})
+	s.queue.Enqueue(order.Order{ID: "next", Drink: "lungo", CustomerName: "Cleo"})
 	// What processQueue does at the top of every order.
 	s.queue.Start()
 	s.setStep(stepBrewing)
@@ -669,8 +671,8 @@ func TestClearQueueKeepsInFlightOrder(t *testing.T) {
 // in-flight order costs nothing when none is running.
 func TestClearQueueOnIdleQueueClearsEverythingPending(t *testing.T) {
 	s := newStatusService(t, &Config{})
-	s.queue.Enqueue(Order{ID: "a", Drink: "espresso"})
-	s.queue.Enqueue(Order{ID: "b", Drink: "espresso"})
+	s.queue.Enqueue(order.Order{ID: "a", Drink: "espresso"})
+	s.queue.Enqueue(order.Order{ID: "b", Drink: "espresso"})
 
 	res, err := s.DoCommand(context.Background(), map[string]any{"clear_queue": true})
 	if err != nil {
@@ -707,7 +709,7 @@ func TestFaultWithStrandedStatePausesQueue(t *testing.T) {
 	s.gripper = faultingGripper()
 	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
 
-	if err := s.prepareDrink(context.Background(), NewOrder("espresso", "Alice", "", "")); err == nil {
+	if err := s.prepareDrink(context.Background(), order.NewOrder("espresso", "Alice", "", "")); err == nil {
 		t.Fatal("prepareDrink should fail on the unreadable gripper")
 	}
 	if !s.paused.Load() {
@@ -729,7 +731,7 @@ func TestFaultWithCleanWorldPausesQueue(t *testing.T) {
 	s.gripper = faultingGripper()
 	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
 
-	if err := s.prepareDrink(context.Background(), NewOrder("espresso", "Alice", "", "")); err == nil {
+	if err := s.prepareDrink(context.Background(), order.NewOrder("espresso", "Alice", "", "")); err == nil {
 		t.Fatal("prepareDrink should fail on the unreadable gripper")
 	}
 	if !s.paused.Load() {
@@ -747,7 +749,7 @@ func TestOperatorCancelLeavesPauseToCancel(t *testing.T) {
 	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
 	s.cancelFunc()
 
-	if err := s.prepareDrink(context.Background(), NewOrder("espresso", "Alice", "", "")); err == nil {
+	if err := s.prepareDrink(context.Background(), order.NewOrder("espresso", "Alice", "", "")); err == nil {
 		t.Fatal("prepareDrink should fail on the unreadable gripper")
 	}
 	if s.paused.Load() {
