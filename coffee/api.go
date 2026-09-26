@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"go.viam.com/rdk/module/trace"
+
+	"beanjamin/coffee/icevision"
 )
 
 // Step labels surfaced through setStep -> get_queue, the order sensor's
@@ -175,7 +177,7 @@ var coffeeCommands = []commandDef{
 				return nil, err
 			}
 			if annotate {
-				ctx = withIceFrameSaving(ctx)
+				ctx = icevision.WithFrameSaving(ctx)
 			}
 			return s.executeAction(ctx, cmd["execute_action"].(string), withGlass)
 		}},
