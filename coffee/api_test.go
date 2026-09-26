@@ -2,9 +2,11 @@ package coffee
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"beanjamin/coffee/order"
+	"beanjamin/coffee/speech"
 
 	"go.viam.com/rdk/logging"
 )
@@ -59,6 +61,22 @@ func TestStatusReportsQueueAndFlags(t *testing.T) {
 	orders, ok := st["orders"].([]any)
 	if !ok || len(orders) != 2 {
 		t.Fatalf("orders = %v, want a 2-element []any", st["orders"])
+	}
+}
+
+func TestStatusReportsFaultActive(t *testing.T) {
+	s := newStatusService(t, &Config{})
+	s.faultAlarm = speech.NewFaultAlarm(nil, s.logger)
+	s.notifyOrderReading(order.Reading{
+		Order:   order.Order{ID: "order-1", Drink: "espresso"},
+		ExecErr: errors.New("boom"),
+	})
+	st, err := s.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status error: %v", err)
+	}
+	if active, _ := st["fault_active"].(bool); !active {
+		t.Errorf("fault_active = %v, want true", st["fault_active"])
 	}
 }
 

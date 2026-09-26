@@ -1,4 +1,4 @@
-package coffee
+package speech
 
 import (
 	"fmt"
@@ -6,9 +6,9 @@ import (
 	"strings"
 )
 
-// speakableDrink converts a drink id like "decaf_lungo" into a form Google TTS
+// SpeakableDrink converts a drink id like "decaf_lungo" into a form Google TTS
 // reads naturally ("decaf lungo") rather than pronouncing the underscore.
-func speakableDrink(drink string) string {
+func SpeakableDrink(drink string) string {
 	return strings.ReplaceAll(drink, "_", " ")
 }
 
@@ -95,16 +95,18 @@ var unsupportedDrink = []string{
 	"Did you just ask me for a %s? I have one arm and zero patience. Espresso, lungo, or nothing.",
 }
 
-func pickGreeting(drink, customerName string) string {
-	drink = speakableDrink(drink)
+// Greeting picks the line spoken when the machine starts on an order.
+func Greeting(drink, customerName string) string {
+	drink = SpeakableDrink(drink)
 	if customerName != "" {
 		return fmt.Sprintf(greetingsNamed[rand.Intn(len(greetingsNamed))], drink, customerName)
 	}
 	return fmt.Sprintf(greetingsAnonymous[rand.Intn(len(greetingsAnonymous))], drink)
 }
 
-func pickOrderReceived(drink, customerName string) string {
-	drink = speakableDrink(drink)
+// OrderReceived picks the line spoken when a single order joins the queue.
+func OrderReceived(drink, customerName string) string {
+	drink = SpeakableDrink(drink)
 	if customerName != "" {
 		return fmt.Sprintf(orderReceivedNamed[rand.Intn(len(orderReceivedNamed))], drink, customerName)
 	}
@@ -112,7 +114,7 @@ func pickOrderReceived(drink, customerName string) string {
 }
 
 // orderReceivedBatch templates fire once per batch (count > 1), replacing
-// the per-order pickOrderReceived line that would otherwise speak N-1 times
+// the per-order OrderReceived line that would otherwise speak N-1 times
 // in rapid succession at enqueue time. Format verbs: %[1]d count,
 // %[2]s drink-plural, %[3]s name.
 var orderReceivedBatchAnonymous = []string{
@@ -127,8 +129,10 @@ var orderReceivedBatchNamed = []string{
 	"%[3]s, %[1]d %[2]s in the queue. Starting on the first now.",
 }
 
-func pickOrderReceivedBatch(drink, customerName string, count int) string {
-	plural := speakableDrink(drink) + "s"
+// OrderReceivedBatch picks the single line spoken when a batch of count
+// identical orders joins the queue.
+func OrderReceivedBatch(drink, customerName string, count int) string {
+	plural := SpeakableDrink(drink) + "s"
 	if customerName != "" {
 		return fmt.Sprintf(orderReceivedBatchNamed[rand.Intn(len(orderReceivedBatchNamed))], count, plural, customerName)
 	}
@@ -150,24 +154,26 @@ var orderCancelledNamed = []string{
 	"No %[1]s for %[2]s then. Noted.",
 }
 
-func pickOrderCancelled(drink, customerName string) string {
-	drink = speakableDrink(drink)
+// OrderCancelled picks the line spoken when a queued order is cancelled.
+func OrderCancelled(drink, customerName string) string {
+	drink = SpeakableDrink(drink)
 	if customerName != "" {
 		return fmt.Sprintf(orderCancelledNamed[rand.Intn(len(orderCancelledNamed))], drink, customerName)
 	}
 	return fmt.Sprintf(orderCancelledAnonymous[rand.Intn(len(orderCancelledAnonymous))], drink)
 }
 
-func pickAlmostReady() string {
+// AlmostReady picks the line spoken as the drink nears completion.
+func AlmostReady() string {
 	return almostReadyAnonymous[rand.Intn(len(almostReadyAnonymous))]
 }
 
-// pickDrinkReady picks a cup-handoff line. When batchSize > 1, the order is
+// DrinkReady picks a cup-handoff line. When batchSize > 1, the order is
 // part of a multi-drink batch and the spoken line names the position
 // (e.g. "2 of 3") so the customer can track progress; otherwise the original
 // single-drink templates are used.
-func pickDrinkReady(drink, customerName string, batchIndex, batchSize int) string {
-	drink = speakableDrink(drink)
+func DrinkReady(drink, customerName string, batchIndex, batchSize int) string {
+	drink = SpeakableDrink(drink)
 	if batchSize > 1 {
 		if customerName != "" {
 			return fmt.Sprintf(drinkReadyBatchNamed[rand.Intn(len(drinkReadyBatchNamed))], drink, customerName, batchIndex, batchSize)
@@ -180,13 +186,15 @@ func pickDrinkReady(drink, customerName string, batchIndex, batchSize int) strin
 	return fmt.Sprintf(drinkReadyAnonymous[rand.Intn(len(drinkReadyAnonymous))], drink)
 }
 
-func pickUnsupportedDrink(drink string) string {
-	return fmt.Sprintf(unsupportedDrink[rand.Intn(len(unsupportedDrink))], speakableDrink(drink))
+// UnsupportedDrink picks the line spoken when an order asks for a drink the
+// machine cannot make.
+func UnsupportedDrink(drink string) string {
+	return fmt.Sprintf(unsupportedDrink[rand.Intn(len(unsupportedDrink))], SpeakableDrink(drink))
 }
 
 // orderFailed lines are Cappuccina owning up to a brew that genuinely faulted.
-// Spoken via sayAlways alongside the red LED flash (fault_alert.go); operator
-// cancels get the calmer cancelAnnouncement instead. Format verbs:
+// Spoken via Speaker.SayAlways alongside the fault_active flag (FaultAlarm);
+// operator cancels get the calmer cancel announcement instead. Format verbs:
 // %[1]s = drink name, %[2]s = customer name.
 var orderFailedAnonymous = []string{
 	"Ugh. That %[1]s did not make it. I'd blame the beans, but we all saw whose arm it was.",
@@ -204,8 +212,9 @@ var orderFailedNamed = []string{
 	"Not my finest work, %[2]s. The %[1]s is gone. Tell no one — someone's on the way to fix me.",
 }
 
-func pickOrderFailed(drink, customerName string) string {
-	drink = speakableDrink(drink)
+// OrderFailed picks the line spoken when a brew genuinely faults.
+func OrderFailed(drink, customerName string) string {
+	drink = SpeakableDrink(drink)
 	if customerName != "" {
 		return fmt.Sprintf(orderFailedNamed[rand.Intn(len(orderFailedNamed))], drink, customerName)
 	}

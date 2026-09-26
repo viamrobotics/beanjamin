@@ -5,6 +5,7 @@ package coffee
 // the arm back to a clean starting state.
 
 import (
+	"beanjamin/coffee/speech"
 	"context"
 	"errors"
 	"fmt"
@@ -244,7 +245,7 @@ func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]any, error) {
 		if err := s.waitForIdle(ctx, resetCancelWaitTimeout); err != nil {
 			return nil, fmt.Errorf("cancel: %w", err)
 		}
-		if err := s.sayAlways(ctx, cancelAnnouncement); err != nil {
+		if err := s.speaker.SayAlways(ctx, cancelAnnouncement); err != nil {
 			logger.Warnf("cancel: failed to announce cancellation: %v", err)
 		}
 	}
@@ -286,7 +287,7 @@ func (s *beanjaminCoffee) cancelOrder(ctx context.Context, v any) (map[string]an
 	s.logger.Infof("cancel_order: dropped queued order %s (%s for %s) — %d order(s) still queued",
 		order.ID, order.Drink, order.CustomerName, remaining)
 
-	if err := s.say(ctx, pickOrderCancelled(order.Drink, order.DisplayName())); err != nil {
+	if err := s.speaker.Say(ctx, speech.OrderCancelled(order.Drink, order.DisplayName())); err != nil {
 		s.logger.Warnf("cancel_order: failed to announce cancellation: %v", err)
 	}
 
@@ -383,7 +384,7 @@ func (s *beanjaminCoffee) rewind(ctx context.Context) (map[string]any, error) {
 
 	// Announce up front so anyone standing at the machine hears what is about
 	// to move before it moves.
-	if err := s.sayAlways(ctx, rewindAnnouncement); err != nil {
+	if err := s.speaker.SayAlways(ctx, rewindAnnouncement); err != nil {
 		logger.Warnf("rewind: failed to announce recovery: %v", err)
 	}
 
