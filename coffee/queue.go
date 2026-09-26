@@ -202,9 +202,15 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order order.Or
 	return nil
 }
 
+// orderSensorSink is what the coffee service needs from the
+// viam:beanjamin:order-sensor component: somewhere to push each order attempt.
+type orderSensorSink interface {
+	PushOrderReading(r order.Reading)
+}
+
 func (s *beanjaminCoffee) notifyOrderReading(r order.Reading) {
 	if s.orderSensorSink != nil {
-		s.orderSensorSink.pushOrderReading(r)
+		s.orderSensorSink.PushOrderReading(r)
 	}
 	// Best-effort Slack alert on any non-successful attempt (faults + operator
 	// cancels). No-op when no slack_notifier_name is configured.
