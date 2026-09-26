@@ -1,8 +1,8 @@
 package coffee
 
 // Coffee service configuration: the Config struct and its validation, the typed
-// values it carries (steps, relative poses, container dimensions), and the
-// small helpers that resolve configured values to their defaults.
+// values it carries (relative poses, container dimensions), and the small
+// helpers that resolve configured values to their defaults.
 
 import (
 	"fmt"
@@ -14,59 +14,11 @@ import (
 	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/components/gripper"
 	"go.viam.com/rdk/components/sensor"
-	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot/framesystem"
 	generic "go.viam.com/rdk/services/generic"
 	"go.viam.com/rdk/services/vision"
 )
-
-type StepLinearConstraint struct {
-	LineToleranceMm          float64 `json:"line_tolerance_mm"`
-	OrientationToleranceDegs float64 `json:"orientation_tolerance_degs"`
-}
-
-type AllowedCollision struct {
-	Frame1 string `json:"frame1"`
-	Frame2 string `json:"frame2"`
-}
-
-type StepMoveOptions struct {
-	MaxVelDegsPerSec  float64 `json:"max_vel_degs_per_sec,omitempty"`
-	MaxAccDegsPerSec2 float64 `json:"max_acc_degs_per_sec2,omitempty"`
-}
-
-type Step struct {
-	PoseName            string                `json:"pose_name"`
-	Pause               time.Duration         `json:"pause_secs,omitempty"`
-	LinearConstraint    *StepLinearConstraint `json:"linear_constraint,omitempty"`
-	MoveOptions         *StepMoveOptions      `json:"move_options,omitempty"`
-	AllowedCollisions   []AllowedCollision    `json:"allowed_collisions,omitempty"`
-	PivotFromPose       string                `json:"pivot_from_pose,omitempty"`
-	PivotDegreesPerStep float64               `json:"pivot_degrees_per_step,omitempty"`
-
-	// PivotExtraDegrees rotates past PoseName by this much along the same axis,
-	// then unwinds back onto it — all in one planned trajectory. It compensates
-	// for the gripper slipping on the portafilter handle while the bayonet is
-	// under load: the arm must over-rotate for the filter to seat, and the
-	// unwind re-zeroes the grip, since a seated filter out-holds the claws so
-	// the handle slides back through them.
-	PivotExtraDegrees float64 `json:"pivot_extra_degrees,omitempty"`
-
-	// NoSpill routes this step's move through the level carry (carryHeldLevel)
-	// rather than a direct plan.
-	NoSpill bool `json:"no_spill,omitempty"`
-
-	// PoseSwitch is the switch this step's pose is read from (fetchPose).
-	PoseSwitch toggleswitch.Switch `json:"-"`
-
-	// Circular motion: move in small circles around PoseName to distribute
-	// material (e.g. coffee grounds) evenly. The motion continues until
-	// CircularDurationSec is exceeded.
-	CircularRadiusMm     float64 `json:"circular_radius_mm,omitempty"`
-	CircularDurationSec  float64 `json:"circular_duration_sec,omitempty"`
-	CircularPointsPerRev int     `json:"circular_points_per_rev,omitempty"`
-}
 
 // Config is the attribute set of the viam:beanjamin:coffee service. Field
 // semantics and defaults are documented in the README; zero-valued tunables
@@ -365,10 +317,7 @@ func orDefault[T ~int | ~float64](v, def T) T {
 // maxBatchSize returns the configured cap on prepare_order count, falling
 // back to defaultMaxBatchSize.
 func (s *beanjaminCoffee) maxBatchSize() int {
-	if s.cfg != nil && s.cfg.MaxBatchSize > 0 {
-		return s.cfg.MaxBatchSize
-	}
-	return defaultMaxBatchSize
+	return orDefault(s.cfg.MaxBatchSize, defaultMaxBatchSize)
 }
 
 // defaultCupPickupMaxAttempts is used when Config.CupPickupMaxAttempts is

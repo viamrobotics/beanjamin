@@ -310,16 +310,11 @@ func (s *beanjaminCoffee) buttonPressHold() time.Duration {
 // drinkBrewTime returns how long to wait for the machine to finish pouring the
 // given drink — the configured value, or the default for that shot size.
 func (s *beanjaminCoffee) drinkBrewTime(drink string) time.Duration {
+	configured, def := s.cfg.BrewTimeSec, defaultEspressoBrewTime
 	if isLungoDrink(drink) {
-		if s.cfg.LungoBrewTimeSec > 0 {
-			return time.Duration(s.cfg.LungoBrewTimeSec * float64(time.Second))
-		}
-		return defaultLungoBrewTime
+		configured, def = s.cfg.LungoBrewTimeSec, defaultLungoBrewTime
 	}
-	if s.cfg.BrewTimeSec > 0 {
-		return time.Duration(s.cfg.BrewTimeSec * float64(time.Second))
-	}
-	return defaultEspressoBrewTime
+	return time.Duration(orDefault(configured, def.Seconds()) * float64(time.Second))
 }
 
 func (s *beanjaminCoffee) cleanPortafilter(ctx, cancelCtx context.Context) error {

@@ -34,8 +34,8 @@ func (g gripperState) String() string {
 // (empty 357, glass 494, cup 520, open 850). Tunable per build via Config, since
 // 357 is this arm's claws-extension rest position.
 const (
-	gripperHoldMinPosDefault = 430.0
-	gripperHoldMaxPosDefault = 685.0
+	defaultGripperHoldMinPos = 430.0
+	defaultGripperHoldMaxPos = 685.0
 )
 
 // errGripMissed means a Grab closed the jaws but they did not land in the
@@ -57,11 +57,11 @@ func (s *beanjaminCoffee) gripperOpenTimeout() time.Duration {
 }
 
 func (s *beanjaminCoffee) gripperHoldMinPos() float64 {
-	return orDefault(s.cfg.GripperHoldMinPos, gripperHoldMinPosDefault)
+	return orDefault(s.cfg.GripperHoldMinPos, defaultGripperHoldMinPos)
 }
 
 func (s *beanjaminCoffee) gripperHoldMaxPos() float64 {
-	return orDefault(s.cfg.GripperHoldMaxPos, gripperHoldMaxPosDefault)
+	return orDefault(s.cfg.GripperHoldMaxPos, defaultGripperHoldMaxPos)
 }
 
 // classifyGripper maps a raw jaw position to a coarse state. Pure: the only
