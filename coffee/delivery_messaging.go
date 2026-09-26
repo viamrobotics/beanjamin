@@ -12,6 +12,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"beanjamin/coffee/order"
 )
 
 // deliveryMessageTimeout caps how long a single peer DoCommand may take, so a
@@ -23,20 +25,20 @@ const deliveryMessageTimeout = 10 * time.Second
 // 0-based serving-area slot the drink was placed in (Order.PickupPosition).
 // customer_email is always non-empty here: enqueueOrder rejects delivery
 // orders without one.
-func buildDeliveryRequest(order Order) map[string]any {
+func buildDeliveryRequest(o order.Order) map[string]any {
 	// Iced drinks are served in the tall glass; everything else in the
 	// standard espresso cup. Same container labels as the pickup pipeline.
 	container := pickupLabelCup
-	if isIcedDrink(order.Drink) {
+	if order.IsIced(o.Drink) {
 		container = pickupLabelGlass
 	}
 	return map[string]any{
 		"delivery_request": map[string]any{
-			"order_id":        order.ID,
-			"order_timestamp": order.EnqueuedAt.UTC().Format(time.RFC3339),
+			"order_id":        o.ID,
+			"order_timestamp": o.EnqueuedAt.UTC().Format(time.RFC3339),
 			"cup_type":        container,
-			"customer_email":  order.CustomerEmail,
-			"pickup_position": order.PickupPosition,
+			"customer_email":  o.CustomerEmail,
+			"pickup_position": o.PickupPosition,
 		},
 	}
 }
@@ -49,7 +51,7 @@ func buildDeliveryRequest(order Order) map[string]any {
 // before this machine moves on. Best-effort beyond that: a no-op when no
 // delivery_handler_name is configured, and failures are logged rather than
 // failing the order (the drink is already sitting in the serving area).
-func (s *beanjaminCoffee) notifyDeliveryRequest(ctx context.Context, order Order) {
+func (s *beanjaminCoffee) notifyDeliveryRequest(ctx context.Context, order order.Order) {
 	if s.deliveryHandler == nil {
 		s.logger.Warnf("no delivery_handler_name configured — skipping delivery request for order %s", order.ID)
 		return

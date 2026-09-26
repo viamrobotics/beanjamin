@@ -29,6 +29,7 @@ import (
 	"go.viam.com/rdk/services/vision"
 	"go.viam.com/rdk/spatialmath"
 
+	"beanjamin/coffee/order"
 	// Register the multi-poses-execution-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
 )
@@ -93,7 +94,7 @@ type beanjaminCoffee struct {
 	// rewind — read it via activeOrderLogger() so their logs carry the in-flight
 	// order's order_id. nil when idle.
 	activeLogger atomic.Pointer[logging.Logger]
-	queue        *OrderQueue
+	queue        *order.Queue
 	queueStop    chan struct{}
 	paused       atomic.Bool
 	// portafilterInMachine is true between releaseFilter and grabFilter:
@@ -393,7 +394,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		gripper:              gripperComp,
 		cancelCtx:            cancelCtx,
 		cancelFunc:           cancelFunc,
-		queue:                NewOrderQueue(),
+		queue:                order.NewQueue(),
 		queueStop:            make(chan struct{}),
 		orderSensorSink:      sink,
 		usageSensor:          usageSensor,

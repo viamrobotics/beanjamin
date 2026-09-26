@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"beanjamin/coffee/order"
+
 	"github.com/golang/geo/r3"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/module/trace"
@@ -268,7 +270,7 @@ func (s *beanjaminCoffee) sayAlways(ctx context.Context, text string) error {
 // (bounded by deliveryMessageTimeout) before speaking, so the order isn't
 // announced as handed off on the strength of a request nobody confirmed.
 // The caller sets order.PickupPosition from the serving step.
-func (s *beanjaminCoffee) readyForDelivery(ctx context.Context, order Order) error {
+func (s *beanjaminCoffee) readyForDelivery(ctx context.Context, order order.Order) error {
 	s.notifyDeliveryRequest(ctx, order)
 	drink := speakableDrink(order.Drink)
 	text := fmt.Sprintf("%s ready for delivery!", drink)
@@ -280,7 +282,7 @@ func (s *beanjaminCoffee) readyForDelivery(ctx context.Context, order Order) err
 
 // recordOrderHistory credits a completed drink to the customer's history; no-op
 // without an email or detector, best-effort otherwise.
-func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order Order) {
+func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order order.Order) {
 	if s.customerDetector == nil || order.CustomerEmail == "" {
 		return
 	}
@@ -434,45 +436,18 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string, withGl
 	return map[string]any{"status": "complete", "action": name}, nil
 }
 
-// isDecafDrink reports whether the drink uses the decaf grinding path.
-func isDecafDrink(drink string) bool {
-	return drink == "decaf" || drink == "decaf_lungo"
-}
-
-// isLungoDrink reports whether the drink is a lungo-size pour, matching the
-// lungo cases in drinkBrewTime. The iced drinks pour a lungo into the cup
-// before it is tipped over the ice.
-func isLungoDrink(drink string) bool {
-	return drink == "lungo" || drink == "decaf_lungo" || isIcedDrink(drink)
-}
-
-// isIcedDrink reports whether the drink uses the iced serving path
-// (fetch glass -> dispense ice -> pour espresso over ice) instead of handing
-// the espresso cup to the customer. It brews a lungo (see isLungoDrink).
-func isIcedDrink(drink string) bool {
-	return drink == "iced_coffee" || drink == "iced_latte"
-}
-
-// isMilkDrink reports whether the iced serving path additionally fetches the
-// milk bottle from the fridge and pours it into the glass (coffee/milk.go).
-// Every milk drink is also an iced drink — the milk goes into the same staged
-// glass, on top of the espresso.
-func isMilkDrink(drink string) bool {
-	return drink == "iced_latte"
-}
-
 // waterDelta returns the water-usage increment for a brew: 1.5 for lungo sizes
 // (lungo/decaf_lungo and the iced drinks), 1 otherwise (espresso/decaf).
 func waterDelta(drink string) float64 {
-	if isLungoDrink(drink) {
+	if order.IsLungo(drink) {
 		return 1.5
 	}
 	return 1
 }
 
-func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err error) {
-	drink, customerName := order.Drink, order.DisplayName()
-	batchIndex, batchSize := order.BatchIndex, order.BatchSize
+func (s *beanjaminCoffee) prepareDrink(ctx context.Context, o order.Order) (err error) {
+	drink, customerName := o.Drink, o.DisplayName()
+	batchIndex, batchSize := o.BatchIndex, o.BatchSize
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::prepareDrink["+drink+"]")
 	defer span.End()
@@ -527,7 +502,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 		return fn(phaseCtx, cancelCtx)
 	}
 
-	if isDecafDrink(drink) {
+	if order.IsDecaf(drink) {
 		if err := runPhase(stepGrinding, "grinding_decaf", "step 1/9: grinding decaf coffee", s.grindDecaf); err != nil {
 			return err
 		}
@@ -565,7 +540,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 	brewProgress := fmt.Sprintf("step 6/9: brewing %s", drink)
 	brewPhase := func(ctx, cancelCtx context.Context) error { return s.brew(ctx, cancelCtx, drink) }
 	if armFreeDuringPour {
-		if isIcedDrink(drink) {
+		if order.IsIced(drink) {
 			brewProgress += " while prepping the iced glass"
 		}
 		brewPhase = func(ctx, cancelCtx context.Context) error {
@@ -573,7 +548,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 				return err
 			}
 			// brewAndPrep lines the gripper up over the cup for every non-iced drink.
-			cupApproached = !isIcedDrink(drink)
+			cupApproached = !order.IsIced(drink)
 			return nil
 		}
 	}
@@ -589,11 +564,11 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 	var servedSlot int
 	serve := func(ctx, cancelCtx context.Context) (err error) {
 		switch {
-		case isIcedDrink(drink) && armFreeDuringPour:
+		case order.IsIced(drink) && armFreeDuringPour:
 			// Glass already iced and staged during the brew; finish the rest.
-			servedSlot, err = s.finishIced(ctx, cancelCtx, isMilkDrink(drink))
-		case isIcedDrink(drink):
-			servedSlot, err = s.serveIced(ctx, cancelCtx, isMilkDrink(drink))
+			servedSlot, err = s.finishIced(ctx, cancelCtx, order.IsMilk(drink))
+		case order.IsIced(drink):
+			servedSlot, err = s.serveIced(ctx, cancelCtx, order.IsMilk(drink))
 		case cupApproached:
 			// Hot drink, gripper already poised over the cup: grasp it and shelf it.
 			if err = s.graspBrewedCup(ctx, cancelCtx); err != nil {
@@ -610,9 +585,9 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, order Order) (err er
 	}
 	// Record where the drink physically landed so a delivery order can report it
 	// as the pickup_position.
-	order.PickupPosition = servedSlot
-	if order.Fulfillment == FulfillmentDelivery {
-		if err := s.readyForDelivery(ctx, order); err != nil {
+	o.PickupPosition = servedSlot
+	if o.Fulfillment == order.FulfillmentDelivery {
+		if err := s.readyForDelivery(ctx, o); err != nil {
 			logger.Warnf("failed to announce ready-for-delivery: %v", err)
 		}
 	} else if err := s.sayAlways(ctx, pickDrinkReady(drink, customerName, batchIndex, batchSize)); err != nil {

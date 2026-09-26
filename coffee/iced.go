@@ -8,6 +8,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"beanjamin/coffee/order"
 )
 
 // serveIced finishes an iced order after the espresso has brewed into the cup
@@ -117,7 +119,7 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 		return fmt.Errorf("brew_and_prep: requires has_separate_brew_buttons (the toggle machine's claw holds the switch for the whole pour)")
 	}
 	press := s.pressEspressoButton
-	if isLungoDrink(drink) {
+	if order.IsLungo(drink) {
 		press = s.pressLungoButton
 	}
 	if err := press(ctx, cancelCtx); err != nil {
@@ -128,8 +130,8 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 	// Fill the pour time with prep: an iced drink stages its glass, anything else
 	// lines the gripper up over the cup so only the grasp is left afterward.
 	prepErr := func() error {
-		if isIcedDrink(drink) {
-			return s.prepIcedGlass(ctx, cancelCtx, isMilkDrink(drink))
+		if order.IsIced(drink) {
+			return s.prepIcedGlass(ctx, cancelCtx, order.IsMilk(drink))
 		}
 		return s.approachBrewedCup(ctx, cancelCtx)
 	}()

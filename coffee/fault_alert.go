@@ -9,6 +9,8 @@ package coffee
 import (
 	"context"
 	"time"
+
+	"beanjamin/coffee/order"
 )
 
 // faultWindow is how long fault_active stays raised after a genuine fault —
@@ -18,8 +20,8 @@ var faultWindow = 5 * time.Second
 // reactToOrderFailure raises the transient fault window and speaks a snarky
 // failure line for a genuine fault. It is a no-op for successful orders and
 // operator cancels, and the speech is best-effort off the queue goroutine.
-func (s *beanjaminCoffee) reactToOrderFailure(r orderReading) {
-	if r.execErr == nil || r.operatorCancelled {
+func (s *beanjaminCoffee) reactToOrderFailure(r order.Reading) {
+	if r.ExecErr == nil || r.OperatorCancelled {
 		return
 	}
 	s.faultActive.Store(true)
@@ -29,8 +31,8 @@ func (s *beanjaminCoffee) reactToOrderFailure(r orderReading) {
 	if s.speech == nil {
 		return
 	}
-	line := pickOrderFailed(r.order.Drink, r.order.DisplayName())
-	logger := s.logger.WithFields("order_id", r.order.ID)
+	line := pickOrderFailed(r.Order.Drink, r.Order.DisplayName())
+	logger := s.logger.WithFields("order_id", r.Order.ID)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

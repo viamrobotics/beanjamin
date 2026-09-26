@@ -8,6 +8,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"beanjamin/coffee/order"
 )
 
 func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
@@ -248,7 +250,7 @@ func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, drink string) err
 
 	if buttons {
 		press := s.pressEspressoButton
-		if isLungoDrink(drink) {
+		if order.IsLungo(drink) {
 			press = s.pressLungoButton
 		}
 		if err := press(ctx, cancelCtx); err != nil {
@@ -311,7 +313,7 @@ func (s *beanjaminCoffee) buttonPressHold() time.Duration {
 // given drink — the configured value, or the default for that shot size.
 func (s *beanjaminCoffee) drinkBrewTime(drink string) time.Duration {
 	configured, def := s.cfg.BrewTimeSec, defaultEspressoBrewTime
-	if isLungoDrink(drink) {
+	if order.IsLungo(drink) {
 		configured, def = s.cfg.LungoBrewTimeSec, defaultLungoBrewTime
 	}
 	return time.Duration(orDefault(configured, def.Seconds()) * float64(time.Second))

@@ -5,6 +5,8 @@ import (
 	"os"
 	"testing"
 
+	"beanjamin/coffee/order"
+
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/motionplan/armplanning"
 	"go.viam.com/rdk/referenceframe"
@@ -101,8 +103,8 @@ func TestSavePlanRequestAndResponse_NoOpWhenDirUnset(t *testing.T) {
 
 func TestSavePlanRequestAndResponse_FailureTags(t *testing.T) {
 	dir := t.TempDir()
-	c := &beanjaminCoffee{logger: logging.NewTestLogger(t), cfg: &Config{SaveMotionRequestsDir: dir}, queue: NewOrderQueue()}
-	c.queue.Enqueue(Order{ID: "order-123"})
+	c := &beanjaminCoffee{logger: logging.NewTestLogger(t), cfg: &Config{SaveMotionRequestsDir: dir}, queue: order.NewQueue()}
+	c.queue.Enqueue(order.Order{ID: "order-123"})
 	c.queue.Start()
 	c.currentStep.Store("Locking portafilter")
 
@@ -134,8 +136,8 @@ func TestSavePlanRequestAndResponse_FailureTags(t *testing.T) {
 
 func TestSavePlanRequestAndResponse_SuccessOutcome(t *testing.T) {
 	dir := t.TempDir()
-	c := &beanjaminCoffee{logger: logging.NewTestLogger(t), cfg: &Config{SaveMotionRequestsDir: dir}, queue: NewOrderQueue()}
-	c.queue.Enqueue(Order{ID: "order-9"})
+	c := &beanjaminCoffee{logger: logging.NewTestLogger(t), cfg: &Config{SaveMotionRequestsDir: dir}, queue: order.NewQueue()}
+	c.queue.Enqueue(order.Order{ID: "order-9"})
 	c.queue.Start()
 	c.currentStep.Store("Grinding")
 

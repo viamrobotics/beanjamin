@@ -10,6 +10,8 @@ import (
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/module/trace"
 	"go.viam.com/rdk/resource"
+
+	"beanjamin/coffee/order"
 )
 
 // OrderSensor queues one reading per order when processing finishes.
@@ -30,28 +32,9 @@ func (cfg *OrderSensorConfig) Validate(string) ([]string, []string, error) {
 	return nil, nil, nil
 }
 
-// orderReading is the per-attempt observability record coffee hands to the
-// order sensor after each order finishes or fails. Grouped into a struct
-// rather than positional args so new fields don't churn every call site.
-type orderReading struct {
-	order      Order
-	execErr    error  // nil on success
-	failedStep string // step the order errored at; "" on success
-	// operatorCancelled is true when the failure was an operator cancel
-	// (context.Canceled propagated from cancelCtx), not a genuine fault.
-	// Filter these out of step error-rate metrics.
-	operatorCancelled bool
-	traceID           string // OTel trace ID; links the reading to the order's full trace
-	// decaf records whether the order took the decaf grinder branch, to explain
-	// why a given step ran (or didn't) without cross-referencing config.
-	decaf     bool
-	startedAt time.Time
-	endedAt   time.Time
-}
-
 // Implemented by orderSensor; coffee calls this after each order attempt.
 type orderSensorSink interface {
-	pushOrderReading(r orderReading)
+	pushOrderReading(r order.Reading)
 }
 
 type orderSensor struct {
@@ -107,33 +90,33 @@ func (*orderSensor) Close(context.Context) error {
 	return nil
 }
 
-func (s *orderSensor) pushOrderReading(r orderReading) {
-	ok := r.execErr == nil
+func (s *orderSensor) pushOrderReading(r order.Reading) {
+	ok := r.ExecErr == nil
 	errMsg := ""
-	if r.execErr != nil {
-		errMsg = r.execErr.Error()
+	if r.ExecErr != nil {
+		errMsg = r.ExecErr.Error()
 	}
 	// failedStep is the step label the order errored at; empty on success.
-	failedStep := r.failedStep
+	failedStep := r.FailedStep
 	if ok {
 		failedStep = ""
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pending = append(s.pending, map[string]any{
-		"order_id":      r.order.ID,
-		"drink":         r.order.Drink,
-		"customer_name": r.order.CustomerName,
+		"order_id":      r.Order.ID,
+		"drink":         r.Order.Drink,
+		"customer_name": r.Order.CustomerName,
 		// What the customer was actually shown.
-		"modified_customer_name": r.order.ModifiedCustomerName,
+		"modified_customer_name": r.Order.ModifiedCustomerName,
 		"order_ok":               ok,
-		"operator_cancelled":     r.operatorCancelled,
+		"operator_cancelled":     r.OperatorCancelled,
 		"error_message":          errMsg,
 		"failed_step":            failedStep,
-		"trace_id":               r.traceID,
-		"decaf":                  r.decaf,
-		"start_time":             r.startedAt.UTC().Format(time.RFC3339Nano),
-		"end_time":               r.endedAt.UTC().Format(time.RFC3339Nano),
-		"duration_ms":            float64(r.endedAt.Sub(r.startedAt).Milliseconds()),
+		"trace_id":               r.TraceID,
+		"decaf":                  r.Decaf,
+		"start_time":             r.StartedAt.UTC().Format(time.RFC3339Nano),
+		"end_time":               r.EndedAt.UTC().Format(time.RFC3339Nano),
+		"duration_ms":            float64(r.EndedAt.Sub(r.StartedAt).Milliseconds()),
 	})
 }
