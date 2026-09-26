@@ -33,6 +33,8 @@ import (
 	_ "beanjamin/multiposesexecutionswitch"
 )
 
+// Model is the viam:beanjamin:coffee model triple, registered as a generic
+// service.
 var Model = resource.NewModel("viam", "beanjamin", "coffee")
 
 func init() {
@@ -219,6 +221,10 @@ func visionPickup(deps resource.Dependencies, logger logging.Logger, label, visi
 	return vis, sw, nil
 }
 
+// NewCoffee builds the coffee service from an already-parsed Config, resolving
+// its dependencies and validating the configured poses. On success it has
+// started the order-queue consumer (and the keepalive loop, if configured), so
+// the returned resource must be Closed to stop them.
 func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Name, conf *Config, logger logging.Logger) (resource.Resource, error) {
 	filterSw, err := switchDep(deps, "pose_switcher_name", conf.PoseSwitcherName)
 	if err != nil {

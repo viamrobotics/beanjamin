@@ -68,6 +68,9 @@ type Step struct {
 	CircularPointsPerRev int     `json:"circular_points_per_rev,omitempty"`
 }
 
+// Config is the attribute set of the viam:beanjamin:coffee service. Field
+// semantics and defaults are documented in the README; zero-valued tunables
+// fall back to the defaults defined next to the feature that reads them.
 type Config struct {
 	PoseSwitcherName      string `json:"pose_switcher_name"`
 	ClawsPoseSwitcherName string `json:"claws_pose_switcher_name"`
@@ -471,6 +474,9 @@ func requireFields(path string, pairs ...any) error {
 	return nil
 }
 
+// Validate checks the required fields and any feature-gated requirements (e.g.
+// can_serve_iced needs the ice board and glass vision pipeline), and returns the
+// required and optional dependency names derived from the configured resources.
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if err := requireFields(path,
 		"pose_switcher_name", cfg.PoseSwitcherName,

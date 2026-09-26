@@ -293,8 +293,8 @@ func (s *beanjaminCoffee) moveToIceDispense(ctx, cancelCtx context.Context) erro
 }
 
 // dispenseIce carries the held glass to the ice machine, holds it under the
-// chute, runs pulseIcePin, then retreats. The pin is always driven back LOW —
-// including on cancel — so the ice machine can't be left running.
+// chute, runs pulseIcePin, then retreats. holdIcePin attempts to drive the pin
+// back LOW on every exit path, including cancel, and surfaces a failed write.
 func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 	if err := s.moveToIceDispense(ctx, cancelCtx); err != nil {
 		return err
@@ -338,8 +338,10 @@ func (s *beanjaminCoffee) pulseIcePin(ctx, cancelCtx context.Context) error {
 // handing back what the dispense saw. It logs nothing about the result and
 // saves nothing: the pin is still open until this function returns.
 //
-// The pin is driven LOW on every exit path — cancel, error, panic — with a fresh
-// context so the write still lands when ctx is already cancelled. The close is
+// Once the pin is resolved, every exit path — cancel, error, panic — attempts to
+// drive it LOW with a fresh context, so the write still lands when ctx is
+// already cancelled. A failed LOW write is returned as the error, or logged if
+// the dispense already failed. The close is
 // deferred *before* the HIGH write, not after: a Set that reaches the board and
 // then loses its response returns an error with the pin already open, and the
 // only safe assumption is that it might be. That deferred close is the invariant
@@ -356,9 +358,17 @@ func (s *beanjaminCoffee) holdIcePin(ctx, cancelCtx context.Context) (res iceDwe
 		return res, fmt.Errorf("pulse_ice_pin: get pin %q: %w", pinName, err)
 	}
 	defer func() {
-		if stopErr := pin.Set(context.Background(), false, nil); stopErr != nil && err == nil {
-			err = fmt.Errorf("pulse_ice_pin: set pin %q low: %w", pinName, stopErr)
+		stopErr := pin.Set(context.Background(), false, nil)
+		if stopErr == nil {
+			return
 		}
+		if err == nil {
+			err = fmt.Errorf("pulse_ice_pin: set pin %q low: %w", pinName, stopErr)
+			return
+		}
+		// err already carries the dispense failure; a stuck-open pin must not be
+		// hidden behind it.
+		logger.Errorf("pulse_ice_pin: set pin %q low failed, ice machine may still be running: %v", pinName, stopErr)
 	}()
 	if setErr := pin.Set(ctx, true, nil); setErr != nil {
 		return res, fmt.Errorf("pulse_ice_pin: set pin %q high: %w", pinName, setErr)
