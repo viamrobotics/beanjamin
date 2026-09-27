@@ -30,6 +30,7 @@ import (
 	"go.viam.com/rdk/spatialmath"
 
 	"beanjamin/coffee/order"
+	"beanjamin/coffee/report"
 	"beanjamin/coffee/speech"
 	// Register the multi-poses-execution-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
@@ -67,15 +68,15 @@ type beanjaminCoffee struct {
 	cachedFS             *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
 	speaker              *speech.Speaker             // says nothing when speech_service_name is not configured
 	gripper              gripper.Gripper
-	camStorage           generic.Service // optional; mux over video stores; nil if cam_storage_mux_name unset
-	iceBoard             board.Board     // optional; drives the ice-machine GPIO pin; nil if ice_board_name unset
-	slackNotifier        generic.Service // optional; viam:notifications:slack; nil if slack_notifier_name unset
-	customerDetector     generic.Service // optional; viam:beanjamin:customer-detector; nil if customer_detector_name unset
-	deliveryHandler      generic.Service // optional; peer-machine service reached via a remote; nil if delivery_handler_name unset
-	machineLogsURL       string          // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
-	dataLocationID       string          // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
-	primaryOrgID         string          // VIAM_PRIMARY_ORG_ID env; scopes app.viam.com deep-links to the owning org; "" when unavailable
-	pendingOrderClipsDir string          // optional; directory for pending-clip records to survive restarts
+	camStorage           generic.Service  // optional; mux over video stores; nil if cam_storage_mux_name unset
+	iceBoard             board.Board      // optional; drives the ice-machine GPIO pin; nil if ice_board_name unset
+	slackNotifier        *report.Notifier // optional; viam:notifications:slack; nil if slack_notifier_name unset
+	customerDetector     generic.Service  // optional; viam:beanjamin:customer-detector; nil if customer_detector_name unset
+	deliveryHandler      generic.Service  // optional; peer-machine service reached via a remote; nil if delivery_handler_name unset
+	machineLogsURL       string           // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
+	dataLocationID       string           // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
+	primaryOrgID         string           // VIAM_PRIMARY_ORG_ID env; scopes app.viam.com deep-links to the owning org; "" when unavailable
+	pendingOrderClipsDir string           // optional; directory for pending-clip records to survive restarts
 	mu                   sync.Mutex
 	cancelCtx            context.Context
 	cancelFunc           func()
@@ -386,10 +387,10 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		faultAlarm:           speech.NewFaultAlarm(speaker, logger),
 		camStorage:           camStorage,
 		iceBoard:             iceBoard,
-		slackNotifier:        slackNotifier,
+		slackNotifier:        report.NewNotifier(slackNotifier),
 		customerDetector:     customerDetector,
 		deliveryHandler:      deliveryHandler,
-		machineLogsURL:       buildMachineLogsURL(os.Getenv("VIAM_MACHINE_ID"), os.Getenv("VIAM_PRIMARY_ORG_ID")),
+		machineLogsURL:       report.MachineLogsURL(os.Getenv("VIAM_MACHINE_ID"), os.Getenv("VIAM_PRIMARY_ORG_ID")),
 		dataLocationID:       os.Getenv("VIAM_LOCATION_ID"),
 		primaryOrgID:         os.Getenv("VIAM_PRIMARY_ORG_ID"),
 		pendingOrderClipsDir: pendingOrderClipsDir,

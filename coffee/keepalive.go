@@ -439,10 +439,7 @@ func (s *beanjaminCoffee) notifyKeepAliveFailureSlack(purgeErr error) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), notifySlackTimeout)
 		defer cancel()
-		if _, err := s.slackNotifier.DoCommand(ctx, map[string]any{
-			"command": "send",
-			"text":    text,
-		}); err != nil {
+		if _, err := s.slackNotifier.Send(ctx, text, nil); err != nil {
 			logger.Warnf("keepalive: slack notify failed: %v", err)
 		}
 	}()
