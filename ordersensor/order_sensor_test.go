@@ -1,4 +1,4 @@
-package coffee
+package ordersensor
 
 import (
 	"context"
@@ -37,7 +37,7 @@ func TestOrderSensor_Readings_Success(t *testing.T) {
 	o := order.Order{
 		ID: "o1", Drink: "latte", CustomerName: "Ada",
 	}
-	s.pushOrderReading(order.Reading{Order: o, StartedAt: start, EndedAt: end})
+	s.PushOrderReading(order.Reading{Order: o, StartedAt: start, EndedAt: end})
 
 	r, err := s.Readings(context.Background(), nil)
 	if err != nil {
@@ -78,7 +78,7 @@ func TestOrderSensor_Readings_Failure(t *testing.T) {
 	start := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
 	end := start.Add(time.Millisecond)
 	o := order.Order{ID: "o2", Drink: "decaf", CustomerName: "Bob"}
-	s.pushOrderReading(order.Reading{
+	s.PushOrderReading(order.Reading{
 		Order:      o,
 		ExecErr:    errors.New("grinder jam"),
 		FailedStep: "Grinding",
@@ -115,7 +115,7 @@ func TestOrderSensor_Readings_Failure(t *testing.T) {
 func TestOrderSensor_Readings_OperatorCancelled(t *testing.T) {
 	s := newTestOrderSensor(t)
 	t0 := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
-	s.pushOrderReading(order.Reading{
+	s.PushOrderReading(order.Reading{
 		Order:             order.Order{ID: "o3", Drink: "latte"},
 		ExecErr:           context.Canceled,
 		FailedStep:        "Brewing",
@@ -143,8 +143,8 @@ func TestOrderSensor_Readings_OperatorCancelled(t *testing.T) {
 func TestOrderSensor_Readings_FIFO(t *testing.T) {
 	s := newTestOrderSensor(t)
 	t0 := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
-	s.pushOrderReading(order.Reading{Order: order.Order{ID: "first"}, StartedAt: t0, EndedAt: t0})
-	s.pushOrderReading(order.Reading{Order: order.Order{ID: "second"}, StartedAt: t0, EndedAt: t0})
+	s.PushOrderReading(order.Reading{Order: order.Order{ID: "first"}, StartedAt: t0, EndedAt: t0})
+	s.PushOrderReading(order.Reading{Order: order.Order{ID: "second"}, StartedAt: t0, EndedAt: t0})
 
 	r1, err := s.Readings(context.Background(), nil)
 	if err != nil {
@@ -191,7 +191,7 @@ func TestOrderSensor_Readings_CustomerNames(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newTestOrderSensor(t)
-			s.pushOrderReading(order.Reading{Order: tc.order})
+			s.PushOrderReading(order.Reading{Order: tc.order})
 
 			r, err := s.Readings(context.Background(), nil)
 			if err != nil {
