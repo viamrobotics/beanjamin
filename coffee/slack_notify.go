@@ -26,7 +26,7 @@ func (s *beanjaminCoffee) notifyOrderFailureSlack(r order.Reading) {
 	// Only link to a clip when one was actually requested (cam storage
 	// configured) and we know the location to filter within.
 	clipURL := ""
-	if s.camStorage != nil {
+	if s.clips.Configured() {
 		clipURL = report.ClipDataURL(s.dataLocationID, s.primaryOrgID, r.Order.ID)
 	}
 	planRequestURL := report.PlanRequestDataURL(s.dataLocationID, s.primaryOrgID, r.Order.ID)
