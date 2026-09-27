@@ -636,7 +636,7 @@ func (s *beanjaminCoffee) pickGlassDynamic(ctx, cancelCtx context.Context) error
 }
 
 // announceAndWaitForRetry recovers the arm to the observe home pose, speaks the
-// given prompt to the customer regardless of conversational mode (sayAlways), and
+// given prompt to the customer regardless of conversational mode (SayAlways), and
 // waits noItemRetryDelay before the caller re-observes. This is the shared
 // recovery for both "no item detected" (please place one) and "item seen but
 // unreachable" (please nudge it) — in both cases the fix is physical and needs
@@ -649,7 +649,7 @@ func (s *beanjaminCoffee) announceAndWaitForRetry(ctx, cancelCtx context.Context
 	if mvErr := s.executeStep(ctx, cancelCtx, recoverStep); mvErr != nil {
 		logger.Warnf("dynamic %s pickup: return to %q before retry wait: %v", t.label, t.observeHomePose, mvErr)
 	}
-	if sayErr := s.sayAlways(ctx, prompt); sayErr != nil {
+	if sayErr := s.speaker.SayAlways(ctx, prompt); sayErr != nil {
 		logger.Warnf("dynamic %s pickup: announcement failed: %v", t.label, sayErr)
 	}
 	select {

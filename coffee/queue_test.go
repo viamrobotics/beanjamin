@@ -8,12 +8,13 @@ import (
 	"testing"
 
 	"beanjamin/coffee/order"
+	"beanjamin/coffee/speech"
 
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
 )
 
-// fakeSpeech records say_async calls dispatched through s.say so tests can
+// fakeSpeech records say_async calls dispatched through s.speaker so tests can
 // assert how many announcements enqueueOrder produced.
 type fakeSpeech struct {
 	resource.AlwaysRebuild
@@ -50,13 +51,13 @@ func newTestCoffee(t *testing.T, cfg *Config) (*beanjaminCoffee, *fakeSpeech) {
 	if cfg == nil {
 		cfg = &Config{CanServeDecaf: true}
 	}
-	speech := &fakeSpeech{}
+	sp := &fakeSpeech{}
 	return &beanjaminCoffee{
-		logger: logging.NewTestLogger(t),
-		cfg:    cfg,
-		queue:  order.NewQueue(),
-		speech: speech,
-	}, speech
+		logger:  logging.NewTestLogger(t),
+		cfg:     cfg,
+		queue:   order.NewQueue(),
+		speaker: speech.NewSpeaker(sp, cfg.Conversational),
+	}, sp
 }
 
 func TestEnqueueOrder_DefaultsCountToOne(t *testing.T) {
@@ -268,8 +269,8 @@ func TestEnqueueOrder_RejectsAboveCap(t *testing.T) {
 func TestEnqueueOrder_BatchSuppressesPerOrderAnnouncement(t *testing.T) {
 	c, sp := newTestCoffee(t, &Config{CanServeDecaf: true, Conversational: true})
 	// Pre-populate the queue so the single-order path would normally fire
-	// pickOrderReceived (pos > 1). The batch path should fire exactly one
-	// pickOrderReceivedBatch line instead.
+	// speech.OrderReceived (pos > 1). The batch path should fire exactly one
+	// speech.OrderReceivedBatch line instead.
 	c.queue.Enqueue(order.NewOrder("lungo", "Bob", "", ""))
 
 	if _, err := c.enqueueOrder(context.Background(), map[string]any{

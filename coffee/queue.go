@@ -177,7 +177,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order order.Or
 		order.CustomerName, order.Drink, waitTime)
 
 	if order.Greeting != "" {
-		if err := s.say(ctx, order.Greeting); err != nil {
+		if err := s.speaker.Say(ctx, order.Greeting); err != nil {
 			logger.Warnf("failed to say greeting: %v", err)
 		}
 	}
@@ -188,7 +188,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order order.Or
 	}
 
 	if order.Completion != "" {
-		if err := s.say(ctx, order.Completion); err != nil {
+		if err := s.speaker.Say(ctx, order.Completion); err != nil {
 			logger.Warnf("failed to say completion: %v", err)
 		}
 	}
@@ -216,7 +216,7 @@ func (s *beanjaminCoffee) notifyOrderReading(r order.Reading) {
 	// cancels). No-op when no slack_notifier_name is configured.
 	s.notifyOrderFailureSlack(r)
 	// Red LED flash + snarky spoken line on genuine faults only.
-	s.reactToOrderFailure(r)
+	s.faultAlarm.ReactToOrderFailure(r)
 }
 
 // traceIDFromContext returns the OTel trace ID for ctx, or "" if there is no
