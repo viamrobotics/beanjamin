@@ -185,8 +185,8 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, tileW
 		Y: tileWorld.Y,
 		Z: shelfTopZ + s.servingAreaDropZOffset(),
 	}
-	dropPose := geom.ComposeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.ServingGrabRelativePose))
-	approachPose := geom.ComposeCupPose(dropAnchor, relativePoseToSpatial(s.cfg.ServingApproachRelativePose))
+	dropPose := geom.PoseRelativeTo(dropAnchor, relativePoseToSpatial(s.cfg.ServingGrabRelativePose))
+	approachPose := geom.PoseRelativeTo(dropAnchor, relativePoseToSpatial(s.cfg.ServingApproachRelativePose))
 
 	approachPD := &poseData{pose: approachPose, refFrame: referenceframe.World, componentName: gripPoint}
 	dropPD := &poseData{pose: dropPose, refFrame: referenceframe.World, componentName: gripPoint}

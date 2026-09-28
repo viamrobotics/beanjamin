@@ -114,7 +114,7 @@ func (s *beanjaminCoffee) reattachGeometry(label string) error {
 //
 // The cup is modeled exactly as geom.ContainerBox models it at pickup: an upright box
 // of the configured size centered on the grasp centroid. The centroid is
-// recovered by inverting the geom.ComposeCupPose the grab used — the grab sends the
+// recovered by inverting the geom.PoseRelativeTo the grab used — the grab sends the
 // grip point to centroid + cup_grab_relative_pose, so the centroid is the current
 // grip-point world position minus that offset.
 func (s *beanjaminCoffee) attachConfiguredCupGeometry(ctx context.Context) error {
@@ -148,7 +148,7 @@ func (s *beanjaminCoffee) attachConfiguredGeometry(
 
 // configuredContainerBox builds the world-frame container box from the given
 // dimensions, centered on the grasp centroid recovered from the current
-// grip-point world pose. It inverts geom.ComposeCupPose: the grab sends the grip point
+// grip-point world pose. It inverts geom.PoseRelativeTo: the grab sends the grip point
 // to centroid + the grab offset, so the centroid is the grip-point world position
 // minus that offset. Split from attachConfiguredGeometry (which reads the arm's
 // joint inputs) so the centroid math is unit-testable against a static frame

@@ -72,15 +72,16 @@ func RankCentroidsByProximity(centroids []r3.Vector, reference r3.Vector) []r3.V
 	return ranked
 }
 
-// ComposeCupPose builds a world-frame target pose by composing a relative
-// pose (translation + orientation) onto a centroid point with identity
-// orientation. The relative pose comes from the coffee Config
-// (cup_approach_relative_pose / cup_grab_relative_pose) and is interpreted as an
-// offset onto the runtime centroid — these are offsets, not absolute world-frame
-// poses.
-func ComposeCupPose(centroidWorld r3.Vector, relative spatialmath.Pose) spatialmath.Pose {
-	centroid := spatialmath.NewPoseFromPoint(centroidWorld)
-	return spatialmath.Compose(centroid, relative)
+// PoseRelativeTo builds a world-frame target pose by composing a relative
+// pose (translation + orientation) onto a world point with identity
+// orientation, so the relative translation is applied in world axes. The point
+// is whatever the target is anchored to at runtime — a detected cup, glass or
+// milk-bottle centroid, a serving-shelf slot, the fridge-door handle — and the
+// relative pose is a configured offset from it (e.g. cup_grab_relative_pose),
+// not an absolute world-frame pose.
+func PoseRelativeTo(pointWorld r3.Vector, relative spatialmath.Pose) spatialmath.Pose {
+	anchor := spatialmath.NewPoseFromPoint(pointWorld)
+	return spatialmath.Compose(anchor, relative)
 }
 
 // CameraToWorldPose resolves the camera frame's pose in the world frame at the

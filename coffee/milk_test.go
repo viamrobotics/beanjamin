@@ -23,8 +23,8 @@ func TestMilkReturnPosesReplayThePickupOffsets(t *testing.T) {
 
 	approach, place := s.milkReturnPoses(centroid)
 
-	wantApproach := geom.ComposeCupPose(centroid, relativePoseToSpatial(s.cfg.MilkApproachRelativePose))
-	wantPlace := geom.ComposeCupPose(centroid, relativePoseToSpatial(s.cfg.MilkGrabRelativePose))
+	wantApproach := geom.PoseRelativeTo(centroid, relativePoseToSpatial(s.cfg.MilkApproachRelativePose))
+	wantPlace := geom.PoseRelativeTo(centroid, relativePoseToSpatial(s.cfg.MilkGrabRelativePose))
 	if approach.Point() != wantApproach.Point() {
 		t.Errorf("approach point = %v, want %v", approach.Point(), wantApproach.Point())
 	}

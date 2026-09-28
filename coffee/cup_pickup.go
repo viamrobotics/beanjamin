@@ -374,12 +374,12 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 		centroid.Z = geomZ
 	}
 	approachPD := &poseData{
-		pose:          geom.ComposeCupPose(centroid, relativePoseToSpatial(t.approachRel)),
+		pose:          geom.PoseRelativeTo(centroid, relativePoseToSpatial(t.approachRel)),
 		refFrame:      referenceframe.World,
 		componentName: gripPoint,
 	}
 	grabPD := &poseData{
-		pose:          geom.ComposeCupPose(centroid, relativePoseToSpatial(t.grabRel)),
+		pose:          geom.PoseRelativeTo(centroid, relativePoseToSpatial(t.grabRel)),
 		refFrame:      referenceframe.World,
 		componentName: gripPoint,
 	}

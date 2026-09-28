@@ -230,7 +230,7 @@ type Config struct {
 	// DoorApproachRelativePose is a RelativePose offset composed onto the grasp
 	// frame's center to produce the pre-grasp standoff (like
 	// cup_approach_relative_pose onto a detected cup centroid — see
-	// geom.ComposeCupPose), but resolved against the live grasp frame. Its
+	// geom.PoseRelativeTo), but resolved against the live grasp frame. Its
 	// orientation is the base grasp orientation, which DoorGraspYawRatio then
 	// yaws through the swing. Required to run open_door.
 	DoorApproachRelativePose *RelativePose `json:"door_approach_relative_pose,omitempty"`
@@ -353,7 +353,7 @@ type RelativePose struct {
 }
 
 // relativePoseToSpatial converts a Config RelativePose into a spatialmath.Pose
-// suitable for geom.ComposeCupPose. Translation is millimeters; orientation is
+// suitable for geom.PoseRelativeTo. Translation is millimeters; orientation is
 // OrientationVectorDegrees.
 func relativePoseToSpatial(r *RelativePose) spatialmath.Pose {
 	return spatialmath.NewPose(

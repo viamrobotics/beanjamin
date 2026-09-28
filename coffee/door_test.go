@@ -350,7 +350,7 @@ func TestDoorApproachFromBall(t *testing.T) {
 		t.Errorf("grasp point = %v, want ball center %v", grasp.Point(), ballPoint)
 	}
 
-	approach := geom.ComposeCupPose(ballPoint, relSpatial)
+	approach := geom.PoseRelativeTo(ballPoint, relSpatial)
 	wantApproach := r3.Vector{X: 200, Y: -70, Z: 400} // ball + (0,-120,0)
 	if approach.Point().Sub(wantApproach).Norm() > 0.01 {
 		t.Errorf("approach point = %v, want %v", approach.Point(), wantApproach)

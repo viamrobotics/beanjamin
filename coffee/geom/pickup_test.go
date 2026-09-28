@@ -151,10 +151,10 @@ func TestMergeNearbyCentroids_DoesNotMutateInput(t *testing.T) {
 	}
 }
 
-func TestComposeCupPose_IdentityRelative(t *testing.T) {
+func TestPoseRelativeTo_IdentityRelative(t *testing.T) {
 	centroid := r3.Vector{X: 100, Y: 200, Z: 300}
 	relative := spatialmath.NewZeroPose()
-	got := ComposeCupPose(centroid, relative)
+	got := PoseRelativeTo(centroid, relative)
 	if got.Point() != centroid {
 		t.Fatalf("expected centroid preserved %v, got %v", centroid, got.Point())
 	}
@@ -163,21 +163,21 @@ func TestComposeCupPose_IdentityRelative(t *testing.T) {
 	}
 }
 
-func TestComposeCupPose_PureTranslation(t *testing.T) {
+func TestPoseRelativeTo_PureTranslation(t *testing.T) {
 	centroid := r3.Vector{X: 100, Y: 200, Z: 300}
 	relative := spatialmath.NewPoseFromPoint(r3.Vector{X: 10, Y: 0, Z: 0})
-	got := ComposeCupPose(centroid, relative)
+	got := PoseRelativeTo(centroid, relative)
 	want := r3.Vector{X: 110, Y: 200, Z: 300}
 	if got.Point() != want {
 		t.Fatalf("expected %v, got %v", want, got.Point())
 	}
 }
 
-func TestComposeCupPose_PureRotation(t *testing.T) {
+func TestPoseRelativeTo_PureRotation(t *testing.T) {
 	centroid := r3.Vector{X: 100, Y: 200, Z: 300}
 	orient := &spatialmath.OrientationVectorDegrees{OX: 1, OY: 0, OZ: 0, Theta: 90}
 	relative := spatialmath.NewPose(r3.Vector{}, orient)
-	got := ComposeCupPose(centroid, relative)
+	got := PoseRelativeTo(centroid, relative)
 	if got.Point() != centroid {
 		t.Fatalf("expected centroid preserved %v, got %v", centroid, got.Point())
 	}
