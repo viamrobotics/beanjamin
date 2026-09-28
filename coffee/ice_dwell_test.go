@@ -3,10 +3,16 @@ package coffee
 import (
 	"context"
 	"errors"
+	"image"
+	"image/jpeg"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"beanjamin/coffee/icevision"
 	"beanjamin/coffee/order"
 
 	"go.viam.com/rdk/components/board"
@@ -49,7 +55,8 @@ func (p *recordingPin) history() []bool {
 }
 
 // iceTestService builds a service with the dispense timings scaled down so the
-// loop runs in milliseconds. The ratios are what the loop cares about.
+// loop runs in milliseconds. The ratios are what the loop cares about. It has
+// no camera, so a real measurement fails with "no source camera".
 func iceTestService(t *testing.T, cfg *Config) (*beanjaminCoffee, *recordingPin) {
 	t.Helper()
 	if cfg == nil {
@@ -73,19 +80,44 @@ func iceTestService(t *testing.T, cfg *Config) (*beanjaminCoffee, *recordingPin)
 	}
 	brd, pin := newRecordingBoard(t)
 	return &beanjaminCoffee{
-		logger:   logging.NewTestLogger(t),
-		cfg:      cfg,
-		queue:    order.NewQueue(),
-		iceBoard: brd,
+		logger:    logging.NewTestLogger(t),
+		cfg:       cfg,
+		queue:     order.NewQueue(),
+		iceBoard:  brd,
+		iceVision: icevision.NewDetector(nil, iceVisionParams(cfg)),
 	}, pin
+}
+
+// loadFixture decodes one of the ice-level fixtures kept with the measurement.
+func loadFixture(t *testing.T, name string) image.Image {
+	t.Helper()
+	f, err := os.Open(filepath.Join("icevision", "testdata", "icelevel", name))
+	if err != nil {
+		t.Fatalf("opening fixture: %v", err)
+	}
+	defer f.Close() //nolint:errcheck // read-only
+	img, err := jpeg.Decode(f)
+	if err != nil {
+		t.Fatalf("decoding %s: %v", name, err)
+	}
+	return img
+}
+
+func savedFrames(t *testing.T, dir string) []string {
+	t.Helper()
+	found, err := filepath.Glob(filepath.Join(dir, "tag=*", "tag=*", "*.jpg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return found
 }
 
 // readings replays a fixed sequence of measurements, holding the last one once
 // it runs out, so a test states only the part of the run it is about.
-func readings(found ...bool) func(context.Context) (iceMeasurement, error) {
+func readings(found ...bool) func(context.Context) (icevision.Measurement, error) {
 	var i int
 	var mu sync.Mutex
-	return func(context.Context) (iceMeasurement, error) {
+	return func(context.Context) (icevision.Measurement, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		f := found[len(found)-1]
@@ -94,16 +126,16 @@ func readings(found ...bool) func(context.Context) (iceMeasurement, error) {
 		}
 		i++
 		if !f {
-			return iceMeasurement{}, nil
+			return icevision.Measurement{}, nil
 		}
-		return iceMeasurement{contrast: iceReading{row: 570, step: 40, found: true}}, nil
+		return icevision.Measurement{Contrast: icevision.Reading{Row: 570, Step: 40, Found: true}}, nil
 	}
 }
 
 // shadowReadings replays the two methods independently, which is the only thing
 // the shadow tests are about: what the contrast step decides must not move when
 // the shadow says something else.
-func shadowReadings(contrast, brightness []bool, brightnessRow int) func(context.Context) (iceMeasurement, error) {
+func shadowReadings(contrast, brightness []bool, brightnessRow int) func(context.Context) (icevision.Measurement, error) {
 	var i int
 	var mu sync.Mutex
 	pick := func(seq []bool, n int) bool {
@@ -112,17 +144,17 @@ func shadowReadings(contrast, brightness []bool, brightnessRow int) func(context
 		}
 		return seq[len(seq)-1]
 	}
-	return func(context.Context) (iceMeasurement, error) {
+	return func(context.Context) (icevision.Measurement, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		n := i
 		i++
-		m := iceMeasurement{shadow: true}
+		m := icevision.Measurement{Shadow: true}
 		if pick(contrast, n) {
-			m.contrast = iceReading{row: 570, step: 40, found: true}
+			m.Contrast = icevision.Reading{Row: 570, Step: 40, Found: true}
 		}
 		if pick(brightness, n) {
-			m.brightness = iceReading{row: brightnessRow, step: 180, found: true}
+			m.Brightness = icevision.Reading{Row: brightnessRow, Step: 180, Found: true}
 		}
 		return m, nil
 	}
@@ -223,11 +255,11 @@ func TestDwellUntilFullFallsBackToFixedDwell(t *testing.T) {
 	s, _ := iceTestService(t, &Config{IceDispenseMaxSec: 5, IceDispenseSec: 0.05})
 	var calls int
 	var mu sync.Mutex
-	measure := func(context.Context) (iceMeasurement, error) {
+	measure := func(context.Context) (icevision.Measurement, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		calls++
-		return iceMeasurement{}, errors.New("camera is down")
+		return icevision.Measurement{}, errors.New("camera is down")
 	}
 	start := time.Now()
 	res, err := s.dwellUntilFull(context.Background(), context.Background(), measure)
@@ -252,17 +284,17 @@ func TestDwellUntilFullRecoversFromOneError(t *testing.T) {
 	s, _ := iceTestService(t, nil)
 	var i int
 	var mu sync.Mutex
-	measure := func(context.Context) (iceMeasurement, error) {
+	measure := func(context.Context) (icevision.Measurement, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		i++
 		switch i {
 		case 1, 3:
-			return iceMeasurement{}, errors.New("transient")
+			return icevision.Measurement{}, errors.New("transient")
 		case 2, 4, 5:
-			return iceMeasurement{contrast: iceReading{row: 570, step: 40, found: true}}, nil
+			return icevision.Measurement{Contrast: icevision.Reading{Row: 570, Step: 40, Found: true}}, nil
 		}
-		return iceMeasurement{}, nil
+		return icevision.Measurement{}, nil
 	}
 	if _, err := s.dwellUntilFull(context.Background(), context.Background(), measure); err != nil {
 		t.Fatalf("dwellUntilFull: %v", err)
@@ -288,8 +320,8 @@ func TestPulseIcePinAlwaysClosesThePin(t *testing.T) {
 		{name: "cancelled watched dispense", cfg: &Config{IceVisionEnabled: true, IceDispenseMaxSec: 5}, cancel: true, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// A watched dispense with no camera is all errors, then the fallback.
 			s, pin := iceTestService(t, tc.cfg)
-			s.srcCamera = nil // a watched dispense with no camera is all errors, then the fallback
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			if tc.cancel {
@@ -355,11 +387,11 @@ func TestCloseDrivesThePinLow(t *testing.T) {
 
 // countingReadings is readings with a call count, for the tests that assert how
 // far the loop got rather than only that it finished.
-func countingReadings(found ...bool) (func(context.Context) (iceMeasurement, error), func() int) {
+func countingReadings(found ...bool) (func(context.Context) (icevision.Measurement, error), func() int) {
 	var mu sync.Mutex
 	var calls int
 	inner := readings(found...)
-	return func(ctx context.Context) (iceMeasurement, error) {
+	return func(ctx context.Context) (icevision.Measurement, error) {
 			mu.Lock()
 			calls++
 			mu.Unlock()
@@ -378,14 +410,14 @@ func countingReadings(found ...bool) (func(context.Context) (iceMeasurement, err
 func TestDwellUntilFullDefersItsReporting(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := iceTestService(t, &Config{SaveMotionRequestsDir: dir})
-	ctx := withIceFrameSaving(context.Background())
+	ctx := icevision.WithFrameSaving(context.Background())
 	frame := loadFixture(t, "fill_40.jpg")
 	var i int
-	measure := func(context.Context) (iceMeasurement, error) {
+	measure := func(context.Context) (icevision.Measurement, error) {
 		i++
 		// Seen twice then gone twice: the stop path, with a real frame behind it
 		// so the annotation actually runs.
-		return iceMeasurement{contrast: iceReading{row: 570, step: 40, found: i <= 2}, frame: frame}, nil
+		return icevision.Measurement{Contrast: icevision.Reading{Row: 570, Step: 40, Found: i <= 2}, Frame: frame}, nil
 	}
 
 	res, err := s.dwellUntilFull(ctx, context.Background(), measure)
@@ -408,8 +440,8 @@ func TestDwellUntilFullDefersItsReporting(t *testing.T) {
 // before the fault is evidence about the run and not a picture of its end.
 func TestDwellUntilFullReportsHowItEnded(t *testing.T) {
 	frame := loadFixture(t, "fill_40.jpg")
-	seen := func(found bool) iceMeasurement {
-		return iceMeasurement{contrast: iceReading{row: 570, step: 40, found: found}, frame: frame}
+	seen := func(found bool) icevision.Measurement {
+		return icevision.Measurement{Contrast: icevision.Reading{Row: 570, Step: 40, Found: found}, Frame: frame}
 	}
 
 	for _, tc := range []struct {
@@ -417,27 +449,27 @@ func TestDwellUntilFullReportsHowItEnded(t *testing.T) {
 		outcome  string
 		wantNote bool
 		compare  bool
-		measure  func(cancel context.CancelFunc) func(context.Context) (iceMeasurement, error)
+		measure  func(cancel context.CancelFunc) func(context.Context) (icevision.Measurement, error)
 	}{
-		{"stopped", "stopped", false, true, func(context.CancelFunc) func(context.Context) (iceMeasurement, error) {
+		{"stopped", "stopped", false, true, func(context.CancelFunc) func(context.Context) (icevision.Measurement, error) {
 			var i int
-			return func(context.Context) (iceMeasurement, error) { i++; return seen(i <= 2), nil }
+			return func(context.Context) (icevision.Measurement, error) { i++; return seen(i <= 2), nil }
 		}},
-		{"ceiling", "timeout", false, true, func(context.CancelFunc) func(context.Context) (iceMeasurement, error) {
-			return func(context.Context) (iceMeasurement, error) { return seen(false), nil }
+		{"ceiling", "timeout", false, true, func(context.CancelFunc) func(context.Context) (icevision.Measurement, error) {
+			return func(context.Context) (icevision.Measurement, error) { return seen(false), nil }
 		}},
-		{"camera gives out", "vision_fallback", true, false, func(context.CancelFunc) func(context.Context) (iceMeasurement, error) {
+		{"camera gives out", "vision_fallback", true, false, func(context.CancelFunc) func(context.Context) (icevision.Measurement, error) {
 			var i int
-			return func(context.Context) (iceMeasurement, error) {
+			return func(context.Context) (icevision.Measurement, error) {
 				if i++; i == 1 {
 					return seen(false), nil
 				}
-				return iceMeasurement{}, errors.New("camera is down")
+				return icevision.Measurement{}, errors.New("camera is down")
 			}
 		}},
-		{"cancelled mid-run", "cancelled", true, false, func(cancel context.CancelFunc) func(context.Context) (iceMeasurement, error) {
+		{"cancelled mid-run", "cancelled", true, false, func(cancel context.CancelFunc) func(context.Context) (icevision.Measurement, error) {
 			var i int
-			return func(context.Context) (iceMeasurement, error) {
+			return func(context.Context) (icevision.Measurement, error) {
 				if i++; i == 2 {
 					cancel()
 				}
@@ -520,5 +552,130 @@ func TestDwellUntilFullCapLeavesTheNormalStopAlone(t *testing.T) {
 	}
 	if res.outcome != "stopped" || res.timedOut {
 		t.Errorf("outcome %q timedOut=%v, want stopped false", res.outcome, res.timedOut)
+	}
+}
+
+// TestBrightnessShadowNeverDecides is the invariant the whole feature rests on.
+// The shadow is fed the opposite of the contrast step on every frame — it sees
+// a surface at the stop row from the first tick, which is its own stop
+// condition — and the dispense must end exactly as it does without it.
+func TestBrightnessShadowNeverDecides(t *testing.T) {
+	contrast := []bool{false, false, true, true, false, false}
+	for _, tc := range []struct {
+		name    string
+		measure func(context.Context) (icevision.Measurement, error)
+	}{
+		{"shadow off", readings(contrast...)},
+		{"shadow stopping immediately", shadowReadings(contrast, []bool{true}, 500)},
+		{"shadow never seeing anything", shadowReadings(contrast, []bool{false}, 0)},
+	} {
+		s, _ := iceTestService(t, &Config{IceBrightnessThresh: 132})
+		res, err := s.dwellUntilFull(context.Background(), context.Background(), tc.measure)
+		if err != nil {
+			t.Fatalf("%s: dwellUntilFull: %v", tc.name, err)
+		}
+		if res.timedOut || !res.sawSurface {
+			t.Errorf("%s: timedOut=%v sawSurface=%v, want false true — the shadow changed the outcome",
+				tc.name, res.timedOut, res.sawSurface)
+		}
+	}
+}
+
+// TestValidateIceVisionRejectsSilentGeometry: every case here would otherwise
+// run, log nothing unusual, and either stop the dispense immediately or never
+// stop it at all.
+func TestValidateIceVisionRejectsSilentGeometry(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		mutfn func(*Config)
+		want  string
+	}{
+		{"transposed x pair", func(c *Config) { c.IceROIX0, c.IceROIX1 = 910, 700 }, "ice_roi_x0"},
+		{"stop row above the window", func(c *Config) { c.IceStopRowPx = 10 }, "ice_stop_row_px"},
+		{"band bottom inside the window", func(c *Config) { c.IceROIY1 = 600 }, "ice_roi_y1"},
+		{"negative contrast", func(c *Config) { c.IceMinContrast = -1 }, "must not be negative"},
+		{"negative stop row", func(c *Config) { c.IceStopRowPx = -565 }, "must not be negative"},
+		{"min dwell past the ceiling", func(c *Config) { c.IceDispenseMinSec, c.IceDispenseMaxSec = 40, 30 }, "ice_dispense_min_sec"},
+		// A cap inside one poll ends every dispense on the tick after ice appears.
+		{"cap at the poll interval", func(c *Config) { c.IceAfterFirstSeenMaxSec, c.IceCheckIntervalSec = 0.5, 0.5 }, "ice_after_first_seen_max_sec"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validCanServeIcedConfig()
+			tc.mutfn(cfg)
+			_, _, err := cfg.Validate("path")
+			if err == nil {
+				t.Fatalf("Validate accepted %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestCheckIceLevelRegisteredWithIced(t *testing.T) {
+	iced := (&beanjaminCoffee{cfg: &Config{CanServeIced: true}}).actionFuncs()
+	if _, ok := iced["check_ice_level"]; !ok {
+		t.Error("check_ice_level is not registered on an iced machine")
+	}
+	plain := (&beanjaminCoffee{cfg: &Config{}}).actionFuncs()
+	if _, ok := plain["check_ice_level"]; ok {
+		t.Error("check_ice_level is registered on a machine that cannot serve iced drinks")
+	}
+}
+
+// The band is checked on every machine, not only the ones serving iced drinks:
+// ice_roi_* is reachable config either way, and a band that scans nothing has to
+// be rejected rather than measuring silently.
+func TestValidateIceVisionAppliesWithoutIced(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.IceROIX0, cfg.IceROIX1 = 910, 700
+
+	_, _, err := cfg.Validate("path")
+	if err == nil {
+		t.Fatal("Validate accepted a transposed ice band on a machine without can_serve_iced")
+	}
+	if !strings.Contains(err.Error(), "ice_roi_x0") {
+		t.Errorf("error %q does not mention ice_roi_x0", err)
+	}
+}
+
+// The defaults have to survive their own validator, and the band they derive
+// has to be able to nominate the stop row itself.
+func TestValidateIceVisionAcceptsDefaults(t *testing.T) {
+	if _, _, err := validCanServeIcedConfig().Validate("path"); err != nil {
+		t.Fatalf("Validate rejected the defaults: %v", err)
+	}
+	p := iceVisionParams(&Config{})
+	b := p.Band()
+	if b.Y0+b.Window != p.StopRow() {
+		t.Errorf("band top %d + window %d = %d, want the stop row %d", b.Y0, b.Window, b.Y0+b.Window, p.StopRow())
+	}
+	if b.Y0+2*b.Window >= b.Y1 {
+		t.Errorf("band y %d..%d cannot reach the stop row with window %d", b.Y0, b.Y1, b.Window)
+	}
+}
+
+// TestReportIceDispenseDuringAnOrder: an order's steps carry no DoCommand to set
+// the flag on, and an order's dispense is the one nobody watched — so its frame
+// is written on its own, tagged with the order in progress.
+func TestReportIceDispenseDuringAnOrder(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := iceTestService(t, &Config{SaveMotionRequestsDir: dir})
+	s.queue.Enqueue(order.Order{ID: "oid"})
+	if _, ok := s.queue.Start(); !ok {
+		t.Fatal("Start found nothing to make")
+	}
+
+	s.reportIceDispense(context.Background(), iceDwellResult{
+		outcome: "stopped",
+		frame:   icevision.Measurement{Frame: loadFixture(t, "fill_40.jpg")},
+	})
+	wrote, err := filepath.Glob(filepath.Join(dir, "tag=oid", "tag=ice_dispense", "tag=ice_stopped", "*_ice_dispense.jpg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wrote) != 1 {
+		t.Errorf("an order's dispense wrote %d frames, want 1", len(wrote))
 	}
 }

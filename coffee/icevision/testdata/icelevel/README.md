@@ -1,7 +1,7 @@
 # Ice-level test fixtures
 
 Two seatings of the same glass at `ice_machine_dispense` on `cappuccina-main`,
-exercised by `coffee/ice_level_test.go`. Two, because where the glass hangs in
+exercised by `coffee/icevision/level_test.go`. Two, because where the glass hangs in
 the jaws is the failure mode the measurement is designed around, and a set
 captured at one seating cannot catch a seating bug.
 

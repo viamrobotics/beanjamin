@@ -1,4 +1,4 @@
-package coffee
+package icevision
 
 // The brightness shadow: a second, independent read of every dispense frame,
 // logged beside the contrast step and never allowed to decide anything.
@@ -24,16 +24,18 @@ import (
 // contrast window does for the step.
 const defaultIceBrightRun = 8
 
-// iceBrightnessShadowOn reports whether the shadow runs. An unset threshold is
-// the off switch, and deliberately has no default: an absolute brightness
-// cutoff is the one number that does not survive a change in lighting, so it
-// has to be read off the machine it will run on (check_ice_level prints it).
-func (s *beanjaminCoffee) iceBrightnessShadowOn() bool {
-	return s.cfg.IceBrightnessThresh > 0
+// ShadowOn reports whether the shadow runs. An unset threshold is the off
+// switch, and deliberately has no default: an absolute brightness cutoff is the
+// one number that does not survive a change in lighting, so it has to be read
+// off the machine it will run on (check_ice_level prints it).
+func (p Params) ShadowOn() bool {
+	return p.BrightnessThresh > 0
 }
 
-func (s *beanjaminCoffee) iceBrightRun() int {
-	return orDefault(s.cfg.IceBrightRun, defaultIceBrightRun)
+// ShadowRun returns how many consecutive rows must clear the threshold,
+// configured or default.
+func (p Params) ShadowRun() int {
+	return orDefault(p.BrightRun, defaultIceBrightRun)
 }
 
 // brightnessSurfaceRow finds the ice surface by absolute brightness: the
@@ -47,7 +49,7 @@ func (s *beanjaminCoffee) iceBrightRun() int {
 // glass therefore reports a row near the band top rather than reporting
 // nothing, which is why the shadow's stop test is a row comparison and not the
 // absence the step's latch is built around.
-func brightnessSurfaceRow(rows []float64, b iceBand, thresh float64, run int) iceReading {
+func brightnessSurfaceRow(rows []float64, b Band, thresh float64, run int) Reading {
 	if run < 1 {
 		run = 1
 	}
@@ -60,17 +62,17 @@ func brightnessSurfaceRow(rows []float64, b iceBand, thresh float64, run int) ic
 			}
 		}
 		if bright {
-			return iceReading{row: b.y0 + i, step: rows[i], found: true}
+			return Reading{Row: b.Y0 + i, Step: rows[i], Found: true}
 		}
 	}
-	return iceReading{}
+	return Reading{}
 }
 
-// brightnessShadow follows the shadow through one dispense so the comparison
+// Shadow follows the shadow through one dispense so the comparison
 // logs as a few edges rather than one line per poll. A 30-second dispense is
 // ~60 polls; logging each one buries the lines that matter and trips the
 // logger's own repeat suppression.
-type brightnessShadow struct {
+type Shadow struct {
 	on      bool
 	stopRow int
 
@@ -93,40 +95,46 @@ type brightnessShadow struct {
 	closestRow int
 }
 
-func (s *beanjaminCoffee) newBrightnessShadow() *brightnessShadow {
-	return &brightnessShadow{
-		on:         s.iceBrightnessShadowOn(),
-		stopRow:    s.iceStopRowPx(),
+// NewShadow starts following one dispense.
+func (p Params) NewShadow() *Shadow {
+	return &Shadow{
+		on:         p.ShadowOn(),
+		stopRow:    p.StopRow(),
 		closestRow: -1,
 	}
 }
 
-// observe folds one frame's shadow reading in, logging only the two edges:
+// On reports whether the shadow runs on this dispense.
+func (b *Shadow) On() bool {
+	return b.on
+}
+
+// Observe folds one frame's shadow reading in, logging only the two edges:
 // first sighting, and the first frame its own stop test would have fired on.
 // contrast is a short description of what the deciding method saw on the same
 // frame, so a disagreement is readable without cross-referencing timestamps.
-func (b *brightnessShadow) observe(r iceReading, elapsed time.Duration, contrast string, logger logging.Logger) {
-	if !b.on || !r.found {
+func (b *Shadow) Observe(r Reading, elapsed time.Duration, contrast string, logger logging.Logger) {
+	if !b.on || !r.Found {
 		return
 	}
-	if b.closestRow < 0 || r.row < b.closestRow {
-		b.closestRow = r.row
+	if b.closestRow < 0 || r.Row < b.closestRow {
+		b.closestRow = r.Row
 	}
 	firstSighting := !b.sawSurface
 	if firstSighting {
-		b.sawSurface, b.firstSeen, b.firstRow = true, elapsed, r.row
+		b.sawSurface, b.firstSeen, b.firstRow = true, elapsed, r.Row
 		logger.Infof("dispensing ice: brightness shadow first saw a surface at row %d (brightness %.0f) after %s — contrast %s",
-			r.row, r.step, elapsed.Round(time.Millisecond), contrast)
+			r.Row, r.Step, elapsed.Round(time.Millisecond), contrast)
 	}
-	if !b.wouldStop && r.row <= b.stopRow {
-		b.wouldStop, b.wouldStopAt, b.stoppedRow = true, elapsed, r.row
+	if !b.wouldStop && r.Row <= b.stopRow {
+		b.wouldStop, b.wouldStopAt, b.stoppedRow = true, elapsed, r.Row
 		b.stoppedOnFirstSighting = firstSighting
 		logger.Infof("dispensing ice: brightness shadow would close the pin now — row %d is at or above stop row %d, %s in — contrast %s",
-			r.row, b.stopRow, elapsed.Round(time.Millisecond), contrast)
+			r.Row, b.stopRow, elapsed.Round(time.Millisecond), contrast)
 	}
 }
 
-// verdict compares the finished run against what the deciding method did and
+// Verdict compares the finished run against what the deciding method did and
 // returns the summary line plus whether the two disagreed.
 //
 // A timing difference is not a disagreement. The shadow sees rows the step
@@ -136,7 +144,7 @@ func (b *brightnessShadow) observe(r iceReading, elapsed time.Duration, contrast
 // seeing ice, seeing it but never reaching the stop row, or reaching the stop
 // row on the first frame it saw anything at all. The last is the one that would
 // disqualify the swap.
-func (b *brightnessShadow) verdict(contrastStopped bool, contrastAt, contrastFirstSeen time.Duration) (string, bool) {
+func (b *Shadow) Verdict(contrastStopped bool, contrastAt, contrastFirstSeen time.Duration) (string, bool) {
 	if !b.on {
 		return "", false
 	}

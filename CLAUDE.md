@@ -24,8 +24,9 @@ Each model lives in its own package. The coffee service is `coffee/` (`package c
 | Speech (`coffee/speech/`, `package speech`) | `phrases.go` (spoken line tables and pickers), `speaker.go` (`Speaker`, `say_async` to the speech service), `fault_alarm.go` (`FaultAlarm`, the `fault_active` flag and failure line) |
 | Slack reports (`coffee/report/`, `package report`) | `notifier.go` (`Notifier`, the one Slack send path), `failure.go` (failed-order alert), `daily_summary.go` (order digest), `chore_wheel.go` (weekly rota and `ChoreWheelConfig`), `links.go` (app.viam.com deep-links) |
 | Camera clips (`coffee/clips/`, `package clips`) | `saver.go` (`Saver`: per-order clip saves through the video-store multiplexer, pending-clip records, and the `cleanup_pending_clips` recovery sweep) |
+| Ice vision (`coffee/icevision/`, `package icevision`) | `detector.go` (`Detector` over the arm camera, `Params`), `level.go` (contrast-step surface measurement, `check_ice_level`), `brightness.go` (brightness shadow), `annotate.go` and `dispense_frame.go` (annotated ice frames saved under `save_motion_requests_dir`); the dwell loop that drives the ice pin is `coffee/ice_dwell.go`, which calls into it |
 
-`coffee/order`, `coffee/speech`, `coffee/report`, and `coffee/clips` depend on nothing in `coffee`, so they must never import it. The other models are sibling packages: `ordersensor/`, `maintenancesensor/`, `customerdetector/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`. There is no top-level Go package; `cmd/module/main.go` registers every model.
+`coffee/order`, `coffee/speech`, `coffee/report`, `coffee/clips`, and `coffee/icevision` depend on nothing in `coffee`, so they must never import it. The other models are sibling packages: `ordersensor/`, `maintenancesensor/`, `customerdetector/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`. There is no top-level Go package; `cmd/module/main.go` registers every model.
 
 ## Common commands
 
