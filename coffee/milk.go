@@ -157,9 +157,11 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, pourStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}
-	// Return upright along the same pivot so any residual drip stays over the glass.
+	// Return upright along the same pivot so any residual drip stays over the
+	// glass, at the default (slow) pivot speed so the milk left in the bottle
+	// doesn't slosh out.
 	uprightStep := Step{PoseName: clawPoseMilkPourApproach, PoseSwitch: s.clawsSw, PivotFromPose: clawPoseMilkPour, PivotDegreesPerStep: 5,
-		MoveOptions: s.pourMoveOptions(), Pause: shortPause}
+		Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}
