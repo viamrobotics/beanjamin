@@ -448,9 +448,11 @@ func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, pourStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
-	// Return upright along the same pivot so any residual drip stays over the glass.
+	// Return upright along the same pivot so any residual drip stays over the
+	// glass, at the default (slow) pivot speed: a fast return flicks the dregs
+	// left in the cup over the rim.
 	uprightStep := Step{PoseName: clawPosePourApproach, PoseSwitch: s.clawsSw, PivotFromPose: clawPosePour, PivotDegreesPerStep: 5,
-		MoveOptions: s.pourMoveOptions(), Pause: shortPause}
+		Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
@@ -462,13 +464,14 @@ func (s *beanjaminCoffee) iceDispenseSec() float64 {
 	return orDefault(s.cfg.IceDispenseSec, defaultIceDispenseSec)
 }
 
-// defaultPourVelDegsPerSec is the max joint velocity for the pour tilt and
-// return-upright pivots when pour_vel_degs_per_sec is unset.
+// defaultPourVelDegsPerSec is the max joint velocity for the pour tilt pivot
+// when pour_vel_degs_per_sec is unset.
 const defaultPourVelDegsPerSec = 60.0
 
-// pourMoveOptions returns the per-step MoveOptions applied to the pour pivots,
+// pourMoveOptions returns the per-step MoveOptions applied to the pour tilt,
 // using the configured pour velocity or the default. We want the speed and acceleration to be higher
-// so it tilts faster and reduces spills.
+// so it tilts faster and reduces spills. The return upright is left at the
+// slow pivot default, since a fast return spills what is left in the container.
 func (s *beanjaminCoffee) pourMoveOptions() *StepMoveOptions {
 	return &StepMoveOptions{
 		MaxVelDegsPerSec:  orDefault(s.cfg.PourVelDegsPerSec, defaultPourVelDegsPerSec),
