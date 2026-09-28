@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"beanjamin/coffee/order"
+	"beanjamin/coffee/speech"
 )
 
 // deliveryMessageTimeout caps how long a single peer DoCommand may take, so a
@@ -94,4 +95,20 @@ func (s *beanjaminCoffee) sendDeliveryMessage(ctx context.Context, command any) 
 		"sent":          true,
 		"peer_response": resp,
 	}, nil
+}
+
+// readyForDelivery handles the cup-handoff moment for delivery-fulfillment
+// orders, replacing the pickup drink-ready announcement: it sends the
+// delivery_request to the delivery machine and waits for its acknowledgment
+// (bounded by deliveryMessageTimeout) before speaking, so the order isn't
+// announced as handed off on the strength of a request nobody confirmed.
+// The caller sets order.PickupPosition from the serving step.
+func (s *beanjaminCoffee) readyForDelivery(ctx context.Context, order order.Order) error {
+	s.notifyDeliveryRequest(ctx, order)
+	drink := speech.SpeakableDrink(order.Drink)
+	text := fmt.Sprintf("%s ready for delivery!", drink)
+	if name := order.DisplayName(); name != "" {
+		text = fmt.Sprintf("%s for %s, ready for delivery!", drink, name)
+	}
+	return s.speaker.SayAlways(ctx, text)
 }

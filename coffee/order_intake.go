@@ -123,3 +123,12 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		"count":          count,
 	}, nil
 }
+
+// defaultMaxBatchSize is used when Config.MaxBatchSize is unset or zero.
+const defaultMaxBatchSize = 10
+
+// maxBatchSize returns the configured cap on prepare_order count, falling
+// back to defaultMaxBatchSize.
+func (s *beanjaminCoffee) maxBatchSize() int {
+	return orDefault(s.cfg.MaxBatchSize, defaultMaxBatchSize)
+}

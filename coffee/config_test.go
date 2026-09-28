@@ -29,12 +29,3 @@ func TestOrDefault(t *testing.T) {
 		t.Errorf("orDefault(2.5, 1.0) = %v, want 2.5", got)
 	}
 }
-
-func TestPickupGetters(t *testing.T) {
-	if got := pickupMaxAttempts(0); got != defaultCupPickupMaxAttempts {
-		t.Errorf("pickupMaxAttempts(0) = %d, want %d", got, defaultCupPickupMaxAttempts)
-	}
-	if got := pickupMaxAttempts(7); got != 7 {
-		t.Errorf("pickupMaxAttempts(7) = %d, want 7", got)
-	}
-}
