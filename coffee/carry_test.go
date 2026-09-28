@@ -17,11 +17,12 @@ func gripperFS(t *testing.T, gripperPose spatialmath.Pose) *referenceframe.Frame
 }
 
 // gripperFSWithHeldItem builds world -> gripper -> {grip-point,
-// coffee-claws-middle -> held-item}, mirroring the real machine: grip-point sits
-// 115mm out along the gripper's Z and the claws 90mm, so held-item is 25mm short
-// of grip-point along the tool axis. gripperPose places the gripper in the world;
-// heldItemPose is the transform the container geometry gives the held-item frame
-// (heldItemFramePose).
+// coffee-claws-middle -> held-item}, with grip-point 115mm out along the
+// gripper's Z and the claws 90mm. held-item is placed at heldItemPose relative to
+// the claws, so at an identity pose it is 25mm short of grip-point along the tool
+// axis — an offset carryGoalForMoveFrame must undo for any rigid layout, even
+// though addHeldItemFrame puts the real frame on the grip point. gripperPose
+// places the gripper in the world.
 func gripperFSWithHeldItem(t *testing.T, gripperPose, heldItemPose spatialmath.Pose) *referenceframe.FrameSystem {
 	t.Helper()
 	fs := referenceframe.NewEmptyFrameSystem("test")
@@ -42,10 +43,10 @@ func gripperFSWithHeldItem(t *testing.T, gripperPose, heldItemPose spatialmath.P
 	return fs
 }
 
-// The pour poses are authored for grip-point, but a no-spill carry commands the
-// held-item frame. held-item sits 25mm short of grip-point along the tool axis,
-// so the goal must be shifted by that offset — otherwise grip-point overshoots
-// the authored pose by 25mm and executePivot refuses to pivot (max 2mm).
+// A grip-point pose carried with an item held commands the held-item frame. Here
+// held-item sits 25mm short of grip-point along the tool axis, so the goal must
+// be shifted by that offset — otherwise grip-point overshoots the authored pose
+// by 25mm.
 func TestCarryGoalForMoveFrame_ShiftsByHeldItemOffset(t *testing.T) {
 	// Gripper level, tool axis (its local Z) pointing along world +X.
 	gripperPose := spatialmath.NewPose(
