@@ -467,13 +467,28 @@ export interface CustomerIdentification {
   message?: string;
 }
 
+/**
+ * Stages one face capture for `pose`; a retake of the same pose replaces it.
+ * Nothing is enrolled until `finishRegistration`.
+ */
 export async function registerCustomerFace(
   conn: ViamConnection,
   name: string,
   email: string,
+  pose: number,
 ): Promise<{ registered: string; name: string; image_path: string }> {
   return doCommand(conn, CUSTOMER_DETECTOR_SERVICE_NAME, {
-    register_customer: { name, email },
+    register_customer: { name, email, pose },
+  });
+}
+
+/** Discards the customer's staged captures; safe to call more than once. */
+export async function cancelRegistration(
+  conn: ViamConnection,
+  email: string,
+): Promise<{ cancelled: string; discarded: number }> {
+  return doCommand(conn, CUSTOMER_DETECTOR_SERVICE_NAME, {
+    cancel_registration: email,
   });
 }
 
