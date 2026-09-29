@@ -33,6 +33,15 @@ var Model = resource.NewModel("viam", "beanjamin", "customer-detector")
 // knownFacesDir is the subdirectory under DataDir where face images are stored.
 const knownFacesDir = "known_faces"
 
+// pendingFacesDir holds captures from a registration that hasn't been
+// confirmed yet. It sits outside known_faces (the face-identification
+// picture_directory), so a staged face is never embedded: a customer who
+// skips or backs out must not become recognisable.
+const pendingFacesDir = "pending_faces"
+
+// maxPoses caps the capture slots one registration can stage.
+const maxPoses = 16
+
 func init() {
 	resource.RegisterService(generic.API, Model,
 		resource.Registration[resource.Resource, *Config]{
@@ -96,7 +105,10 @@ type customerDetector struct {
 
 	mu        sync.RWMutex
 	customers map[string]*customerRecord // keyed by email
-	vision    vision.Service             // lazily resolved; may be nil at startup
+	// pendingNames holds the name given with each staged registration,
+	// keyed by email, until finish_registration commits it.
+	pendingNames map[string]string
+	vision       vision.Service // lazily resolved; may be nil at startup
 }
 
 func newCustomerDetector(
@@ -120,6 +132,11 @@ func newCustomerDetector(
 	facesDir := filepath.Join(conf.DataDir, knownFacesDir)
 	if err := os.MkdirAll(facesDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create known_faces directory: %w", err)
+	}
+	// Staged captures only live for one kiosk session. Anything left from
+	// before a restart was never confirmed, so discard it.
+	if err := os.RemoveAll(filepath.Join(conf.DataDir, pendingFacesDir)); err != nil {
+		logger.Warnf("failed to discard unconfirmed face captures: %v", err)
 	}
 
 	threshold := conf.ConfidenceThreshold
@@ -146,6 +163,7 @@ func newCustomerDetector(
 		threshold:           threshold,
 		minFaceAreaFraction: minFaceAreaFraction,
 		customers:           make(map[string]*customerRecord),
+		pendingNames:        make(map[string]string),
 	}
 
 	if err := cd.loadCustomers(); err != nil {
@@ -175,10 +193,20 @@ func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]any) (
 	if reg, ok := cmd["register_customer"].(map[string]any); ok {
 		email, _ := reg["email"].(string)
 		name, _ := reg["name"].(string)
-		return cd.registerCustomer(ctx, name, email)
+		pose := -1
+		if p, ok := reg["pose"].(float64); ok {
+			if p < 0 || p >= maxPoses || p != float64(int(p)) {
+				return nil, fmt.Errorf("pose must be an integer in [0, %d), got %v", maxPoses, p)
+			}
+			pose = int(p)
+		}
+		return cd.registerCustomer(ctx, name, email, pose)
 	}
 	if email, ok := cmd["finish_registration"].(string); ok {
 		return cd.finishRegistration(ctx, email)
+	}
+	if email, ok := cmd["cancel_registration"].(string); ok {
+		return cd.cancelRegistration(email)
 	}
 	if _, ok := cmd["identify_customer"]; ok {
 		return cd.identifyCustomer(ctx)
@@ -202,63 +230,37 @@ func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]any) (
 			"camera_name": cd.camera.Name().ShortName(),
 		}, nil
 	}
-	return nil, fmt.Errorf("unknown command, supported: register_customer, finish_registration, identify_customer, list_customers, remove_customer, record_order, get_usual, get_info")
+	return nil, fmt.Errorf("unknown command, supported: register_customer, finish_registration, cancel_registration, identify_customer, list_customers, remove_customer, record_order, get_usual, get_info")
 }
 
-// registerCustomer captures an image from the camera and stores it as a known
-// face for the given email address. It then tells the vision service to
-// recompute its embeddings so the new face is immediately recognisable.
-func (cd *customerDetector) registerCustomer(ctx context.Context, name, email string) (map[string]any, error) {
-	customerDir, err := cd.customerDir(email)
-	if err != nil {
+// registerCustomer captures an image from the camera and stages it for the
+// given email address. Nothing is enrolled until finishRegistration commits
+// the staged faces; cancelRegistration discards them. A non-negative pose
+// names the capture slot, so retaking a pose replaces its photo instead of
+// adding another.
+func (cd *customerDetector) registerCustomer(ctx context.Context, name, email string, pose int) (map[string]any, error) {
+	if err := validateEmail(email); err != nil {
 		return nil, err
 	}
 	if name == "" {
 		return nil, fmt.Errorf("name must not be empty")
 	}
 
-	// Capture an image from the camera.
 	img, err := camera.DecodeImageFromCamera(ctx, cd.camera, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to capture image: %w", err)
 	}
-	img = centerCrop(img)
 
-	if err := os.MkdirAll(customerDir, 0o755); err != nil {
-		return nil, fmt.Errorf("failed to create customer directory: %w", err)
-	}
-
-	// Count existing images to generate a unique filename.
-	entries, _ := os.ReadDir(customerDir)
-	filename := fmt.Sprintf("face_%d.jpeg", len(entries)+1)
-	imgPath := filepath.Join(customerDir, filename)
-
-	f, err := os.Create(imgPath)
+	imgPath, err := cd.stageFace(email, pose, centerCrop(img))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create face image file: %w", err)
-	}
-	if err := jpeg.Encode(f, img, &jpeg.Options{Quality: 90}); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("failed to encode face image: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return nil, fmt.Errorf("failed to write face image: %w", err)
+		return nil, err
 	}
 
-	cd.logger.Infof("saved face image for %q at %s", email, imgPath)
-
-	// Persist customer record.
 	cd.mu.Lock()
-	cd.customers[email] = &customerRecord{
-		Name:     name,
-		Email:    email,
-		ImageDir: customerDir,
-	}
+	cd.pendingNames[email] = name
 	cd.mu.Unlock()
 
-	if err := cd.saveCustomers(); err != nil {
-		return nil, fmt.Errorf("failed to persist customer records: %w", err)
-	}
+	cd.logger.Infof("staged face image for %q at %s", email, imgPath)
 
 	return map[string]any{
 		"registered": email,
@@ -267,26 +269,104 @@ func (cd *customerDetector) registerCustomer(ctx context.Context, name, email st
 	}, nil
 }
 
-// finishRegistration signals that the app is done capturing face images for
-// a customer. It triggers the vision service to recompute its embeddings so
-// all the newly captured faces become recognisable.
+// stageFace writes img into the email's pending directory, in the slot for
+// pose, or in the next free slot when pose is negative.
+func (cd *customerDetector) stageFace(email string, pose int, img image.Image) (string, error) {
+	pendingDir, err := cd.pendingDir(email)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(pendingDir, 0o700); err != nil {
+		return "", fmt.Errorf("failed to create pending face directory: %w", err)
+	}
+
+	slot := pose + 1
+	if pose < 0 {
+		entries, _ := os.ReadDir(pendingDir)
+		slot = len(entries) + 1
+	}
+	imgPath := filepath.Join(pendingDir, fmt.Sprintf("face_%d.jpeg", slot))
+
+	f, err := os.OpenFile(imgPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return "", fmt.Errorf("failed to create face image file: %w", err)
+	}
+	if err := jpeg.Encode(f, img, &jpeg.Options{Quality: 90}); err != nil {
+		_ = f.Close()
+		return "", fmt.Errorf("failed to encode face image: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("failed to write face image: %w", err)
+	}
+	return imgPath, nil
+}
+
+// finishRegistration commits the customer's staged faces into known_faces,
+// saves their record, and has the vision service recompute its embeddings
+// so the new faces become recognisable.
 func (cd *customerDetector) finishRegistration(ctx context.Context, email string) (map[string]any, error) {
-	if err := validateEmail(email); err != nil {
+	customerDir, err := cd.customerDir(email)
+	if err != nil {
 		return nil, err
+	}
+	pendingDir, err := cd.pendingDir(email)
+	if err != nil {
+		return nil, err
+	}
+
+	staged, err := os.ReadDir(pendingDir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to read staged faces: %w", err)
 	}
 
 	cd.mu.RLock()
 	rec, exists := cd.customers[email]
+	name, hasPending := cd.pendingNames[email]
 	cd.mu.RUnlock()
-	if !exists {
-		return nil, fmt.Errorf("customer %q not found — call register_customer first", email)
+	if len(staged) == 0 && !exists {
+		return nil, fmt.Errorf("no staged faces for %q — call register_customer first", email)
+	}
+	if !hasPending && exists {
+		name = rec.Name
 	}
 
-	entries, _ := os.ReadDir(rec.ImageDir)
-
+	// Resolve the vision service before moving anything, so a missing
+	// dependency leaves the capture staged rather than half-committed.
 	vis, err := cd.getVision()
 	if err != nil {
 		return nil, err
+	}
+
+	if len(staged) > 0 {
+		if err := os.MkdirAll(customerDir, 0o755); err != nil {
+			return nil, fmt.Errorf("failed to create customer directory: %w", err)
+		}
+		// Committed faces get a unique name so they never overwrite the
+		// samples from an earlier registration of the same customer.
+		stamp := time.Now().UnixNano()
+		for i, e := range staged {
+			src := filepath.Join(pendingDir, e.Name())
+			dst := filepath.Join(customerDir, fmt.Sprintf("face_%d_%d.jpeg", stamp, i+1))
+			if err := os.Rename(src, dst); err != nil {
+				return nil, fmt.Errorf("failed to commit face image: %w", err)
+			}
+		}
+		if err := os.RemoveAll(pendingDir); err != nil {
+			cd.logger.Warnf("failed to clear staged faces for %q: %v", email, err)
+		}
+
+		cd.mu.Lock()
+		next := &customerRecord{Name: name, Email: email, ImageDir: customerDir}
+		if prev, ok := cd.customers[email]; ok {
+			next.Orders = prev.Orders
+		}
+		cd.customers[email] = next
+		delete(cd.pendingNames, email)
+		cd.mu.Unlock()
+
+		if err := cd.saveCustomers(); err != nil {
+			return nil, fmt.Errorf("failed to persist customer records: %w", err)
+		}
 	}
 
 	if _, err := vis.DoCommand(ctx, map[string]any{
@@ -295,12 +375,35 @@ func (cd *customerDetector) finishRegistration(ctx context.Context, email string
 		return nil, fmt.Errorf("failed to recompute embeddings: %w", err)
 	}
 
+	entries, _ := os.ReadDir(customerDir)
 	cd.logger.Infof("finished registration for %q with %d face images", email, len(entries))
 
 	return map[string]any{
 		"email":       email,
-		"name":        rec.Name,
+		"name":        name,
 		"face_images": len(entries),
+	}, nil
+}
+
+// cancelRegistration discards the customer's staged faces. It is idempotent
+// and never touches faces already committed by an earlier registration.
+func (cd *customerDetector) cancelRegistration(email string) (map[string]any, error) {
+	pendingDir, err := cd.pendingDir(email)
+	if err != nil {
+		return nil, err
+	}
+	staged, _ := os.ReadDir(pendingDir)
+	if err := os.RemoveAll(pendingDir); err != nil {
+		return nil, fmt.Errorf("failed to discard staged faces: %w", err)
+	}
+
+	cd.mu.Lock()
+	delete(cd.pendingNames, email)
+	cd.mu.Unlock()
+
+	return map[string]any{
+		"cancelled": email,
+		"discarded": len(staged),
 	}, nil
 }
 
@@ -547,6 +650,14 @@ func (cd *customerDetector) customerDir(email string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(cd.dataDir, knownFacesDir, email), nil
+}
+
+// pendingDir validates email and returns the directory staging its captures.
+func (cd *customerDetector) pendingDir(email string) (string, error) {
+	if err := validateEmail(email); err != nil {
+		return "", err
+	}
+	return filepath.Join(cd.dataDir, pendingFacesDir, email), nil
 }
 
 // isCustomerDir reports whether dir is a direct child of known_faces.
