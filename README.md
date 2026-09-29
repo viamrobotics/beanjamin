@@ -1062,6 +1062,8 @@ The face-identification vision service should be configured with `picture_direct
 
 **`register_customer`** — Capture a single photo from the camera, save it as a known face, and associate it with the customer's name and email. Call this multiple times during a registration session to capture different angles (front, left, right, etc.). Does **not** trigger embedding recomputation — call `finish_registration` when done.
 
+The email must be a bare address (`alice@example.com` — no display name, no surrounding whitespace, at most 254 characters, no `/` or `\`), because it names the customer's face directory. `register_customer` and `finish_registration` reject anything else, and `remove_customer` refuses to delete an image directory that is not directly under `<data_dir>/known_faces`.
+
 ```json
 {
   "register_customer": {

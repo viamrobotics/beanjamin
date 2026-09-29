@@ -247,7 +247,7 @@ export function Kiosk() {
         modifiedName: misspelledName,
         // Credits the drink to this customer's history; empty = anonymous
         // (ignored). Required by the backend when fulfillment is delivery.
-        customerEmail: email,
+        customerEmail: email.trim(),
         pronunciation: undefined,
         fulfillment,
       });
@@ -351,7 +351,7 @@ export function Kiosk() {
       return (
         <FaceRegister
           name={name}
-          email={email}
+          email={email.trim()}
           viamConn={viamConn}
           onBack={() => setStep("name")}
           onComplete={() => placeOrder(misspelled)}
