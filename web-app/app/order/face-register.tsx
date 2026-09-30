@@ -5,6 +5,7 @@ import { StreamClient } from "@viamrobotics/sdk";
 import {
   registerCustomerFace,
   finishRegistration,
+  cancelRegistration,
   getCustomerDetectorInfo,
   type ViamConnection,
 } from "../lib/viamClient";
@@ -68,6 +69,29 @@ export function FaceRegister({
   useEffect(() => {
     onSkipRef.current = onSkip;
   }, [onSkip]);
+
+  // Captures are only staged on the machine until handleConfirm commits
+  // them. Leaving this screen any other way (Skip, Back, navigating off)
+  // must discard them, or a customer who declined would still be enrolled.
+  const committed = useRef(false);
+  const discardTarget = useRef({ viamConn, email });
+  useEffect(() => {
+    discardTarget.current = { viamConn, email };
+  }, [viamConn, email]);
+  const discardCaptures = useCallback(() => {
+    const { viamConn: conn, email: target } = discardTarget.current;
+    if (committed.current || !conn) return;
+    cancelRegistration(conn, target).catch((err) => {
+      console.error("[face-register] failed to discard captures:", err);
+    });
+  }, []);
+  useEffect(() => discardCaptures, [discardCaptures]);
+
+  function handleSkip() {
+    cancelled.current = true;
+    discardCaptures();
+    onSkip();
+  }
 
   // Fetch camera name
   useEffect(() => {
@@ -143,7 +167,7 @@ export function FaceRegister({
         console.log(
           `[face-register] capturing pose ${idx + 1}/${POSES.length}: ${POSES[idx].label}`
         );
-        await registerCustomerFace(viamConn, name, email);
+        await registerCustomerFace(viamConn, name, email, idx);
         const snap = snapshotVideo(videoRef.current);
         setSnapshots((prev) => {
           const next = [...prev];
@@ -245,6 +269,7 @@ export function FaceRegister({
     console.log("[face-register] finishing registration");
     try {
       const result = await finishRegistration(viamConn!, email);
+      committed.current = true;
       console.log("[face-register] registration complete:", result);
       setStatus("done");
       onComplete();
@@ -335,7 +360,7 @@ export function FaceRegister({
 
           <div className="flex gap-4 w-full">
             <button
-              onClick={onSkip}
+              onClick={handleSkip}
               disabled={status === "finishing"}
               className="press flex-1 py-4 text-base font-medium bg-neutral-100 text-neutral-600 rounded-full hover:bg-neutral-200 transition-colors disabled:opacity-30"
             >
@@ -382,7 +407,8 @@ export function FaceRegister({
         </h1>
 
         <p className="anim-in text-neutral-500 text-center text-sm -mt-4">
-          So we can greet you next time!
+          So we can greet you next time! Photos are kept on this machine
+          only if you tap &ldquo;Looks good!&rdquo; &mdash; Skip deletes them.
         </p>
 
         {/* Camera viewfinder with guide overlay */}
@@ -480,7 +506,7 @@ export function FaceRegister({
         )}
 
         <button
-          onClick={onSkip}
+          onClick={handleSkip}
           className="anim-in press w-full py-4 text-base font-medium bg-neutral-100 text-neutral-600 rounded-full hover:bg-neutral-200 transition-colors"
           style={{ animationDelay: "160ms" }}
         >

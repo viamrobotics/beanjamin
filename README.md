@@ -1060,7 +1060,7 @@ The face-identification vision service should be configured with `picture_direct
 
 ### DoCommand
 
-**`register_customer`** — Capture a single photo from the camera, save it as a known face, and associate it with the customer's name and email. Call this multiple times during a registration session to capture different angles (front, left, right, etc.). Does **not** trigger embedding recomputation — call `finish_registration` when done.
+**`register_customer`** — Capture a single photo from the camera and stage it for the customer's name and email. Call this multiple times during a registration session to capture different angles (front, left, right, etc.). Staged photos live under `<data_dir>/pending_faces/<email>/`, outside the face-identification `picture_directory`, so nobody is enrolled until `finish_registration` commits them; `cancel_registration` discards them. The optional `pose` (a non-negative integer) names the capture slot, so retaking a pose replaces its photo instead of adding another.
 
 The email must be a bare address (`alice@example.com` — no display name, no surrounding whitespace, at most 254 characters, no `/` or `\`), because it names the customer's face directory. `register_customer` and `finish_registration` reject anything else, and `remove_customer` refuses to delete an image directory that is not directly under `<data_dir>/known_faces`.
 
@@ -1068,7 +1068,8 @@ The email must be a bare address (`alice@example.com` — no display name, no su
 {
   "register_customer": {
     "name": "Alice Smith",
-    "email": "alice@example.com"
+    "email": "alice@example.com",
+    "pose": 0
   }
 }
 ```
@@ -1079,11 +1080,11 @@ Returns:
 {
   "registered": "alice@example.com",
   "name": "Alice Smith",
-  "image_path": "/data/customers/known_faces/alice@example.com/face_1.jpeg"
+  "image_path": "/data/customers/pending_faces/alice@example.com/face_1.jpeg"
 }
 ```
 
-**`finish_registration`** — Call after capturing all face images for a customer. Triggers the vision service to recompute its embeddings so the new faces become recognisable.
+**`finish_registration`** — Call once the customer confirms their photos. Moves the staged faces into `<data_dir>/known_faces/<email>/`, saves the customer record (keeping any order history from an earlier registration), and triggers the vision service to recompute its embeddings so the new faces become recognisable.
 
 ```json
 {"finish_registration": "alice@example.com"}
@@ -1093,6 +1094,18 @@ Returns:
 
 ```json
 {"email": "alice@example.com", "name": "Alice Smith", "face_images": 5}
+```
+
+**`cancel_registration`** — Discard the customer's staged photos, e.g. when they skip or back out of face registration. Faces committed by an earlier `finish_registration` are untouched. Safe to call more than once. Staged photos are also discarded whenever the service restarts.
+
+```json
+{"cancel_registration": "alice@example.com"}
+```
+
+Returns:
+
+```json
+{"cancelled": "alice@example.com", "discarded": 3}
 ```
 
 **`identify_customer`** — Capture a photo and attempt to match the face against registered customers.
@@ -1198,7 +1211,7 @@ Otherwise: `{"recognized": false}`.
 
 ### Storage
 
-Customer records (name, email, image directory, order history) are persisted to `<data_dir>/customers.json`. Order history is capped at the most recent 50 entries per customer. Face images are stored under `<data_dir>/known_faces/<email>/` — one subdirectory per customer, which is the directory structure the face-identification vision service expects. Registering the same customer multiple times adds additional face samples, improving recognition accuracy.
+Customer records (name, email, image directory, order history) are persisted to `<data_dir>/customers.json`. Order history is capped at the most recent 50 entries per customer. Face images are stored under `<data_dir>/known_faces/<email>/` — one subdirectory per customer, which is the directory structure the face-identification vision service expects. Unconfirmed captures are staged under `<data_dir>/pending_faces/` and never reach `known_faces` unless `finish_registration` is called. Registering the same customer multiple times adds additional face samples, improving recognition accuracy.
 
 ---
 
