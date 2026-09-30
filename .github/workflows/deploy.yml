@@ -16,11 +16,29 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
+
+# rc tags are computed from the latest tag, so two overlapping runs would pick
+# the same -rc.N and the second upload would fail as a duplicate version.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
 
 jobs:
+  # Nothing is tagged or published unless the same checks PRs run pass on
+  # this exact commit.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  web-app:
+    uses: ./.github/workflows/web-app.yml
+
   compute-version:
+    needs: [ci, web-app]
     runs-on: ubuntu-24.04
+    permissions:
+      # The rc tag is pushed with GITHUB_TOKEN.
+      contents: write
     outputs:
       version: ${{ steps.resolve.outputs.version }}
     steps:
@@ -28,6 +46,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Bump rc tag
         id: bump
@@ -44,11 +63,15 @@ jobs:
 
       - name: Resolve version
         id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BUMPED_TAG: ${{ steps.bump.outputs.new_tag }}
+          REQUESTED_VERSION: ${{ inputs.version || github.ref_name }}
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            VERSION="${{ steps.bump.outputs.new_tag }}"
+          if [ "$EVENT_NAME" = "push" ]; then
+            VERSION="$BUMPED_TAG"
           else
-            VERSION="${{ inputs.version || github.ref_name }}"
+            VERSION="$REQUESTED_VERSION"
           fi
           echo "Resolved version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -59,6 +82,8 @@ jobs:
     steps:
       # actions/checkout@v6.0.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
 
       - name: Build and upload to Viam Registry
         # viamrobotics/build-action@v1.7.2
@@ -74,8 +99,12 @@ jobs:
     needs: [compute-version]
     runs-on: ubuntu-24.04
     steps:
+      # The build below runs every npm lifecycle script in the dependency
+      # tree, so it must not find a token in .git/config.
       # actions/checkout@v6.0.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
 
       # actions/setup-node@v6.3.0
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
@@ -107,16 +136,20 @@ jobs:
 
   send-slack-msg:
     name: Send Slack Message
-    needs: [compute-version, publish-module, publish-app]
+    needs: [ci, web-app, compute-version, publish-module, publish-app]
     runs-on: ubuntu-24.04
     if: always()
     steps:
       - name: Generate metadata
         id: meta
+        env:
+          VERSION: ${{ needs.compute-version.outputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+          MODULE_RESULT: ${{ needs.publish-module.result }}
+          APP_RESULT: ${{ needs.publish-app.result }}
         run: |
           set -euo pipefail
-          VERSION="${{ needs.compute-version.outputs.version }}"
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "$EVENT_NAME" = "push" ]; then
             KIND="rc build"
             LINK_URL="${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
             LINK_LABEL="commit ${GITHUB_SHA:0:7}"
@@ -125,7 +158,7 @@ jobs:
             LINK_URL="${{ github.server_url }}/${{ github.repository }}/releases/tag/${VERSION}"
             LINK_LABEL="Release ${VERSION}"
           fi
-          if [ "${{ needs.publish-module.result }}" = "success" ] && [ "${{ needs.publish-app.result }}" = "success" ]; then
+          if [ "$MODULE_RESULT" = "success" ] && [ "$APP_RESULT" = "success" ]; then
             RESULT="success"
           else
             RESULT="failure"
@@ -153,7 +186,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "${{ steps.meta.outputs.result == 'success' && format('Deploy *{0}* ({1}) *succeeded* :white_check_mark:\n\t<{2}|{3}>', steps.meta.outputs.version, steps.meta.outputs.kind, steps.meta.outputs.link_url, steps.meta.outputs.link_label) || format('Deploy *{0}* ({1}) *failed* :x:\n\t<{2}|{3}>', steps.meta.outputs.version, steps.meta.outputs.kind, steps.meta.outputs.link_url, steps.meta.outputs.link_label) }}\n\tModule: ${{ needs.publish-module.result }}\n\tWeb app: ${{ needs.publish-app.result }}\n\t<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Workflow run>"
+                    "text": "${{ steps.meta.outputs.result == 'success' && format('Deploy *{0}* ({1}) *succeeded* :white_check_mark:\n\t<{2}|{3}>', steps.meta.outputs.version, steps.meta.outputs.kind, steps.meta.outputs.link_url, steps.meta.outputs.link_label) || format('Deploy *{0}* ({1}) *failed* :x:\n\t<{2}|{3}>', steps.meta.outputs.version, steps.meta.outputs.kind, steps.meta.outputs.link_url, steps.meta.outputs.link_label) }}\n\tCI: ${{ needs.ci.result }} / web app ${{ needs.web-app.result }}\n\tModule: ${{ needs.publish-module.result }}\n\tWeb app: ${{ needs.publish-app.result }}\n\t<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Workflow run>"
                   }
                 }
               ]

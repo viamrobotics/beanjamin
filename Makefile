@@ -108,4 +108,4 @@ ifeq ($(shell uname), Darwin)
 else ifeq ($(shell uname), Linux)
 	sudo apt-get install -y --no-install-recommends libnlopt-dev
 endif
-	go mod tidy
+	go mod download
