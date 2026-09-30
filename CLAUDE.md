@@ -38,7 +38,7 @@ make                  # build bin/beanjamin (default target)
 make test             # go test ./...
 make lint             # gofmt -s -w . && golangci-lint run
 make module.tar.gz    # package for Viam (use `make module` to run tests first)
-make setup            # install nlopt (brew on macOS, apt on Linux) + go mod tidy
+make setup            # install nlopt (brew on macOS, apt on Linux) + go mod download
 ```
 
 Run a single Go test:
