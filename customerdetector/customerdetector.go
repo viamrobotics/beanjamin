@@ -11,8 +11,10 @@ import (
 	"image"
 	"image/draw"
 	"image/jpeg"
+	"net/mail"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -207,8 +209,9 @@ func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]any) (
 // face for the given email address. It then tells the vision service to
 // recompute its embeddings so the new face is immediately recognisable.
 func (cd *customerDetector) registerCustomer(ctx context.Context, name, email string) (map[string]any, error) {
-	if email == "" {
-		return nil, fmt.Errorf("email must not be empty")
+	customerDir, err := cd.customerDir(email)
+	if err != nil {
+		return nil, err
 	}
 	if name == "" {
 		return nil, fmt.Errorf("name must not be empty")
@@ -221,8 +224,6 @@ func (cd *customerDetector) registerCustomer(ctx context.Context, name, email st
 	}
 	img = centerCrop(img)
 
-	// Save the image into the known_faces directory under the customer's email.
-	customerDir := filepath.Join(cd.dataDir, knownFacesDir, email)
 	if err := os.MkdirAll(customerDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create customer directory: %w", err)
 	}
@@ -270,8 +271,8 @@ func (cd *customerDetector) registerCustomer(ctx context.Context, name, email st
 // a customer. It triggers the vision service to recompute its embeddings so
 // all the newly captured faces become recognisable.
 func (cd *customerDetector) finishRegistration(ctx context.Context, email string) (map[string]any, error) {
-	if email == "" {
-		return nil, fmt.Errorf("email must not be empty")
+	if err := validateEmail(email); err != nil {
+		return nil, err
 	}
 
 	cd.mu.RLock()
@@ -411,6 +412,14 @@ func (cd *customerDetector) removeCustomer(ctx context.Context, email string) (m
 		cd.mu.Unlock()
 		return nil, fmt.Errorf("customer %q not found", email)
 	}
+	// ImageDir comes from customers.json, which may hold a record written
+	// before emails were validated; RemoveAll on it must never reach
+	// outside known_faces.
+	if !cd.isCustomerDir(rec.ImageDir) {
+		cd.mu.Unlock()
+		return nil, fmt.Errorf("refusing to remove %q: image directory %q is not directly under %s",
+			email, rec.ImageDir, filepath.Join(cd.dataDir, knownFacesDir))
+	}
 	delete(cd.customers, email)
 	cd.mu.Unlock()
 
@@ -505,6 +514,47 @@ func usualDrink(orders []orderHistoryEntry) (drink string, count int) {
 		}
 	}
 	return drink, count
+}
+
+// maxEmailLen is the RFC 5321 limit on a forward path.
+const maxEmailLen = 254
+
+// validateEmail rejects anything that is not a bare email address. The email
+// names the customer's face directory (the face-identification label), so it
+// must be exactly one path component: a separator or a "." / ".." name would
+// let a kiosk entry write, and a later remove_customer delete, outside
+// known_faces.
+func validateEmail(email string) error {
+	if email == "" {
+		return fmt.Errorf("email must not be empty")
+	}
+	if len(email) > maxEmailLen {
+		return fmt.Errorf("email must be at most %d characters", maxEmailLen)
+	}
+	if strings.ContainsAny(email, `/\`) || email == "." || email == ".." {
+		return fmt.Errorf("email %q is not a valid address", email)
+	}
+	addr, err := mail.ParseAddress(email)
+	if err != nil || addr.Address != email {
+		return fmt.Errorf("email %q is not a valid address", email)
+	}
+	return nil
+}
+
+// customerDir validates email and returns the face-image directory it names.
+func (cd *customerDetector) customerDir(email string) (string, error) {
+	if err := validateEmail(email); err != nil {
+		return "", err
+	}
+	return filepath.Join(cd.dataDir, knownFacesDir, email), nil
+}
+
+// isCustomerDir reports whether dir is a direct child of known_faces.
+func (cd *customerDetector) isCustomerDir(dir string) bool {
+	root := filepath.Clean(filepath.Join(cd.dataDir, knownFacesDir))
+	dir = filepath.Clean(dir)
+	base := filepath.Base(dir)
+	return filepath.Dir(dir) == root && base != "." && base != ".."
 }
 
 // customersFilePath returns the path to the JSON file that persists customer records.
