@@ -14,6 +14,7 @@ Customer-facing kiosk UI for the Beanjamin espresso robot. Built with Next.js an
 
 - `partId` — the robot part to connect to (required for real connections).
 - `kiosk=1` — kiosk mode: hides the "← Back to Fleet Dashboard" link on the welcome and order-confirmation screens. Use when the page is the only thing on screen and you don't want customers navigating away.
+- `name` / `email` — prefill the kiosk's name and email fields, e.g. `&name=Ada&email=ada@example.com`. The fields stay editable, and are reset to these values after each order. A face-recognized returning customer still takes precedence.
 - `mock=1` / `mock=0` — see dev-mode rules below.
 
 ## Running locally
