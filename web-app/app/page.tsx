@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Dashboard } from "./dashboard";
 import { Kiosk } from "./kiosk";
 import { Calibrate } from "./calibrate";
+import { Rewards } from "./rewards";
 
 // Everything is served from the single static entrypoint (out/index.html), so
 // the kiosk can't live at its own route — the Viam app host serves the export
@@ -15,6 +16,7 @@ function Root() {
   const view = useSearchParams().get("view");
   if (view === "machine") return <Kiosk />;
   if (view === "calibrate") return <Calibrate />;
+  if (view === "rewards") return <Rewards />;
   return <Dashboard />;
 }
 

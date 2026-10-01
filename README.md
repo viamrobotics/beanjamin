@@ -8,6 +8,7 @@ The `viam:beanjamin` module provides these models for arm-based automation workf
 4. **`viam:beanjamin:order-sensor`** - A sensor that yields one reading per completed order (start/end timestamps and outcome) when wired from the coffee service.
 5. **`viam:beanjamin:dial-control-motion`** - A generic service that translates Stream Deck dial inputs into relative arm motions.
 6. **`viam:beanjamin:customer-detector`** - A generic service that identifies return customers via facial recognition using the [`viam:vision:face-identification`](https://github.com/viam-modules/viam-face-identification) vision service.
+7. **`viam:beanjamin:crm`** - A generic service holding customer profiles keyed by email: a loyalty point per completed drink, and shared rewards customers pool those points toward.
 
 ---
 
@@ -288,6 +289,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `slack_notifier_name`      | string | No       | Name of a [`viam:notifications:slack`](https://github.com/viam-modules/notifications) generic service. When set, the coffee service sends a best-effort Slack message on every non-successful order attempt (faults and operator cancels). See "Slack notifications" above. |
 | `chore_wheel`              | object | No       | Roster and chores for the weekly maintenance rota posted by `send_weekly_chores`: `{ "people": [...], "chores": [...] }`. Requires `slack_notifier_name`. See "Weekly chore wheel in Slack" below. |
 | `customer_detector_name`   | string | No       | Name of a `viam:beanjamin:customer-detector` service. When set, the coffee service credits each **successfully** completed order (when the `prepare_order` carried a `customer_email`) to that customer's order history via the detector's `record_order` DoCommand, powering "the usual". Setting the field automatically registers it as a dependency. Unset disables order-history recording. |
+| `crm_name`                 | string | No       | Name of a `viam:beanjamin:crm` service. When set, each **successfully** completed order that carried a `customer_email` earns that email one loyalty point through the CRM's `credit_points` DoCommand (keyed by order ID, so a drink is never credited twice). Registered as an optional dependency: a CRM that is down costs the points (logged with the email and order ID, for a backfill), never the drink. Unset disables loyalty points. |
 | `delivery_handler_name`    | string | No       | Name of a generic service on a peer delivery machine, reached through a remote part (e.g. `"delivery-bot:mission-control"` after adding the peer machine as a remote named `delivery-bot` in app.viam.com). Setting the field automatically registers it as an (optional) dependency. When a `fulfillment: "delivery"` order's drink lands in the serving area, the coffee service sends that service a `delivery_request` DoCommand (see `send_delivery_message` below for the payload and the manual test hook). Unset disables outbound peer messaging; delivery orders then just announce and rely on pickup from the serving area. |
 | `input_range_override`     | object | No       | Narrows joint limits on named frames before motion planning. Outer key is the frame name (typically the arm); inner key is either the joint name or its stringified index (e.g. `"5"` for the last joint of a 6-DoF arm). Each value is `{ "min_degs": number, "max_degs": number }`. |
 | `conversational`           | bool   | No       | When true, the coffee service speaks its own greetings, almost-ready prompts, order-received lines, and rejection quips through `speech_service_name`. When false (default), the service stays silent except for the drink-ready announcement at cup handoff — leaving the rest of the talking to an external orchestrator (e.g. `viam:conversation-bundle:voice-command`). |
@@ -1199,6 +1201,105 @@ Otherwise: `{"recognized": false}`.
 ### Storage
 
 Customer records (name, email, image directory, order history) are persisted to `<data_dir>/customers.json`. Order history is capped at the most recent 50 entries per customer. Face images are stored under `<data_dir>/known_faces/<email>/` — one subdirectory per customer, which is the directory structure the face-identification vision service expects. Registering the same customer multiple times adds additional face samples, improving recognition accuracy.
+
+---
+
+## Model: `viam:beanjamin:crm`
+
+**API:** `rdk:service:generic`
+
+Customer profiles keyed by email. Today a profile is a loyalty account: the coffee service (with `crm_name` set) credits one point per completed drink whose order carried a `customer_email`, and customers contribute their points toward **rewards** — improvements to the barista setup — configured here. Everyone's contributions to a reward pool together; once they reach its target the reward is unlocked, locked against further contributions, and announced on Slack. Contributions are final.
+
+Emails are matched case-insensitively (stored lowercased), so the address typed at the kiosk and the one on a Viam account land on the same profile. The web app's rewards page is `/?view=rewards&partId=<part id>` (linked from the fleet dashboard as `[rewards →]`); it reads the viewer's email from their Viam access token and shows and spends that email's points.
+
+### Configuration
+
+```json
+{
+  "data_dir": "<string>",
+  "slack_notifier_name": "<string>",
+  "rewards": [
+    {
+      "id": "<string>",
+      "name": "<string>",
+      "description": "<string>",
+      "points_required": <int>
+    }
+  ]
+}
+```
+
+| Name                  | Type   | Required | Description |
+| --------------------- | ------ | -------- | ----------- |
+| `data_dir`            | string | Yes      | Directory holding the ledger, `<data_dir>/loyalty.json`. It is the only record of everyone's points, so pick a path that survives module upgrades and back it up. Created if missing. |
+| `rewards`             | list   | No       | Rewards customers can fund. `id` keys the recorded contributions, so keep it stable — renaming it orphans what was put in. `name` and `points_required` (> 0) are required; `description` is optional. Raising a funded reward's `points_required` above what it holds reopens it. |
+| `slack_notifier_name` | string | No       | A `viam:notifications:slack` service that announces each reward as it becomes fully funded, listing every contributor. If it is configured but unavailable the CRM still runs, without announcements. |
+### Example Configuration
+
+```json
+{
+  "data_dir": "/data/crm",
+  "slack_notifier_name": "slack",
+  "rewards": [
+    { "id": "grinder", "name": "Better grinder", "description": "Burrs that don't squeak.", "points_required": 200 },
+    { "id": "oat-milk", "name": "Oat milk in the fridge", "points_required": 50 }
+  ]
+}
+```
+
+### DoCommand
+
+**`get_rewards`** — Every reward's progress, and with `{"email": ...}` that customer's account. `true` alone returns just the rewards.
+
+```json
+{ "get_rewards": { "email": "alice@example.com" } }
+```
+
+Returns (`funded_at` is empty until funded; `contributors` is largest first):
+
+```json
+{
+  "account": { "email": "alice@example.com", "points": 7, "earned": 12, "contributed": 5 },
+  "rewards": [
+    {
+      "id": "grinder",
+      "name": "Better grinder",
+      "description": "Burrs that don't squeak.",
+      "points_required": 200,
+      "contributed": 45,
+      "remaining": 155,
+      "funded": false,
+      "funded_at": "",
+      "contributors": [{ "email": "bob@example.com", "points": 40 }, { "email": "alice@example.com", "points": 5 }]
+    }
+  ]
+}
+```
+
+**`contribute_points`** — Move points from a customer's balance to a reward. Only what the reward still needs is taken, so `contributed` in the reply can be less than asked. Fails when the reward is unknown or already funded, or the customer doesn't have the points.
+
+```json
+{ "contribute_points": { "email": "alice@example.com", "reward_id": "grinder", "points": 5 } }
+```
+
+Returns `{"contributed": 5, "account": {...}, "reward": {...}, "funded": false}`; `funded` is `true` only on the contribution that unlocked the reward.
+
+**`credit_points`** — Give points to an email. The coffee service sends one per completed drink; use it by hand to backfill orders made before loyalty was on. Takes one credit or a list. `reason` defaults to `"manual"`. An entry with an `order_id` that was already credited is skipped, so a backfill can be re-run safely. Every entry of a list is validated before any is applied.
+
+```json
+{
+  "credit_points": [
+    { "email": "alice@example.com", "points": 1, "order_id": "3f1c…", "reason": "backfill" },
+    { "email": "bob@example.com", "points": 4, "reason": "backfill" }
+  ]
+}
+```
+
+A single credit returns `{"credited": true, "account": {...}}`; a list returns `{"credited": 1, "skipped": 1, "results": [...]}`.
+
+`Status()` returns `{"rewards": [...]}` in the same shape as `get_rewards`.
+
+> **Trust:** the CRM believes the email it is sent. viam-server verifies each caller but doesn't tell modules who the caller is, so the rewards page reads the viewer's email from their own Viam access token and sends that. Anyone who can issue DoCommands on the machine can credit or spend any email's points.
 
 ---
 

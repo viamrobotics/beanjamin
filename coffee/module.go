@@ -75,6 +75,7 @@ type beanjaminCoffee struct {
 	slackNotifier    *report.Notifier // optional; viam:notifications:slack; nil if slack_notifier_name unset
 	customerDetector generic.Service  // optional; viam:beanjamin:customer-detector; nil if customer_detector_name unset
 	deliveryHandler  generic.Service  // optional; peer-machine service reached via a remote; nil if delivery_handler_name unset
+	crm              generic.Service  // optional; viam:beanjamin:crm; nil if crm_name unset or not yet up
 	machineLogsURL   string           // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
 	dataLocationID   string           // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
 	primaryOrgID     string           // VIAM_PRIMARY_ORG_ID env; scopes app.viam.com deep-links to the owning org; "" when unavailable
@@ -323,6 +324,18 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, err
 	}
 
+	// Unlike the other optional services, a CRM that won't come up must not stop
+	// drinks being made; it is an optional dependency, so this service is rebuilt
+	// with it once it resolves.
+	var crmSvc generic.Service
+	if conf.CRMName != "" {
+		if crmSvc, err = generic.FromProvider(deps, conf.CRMName); err != nil {
+			logger.Warnf("crm_name %q not available, loyalty points won't be credited: %v", conf.CRMName, err)
+		} else {
+			logger.Infof("crm_name %q connected — loyalty points enabled", conf.CRMName)
+		}
+	}
+
 	srcCamera, err := camera.FromProvider(deps, conf.SrcCameraName)
 	if err != nil {
 		return nil, fmt.Errorf("src_camera_name %q: %w", conf.SrcCameraName, err)
@@ -390,6 +403,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		slackNotifier:    report.NewNotifier(slackNotifier),
 		customerDetector: customerDetector,
 		deliveryHandler:  deliveryHandler,
+		crm:              crmSvc,
 		machineLogsURL:   report.MachineLogsURL(os.Getenv("VIAM_MACHINE_ID"), os.Getenv("VIAM_PRIMARY_ORG_ID")),
 		dataLocationID:   os.Getenv("VIAM_LOCATION_ID"),
 		primaryOrgID:     os.Getenv("VIAM_PRIMARY_ORG_ID"),
