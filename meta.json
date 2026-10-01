@@ -40,6 +40,12 @@
       "model": "viam:beanjamin:customer-detector",
       "short_description": "Identifies return customers via facial recognition using the face-identification vision service.",
       "markdown_link": "README.md#model-viambeanjamincustomer-detector"
+    },
+    {
+      "api": "rdk:service:generic",
+      "model": "viam:beanjamin:crm",
+      "short_description": "Customer profiles keyed by email: loyalty points per drink and shared rewards they can be pooled toward.",
+      "markdown_link": "README.md#model-viambeanjamincrm"
     }
   ],
   "entrypoint": "bin/beanjamin",

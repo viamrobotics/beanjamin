@@ -141,6 +141,10 @@ type Config struct {
 	// to, for "the usual". Unset disables recording.
 	CustomerDetectorName string `json:"customer_detector_name,omitempty"`
 
+	// CRMName: viam:beanjamin:crm service credited a loyalty point for every
+	// completed drink whose order carries a customer_email. Unset disables it.
+	CRMName string `json:"crm_name,omitempty"`
+
 	// DeliveryHandlerName names a generic service on a peer machine (via a
 	// remote, e.g. "delivery-bot:mission-control") that this service can send
 	// one-way notifications to with the send_delivery_message DoCommand. The
@@ -412,6 +416,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		{cfg.CamStorageMuxName, generic.Named},
 		{cfg.SlackNotifierName, generic.Named},
 		{cfg.CustomerDetectorName, generic.Named},
+		{cfg.CRMName, generic.Named},
 		{cfg.DeliveryHandlerName, generic.Named},
 	} {
 		if dep.name != "" {

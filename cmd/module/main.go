@@ -2,6 +2,7 @@ package main
 
 import (
 	"beanjamin/coffee"
+	"beanjamin/crm"
 	"beanjamin/customerdetector"
 	"beanjamin/dialcontrolmotion"
 	"beanjamin/maintenancesensor"
@@ -23,5 +24,6 @@ func main() {
 		resource.APIModel{API: sensor.API, Model: ordersensor.Model},
 		resource.APIModel{API: generic.API, Model: dialcontrolmotion.Model},
 		resource.APIModel{API: generic.API, Model: customerdetector.Model},
+		resource.APIModel{API: generic.API, Model: crm.Model},
 	)
 }

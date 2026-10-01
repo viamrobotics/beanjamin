@@ -84,6 +84,14 @@ export function MachineRow({
       >
         [kiosk mode →]
       </Link>
+      {queue?.kind === "ok" && (
+        <Link
+          href={`/?view=rewards&partId=${m.mainPartId}`}
+          className="text-blue-600 ml-2 hover:underline"
+        >
+          [rewards →]
+        </Link>
+      )}
       {CALIBRATED_PARTS.has(m.mainPartId) && (
         <Link
           href={`/?view=calibrate&partId=${m.mainPartId}`}

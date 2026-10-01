@@ -508,6 +508,194 @@ export async function getCustomerDetectorInfo(
   return doCommand(conn, CUSTOMER_DETECTOR_SERVICE_NAME, { get_info: true });
 }
 
+// --- CRM (loyalty) ---
+
+const CRM_SERVICE_NAME = "crm";
+
+export interface RewardContributor {
+  email: string;
+  points: number;
+}
+
+export interface Reward {
+  id: string;
+  name: string;
+  description: string;
+  points_required: number;
+  contributed: number;
+  remaining: number;
+  funded: boolean;
+  /** RFC3339; empty unless funded. */
+  funded_at: string;
+  /** Largest contribution first. */
+  contributors: RewardContributor[];
+}
+
+export interface LoyaltyAccount {
+  email: string;
+  /** Available to contribute. */
+  points: number;
+  earned: number;
+  contributed: number;
+}
+
+export interface RewardsState {
+  rewards: Reward[];
+  account: LoyaltyAccount;
+}
+
+let devLoyalty: { balance: number; rewards: Reward[] } | null = null;
+
+function devLoyaltyState() {
+  devLoyalty ??= {
+    balance: 12,
+    rewards: [
+      {
+        id: "grinder",
+        name: "Better grinder",
+        description: "Burrs that don't squeak.",
+        points_required: 50,
+        contributed: 18,
+        remaining: 32,
+        funded: false,
+        funded_at: "",
+        contributors: [
+          { email: "grace@example.com", points: 10 },
+          { email: "ada@example.com", points: 8 },
+        ],
+      },
+      {
+        id: "oat-milk",
+        name: "Oat milk",
+        description: "",
+        points_required: 20,
+        contributed: 20,
+        remaining: 0,
+        funded: true,
+        funded_at: new Date().toISOString(),
+        contributors: [{ email: "grace@example.com", points: 20 }],
+      },
+    ],
+  };
+  return devLoyalty;
+}
+
+function devRewardsState(email: string): RewardsState {
+  const s = devLoyaltyState();
+  return {
+    rewards: structuredClone(s.rewards),
+    account: {
+      email,
+      points: s.balance,
+      earned: 30,
+      contributed: 30 - s.balance,
+    },
+  };
+}
+
+/**
+ * The signed-in Viam user's email, read from their access token: the identity
+ * the rewards page shows and spends. User tokens carry it as `email`, or under
+ * `rpc_auth_md` where viam-server's own auth layer reads it; failing both, the
+ * token's subject (the user ID) is looked up among the members of the user's
+ * organizations.
+ *
+ * The CRM trusts the email it is sent, so this only decides whose points the
+ * page acts on; it is not access control.
+ */
+export async function getCurrentUserEmail(
+  conn: ViamConnection,
+): Promise<string> {
+  if (isDevMode()) return "dev@example.com";
+
+  const sdk = await loadSDK();
+  const raw = sdk.Cookies.get("userToken");
+  if (!raw) throw new Error('No "userToken" cookie found');
+  const { access_token } = JSON.parse(raw) as { access_token: string };
+  const claims = decodeJwtPayload(access_token);
+
+  const authMd = claims.rpc_auth_md as Record<string, unknown> | undefined;
+  for (const email of [claims.email, authMd?.email]) {
+    if (typeof email === "string" && email) return email.toLowerCase();
+  }
+
+  const userId = typeof claims.sub === "string" ? claims.sub : "";
+  if (!userId) throw new Error("access token carries neither email nor sub");
+  for (const org of await conn.viamClient.appClient.listOrganizations()) {
+    const { members } = await conn.viamClient.appClient.listOrganizationMembers(
+      org.id,
+    );
+    const me = members.find((m) => m.userId === userId);
+    if (me?.emails[0]) return me.emails[0].toLowerCase();
+  }
+  throw new Error(
+    "could not find your email among your organizations' members",
+  );
+}
+
+/** Decodes a JWT's claims without verifying it; the browser has no key to. */
+function decodeJwtPayload(token: string): Record<string, unknown> {
+  const payload = token.split(".")[1];
+  if (!payload) throw new Error("access token is not a JWT");
+  const b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = b64.padEnd(b64.length + ((4 - (b64.length % 4)) % 4), "=");
+  return JSON.parse(atob(padded));
+}
+
+/** Every reward's progress, plus the given customer's account. */
+export async function getRewards(
+  conn: ViamConnection,
+  email: string,
+): Promise<RewardsState> {
+  if (isDevMode()) return devRewardsState(email);
+  return doCommand(conn, CRM_SERVICE_NAME, { get_rewards: { email } });
+}
+
+/**
+ * Put a customer's points toward a reward. The backend takes only what the
+ * reward still needs, so `contributed` in the result can be less than
+ * `points`.
+ */
+export async function contributePoints(
+  conn: ViamConnection,
+  email: string,
+  rewardId: string,
+  points: number,
+): Promise<{
+  contributed: number;
+  account: LoyaltyAccount;
+  reward: Reward;
+  funded: boolean;
+}> {
+  if (isDevMode()) {
+    const s = devLoyaltyState();
+    const r = s.rewards.find((x) => x.id === rewardId);
+    if (!r) throw new Error(`unknown reward "${rewardId}"`);
+    if (r.funded) throw new Error("reward is already fully funded");
+    if (points > s.balance) throw new Error("not enough points");
+    const applied = Math.min(points, r.remaining);
+    s.balance -= applied;
+    r.contributed += applied;
+    r.remaining -= applied;
+    r.funded = r.remaining === 0;
+    if (r.funded) r.funded_at = new Date().toISOString();
+    const mine = r.contributors.find((c) => c.email === email);
+    if (mine) mine.points += applied;
+    else r.contributors.push({ email, points: applied });
+    r.contributors.sort((a, b) => b.points - a.points);
+    const state = devRewardsState(email);
+    return {
+      contributed: applied,
+      account: state.account,
+      reward: state.rewards.find((x) => x.id === rewardId)!,
+      funded: r.funded,
+    };
+  }
+  return doCommand(conn, CRM_SERVICE_NAME, {
+    contribute_points: { email, reward_id: rewardId, points },
+  });
+}
+
 // --- Live frame poses ---
 
 /**

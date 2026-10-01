@@ -156,6 +156,7 @@ func (s *beanjaminCoffee) safeExecuteOrder(o order.Order) {
 			// is wired in. Recording only here (not on faults/cancels) keeps
 			// history to drinks the machine actually made.
 			s.recordOrderHistory(ctx, o)
+			s.creditLoyaltyPoint(ctx, o)
 		} else {
 			s.setSensorReading(ctx, s.usageSensor, "consecutive orders", "successful_consecutive_orders", 0)
 		}
@@ -243,6 +244,25 @@ func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order order.Or
 		},
 	}); err != nil {
 		s.activeOrderLogger().Warnf("failed to record order history for %q: %v", order.CustomerEmail, err)
+	}
+}
+
+// creditLoyaltyPoint gives a completed drink's customer their point on the CRM.
+// The order ID makes the credit idempotent there. Best-effort: a miss is logged
+// with what an operator needs to backfill it through the CRM's credit_points.
+func (s *beanjaminCoffee) creditLoyaltyPoint(ctx context.Context, o order.Order) {
+	if s.crm == nil || o.CustomerEmail == "" {
+		return
+	}
+	if _, err := s.crm.DoCommand(ctx, map[string]any{
+		"credit_points": map[string]any{
+			"email":    o.CustomerEmail,
+			"points":   1.0,
+			"reason":   "order",
+			"order_id": o.ID,
+		},
+	}); err != nil {
+		s.activeOrderLogger().Warnf("failed to credit a loyalty point to %q for order %s: %v", o.CustomerEmail, o.ID, err)
 	}
 }
 
