@@ -46,6 +46,10 @@ export function Kiosk() {
   const searchParams = useSearchParams();
   const partId = searchParams.get("partId") ?? "";
   const kioskMode = searchParams.get("kiosk") === "1";
+  // Prefill for personal links; restored after each order, so the next one
+  // starts from the same values.
+  const prefillName = searchParams.get("name") ?? "";
+  const prefillEmail = searchParams.get("email") ?? "";
 
   // iOS Safari doesn't shrink the layout viewport (dvh/vh) when the on-screen
   // keyboard opens — only the visual viewport. Mirror visualViewport.height into
@@ -69,8 +73,8 @@ export function Kiosk() {
   }, []);
 
   const [step, setStep] = useState<Step>("welcome");
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [name, setName] = useState(prefillName);
+  const [email, setEmail] = useState(prefillEmail);
   const [selectedDrink, setSelectedDrink] = useState<string | null>(null);
   // Defaults to pickup everywhere; delivery requires an email (enforced here
   // and again by the backend).
@@ -303,13 +307,13 @@ export function Kiosk() {
 
   const handleConfirmationDismiss = useCallback(() => {
     setStep("welcome");
-    setName("");
-    setEmail("");
+    setName(prefillName);
+    setEmail(prefillEmail);
     setSelectedDrink(null);
     setFulfillment("pickup");
     setWelcomeBack(null);
     setAppError(null);
-  }, []);
+  }, [prefillName, prefillEmail]);
 
   // The 'auto' tracker fires onEmpty when the queue drains; 'manual' is
   // persistent and never fires this. Always collapse to 'hidden'.

@@ -15,6 +15,15 @@ import { useViamConnection } from "./lib/useViamConnection";
 // Others contribute too, so progress is re-read while the page is open.
 const REFRESH_MS = 15_000;
 
+// Open rewards come first, nearest to unlocking (by fraction funded) at the
+// top, ties going to the cheaper reward. Unlocked ones sink to the bottom since
+// they no longer take contributions.
+function compareRewards(a: Reward, b: Reward): number {
+  if (a.funded !== b.funded) return a.funded ? 1 : -1;
+  const progress = (r: Reward) => r.contributed / r.points_required;
+  return progress(b) - progress(a) || a.points_required - b.points_required;
+}
+
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
@@ -118,7 +127,9 @@ function RewardCard({
   const mine = reward.contributors.find((c) => c.email === me)?.points ?? 0;
 
   return (
-    <section className="border border-neutral-200 rounded-lg bg-white p-4">
+    <section
+      className={`border rounded-lg p-4 ${mine > 0 ? "border-sky-200 bg-sky-50" : "border-neutral-200 bg-white"}`}
+    >
       <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-1">
         <h2 className="text-base font-semibold text-neutral-900">
           {reward.name}
@@ -291,7 +302,7 @@ export function Rewards() {
             </p>
           ) : (
             <div className="space-y-4">
-              {state.rewards.map((r) => (
+              {[...state.rewards].sort(compareRewards).map((r) => (
                 <RewardCard
                   key={r.id}
                   reward={r}
