@@ -44,7 +44,7 @@
     {
       "api": "rdk:service:generic",
       "model": "viam:beanjamin:crm",
-      "short_description": "Customer profiles keyed by email: loyalty points per drink and shared rewards they can be pooled toward.",
+      "short_description": "Customer profiles: loyalty points per drink and shared rewards they can be pooled toward.",
       "markdown_link": "README.md#model-viambeanjamincrm"
     }
   ],
