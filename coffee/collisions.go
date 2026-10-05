@@ -11,6 +11,17 @@ var coffeeBrewingCollisions = []AllowedCollision{
 	{Frame1: "gripper:claws", Frame2: "coffee-machine-actuation-area"},
 }
 
+// Each grinder's button sits behind a shield that keeps unrelated moves from
+// pressing it. Grinding is the one phase that has to reach through, and only
+// the filter touches the button.
+var grinderButtonCollisions = []AllowedCollision{
+	{Frame1: componentFilter, Frame2: "grinder-button-shield"},
+}
+
+var decafGrinderButtonCollisions = []AllowedCollision{
+	{Frame1: componentFilter, Frame2: "decaf-grinder-button-shield"},
+}
+
 var filterGrabCollisions = []AllowedCollision{
 	{Frame1: componentClaws, Frame2: "portafilter-handle"},
 	{Frame1: "gripper:claws", Frame2: "portafilter-handle"},

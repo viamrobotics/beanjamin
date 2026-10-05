@@ -13,27 +13,19 @@ import (
 )
 
 func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
-	return s.grind(ctx, cancelCtx, filterPoseGrinderApproach, filterPoseGrinderActivate, "grind_coffee")
+	return s.grind(ctx, cancelCtx, filterPoseGrinderApproach, filterPoseGrinderActivate, grinderButtonCollisions, "grind_coffee")
 }
 
 func (s *beanjaminCoffee) grindDecaf(ctx, cancelCtx context.Context) error {
-	return s.grind(ctx, cancelCtx, filterPoseDecafGrinderApproach, filterPoseDecafGrinderActivate, "grind_decaf")
+	return s.grind(ctx, cancelCtx, filterPoseDecafGrinderApproach, filterPoseDecafGrinderActivate, decafGrinderButtonCollisions, "grind_decaf")
 }
 
 // grind approaches a grinder chute, circles under it to distribute grounds
 // evenly while the grinder dispenses, then returns to the approach pose. The
 // approach and activate poses select which grinder (regular vs decaf); label
 // identifies the phase in wrapped errors.
-func (s *beanjaminCoffee) grind(ctx, cancelCtx context.Context, approachPose, activatePose, label string) error {
-	steps := []Step{
-		{PoseName: approachPose, PoseSwitch: s.filterSw, Pause: shortPause},
-		{PoseName: activatePose, PoseSwitch: s.filterSw, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
-		{PoseName: approachPose, PoseSwitch: s.filterSw, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
-		{PoseName: approachPose, PoseSwitch: s.filterSw,
-			CircularRadiusMm: 8, CircularDurationSec: s.grindDurationSec(), CircularPointsPerRev: 8,
-			LinearConstraint: defaultApproachConstraint},
-	}
-	for _, step := range steps {
+func (s *beanjaminCoffee) grind(ctx, cancelCtx context.Context, approachPose, activatePose string, buttonCollisions []AllowedCollision, label string) error {
+	for _, step := range s.grindSteps(approachPose, activatePose, buttonCollisions) {
 		// Mark grounds only as we reach the activate pose: the approach move
 		// keeps the filter clean, and the grinder dispenses once it's under the
 		// chute. From here onward a rewind must clean the filter before home.
@@ -45,6 +37,23 @@ func (s *beanjaminCoffee) grind(ctx, cancelCtx context.Context, approachPose, ac
 		}
 	}
 	return nil
+}
+
+// grindSteps builds the grind sequence. buttonCollisions covers only the linear
+// moves that press the grinder button and rotate the filter under the chute:
+// an allowance applies to the whole plan, so granting it on the free-planned
+// approach would let the planner route the traverse through the button shield.
+func (s *beanjaminCoffee) grindSteps(approachPose, activatePose string, buttonCollisions []AllowedCollision) []Step {
+	return []Step{
+		{PoseName: approachPose, PoseSwitch: s.filterSw, Pause: shortPause},
+		{PoseName: activatePose, PoseSwitch: s.filterSw, Pause: shortPause, LinearConstraint: defaultApproachConstraint,
+			AllowedCollisions: buttonCollisions},
+		{PoseName: approachPose, PoseSwitch: s.filterSw, Pause: shortPause, LinearConstraint: defaultApproachConstraint,
+			AllowedCollisions: buttonCollisions},
+		{PoseName: approachPose, PoseSwitch: s.filterSw,
+			CircularRadiusMm: 8, CircularDurationSec: s.grindDurationSec(), CircularPointsPerRev: 8,
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: buttonCollisions},
+	}
 }
 
 func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
