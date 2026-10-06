@@ -18,8 +18,6 @@ import (
 	generic "go.viam.com/rdk/services/generic"
 	"go.viam.com/rdk/services/vision"
 	"go.viam.com/rdk/spatialmath"
-
-	"beanjamin/coffee/report"
 )
 
 // Config is the attribute set of the viam:beanjamin:coffee service. Field
@@ -132,10 +130,6 @@ type Config struct {
 	// for every non-successful order attempt — genuine faults and operator
 	// cancels alike. Unset disables notifications.
 	SlackNotifierName string `json:"slack_notifier_name,omitempty"`
-
-	// ChoreWheel sets up the weekly chore rota posted by send_weekly_chores.
-	// Needs slack_notifier_name. Leave it out to turn the command off.
-	ChoreWheel *report.ChoreWheelConfig `json:"chore_wheel,omitempty"`
 
 	// CustomerDetectorName: customer-detector that completed orders are credited
 	// to, for "the usual". Unset disables recording.
@@ -496,15 +490,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 
 	if err := validateKeepAlive(cfg, path); err != nil {
 		return nil, nil, err
-	}
-
-	if cfg.ChoreWheel != nil {
-		if cfg.SlackNotifierName == "" {
-			return nil, nil, fmt.Errorf("%s: chore_wheel requires slack_notifier_name (the wheel is posted through it)", path)
-		}
-		if err := cfg.ChoreWheel.Validate(path); err != nil {
-			return nil, nil, err
-		}
 	}
 
 	return reqDeps, optDeps, nil
