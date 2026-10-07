@@ -62,8 +62,8 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		// double on the wire).
 		"count":           float64(s.queue.Len()),
 		"orders":          orderMaps,
-		"is_paused":       s.paused.Load(),
-		"is_busy":         s.running.Load(),
+		"is_paused":       s.lease.paused.Load(),
+		"is_busy":         s.lease.running.Load(),
 		"current_step":    step,
 		"can_serve_decaf": s.cfg.CanServeDecaf,
 		"fault_active":    s.faultAlarm.Active(),

@@ -429,7 +429,7 @@ func TestWaitForProceedHoldsTheQueueUntilProceed(t *testing.T) {
 		t.Fatal("waitForProceed returned while the queue was still paused")
 	case <-time.After(50 * time.Millisecond):
 	}
-	if !s.paused.Load() {
+	if !s.lease.paused.Load() {
 		t.Fatal("paused must stay set while a consumer waits — a proceed reading false would never signal")
 	}
 
@@ -455,7 +455,7 @@ func TestWaitForProceedIgnoresAStaleSignal(t *testing.T) {
 	s.queueStop = make(chan struct{})
 	s.queue.WakeProceed() // parked by an earlier proceed
 
-	s.paused.Store(true)
+	s.lease.paused.Store(true)
 	resumed := make(chan bool, 1)
 	go func() { resumed <- s.waitForProceed() }()
 

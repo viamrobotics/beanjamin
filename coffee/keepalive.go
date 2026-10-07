@@ -200,16 +200,16 @@ func (s *beanjaminCoffee) purge(ctx, cancelCtx context.Context) error {
 // gate on every path is load-bearing, since holding it would stall the queue
 // permanently.
 func (s *beanjaminCoffee) runPurge(ctx context.Context) error {
-	if !s.running.CompareAndSwap(false, true) {
+	if !s.lease.running.CompareAndSwap(false, true) {
 		return errors.New("keepalive: a sequence is already running")
 	}
-	defer s.running.Store(false)
+	defer s.lease.running.Store(false)
 
 	// Snapshot cancelCtx under the mutex, as every other sequence does, so an
 	// operator cancel interrupts the moves mid-trajectory.
-	s.mu.Lock()
-	cancelCtx := s.cancelCtx
-	s.mu.Unlock()
+	s.lease.mu.Lock()
+	cancelCtx := s.lease.cancelCtx
+	s.lease.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(ctx, keepAlivePurgeTimeout)
 	defer cancel()
@@ -234,7 +234,7 @@ func (s *beanjaminCoffee) recordMachineActivity() {
 //
 // It watches queueStop rather than cancelCtx: a cancel pauses the queue rather
 // than shutting down, shouldPurge already declines while paused, and cancelCtx is
-// rotated under s.mu so reading it here would race.
+// rotated under s.lease.mu so reading it here would race.
 func (s *beanjaminCoffee) keepAliveLoop(w *keepAliveWindow) {
 	ka := s.cfg.KeepAlive
 	interval := ka.checkInterval()
@@ -256,8 +256,8 @@ func (s *beanjaminCoffee) keepAliveLoop(w *keepAliveWindow) {
 		st := keepAliveState{
 			now:          time.Now(),
 			lastActivity: s.machineActivity.get(),
-			busy:         s.running.Load(),
-			paused:       s.paused.Load(),
+			busy:         s.lease.running.Load(),
+			paused:       s.lease.paused.Load(),
 			queued:       s.queue.Len(),
 		}
 		ok, why := shouldPurge(w, threshold, st)
