@@ -141,10 +141,11 @@ func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context, milk s
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("fetch_milk: %w", err)
 	}
-	if err := s.gripper.Open(ctx, nil); err != nil {
+	// Verified open, not a fixed pause: jaws still closing in on the way in would
+	// strike the bottle.
+	if err := s.openAndVerifyOpen(ctx); err != nil {
 		return fmt.Errorf("fetch_milk: open gripper: %w", err)
 	}
-	time.Sleep(gripperPause)
 	if err := s.executeStep(ctx, cancelCtx, s.fridgeLinearStep(milkGrabPose(spot))); err != nil {
 		return fmt.Errorf("fetch_milk: %w", err)
 	}
@@ -232,10 +233,12 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 		return fmt.Errorf("return_milk: set the bottle on the shelf: %w", err)
 	}
 
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("return_milk: open gripper: %w", err)
+	// Verified open before backing out: jaws still on the bottle would drag it off
+	// the shelf. On failure the bottle is still recorded as held and still
+	// modeled in the gripper, which is what the operator will find.
+	if err := s.openAndVerifyOpen(ctx); err != nil {
+		return fmt.Errorf("return_milk: release the bottle: %w", err)
 	}
-	time.Sleep(gripperPause)
 	// The bottle is standing on the shelf; it no longer travels with the gripper.
 	s.detachHeldGeometry()
 	s.heldMilk = ""
