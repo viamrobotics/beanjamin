@@ -60,6 +60,12 @@ type Step struct {
 	// the handle slides back through them.
 	PivotExtraDegrees float64
 
+	// AcceptPartialPlan lets a pivot execute the waypoints the planner solved
+	// when a later one fails, stopping the arm short of PoseName rather than
+	// failing the step. Only for moves where falling short is harmless, like a
+	// pour that tilts less far.
+	AcceptPartialPlan bool
+
 	// NoSpill routes this step's move through the level carry (carryHeldLevel)
 	// rather than a direct plan.
 	NoSpill bool
