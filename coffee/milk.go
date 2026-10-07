@@ -219,12 +219,10 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 		return fmt.Errorf("return_milk: approach the shelf: %w", err)
 	}
 
-	// The bottle is held through the descent, so let its geometry approach the
-	// fridge surfaces it legitimately gets close to on the way down, and let the
-	// gripper and bottle pass through the interior shield that keeps the free
-	// traverse clear of the shelves.
-	descentCollisions := append([]AllowedCollision{}, s.heldItemSurfaceCollisions(heldItemFridgeCollisions)...)
-	descentCollisions = append(descentCollisions, s.pickupAreaShieldCollisions(milkAreaShieldFrameName)...)
+	// Let the gripper and the held bottle pass through the interior shield that
+	// keeps the free traverse clear of the shelves. The shield is the "fridge"
+	// frame itself, so this also lets the bottle reach the shelf it stands on.
+	descentCollisions := s.pickupAreaShieldCollisions(milkAreaShieldFrameName)
 	if err := s.moveToRawPose(ctx, placePD, defaultApproachConstraint, descentCollisions, nil); err != nil {
 		return fmt.Errorf("return_milk: descend onto the shelf: %w", err)
 	}
