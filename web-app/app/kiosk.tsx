@@ -81,7 +81,6 @@ export function Kiosk() {
   const [fulfillment, setFulfillment] = useState<Fulfillment>("pickup");
   const [misspelled, setMisspelled] = useState("");
   const [loading, setLoading] = useState(false);
-  const [drinkRejection, setDrinkRejection] = useState<string | null>(null);
   const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
   const [machineName, setMachineName] = useState<string | null>(null);
   const [camName, setCamName] = useState<string | undefined>(undefined);
@@ -180,46 +179,9 @@ export function Kiosk() {
     };
   }, [step, connected, viamConn]);
 
-  async function handleDrinkNext() {
+  function handleDrinkNext() {
     if (!selectedDrink) return;
-    setDrinkRejection(null);
-
-    const supportedDrinks = new Set([
-      "espresso",
-      "lungo",
-      "decaf",
-      "decaf_lungo",
-      "iced_coffee",
-      "iced_latte",
-    ]);
-    if (supportedDrinks.has(selectedDrink)) {
-      setStep("name");
-      return;
-    }
-
-    // ~25% chance: ignore what they picked and just make espresso anyway
-    if (Math.random() < 0.25) {
-      setSelectedDrink("espresso");
-      setStep("name");
-      return;
-    }
-
-    // Non-espresso: call prepare_order so the robot speaks the rejection
-    if (connected && viamConn) {
-      try {
-        await prepareOrder(viamConn, {
-          drink: selectedDrink,
-          drinkLabel: drinkLabel(selectedDrink),
-          customerName: "",
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        const colonIdx = msg.indexOf(": ");
-        setDrinkRejection(colonIdx >= 0 ? msg.slice(colonIdx + 2) : msg);
-      }
-    } else {
-      setDrinkRejection(LOST_CONNECTION_MSG);
-    }
+    setStep("name");
   }
 
   /** `misspelledName` is shown and spoken; `name` is what the order is filed under. */
@@ -404,12 +366,8 @@ export function Kiosk() {
         <ChooseDrink
           selectedDrink={selectedDrink}
           fulfillment={fulfillment}
-          rejection={drinkRejection}
           connected={connected}
-          onSelect={(id) => {
-            setDrinkRejection(null);
-            setSelectedDrink(id);
-          }}
+          onSelect={setSelectedDrink}
           onFulfillmentChange={setFulfillment}
           onBack={() => setStep("welcome")}
           onNext={handleDrinkNext}
@@ -491,7 +449,6 @@ export function Kiosk() {
             // welcome clears it.
             setSelectedDrink(null);
             setFulfillment("pickup");
-            setDrinkRejection(null);
             setStep("drink");
           }}
           disabled={!connected}
