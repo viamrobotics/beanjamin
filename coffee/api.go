@@ -159,9 +159,6 @@ var coffeeCommands = []commandDef{
 	{key: "cancel_order", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
 		return s.cancelOrder(ctx, cmd["cancel_order"])
 	}},
-	{key: "rewind", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
-		return s.rewind(ctx)
-	}},
 	{key: "get_queue", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.Status(ctx)
 	}},
@@ -217,7 +214,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]any) (ma
 		}
 	}
 
-	err := fmt.Errorf("unknown command, supported commands: cancel, cancel_order, rewind, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action, send_delivery_message, send_daily_summary")
+	err := fmt.Errorf("unknown command, supported commands: cancel, cancel_order, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action, send_delivery_message, send_daily_summary")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }
