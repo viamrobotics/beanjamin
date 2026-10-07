@@ -409,64 +409,100 @@ func TestEnqueueOrder_CarriesBothNames(t *testing.T) {
 	}
 }
 
-// TestWaitForProceedHoldsTheQueueUntilProceed pins the consumer side: the flag
-// stays set for the whole wait, so a proceed arriving at any moment sees a
-// paused queue and grants the resume. Clearing it on the way in (the old
-// Swap(false) + Store(true)) opened a window where a concurrent proceed read an
-// unpaused queue, declined to signal, and parked this goroutine for good.
-func TestWaitForProceedHoldsTheQueueUntilProceed(t *testing.T) {
+// TestWaitForArmHoldsTheQueueUntilProceed: a paused queue does not claim the
+// arm, and the pause stays set while it waits, so a proceed arriving at any
+// moment sees a paused queue and grants the resume.
+func TestWaitForArmHoldsTheQueueUntilProceed(t *testing.T) {
 	s, _, _ := pausedCoffeeWithDirtyWorld(t, nil)
 	s.queueStop = make(chan struct{})
 	t.Cleanup(func() { close(s.queueStop) })
 
-	resumed := make(chan bool, 1)
-	go func() { resumed <- s.waitForProceed() }()
+	claimed := make(chan bool, 1)
+	go func() {
+		_, ok := s.waitForArm()
+		claimed <- ok
+	}()
 
-	// The consumer is parked; from a concurrent proceed's point of view the
-	// queue must still read paused.
 	select {
-	case <-resumed:
-		t.Fatal("waitForProceed returned while the queue was still paused")
-	case <-time.After(50 * time.Millisecond):
+	case <-claimed:
+		t.Fatal("waitForArm claimed the arm while the queue was still paused")
+	case <-time.After(3 * queueArmPollInterval):
 	}
-	if !s.paused.Load() {
-		t.Fatal("paused must stay set while a consumer waits — a proceed reading false would never signal")
+	if !s.lease.isPaused() {
+		t.Fatal("paused must stay set while the queue waits")
 	}
 
 	if _, err := s.proceedQueue(context.Background()); err != nil {
 		t.Fatalf("proceed error: %v", err)
 	}
 	select {
-	case ok := <-resumed:
+	case ok := <-claimed:
 		if !ok {
-			t.Error("waitForProceed reported shutdown, want a resume")
+			t.Fatal("waitForArm reported shutdown, want a claim")
 		}
 	case <-time.After(time.Second):
-		t.Fatal("waitForProceed never woke up after proceed")
+		t.Fatal("waitForArm never claimed the arm after proceed")
 	}
+	if got := s.lease.holderName(); got != "order queue" {
+		t.Errorf("holder = %q, want the order queue", got)
+	}
+	s.lease.release()
 }
 
-// TestWaitForProceedIgnoresAStaleSignal: a resume signal can be parked with no
-// consumer waiting (proceed after a cancelled manual action). It must not
-// release the next pause on arrival — that pause is a fresh cancel, and an
-// operator has to ask for that one too.
-func TestWaitForProceedIgnoresAStaleSignal(t *testing.T) {
+// TestWaitForArmWaitsOutABusyArm: an order queued behind another holder, such
+// as a keepalive purge, waits for the arm instead of failing as a fault.
+func TestWaitForArmWaitsOutABusyArm(t *testing.T) {
 	s, _, _ := coffeeWithDirtyWorld(t, nil)
 	s.queueStop = make(chan struct{})
-	s.queue.WakeProceed() // parked by an earlier proceed
+	mustClaim(t, s, "keepalive purge")
 
-	s.paused.Store(true)
-	resumed := make(chan bool, 1)
-	go func() { resumed <- s.waitForProceed() }()
+	claimed := make(chan bool, 1)
+	go func() {
+		_, ok := s.waitForArm()
+		claimed <- ok
+	}()
 
 	select {
-	case <-resumed:
-		t.Fatal("a stale resume signal must not release a later pause")
-	case <-time.After(50 * time.Millisecond):
+	case <-claimed:
+		t.Fatal("waitForArm claimed an arm someone else holds")
+	case <-time.After(3 * queueArmPollInterval):
+	}
+	if s.lease.isPaused() {
+		t.Error("waiting for a busy arm must not pause the queue")
 	}
 
+	s.lease.release()
+	select {
+	case ok := <-claimed:
+		if !ok {
+			t.Fatal("waitForArm reported shutdown, want a claim")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waitForArm never claimed the arm after it was released")
+	}
+	s.lease.release()
 	close(s.queueStop)
-	if ok := <-resumed; ok {
-		t.Error("waitForProceed should report shutdown once queueStop closes")
+}
+
+// TestWaitForArmStopsOnShutdown: a waiting queue gives up once the service
+// closes.
+func TestWaitForArmStopsOnShutdown(t *testing.T) {
+	s, _, _ := pausedCoffeeWithDirtyWorld(t, nil)
+	s.queueStop = make(chan struct{})
+
+	claimed := make(chan bool, 1)
+	go func() {
+		_, ok := s.waitForArm()
+		claimed <- ok
+	}()
+	close(s.queueStop)
+
+	select {
+	case ok := <-claimed:
+		if ok {
+			t.Error("waitForArm should report shutdown once queueStop closes")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("waitForArm never returned after queueStop closed")
 	}
 }
