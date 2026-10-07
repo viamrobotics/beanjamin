@@ -12,15 +12,13 @@ import (
 	"go.viam.com/rdk/referenceframe"
 )
 
-// fakePlan stands in for a real plan; the tests only care which step it is for.
+// fakePlan records which step it was planned for.
 type fakePlan struct {
 	motionplan.Plan
 	pose string
 }
 
-// fakeSegment is a fake arm and planner for runSegmentWith. Each step moves the
-// one joint of the fake arm by 1, so the plan for step k starts at k and ends at
-// k+1.
+// fakeSegment is a one-joint fake arm and planner; each move advances it by 1.
 type fakeSegment struct {
 	mu        sync.Mutex
 	arm       float64
@@ -91,9 +89,7 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// TestSplitIntoRuns: consecutive direct moves group into a segment; a pivot, a
-// circular motion or a no-spill carry stands alone and ends the segment.
-func TestSplitIntoRuns(t *testing.T) {
+func TestSegmentEnd(t *testing.T) {
 	steps := []Step{
 		{PoseName: "a"},
 		{PoseName: "b", LinearConstraint: defaultApproachConstraint},
@@ -104,35 +100,20 @@ func TestSplitIntoRuns(t *testing.T) {
 		{PoseName: "d"},
 		{PoseName: "e"},
 	}
-	runs := splitIntoRuns(steps)
-	type want struct {
-		names   []string
-		segment bool
-	}
-	wants := []want{
-		{[]string{"a", "b"}, true},
-		{[]string{"scrub"}, false},
-		{[]string{"c"}, true},
-		{[]string{"twist"}, false},
-		{[]string{"carry"}, false},
-		{[]string{"d", "e"}, true},
-	}
-	if len(runs) != len(wants) {
-		t.Fatalf("got %d runs, want %d: %+v", len(runs), len(wants), runs)
-	}
-	for i, w := range wants {
-		var got []string
-		for _, s := range runs[i].steps {
-			got = append(got, s.PoseName)
-		}
-		if !equalStrings(got, w.names) || runs[i].segment != w.segment {
-			t.Errorf("run %d = %v segment=%v, want %v segment=%v", i, got, runs[i].segment, w.names, w.segment)
+	for _, tc := range []struct{ from, want int }{
+		{0, 2}, // a, b
+		{2, 2}, // scrub is not a direct move
+		{3, 4}, // c alone, ended by the pivot
+		{4, 4}, // pivot
+		{5, 5}, // no-spill carry
+		{6, 8}, // d, e to the end
+	} {
+		if got := segmentEnd(steps, tc.from); got != tc.want {
+			t.Errorf("segmentEnd(steps, %d) = %d, want %d", tc.from, got, tc.want)
 		}
 	}
 }
 
-// TestRunSegmentChainsPlans: every step runs with its plan made ahead, and each
-// plan starts where the previous one ends.
 func TestRunSegmentChainsPlans(t *testing.T) {
 	f := newFakeSegment()
 	if err := runSegmentWith(context.Background(), poses("a", "b", "c"), []referenceframe.Input{0}, f.ops()); err != nil {
@@ -148,8 +129,6 @@ func TestRunSegmentChainsPlans(t *testing.T) {
 	}
 }
 
-// TestRunSegmentPlansWhileTheArmMoves: the next step is planned while the
-// current one is still executing, which is the whole point.
 func TestRunSegmentPlansWhileTheArmMoves(t *testing.T) {
 	f := newFakeSegment()
 	ops := f.ops()
@@ -165,8 +144,7 @@ func TestRunSegmentPlansWhileTheArmMoves(t *testing.T) {
 	baseRun := ops.runPlanned
 	ops.runPlanned = func(ctx context.Context, step Step, plan motionplan.Plan) error {
 		if step.PoseName == "a" {
-			// Step a "moves" until b has been planned. Without planning ahead,
-			// b would only be planned after a returns, and this would time out.
+			// Without planning ahead, b isn't planned until a returns.
 			select {
 			case <-plannedB:
 			case <-time.After(time.Second):
@@ -180,8 +158,6 @@ func TestRunSegmentPlansWhileTheArmMoves(t *testing.T) {
 	}
 }
 
-// TestRunSegmentPlansLiveWhenTheArmIsElsewhere: a plan made ahead is only used
-// if the arm is where it starts; otherwise the step is planned on the spot.
 func TestRunSegmentPlansLiveWhenTheArmIsElsewhere(t *testing.T) {
 	f := newFakeSegment()
 	f.armOffset = 0.5 // far past planAheadStartToleranceRad
@@ -193,9 +169,6 @@ func TestRunSegmentPlansLiveWhenTheArmIsElsewhere(t *testing.T) {
 	}
 }
 
-// TestRunSegmentPlansLiveAfterAPlanningFailure: when planning ahead fails, that
-// step and the rest of the segment are planned on the spot, where a real
-// failure is reported as it is today.
 func TestRunSegmentPlansLiveAfterAPlanningFailure(t *testing.T) {
 	f := newFakeSegment()
 	f.planErr["b"] = errMotionPlanning
@@ -207,9 +180,8 @@ func TestRunSegmentPlansLiveAfterAPlanningFailure(t *testing.T) {
 	}
 }
 
-// TestRunSegmentStopsPlanningWhenAStepFails: a failed move ends the segment, and
-// runSegmentWith returns only once the planning goroutine has exited, so nothing
-// is still reading the frame system when the caller moves on.
+// TestRunSegmentStopsPlanningWhenAStepFails also checks the planner has exited
+// before runSegmentWith returns.
 func TestRunSegmentStopsPlanningWhenAStepFails(t *testing.T) {
 	f := newFakeSegment()
 	ops := f.ops()
@@ -217,7 +189,7 @@ func TestRunSegmentStopsPlanningWhenAStepFails(t *testing.T) {
 	basePlan := ops.plan
 	ops.plan = func(ctx context.Context, step Step, from []referenceframe.Input) (motionplan.Plan, []referenceframe.Input, error) {
 		if step.PoseName == "c" {
-			// A slow plan: blocks until the segment gives up on it.
+			// A slow plan that only ends when cancelled.
 			<-ctx.Done()
 			plannerExited.Store(true)
 			return nil, nil, ctx.Err()
@@ -241,8 +213,6 @@ func TestRunSegmentStopsPlanningWhenAStepFails(t *testing.T) {
 	}
 }
 
-// TestRunSegmentStopsOnCancel: a cancel ends the segment between steps and stops
-// the planning goroutine.
 func TestRunSegmentStopsOnCancel(t *testing.T) {
 	f := newFakeSegment()
 	ops := f.ops()
@@ -263,7 +233,6 @@ func TestRunSegmentStopsOnCancel(t *testing.T) {
 	}
 }
 
-// TestArmNear checks the per-joint start tolerance.
 func TestArmNear(t *testing.T) {
 	want := []referenceframe.Input{0, 1, 2}
 	if !armNear([]referenceframe.Input{0.005, 1, 1.995}, want) {

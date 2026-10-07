@@ -49,9 +49,7 @@ type Config struct {
 	LungoBrewTimeSec   float64 `json:"lungo_brew_time_sec,omitempty"`
 	ButtonPressHoldSec float64 `json:"button_press_hold_sec,omitempty"`
 	GrindTimeSec       float64 `json:"grind_time_sec,omitempty"`
-	// PlanAhead plans the next moves of a step list while the arm executes the
-	// current one, so a run of direct moves to named poses goes back to back
-	// instead of pausing to plan between them (plan_ahead.go). Off by default.
+	// PlanAhead plans upcoming moves while the arm moves (plan_ahead.go).
 	PlanAhead                  bool    `json:"plan_ahead,omitempty"`
 	GripperHoldMinPos          float64 `json:"gripper_hold_min_pos,omitempty"`
 	GripperHoldMaxPos          float64 `json:"gripper_hold_max_pos,omitempty"`

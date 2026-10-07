@@ -83,11 +83,8 @@ type Step struct {
 }
 
 // runSteps executes each step in order, wrapping the first failure with label
-// (e.g. "tamp_ground") so the caller's error identifies the failed phase.
-//
-// With plan_ahead on, each run of two or more consecutive direct moves goes
-// through runSegment, which plans the next moves while the arm executes the
-// current one (plan_ahead.go). Everything else runs exactly as without it.
+// (e.g. "tamp_ground") so the caller's error identifies the failed phase. With
+// plan_ahead on, runs of direct moves go through runSegment (plan_ahead.go).
 func (s *beanjaminCoffee) runSteps(ctx, cancelCtx context.Context, label string, steps ...Step) error {
 	if !s.cfg.PlanAhead {
 		for _, step := range steps {
@@ -97,18 +94,18 @@ func (s *beanjaminCoffee) runSteps(ctx, cancelCtx context.Context, label string,
 		}
 		return nil
 	}
-	for _, run := range splitIntoRuns(steps) {
-		if run.segment && len(run.steps) > 1 {
-			if err := s.runSegment(ctx, cancelCtx, run.steps); err != nil {
+	for i := 0; i < len(steps); {
+		if end := segmentEnd(steps, i); end-i >= 2 {
+			if err := s.runSegment(ctx, cancelCtx, steps[i:end]); err != nil {
 				return fmt.Errorf("%s: %w", label, err)
 			}
+			i = end
 			continue
 		}
-		for _, step := range run.steps {
-			if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-				return fmt.Errorf("%s: %w", label, err)
-			}
+		if err := s.executeStep(ctx, cancelCtx, steps[i]); err != nil {
+			return fmt.Errorf("%s: %w", label, err)
 		}
+		i++
 	}
 	return nil
 }
@@ -142,7 +139,7 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 	return pauseAfterStep(ctx, cancelCtx, step, logger)
 }
 
-// stepCancelled reports a cancellation that landed before step started.
+// stepCancelled reports a cancel that landed before step started.
 func stepCancelled(ctx, cancelCtx context.Context, step Step) error {
 	select {
 	case <-ctx.Done():

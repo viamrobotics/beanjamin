@@ -1,20 +1,7 @@
 package coffee
 
-// Planning ahead inside a segment. A segment is a run of consecutive direct
-// moves to named poses — steps whose targets are known before the arm starts
-// moving and that are planned from nothing but where the previous move ends.
-// While the arm executes one move of a segment, a helper goroutine plans the
-// rest of the segment, so each move is ready the moment the one before it
-// finishes instead of the arm pausing to plan.
-//
-// A segment ends at anything that cannot be planned ahead: a pivot, a circular
-// motion or a no-spill carry (each planned from the arm's live pose), or the end
-// of the step list. World changes (locking the filter, attaching or releasing a
-// held item, moving the fridge door) never happen inside a step list, so a
-// segment never spans one.
-//
-// A plan made ahead is only used if the arm is actually where it starts;
-// otherwise that step is planned on the spot, exactly as it is without plan-ahead.
+// Plan ahead: while the arm runs one move of a segment (consecutive direct
+// moves), a goroutine plans the rest, so the arm doesn't pause between moves.
 
 import (
 	"context"
@@ -26,110 +13,67 @@ import (
 	"go.viam.com/rdk/referenceframe"
 )
 
-// planAheadStartToleranceRad is how far, per joint, the arm may be from where a
-// plan made ahead starts and still execute it. The plan starts where the
-// previous plan ends; the arm settles a servo tolerance away from that, far
-// smaller than this. Anything larger means the arm is not where the plan
-// assumed, and the step is planned again from where it really is.
+// planAheadStartToleranceRad is the per-joint slack between a plan's start and
+// the arm before the plan is discarded and the move replanned.
 const planAheadStartToleranceRad = 0.01
 
-// isDirectMove reports whether a step is a plain move to a named pose: no pivot,
-// no circular motion and no no-spill carry. Only these can be planned ahead.
+// isDirectMove reports whether a step can be planned ahead. Pivots, circles and
+// no-spill carries plan from the arm's live pose, so they can't.
 func isDirectMove(step Step) bool {
 	return step.PivotFromPose == "" && step.CircularRadiusMm == 0 && !step.NoSpill
 }
 
-// stepRun is a slice of a step list: either a segment of direct moves, or a
-// single step that has to be planned when the arm reaches it.
-type stepRun struct {
-	steps   []Step
-	segment bool
-}
-
-// splitIntoRuns cuts a step list into segments of consecutive direct moves and
-// the single steps between them, preserving order.
-func splitIntoRuns(steps []Step) []stepRun {
-	var runs []stepRun
-	for i := 0; i < len(steps); {
-		if !isDirectMove(steps[i]) {
-			runs = append(runs, stepRun{steps: steps[i : i+1]})
-			i++
-			continue
-		}
-		j := i
-		for j < len(steps) && isDirectMove(steps[j]) {
-			j++
-		}
-		runs = append(runs, stepRun{steps: steps[i:j], segment: true})
-		i = j
+// segmentEnd returns the index just past the direct moves starting at i.
+func segmentEnd(steps []Step, i int) int {
+	j := i
+	for j < len(steps) && isDirectMove(steps[j]) {
+		j++
 	}
-	return runs
+	return j
 }
 
-// aheadPlan is one step's plan made ahead, with the arm joints it starts from.
-// A zero aheadPlan (nil plan) means none was made: planning failed or stopped.
+// aheadPlan is a plan made ahead and the arm joints it starts from. A nil plan
+// means planning failed or stopped.
 type aheadPlan struct {
 	plan  motionplan.Plan
 	start []referenceframe.Input
 }
 
-// segmentOps is what runSegmentWith needs from the service, split out so the
-// plan-ahead logic can be tested without a real arm or planner.
+// segmentOps abstracts the arm and planner so the plan-ahead logic is testable.
 type segmentOps struct {
-	// plan plans step from the arm joints from, returning the plan and the arm
-	// joints it ends at.
-	plan func(ctx context.Context, step Step, from []referenceframe.Input) (motionplan.Plan, []referenceframe.Input, error)
-	// armNow reads where the arm actually is.
-	armNow func(ctx context.Context) ([]referenceframe.Input, error)
-	// runPlanned executes a step with a plan made ahead.
+	plan       func(ctx context.Context, step Step, from []referenceframe.Input) (plan motionplan.Plan, end []referenceframe.Input, err error)
+	armNow     func(ctx context.Context) ([]referenceframe.Input, error)
 	runPlanned func(ctx context.Context, step Step, plan motionplan.Plan) error
-	// runLive executes a step the usual way, planning it on the spot.
-	runLive func(ctx context.Context, step Step) error
+	runLive    func(ctx context.Context, step Step) error // plans on the spot
 }
 
-// planInOrder plans every step on its own goroutine, in order, each from where
-// the previous plan ends, and returns one channel per step. It does not wait
-// for the arm: it plans as far ahead as it can, which is at most the end of the
-// segment. On the first planning failure, or when ctx ends, it stops and closes
-// the remaining channels, so a reader gets a zero aheadPlan for those steps.
-// wait blocks until the goroutine has exited.
-func planInOrder(ctx context.Context, steps []Step, start []referenceframe.Input, ops segmentOps) (plans []<-chan aheadPlan, wait func()) {
-	chans := make([]chan aheadPlan, len(steps))
-	plans = make([]<-chan aheadPlan, len(steps))
-	for k := range steps {
-		chans[k] = make(chan aheadPlan, 1) // never blocks the planner
-		plans[k] = chans[k]
-	}
+// planInOrder plans the steps on a goroutine, each from the previous plan's end,
+// and sends them on the returned channel in order. It stops at the first
+// failure or cancel; the closed channel then makes later steps plan live. wait
+// blocks until the goroutine exits.
+func planInOrder(ctx context.Context, steps []Step, start []referenceframe.Input, ops segmentOps) (plans <-chan aheadPlan, wait func()) {
+	ch := make(chan aheadPlan, len(steps)) // never blocks the planner
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		// Close every channel on the way out, delivered or not, so the
-		// executor never waits on a step the planner gave up on.
-		defer func() {
-			for _, ch := range chans {
-				close(ch)
-			}
-		}()
+		defer close(ch)
 		from := start
-		for k, step := range steps {
+		for _, step := range steps {
 			if ctx.Err() != nil {
 				return
 			}
 			plan, end, err := ops.plan(ctx, step, from)
 			if err != nil {
-				// The executor plans this step on the spot and reports the
-				// failure there if it is real.
-				return
+				return // runLive replans and reports any real failure
 			}
-			chans[k] <- aheadPlan{plan: plan, start: from}
+			ch <- aheadPlan{plan: plan, start: from}
 			from = end
 		}
 	}()
-	return plans, func() { <-done }
+	return ch, func() { <-done }
 }
 
-// armNear reports whether the arm joints got are within
-// planAheadStartToleranceRad of want on every joint.
+// armNear reports whether every joint of got is within tolerance of want.
 func armNear(got, want []referenceframe.Input) bool {
 	if len(got) != len(want) {
 		return false
@@ -142,11 +86,9 @@ func armNear(got, want []referenceframe.Input) bool {
 	return true
 }
 
-// runSegmentWith executes a segment's steps in order while planInOrder plans the
-// rest of it. Each step uses its plan made ahead when there is one and the arm is
-// where that plan starts; otherwise the step runs live. It returns only after the
-// planning goroutine has exited, so nothing reads the frame system once the
-// caller moves on to change it.
+// runSegmentWith runs the steps while planInOrder plans ahead, using each plan
+// only if the arm is at its start. It waits for the planner to exit before
+// returning, so the caller can safely change the frame system after.
 func runSegmentWith(ctx context.Context, steps []Step, start []referenceframe.Input, ops segmentOps) error {
 	planCtx, stopPlanning := context.WithCancel(ctx)
 	plans, wait := planInOrder(planCtx, steps, start, ops)
@@ -155,13 +97,13 @@ func runSegmentWith(ctx context.Context, steps []Step, start []referenceframe.In
 		wait()
 	}()
 
-	for k, step := range steps {
+	for _, step := range steps {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("cancelled before %q: %w", step.PoseName, err)
 		}
 		var ahead aheadPlan
 		select {
-		case ahead = <-plans[k]:
+		case ahead = <-plans: // zero value once closed
 		case <-ctx.Done():
 			return fmt.Errorf("cancelled before %q: %w", step.PoseName, ctx.Err())
 		}
@@ -182,8 +124,7 @@ func runSegmentWith(ctx context.Context, steps []Step, start []referenceframe.In
 
 // runSegment runs a segment of direct moves with plan-ahead on the real arm.
 func (s *beanjaminCoffee) runSegment(ctx, cancelCtx context.Context, steps []Step) error {
-	// Merge cancelCtx in so an operator cancel stops the planning goroutine as
-	// well as the move in flight.
+	// So an operator cancel also stops the planner.
 	ctx, done := mergedCancelContext(ctx, cancelCtx)
 	defer done()
 
@@ -220,8 +161,7 @@ func (s *beanjaminCoffee) runSegment(ctx, cancelCtx context.Context, steps []Ste
 	return runSegmentWith(ctx, steps, baseInputs[s.cfg.ArmName], ops)
 }
 
-// executePlannedStep is executeStep for a direct move whose plan was made ahead:
-// the same cancellation check, span, log line and pause, without planning.
+// executePlannedStep is executeStep for an already-planned direct move.
 func (s *beanjaminCoffee) executePlannedStep(ctx, cancelCtx context.Context, step Step, plan motionplan.Plan) error {
 	ctx, span := trace.StartSpan(ctx, "beanjamin::executeStep::"+step.PoseName)
 	defer span.End()
