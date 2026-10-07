@@ -161,7 +161,7 @@ func (s *beanjaminCoffee) serveIcedCoffee(ctx, cancelCtx context.Context) (int, 
 }
 
 // serveIcedLatte is the iced serving path with the milk sequence — the
-// serve_iced_latte action, with the milk execute_action names (or the default).
+// serve_iced_latte action, with the milk execute_action names.
 // An iced_latte order goes through serveIced with its own milk.
 func (s *beanjaminCoffee) serveIcedLatte(ctx, cancelCtx context.Context) (int, error) {
 	milk, err := s.actionMilk(ctx, "serve_iced_latte")

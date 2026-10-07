@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -70,14 +71,19 @@ func checkMilkChoiceAllowed(name string) error {
 }
 
 // actionMilk is the milk a hand-run milk action uses: the one execute_action
-// named, or the default (first) milk when it named none. It checks the machine
-// is set up for milk first, so action gets requireMilk's error rather than a
-// vaguer one about the milk list.
+// names. It is required, unlike on an order: these actions are for stepping
+// through by hand, and with more than one bottle a silent default sends the arm
+// to a spot the operator didn't mean. It checks the machine is set up for milk
+// first, so action gets requireMilk's error rather than a vaguer one about the
+// milk list.
 func (s *beanjaminCoffee) actionMilk(ctx context.Context, action string) (string, error) {
 	if err := s.requireMilk(action); err != nil {
 		return "", err
 	}
 	milk, _ := ctx.Value(milkChoiceKey{}).(string)
+	if milk == "" {
+		return "", fmt.Errorf("%s: say which milk with \"milk\", one of: %s", action, strings.Join(s.cfg.milkNames(), ", "))
+	}
 	return s.menu().Milk(milk)
 }
 
