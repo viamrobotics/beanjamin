@@ -36,7 +36,7 @@ func TestFaultWithStrandedStatePausesQueue(t *testing.T) {
 	if !s.lease.paused.Load() {
 		t.Error("a fault that stranded state must pause the queue")
 	}
-	if s.lease.running.Load() {
+	if s.lease.busy() {
 		t.Error("running must be released after the fault")
 	}
 }

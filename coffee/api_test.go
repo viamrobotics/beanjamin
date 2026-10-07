@@ -112,11 +112,11 @@ func TestDoCommandDispatch(t *testing.T) {
 	// first thing it checks — so with a sequence already "running" it rejects
 	// without touching the arm. This confirms the action is wired without needing
 	// hardware.
-	s.lease.running.Store(true)
+	mustClaim(t, s, "test sequence")
 	if _, err := s.DoCommand(ctx, map[string]any{"execute_action": "open_door"}); err == nil {
 		t.Error("open_door action should error when a sequence is already running")
 	}
-	s.lease.running.Store(false)
+	s.lease.release()
 
 	if _, err := s.DoCommand(ctx, map[string]any{"action": "teleport"}); err == nil {
 		t.Error("unknown action should error")

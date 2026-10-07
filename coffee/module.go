@@ -33,6 +33,7 @@ import (
 	"beanjamin/coffee/order"
 	"beanjamin/coffee/report"
 	"beanjamin/coffee/speech"
+
 	// Register the multi-poses-execution-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
 )

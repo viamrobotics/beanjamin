@@ -37,14 +37,14 @@ func TestCancelStopsAndNothingElse(t *testing.T) {
 	s.portafilterHasGrounds.Store(true)
 	s.setStep(stepBrewing)
 	s.lease.cancelCtx, s.lease.cancelFunc = context.WithCancel(context.Background())
-	s.lease.running.Store(true)
+	mustClaim(t, s, "test sequence")
 
 	// Play the sequence goroutine: unwind once the shared context is cancelled.
 	// Capture it first, since signalCancel swaps in a fresh one.
 	seqCtx := s.lease.cancelCtx
 	go func() {
 		<-seqCtx.Done()
-		s.lease.running.Store(false)
+		s.lease.release()
 	}()
 
 	resp, err := s.cancel(context.Background())
@@ -106,7 +106,7 @@ func TestCancelIdleIsSilent(t *testing.T) {
 func TestRewindRefusesWhileAnotherSequenceRuns(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
 	s.lease.cancelCtx, s.lease.cancelFunc = context.WithCancel(context.Background())
-	s.lease.running.Store(true)
+	mustClaim(t, s, "test sequence")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -192,7 +192,7 @@ func TestProceedRebuildsFrameSystemWhenPaused(t *testing.T) {
 		t.Errorf("rebuild must clear the mutation flags: held=%v locked=%v staged=%v",
 			s.heldItemAttached, s.filterFrameLocked, s.stagedGlassPlaced)
 	}
-	if s.lease.running.Load() {
+	if s.lease.busy() {
 		t.Error("proceed must hand the arm back after rebuilding")
 	}
 	select {
@@ -298,11 +298,11 @@ func TestCancelledManualActionPauseIsReleasable(t *testing.T) {
 	s.lease.cancelCtx, s.lease.cancelFunc = context.WithCancel(context.Background())
 
 	// A manual action holds the arm; the operator cancels it, then it unwinds.
-	s.lease.running.Store(true)
+	mustClaim(t, s, "test sequence")
 	if !s.signalCancel() {
 		t.Fatal("signalCancel should report the running sequence")
 	}
-	s.lease.running.Store(false)
+	s.lease.release()
 
 	resp, err := s.proceedQueue(context.Background())
 	if err != nil {
@@ -414,7 +414,7 @@ func TestProceedOmitsTheFridgeFieldWhenShut(t *testing.T) {
 // proceed must not swap it out from under it.
 func TestProceedRefusesWhileASequenceRuns(t *testing.T) {
 	s, dirty, rebuilds := pausedCoffeeWithDirtyWorld(t, nil)
-	s.lease.running.Store(true)
+	mustClaim(t, s, "test sequence")
 
 	if _, err := s.proceedQueue(context.Background()); err == nil {
 		t.Fatal("proceed should refuse while a sequence is still running")
@@ -441,7 +441,7 @@ func TestProceedRebuildFailureKeepsQueuePaused(t *testing.T) {
 	if _, err := s.proceedQueue(context.Background()); err == nil {
 		t.Fatal("proceed should fail when the frame system can't be rebuilt")
 	}
-	if s.lease.running.Load() {
+	if s.lease.busy() {
 		t.Error("a failed rebuild must still hand the arm back")
 	}
 	if !s.lease.paused.Load() {
@@ -466,7 +466,7 @@ func TestResetWorldRefusesWhileASequenceHoldsTheArm(t *testing.T) {
 	s.portafilterInMachine.Store(true)
 	s.portafilterHasGrounds.Store(true)
 	s.doorOpenDegs = 90
-	s.lease.running.Store(true)
+	mustClaim(t, s, "test sequence")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -492,7 +492,7 @@ func TestResetWorldRefusesWhileASequenceHoldsTheArm(t *testing.T) {
 	if s.doorOpenDegs != 90 {
 		t.Errorf("doorOpenDegs = %v, want 90", s.doorOpenDegs)
 	}
-	if !s.lease.running.Load() {
+	if !s.lease.busy() {
 		t.Error("reset_world released a running gate it never claimed")
 	}
 }
@@ -505,18 +505,19 @@ func TestResetWorldRefusesWhileASequenceHoldsTheArm(t *testing.T) {
 func TestResetWorldHoldsTheGateWhileRebuilding(t *testing.T) {
 	s, dirty, _ := coffeeWithDirtyWorld(t, nil)
 	s.lease.cancelCtx, s.lease.cancelFunc = context.WithCancel(context.Background())
-	s.lease.running.Store(true)
+	mustClaim(t, s, "test sequence")
 	seqCtx := s.lease.cancelCtx
 	go func() {
 		<-seqCtx.Done()
-		s.lease.running.Store(false)
+		s.lease.release()
 	}()
 
 	var claimedDuringRebuild, heldDuringRebuild bool
 	fsSvc := inject.NewFrameSystemService("fs")
 	fsSvc.FrameSystemConfigFunc = func(context.Context) (*framesystem.Config, error) {
-		heldDuringRebuild = s.lease.running.Load()
-		claimedDuringRebuild = s.lease.running.CompareAndSwap(false, true)
+		heldDuringRebuild = s.lease.busy()
+		_, competeErr := s.lease.claim("competing sequence")
+		claimedDuringRebuild = competeErr == nil
 		return &framesystem.Config{}, nil
 	}
 	s.fsSvc = fsSvc
@@ -535,7 +536,7 @@ func TestResetWorldHoldsTheGateWhileRebuilding(t *testing.T) {
 	if s.cachedFS == dirty {
 		t.Error("cached frame system should have been replaced by the rebuild")
 	}
-	if s.lease.running.Load() {
+	if s.lease.busy() {
 		t.Error("reset_world must hand the arm back after rebuilding")
 	}
 }
@@ -549,7 +550,7 @@ func TestResetWorldReleasesTheGateOnRebuildFailure(t *testing.T) {
 	if _, err := s.resetWorld(context.Background()); err == nil {
 		t.Fatal("reset_world should fail when the frame system can't be rebuilt")
 	}
-	if s.lease.running.Load() {
+	if s.lease.busy() {
 		t.Error("a failed reset_world must still hand the arm back")
 	}
 	if !s.lease.paused.Load() {

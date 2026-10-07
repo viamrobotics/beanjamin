@@ -518,9 +518,12 @@ Returns:
      "completed_at": "", "cancellable": true}
   ],
   "is_paused": false,
-  "is_busy": true
+  "is_busy": true,
+  "arm_holder": "order 3f8c1e2a-…"
 }
 ```
+
+`arm_holder` names what currently holds the arm — `order <id>`, `keepalive purge`, `rewind`, `execute_action open_door` and so on — and is empty when the arm is free. A command refused because the arm is busy names the holder in its error too.
 
 `count` is how many drinks still have to be made — the backlog plus the one on the arm. Orders that have finished stay in the list with `completed_at` set for ~15s so a UI can render a "Ready!" card without diffing polls, but they don't count toward the depth. `cancellable` says whether `cancel_order` would accept this order.
 

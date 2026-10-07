@@ -34,8 +34,8 @@ import (
 // forgets the gripper's modeled contents without opening the gripper — an
 // operator holding something manually wants rewind, which physically lets go.
 func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, error) {
-	if !s.lease.running.CompareAndSwap(false, true) {
-		return nil, errors.New("proceed: a sequence is still running — wait for it to stop, or cancel it first")
+	if _, err := s.lease.claim("proceed"); err != nil {
+		return nil, fmt.Errorf("proceed: %w — wait for it to stop, or cancel it first", err)
 	}
 	// Warn before the flag is cleared: forgetting a held item without opening
 	// the jaws leaves the arm planning through whatever it is still carrying.
@@ -55,7 +55,7 @@ func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, err
 		// would quietly shut a door this proceed never got to vouch for.
 		s.doorOpenDegs = doorOpenDegs
 	}
-	s.lease.running.Store(false)
+	s.lease.release()
 	if err != nil {
 		return nil, fmt.Errorf("proceed: %w", err)
 	}
@@ -142,8 +142,8 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 	// A sequence can start after the cancel check — once the cancelled one has
 	// unwound, or when there was nothing running to cancel — so the arm has to
 	// be claimed, not assumed.
-	if !s.lease.running.CompareAndSwap(false, true) {
-		return nil, errors.New("reset_world: another sequence started before reset could take over — try again")
+	if _, err := s.lease.claim("reset_world"); err != nil {
+		return nil, fmt.Errorf("reset_world: another sequence started before reset could take over — try again: %w", err)
 	}
 
 	removed := s.queue.Clear()
@@ -160,7 +160,7 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 	s.doorOpenDegs = 0
 
 	err := s.resetFrameSystem(ctx)
-	s.lease.running.Store(false)
+	s.lease.release()
 	if err != nil {
 		return nil, fmt.Errorf("reset_world: %w", err)
 	}
@@ -184,13 +184,13 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 // cancelCtx and pausing the queue. Returns true if a sequence was running.
 // Does not wait for the running goroutine to observe the cancellation.
 //
-// running is checked under mu, the lock claim holds, so a sequence cannot take
-// the arm between this check and the cancel and end up with the replacement
-// context.
+// The holder is checked under mu, the lock claim holds, so a sequence cannot
+// take the arm between this check and the cancel and end up with the
+// replacement context.
 func (s *beanjaminCoffee) signalCancel() bool {
 	s.lease.mu.Lock()
 	defer s.lease.mu.Unlock()
-	if !s.lease.running.Load() {
+	if s.lease.holder == "" {
 		return false
 	}
 	s.lease.paused.Store(true)
@@ -199,11 +199,11 @@ func (s *beanjaminCoffee) signalCancel() bool {
 	return true
 }
 
-// waitForIdle polls until s.lease.running flips back to false (meaning the cancelled
+// waitForIdle polls until the arm is released (meaning the cancelled
 // sequence has fully unwound through its defers) or the timeout / ctx expires.
 func (s *beanjaminCoffee) waitForIdle(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	for s.lease.running.Load() {
+	for s.lease.busy() {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out after %s waiting for sequence to stop", timeout)
 		}
@@ -313,11 +313,11 @@ func (s *beanjaminCoffee) rewind(ctx context.Context) (map[string]any, error) {
 
 	// Take exclusive ownership of the arm before any recovery motion so
 	// other commands (execute_action, prepare_order consumer) can't race.
-	cancelCtx, ok := s.lease.claim()
-	if !ok {
-		return nil, errors.New("rewind: another sequence is running")
+	cancelCtx, err := s.lease.claim("rewind")
+	if err != nil {
+		return nil, fmt.Errorf("rewind: %w", err)
 	}
-	defer s.lease.running.Store(false)
+	defer s.lease.release()
 
 	// Rewind runs outside the queue goroutine, so the in-flight order's tagged
 	// logger has to be looked up rather than passed in.
