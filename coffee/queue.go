@@ -77,12 +77,12 @@ func (s *beanjaminCoffee) processQueue() {
 // The wakeup is re-checked rather than trusted, so a signal parked while
 // nothing was waiting cannot release a later pause nobody asked to release.
 func (s *beanjaminCoffee) waitForProceed() bool {
-	if !s.paused.Load() {
+	if !s.lease.paused.Load() {
 		return true
 	}
 	logger := s.activeOrderLogger()
 	logger.Infof("queue paused — send 'proceed' to resume")
-	for s.paused.Load() {
+	for s.lease.paused.Load() {
 		select {
 		case <-s.queue.Proceed():
 		case <-s.queueStop:
@@ -112,15 +112,15 @@ func (s *beanjaminCoffee) safeExecuteOrder(o order.Order) {
 
 	// Snapshot the cancel context this order will run under so we can tell an
 	// operator cancel from a genuine fault. signalCancel cancels this exact
-	// context and then rotates s.cancelCtx to a fresh one, so we must capture
-	// it now: prepareDrink reads the same s.cancelCtx (it can't rotate while
-	// running is false), and reading s.cancelCtx later would see the fresh,
+	// context and then rotates s.lease.cancelCtx to a fresh one, so we must capture
+	// it now: prepareDrink reads the same s.lease.cancelCtx (it can't rotate while
+	// running is false), and reading s.lease.cancelCtx later would see the fresh,
 	// un-cancelled replacement and miss the cancellation. Relying on the error
 	// unwrapping to context.Canceled is unreliable — executeStep's cancelCtx
 	// branch returns a plain (non-wrapped) error.
-	s.mu.Lock()
-	orderCancelCtx := s.cancelCtx
-	s.mu.Unlock()
+	s.lease.mu.Lock()
+	orderCancelCtx := s.lease.cancelCtx
+	s.lease.mu.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
 			execErr = fmt.Errorf("panic: %v", r)

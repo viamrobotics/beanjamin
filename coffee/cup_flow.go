@@ -19,14 +19,14 @@ import (
 // flow never touches portafilter state. Each placement advances the shelf-slot
 // counter inside placeFullCupOnShelf.
 func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string]any, error) {
-	if !s.running.CompareAndSwap(false, true) {
+	if !s.lease.running.CompareAndSwap(false, true) {
 		return nil, errors.New("a sequence is already running")
 	}
-	defer s.running.Store(false)
+	defer s.lease.running.Store(false)
 
-	s.mu.Lock()
-	cancelCtx := s.cancelCtx
-	s.mu.Unlock()
+	s.lease.mu.Lock()
+	cancelCtx := s.lease.cancelCtx
+	s.lease.mu.Unlock()
 
 	// Not tied to a queued order, so there is no order ID to tag — use the
 	// base service logger.
