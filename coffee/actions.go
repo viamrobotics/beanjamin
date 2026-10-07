@@ -55,18 +55,18 @@ func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.C
 		// fetch_milk and add_milk take execute_action's optional "milk" (default:
 		// the first of milk_options); return_milk puts back whichever is out.
 		"fetch_milk": func(ctx, cancelCtx context.Context) error { // take the bottle off its spot in the open fridge
-			milk, err := s.actionMilk(ctx)
+			milk, err := s.actionMilk(ctx, "fetch_milk")
 			if err != nil {
-				return fmt.Errorf("fetch_milk: %w", err)
+				return err
 			}
 			return s.fetchMilkBottle(ctx, cancelCtx, milk)
 		},
 		"pour_milk":   s.pourMilk,         // pour held bottle into the staged glass
 		"return_milk": s.returnMilkBottle, // set the bottle back on its spot
 		"add_milk": func(ctx, cancelCtx context.Context) error { // open fridge + fetch + pour + return + close
-			milk, err := s.actionMilk(ctx)
+			milk, err := s.actionMilk(ctx, "add_milk")
 			if err != nil {
-				return fmt.Errorf("add_milk: %w", err)
+				return err
 			}
 			return s.addMilk(ctx, cancelCtx, milk)
 		},

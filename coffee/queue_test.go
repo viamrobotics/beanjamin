@@ -366,6 +366,17 @@ func TestEnqueueOrder_IcedLatteMilkChoice(t *testing.T) {
 		}
 	}
 
+	// Every order in a batch carries the milk.
+	batch, _ := newTestCoffee(t, cfg)
+	if _, err := batch.enqueueOrder(context.Background(), map[string]any{"drink": "iced_latte", "milk": "oat", "count": float64(3)}); err != nil {
+		t.Fatalf("batch: unexpected error: %v", err)
+	}
+	for i, o := range batch.queue.List() {
+		if o.Milk != "oat" {
+			t.Errorf("batch order %d has milk %q, want oat", i, o.Milk)
+		}
+	}
+
 	c, _ := newTestCoffee(t, cfg)
 	if _, err := c.enqueueOrder(context.Background(), map[string]any{"drink": "iced_latte", "milk": "soy"}); err == nil {
 		t.Fatal("expected rejection for an unconfigured milk")

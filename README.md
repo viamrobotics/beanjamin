@@ -499,19 +499,20 @@ Returns:
 {
   "count": 2,
   "orders": [
-    {"id": "3f8c1e2a-…", "drink": "espresso", "customer_name": "Alice", "fulfillment": "pickup",
+    {"id": "3f8c1e2a-…", "drink": "espresso", "customer_name": "Alice", "fulfillment": "pickup", "milk": "",
      "enqueued_at": "2026-09-17T09:12:03Z", "raw_step": "Brewing", "step_history": [],
      "completed_at": "", "cancellable": false},
-    {"id": "9b21d740-…", "drink": "lungo", "customer_name": "Bob", "fulfillment": "pickup",
+    {"id": "9b21d740-…", "drink": "iced_latte", "customer_name": "Bob", "fulfillment": "pickup", "milk": "oat",
      "enqueued_at": "2026-09-17T09:12:40Z", "raw_step": "", "step_history": [],
      "completed_at": "", "cancellable": true}
   ],
   "is_paused": false,
-  "is_busy": true
+  "is_busy": true,
+  "milk_options": ["whole", "oat"]
 }
 ```
 
-`count` is how many drinks still have to be made — the backlog plus the one on the arm. Orders that have finished stay in the list with `completed_at` set for ~15s so a UI can render a "Ready!" card without diffing polls, but they don't count toward the depth. `cancellable` says whether `cancel_order` would accept this order. An `iced_latte` order also carries its `milk`, and when `can_serve_iced_latte` is set the response lists the machine's `milk_options` (the default first), which is what the kiosk builds its milk choice from.
+`count` is how many drinks still have to be made — the backlog plus the one on the arm. Orders that have finished stay in the list with `completed_at` set for ~15s so a UI can render a "Ready!" card without diffing polls, but they don't count toward the depth. `cancellable` says whether `cancel_order` would accept this order. Every order carries `milk` (empty unless it is an `iced_latte`), and when `can_serve_iced_latte` is set the response lists the machine's `milk_options` (the default first), which is what the kiosk builds its milk choice from.
 
 **`proceed`** - Re-sync the recorded world with the real one, and resume queue processing after a pause — from a `cancel`, or from a fault that left the machine mid-cycle (see "Pause after a fault" above).
 

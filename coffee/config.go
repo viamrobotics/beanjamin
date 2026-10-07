@@ -367,6 +367,13 @@ func validateMilkOptions(path string, milks []MilkOption) error {
 			f.seen[f.value] = true
 		}
 	}
+	for _, m := range milks {
+		// milk_pour_approach is the glass-relative pour pose, so a spot named
+		// "pour" would send the fetch to the glass instead of the fridge.
+		if p := milkApproachPose(m.Spot); p == clawPoseMilkPourApproach || p == clawPoseMilkPour {
+			return fmt.Errorf("%s: milk_options spot %q is reserved: its pose %q is the milk pour pose", path, m.Spot, p)
+		}
+	}
 	return nil
 }
 

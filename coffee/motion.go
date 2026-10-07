@@ -444,11 +444,12 @@ func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 
 // refreshFrameSystemIfClean rebuilds cachedFS from the service when no in-flight
 // state would be lost — i.e. nothing is held, no milk bottle is out of the
-// fridge, the filter frame is not locked, and no glass is staged as an obstacle — so a manually-invoked action picks up
-// out-of-band config edits (e.g. the portafilter handle geometry being changed
-// during calibration) instead of planning against a stale snapshot. When an item
-// is held, the filter is locked, or a glass is staged, cachedFS carries state that
-// must persist across separate DoCommand calls, so it is left untouched. Must be
+// fridge, the filter frame is not locked, and no glass is staged as an obstacle
+// — so a manually-invoked action picks up out-of-band config edits (e.g. the
+// portafilter handle geometry being changed during calibration) instead of
+// planning against a stale snapshot. Otherwise cachedFS (or heldMilk, which a
+// rebuild clears) carries state that must persist across separate DoCommand
+// calls, so it is left untouched. Must be
 // called on the motion sequence goroutine (gated by the running flag), like
 // resetFrameSystem.
 func (s *beanjaminCoffee) refreshFrameSystemIfClean(ctx context.Context) error {

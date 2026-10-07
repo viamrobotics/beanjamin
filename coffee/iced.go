@@ -164,9 +164,9 @@ func (s *beanjaminCoffee) serveIcedCoffee(ctx, cancelCtx context.Context) (int, 
 // serve_iced_latte action, with the milk execute_action names (or the default).
 // An iced_latte order goes through serveIced with its own milk.
 func (s *beanjaminCoffee) serveIcedLatte(ctx, cancelCtx context.Context) (int, error) {
-	milk, err := s.actionMilk(ctx)
+	milk, err := s.actionMilk(ctx, "serve_iced_latte")
 	if err != nil {
-		return -1, fmt.Errorf("serve_iced_latte: %w", err)
+		return -1, err
 	}
 	return s.serveIced(ctx, cancelCtx, milk)
 }

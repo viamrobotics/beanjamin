@@ -2,6 +2,7 @@ package coffee
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -25,13 +26,11 @@ func TestReturnMilkBottleWithoutPickupFails(t *testing.T) {
 // rather than failing partway through a motion on nil config.
 func TestMilkActionsRequireConfiguredMilk(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{}}
-	actions := map[string]func(ctx, cancelCtx context.Context) error{
-		"add_milk":    func(ctx, cancelCtx context.Context) error { return s.addMilk(ctx, cancelCtx, "whole") },
-		"fetch_milk":  func(ctx, cancelCtx context.Context) error { return s.fetchMilkBottle(ctx, cancelCtx, "whole") },
-		"pour_milk":   s.pourMilk,
-		"return_milk": s.returnMilkBottle,
-	}
-	for name, run := range actions {
+	// Through the registered actions, so the wrappers that read execute_action's
+	// "milk" are covered too.
+	registered := s.actionFuncs()
+	for _, name := range []string{"add_milk", "fetch_milk", "pour_milk", "return_milk", "serve_iced_latte"} {
+		run := registered[name]
 		t.Run(name, func(t *testing.T) {
 			err := run(context.Background(), context.Background())
 			if err == nil || !strings.Contains(err.Error(), "can_serve_iced_latte") {
@@ -90,14 +89,14 @@ func TestClearHeldGeometryForgetsHeldMilk(t *testing.T) {
 // A hand-run milk action takes the milk execute_action names, defaults to the
 // first configured milk, and refuses one that isn't configured.
 func TestActionMilk(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{MilkOptions: testMilks}}
-	if got, err := s.actionMilk(context.Background()); err != nil || got != "whole" {
+	s := &beanjaminCoffee{cfg: &Config{CanServeIcedLatte: true, MilkOptions: testMilks}}
+	if got, err := s.actionMilk(context.Background(), "fetch_milk"); err != nil || got != "whole" {
 		t.Errorf("default actionMilk = %q, %v; want whole", got, err)
 	}
-	if got, err := s.actionMilk(withMilkChoice(context.Background(), "oat")); err != nil || got != "oat" {
+	if got, err := s.actionMilk(withMilkChoice(context.Background(), "oat"), "fetch_milk"); err != nil || got != "oat" {
 		t.Errorf("actionMilk(oat) = %q, %v; want oat", got, err)
 	}
-	if _, err := s.actionMilk(withMilkChoice(context.Background(), "soy")); err == nil {
+	if _, err := s.actionMilk(withMilkChoice(context.Background(), "soy"), "fetch_milk"); err == nil {
 		t.Error("actionMilk(soy) should fail for an unconfigured milk")
 	}
 }
@@ -153,5 +152,63 @@ func TestRefreshFrameSystemSkippedWhileMilkIsOut(t *testing.T) {
 	}
 	if s.heldMilk != "oat" {
 		t.Errorf("heldMilk = %q, want it kept", s.heldMilk)
+	}
+}
+
+// gripperAt fakes a gripper whose jaws read pos.
+func gripperAt(pos float64) *inject.Gripper {
+	g := inject.NewGripper("g")
+	g.DoFunc = func(context.Context, map[string]any) (map[string]any, error) {
+		return map[string]any{"pos": pos}, nil
+	}
+	return g
+}
+
+// rewind must not open the jaws on a milk bottle wherever the arm is; once the
+// operator has taken it out, rewind goes ahead.
+func TestRefuseDropWhileMilkHeld(t *testing.T) {
+	cfg := &Config{CanServeIcedLatte: true, MilkOptions: testMilks}
+	holding := &beanjaminCoffee{cfg: cfg, gripper: gripperAt(500), heldMilk: "oat"}
+	err := holding.refuseDropWhileMilkHeld(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "oat milk") || !strings.Contains(err.Error(), "right spot") {
+		t.Fatalf("holding the oat bottle: got %v, want a refusal naming the oat milk and its right spot", err)
+	}
+	removed := &beanjaminCoffee{cfg: cfg, gripper: gripperAt(0), heldMilk: "oat"}
+	if err := removed.refuseDropWhileMilkHeld(context.Background()); err != nil {
+		t.Errorf("bottle already taken out: got %v, want rewind allowed", err)
+	}
+	noMilk := &beanjaminCoffee{cfg: cfg, gripper: gripperAt(500)}
+	if err := noMilk.refuseDropWhileMilkHeld(context.Background()); err != nil {
+		t.Errorf("holding a cup, no milk out: got %v, want rewind allowed", err)
+	}
+}
+
+// A failure with the fridge open names where the bottle goes back.
+func TestMilkStepErrNamesTheSpot(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{MilkOptions: testMilks}, doorOpenDegs: 90}
+	err := s.milkStepErr("oat", errors.New("boom"))
+	if !strings.Contains(err.Error(), "oat milk") || !strings.Contains(err.Error(), "right spot") {
+		t.Errorf("milkStepErr = %v, want it to name the oat milk's right spot", err)
+	}
+}
+
+// A bottle out of the fridge is reported as stranded state on a fault.
+func TestStrandedStateReportsMilkOut(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{}, heldMilk: "oat"}
+	if got := s.strandedState(); len(got) != 1 || got[0] != "oat milk out of the fridge" {
+		t.Errorf("strandedState = %v, want [oat milk out of the fridge]", got)
+	}
+}
+
+// execute_action refuses "milk" on an action that doesn't pick a bottle before
+// it takes the run gate, so a rejected flag costs no state.
+func TestExecuteActionRefusesMilkOnOtherActions(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{}}
+	_, err := s.executeAction(withMilkChoice(context.Background(), "oat"), "grind_coffee", false)
+	if err == nil || !strings.Contains(err.Error(), "milk is not accepted") {
+		t.Fatalf("got %v, want a refusal", err)
+	}
+	if s.running.Load() {
+		t.Error("run gate taken by a refused call")
 	}
 }

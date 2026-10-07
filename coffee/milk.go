@@ -71,10 +71,32 @@ func checkMilkChoiceAllowed(name string) error {
 }
 
 // actionMilk is the milk a hand-run milk action uses: the one execute_action
-// named, or the default (first) milk when it named none.
-func (s *beanjaminCoffee) actionMilk(ctx context.Context) (string, error) {
+// named, or the default (first) milk when it named none. It checks the machine
+// is set up for milk first, so action gets requireMilk's error rather than a
+// vaguer one about the milk list.
+func (s *beanjaminCoffee) actionMilk(ctx context.Context, action string) (string, error) {
+	if err := s.requireMilk(action); err != nil {
+		return "", err
+	}
 	milk, _ := ctx.Value(milkChoiceKey{}).(string)
 	return s.menu().Milk(milk)
+}
+
+// refuseDropWhileMilkHeld keeps rewind from opening the jaws on a milk bottle
+// wherever the arm happens to be (over the glass, mid-carry): the bottle would
+// fall, and it belongs on its spot in the fridge. Only a confirmed hold refuses;
+// once the operator has taken the bottle out, rewind goes ahead and its rebuild
+// forgets it.
+func (s *beanjaminCoffee) refuseDropWhileMilkHeld(ctx context.Context) error {
+	if s.heldMilk == "" || s.gripper == nil {
+		return nil
+	}
+	pos, err := s.gripperPos(ctx)
+	if err != nil || s.classifyGripper(pos) != gripperHolding {
+		// Unreadable: dropHeldContainer won't open the jaws either.
+		return nil
+	}
+	return fmt.Errorf("the gripper is holding a milk bottle — %s, then rewind again", s.milkPutBackHint(s.heldMilk))
 }
 
 // milkSpot returns the fridge spot the named milk stands at.
@@ -101,26 +123,26 @@ func (s *beanjaminCoffee) addMilk(ctx, cancelCtx context.Context, milk string) e
 		return err
 	}
 	if err := s.openDoor(ctx, cancelCtx); err != nil {
-		return s.milkStepErr(err)
+		return s.milkStepErr(milk, err)
 	}
 	s.setStep(stepAddingMilk)
 	if err := s.fetchMilkBottle(ctx, cancelCtx, milk); err != nil {
-		return s.milkStepErr(err)
+		return s.milkStepErr(milk, err)
 	}
 	if err := s.pourMilk(ctx, cancelCtx); err != nil {
-		return s.milkStepErr(err)
+		return s.milkStepErr(milk, err)
 	}
 	if err := s.returnMilkBottle(ctx, cancelCtx); err != nil {
-		return s.milkStepErr(err)
+		return s.milkStepErr(milk, err)
 	}
 	if err := s.closeDoor(ctx, cancelCtx); err != nil {
-		return s.milkStepErr(err)
+		return s.milkStepErr(milk, err)
 	}
 	return nil
 }
 
 // backOutOfFridge best-effort recovers from a failed grab: open the jaws (so a
-// bottle half-gripped is left standing on its spot) and back straight out to the
+// bottle gripped or half-gripped is left standing on its spot) and back straight out to the
 // spot's approach pose, so rewind starts from outside the fridge interior rather
 // than inside the shield. Failures are logged, not returned — the caller is
 // already returning the error that matters.
@@ -149,11 +171,22 @@ func (s *beanjaminCoffee) fridgeLinearStep(pose string) Step {
 // after a failure: it may still be holding the bottle, and a sweep needs the
 // gripper for the handle. So the door stays open, the model keeps recording the
 // angle it really is at, and the message tells the operator what to fix.
-func (s *beanjaminCoffee) milkStepErr(err error) error {
+func (s *beanjaminCoffee) milkStepErr(milk string, err error) error {
 	if s.doorOpenDegs != 0 {
-		return fmt.Errorf("add_milk: %w (the fridge door is standing open at %.0f° — if the gripper is holding a bottle, take it out and stand it back on its own spot in the fridge, where the arm will reach for it next time; rewind to recover the arm, then shut the door by hand before sending proceed: proceed is what declares the door shut again)", err, s.doorOpenDegs)
+		return fmt.Errorf("add_milk: %w (the fridge door is standing open at %.0f° — %s; rewind to recover the arm, then shut the door by hand before sending proceed: proceed is what declares the door shut again)", err, s.doorOpenDegs, s.milkPutBackHint(milk))
 	}
 	return fmt.Errorf("add_milk: %w", err)
+}
+
+// milkPutBackHint tells the operator where a bottle taken out of the gripper by
+// hand goes: its own spot, named, since that is where the arm reaches for it
+// next time.
+func (s *beanjaminCoffee) milkPutBackHint(milk string) string {
+	spot, err := s.milkSpot(milk)
+	if err != nil {
+		return "if the gripper is holding a milk bottle, take it out and stand it back on its own spot in the fridge"
+	}
+	return fmt.Sprintf("if the gripper is holding the %s milk, take it out and stand it back on its %s spot in the fridge, where the arm reaches for it next time", milk, spot)
 }
 
 // fetchMilkBottle takes the named milk's bottle off the fridge shelf, leaving
@@ -161,8 +194,9 @@ func (s *beanjaminCoffee) milkStepErr(err error) error {
 // the grab pose, grab, straight back out to the approach pose. The door must
 // already be open — the approach is through the opening.
 //
-// Which milk is out is recorded only once the bottle is confirmed in hand, so a
-// failed grab can't leave a return pointed at a bottle the gripper never took.
+// Which milk is out is recorded only once the bottle is confirmed in hand and
+// modeled, so a failed grab can't leave a return pointed at a bottle the
+// gripper never took.
 // A grab that fails once the arm has started in backs it out to the approach
 // pose with the jaws open, so recovery starts from outside the fridge.
 func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context, milk string) error {
@@ -200,12 +234,16 @@ func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context, milk s
 		s.backOutOfFridge(ctx, cancelCtx, spot)
 		return fmt.Errorf("fetch_milk: grab the %s milk: %w", milk, err)
 	}
-	s.heldMilk = milk
 	// Model the bottle from milk_bottle_dimensions, centered on the grip point,
-	// so the retreat and the carry to the glass route around it.
+	// so the retreat and the carry to the glass route around it. Without the
+	// model nothing that follows can run — the pour poses and the level carry
+	// are resolved against it — so a failure lets go of the bottle where it
+	// stands and backs out, rather than leaving it half-taken.
 	if err := s.attachConfiguredGeometry(ctx, pickupLabelMilk, s.cfg.MilkBottleDimensions, &RelativePose{}); err != nil {
-		s.activeOrderLogger().Warnf("fetch_milk: model bottle from milk_bottle_dimensions failed, continuing untracked: %v", err)
+		s.backOutOfFridge(ctx, cancelCtx, spot)
+		return fmt.Errorf("fetch_milk: model the %s milk bottle: %w", milk, err)
 	}
+	s.heldMilk = milk
 	if err := s.executeStep(ctx, cancelCtx, s.fridgeLinearStep(milkApproachPose(spot))); err != nil {
 		return fmt.Errorf("fetch_milk: retreat with the %s milk: %w", milk, err)
 	}

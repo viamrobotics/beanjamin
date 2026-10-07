@@ -273,6 +273,7 @@ func TestValidate_CanServeIcedLatte_RejectsBadMilkOptions(t *testing.T) {
 		{{Name: "oat", Spot: ""}},
 		{{Name: "oat", Spot: "left"}, {Name: "oat", Spot: "right"}},
 		{{Name: "whole", Spot: "left"}, {Name: "oat", Spot: "left"}},
+		{{Name: "oat", Spot: "pour"}}, // milk_pour_approach is the pour pose
 	} {
 		cfg := validCanServeIcedLatteConfig()
 		cfg.MilkOptions = milks

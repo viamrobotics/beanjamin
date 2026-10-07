@@ -41,7 +41,7 @@ func TestSetStepReflectedInStatus(t *testing.T) {
 func TestStatusReportsQueueAndFlags(t *testing.T) {
 	s := newStatusService(t, &Config{CanServeDecaf: true, CanServeIcedLatte: true, MilkOptions: testMilks})
 	s.queue.Enqueue(order.Order{ID: "o1", Drink: "espresso", CustomerName: "Ada", RawStep: "Grinding"})
-	s.queue.Enqueue(order.Order{ID: "o2", Drink: "lungo", CustomerName: "Grace"})
+	s.queue.Enqueue(order.Order{ID: "o2", Drink: "iced_latte", CustomerName: "Grace", Milk: "oat"})
 
 	st, err := s.Status(context.Background())
 	if err != nil {
@@ -65,6 +65,9 @@ func TestStatusReportsQueueAndFlags(t *testing.T) {
 	orders, ok := st["orders"].([]any)
 	if !ok || len(orders) != 2 {
 		t.Fatalf("orders = %v, want a 2-element []any", st["orders"])
+	}
+	if milk := orders[1].(map[string]any)["milk"]; milk != "oat" {
+		t.Errorf("iced latte order milk = %v, want oat", milk)
 	}
 }
 
