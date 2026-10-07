@@ -32,6 +32,9 @@ type armLease struct {
 	cancelFunc func()
 	holder     string // who holds the arm, for logs, errors and Status; "" when free
 	paused     bool
+	// closed is set by shutdown and refuses every later claim, so nothing can
+	// take the arm after the service starts closing.
+	closed bool
 }
 
 var (
@@ -39,6 +42,8 @@ var (
 	errArmBusy = errors.New("a sequence is already running")
 	// errQueuePaused is returned by an automated claim while paused.
 	errQueuePaused = errors.New("the queue is paused — send 'proceed' to resume")
+	// errServiceClosed is returned by any claim once the service is closing.
+	errServiceClosed = errors.New("service closing")
 )
 
 // claimManual takes the arm for a troubleshooting command and returns the
@@ -63,6 +68,9 @@ func (l *armLease) claimAutomated(who string) (context.Context, error) {
 func (l *armLease) claim(who string, respectPause bool) (context.Context, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.closed {
+		return nil, errServiceClosed
+	}
 	if l.holder != "" {
 		return nil, fmt.Errorf("%w (%s holds the arm)", errArmBusy, l.holder)
 	}
@@ -89,6 +97,17 @@ func (l *armLease) unpause() bool {
 	was := l.paused
 	l.paused = false
 	return was
+}
+
+// shutdown refuses every later claim and cancels whoever holds the arm. Close
+// calls it.
+func (l *armLease) shutdown() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.closed = true
+	if l.cancelFunc != nil {
+		l.cancelFunc()
+	}
 }
 
 // isPaused reports whether automated work is held back until proceed.

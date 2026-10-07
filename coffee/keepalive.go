@@ -266,7 +266,7 @@ func (s *beanjaminCoffee) keepAliveLoop(w *keepAliveWindow) {
 		idle := st.now.Sub(st.lastActivity).Round(time.Second)
 		s.logger.Infof("keepalive: machine idle %s — purging the group head to hold brew temperature", idle)
 		err := s.runPurge(context.Background())
-		if errors.Is(err, errArmBusy) || errors.Is(err, errQueuePaused) {
+		if errors.Is(err, errArmBusy) || errors.Is(err, errQueuePaused) || errors.Is(err, errServiceClosed) {
 			// Something took the arm or paused the queue since shouldPurge
 			// looked; that is a skip, not a failure worth alerting on.
 			s.logger.Debugf("keepalive: skipping this tick — %v", err)

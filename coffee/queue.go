@@ -83,6 +83,9 @@ func (s *beanjaminCoffee) waitForArm() (context.Context, bool) {
 	logged := ""
 	for {
 		cancelCtx, err := s.lease.claimAutomated("order queue")
+		if errors.Is(err, errServiceClosed) {
+			return nil, false
+		}
 		if err == nil {
 			if logged == "paused" {
 				s.logger.Infof("received 'proceed', resuming queue processing")
@@ -136,8 +139,13 @@ func (s *beanjaminCoffee) safeExecuteOrder(cancelCtx context.Context, o order.Or
 			execErr = fmt.Errorf("panic: %v", r)
 			step, _ := s.currentStep.Load().(string)
 			s.failedStep.Store(step)
-			logger.Errorf("panic while processing order for %s: %v — queue will still save video and order reading",
-				o.CustomerName, r)
+			// A panic is a fault like any other: pause so the next order waits
+			// for rewind → proceed instead of starting from an unknown state.
+			// The queue still holds the arm here, so nothing automated can
+			// start before the pause lands.
+			s.lease.pause()
+			logger.Errorf("panic while processing order for %s: %v — queue paused; run 'rewind' to recover the arm, then 'proceed'. "+
+				"The queue will still save video and order reading", o.CustomerName, r)
 		}
 		failedStep, _ := s.failedStep.Load().(string)
 		s.notifyOrderReading(order.Reading{
