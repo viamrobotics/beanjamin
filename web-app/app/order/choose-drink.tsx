@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { useState } from "react";
 import {
+  COMING_SOON_DRINKS,
   GRID_DRINKS,
   applyDecaf,
   baseDrinkId,
@@ -17,7 +18,6 @@ export function ChooseDrink({
   fulfillment,
   milk,
   milkOptions,
-  rejection,
   connected,
   onSelect,
   onFulfillmentChange,
@@ -30,7 +30,6 @@ export function ChooseDrink({
   milk: string;
   /** The machine's milk_options; the choice shows only when there are two or more. */
   milkOptions: string[];
-  rejection: string | null;
   connected: boolean;
   onSelect: (id: string) => void;
   onFulfillmentChange: (f: Fulfillment) => void;
@@ -39,6 +38,9 @@ export function ChooseDrink({
   onNext: () => void;
 }) {
   const [decaf, setDecaf] = useState(isDecafId(selectedDrink ?? ""));
+  const [unavailableTapped, setUnavailableTapped] = useState<string | null>(
+    null,
+  );
   const selectedBase = selectedDrink ? baseDrinkId(selectedDrink) : null;
 
   const handleDecaf = (next: boolean) => {
@@ -61,7 +63,10 @@ export function ChooseDrink({
         }`}
       >
         <button
-          onClick={() => onSelect(applyDecaf(drink.id, decaf))}
+          onClick={() => {
+            setUnavailableTapped(null);
+            onSelect(applyDecaf(drink.id, decaf));
+          }}
           className={`drink-card relative w-full h-full flex flex-col items-center justify-center gap-1 py-4 rounded-2xl transition-[background-color,border-color,transform] duration-150 ${
             isSelected
               ? "bg-[#ebebeb] border-2 border-black"
@@ -108,6 +113,33 @@ export function ChooseDrink({
       </div>
     );
   };
+
+  const renderComingSoonCard = (
+    drink: (typeof COMING_SOON_DRINKS)[number],
+    i: number,
+  ) => (
+    <button
+      key={drink.id}
+      type="button"
+      aria-disabled="true"
+      onClick={() => setUnavailableTapped(drink.label)}
+      style={{ animationDelay: `${150 + i * 100}ms` }}
+      className="anim-in relative w-full flex flex-col items-center justify-center gap-1 py-4 rounded-2xl bg-neutral-50 border-2 border-dashed border-neutral-200 cursor-not-allowed"
+    >
+      <div className="flex flex-col items-center gap-1 -translate-y-2 opacity-40 grayscale">
+        <Image
+          src={drink.image}
+          alt={drink.label}
+          width={140}
+          height={140}
+          className="object-contain h-[min(140px,14vh)] w-auto"
+        />
+        <p className="font-sans font-medium text-base text-black leading-tight">
+          {drink.label}
+        </p>
+      </div>
+    </button>
+  );
 
   return (
     <main className="@container relative h-full bg-white flex flex-col overflow-y-auto font-sans">
@@ -182,6 +214,26 @@ export function ChooseDrink({
           {GRID_DRINKS.map((drink, i) => renderDrinkCard(drink, i))}
         </div>
 
+        {COMING_SOON_DRINKS.length > 0 && (
+          <section className="flex flex-col gap-3">
+            <div className="anim-in flex flex-col gap-1">
+              <h2 className="font-mono font-semibold text-sm text-neutral-500 uppercase tracking-wider">
+                Coming soon
+              </h2>
+              <p className="text-neutral-500 text-sm" aria-live="polite">
+                {unavailableTapped
+                  ? `Sorry, we're unable to make a ${unavailableTapped} just yet. Please pick another drink above.`
+                  : "We're sorry, we can't make these drinks just yet."}
+              </p>
+            </div>
+            <div className="grid gap-3 grid-cols-2 @md:grid-cols-3 @lg:grid-cols-4">
+              {COMING_SOON_DRINKS.map((drink, i) =>
+                renderComingSoonCard(drink, GRID_DRINKS.length + i),
+              )}
+            </div>
+          </section>
+        )}
+
         {/* Sticky so the fulfillment choice and Next stay reachable when the
             grid overflows a short screen; the fade marks cards scrolling under it. */}
         <div className="sticky bottom-0 z-10 -mx-10 flex flex-col gap-6 bg-white px-10 pb-6 before:pointer-events-none before:absolute before:inset-x-0 before:bottom-full before:h-6 before:bg-linear-to-t before:from-white before:to-transparent">
@@ -218,13 +270,7 @@ export function ChooseDrink({
             </div>
           </div>
 
-          {rejection && (
-            <p className="anim-in text-neutral-500 text-center text-sm -mt-2">
-              {rejection}
-            </p>
-          )}
-
-          {!connected && !rejection && (
+          {!connected && (
             <p className="anim-in text-neutral-500 text-center text-sm -mt-4">
               Waiting to reconnect to the machine…
             </p>

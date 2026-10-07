@@ -28,7 +28,7 @@ func (s *beanjaminCoffee) grind(ctx, cancelCtx context.Context, approachPose, ac
 	for _, step := range s.grindSteps(approachPose, activatePose, buttonCollisions) {
 		// Mark grounds only as we reach the activate pose: the approach move
 		// keeps the filter clean, and the grinder dispenses once it's under the
-		// chute. From here onward a rewind must clean the filter before home.
+		// chute. From here onward the filter needs cleaning before it goes home.
 		if step.PoseName == activatePose {
 			s.portafilterHasGrounds.Store(true)
 		}
@@ -150,7 +150,7 @@ func (s *beanjaminCoffee) releaseFilter(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("release_filter: no gripper configured")
 	}
 	// Bayonet now holds the filter; arm is committed to leaving it behind.
-	// Set the flag before motion so a rewind after a mid-move cancel recovers.
+	// Set the flag before motion so a mid-move cancel still reports it.
 	s.portafilterInMachine.Store(true)
 	if err := s.moveGripperToPoseWithVerify(ctx, cancelCtx, clawPoseFilterReleased); err != nil {
 		return fmt.Errorf("release_filter: %w", err)
@@ -171,7 +171,7 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 	if err := s.moveGripperToPoseWithVerify(ctx, cancelCtx, clawPoseCoffeeLockedFinal); err != nil {
 		return fmt.Errorf("grab_filter: %w", err)
 	}
-	// Filter is firmly back in the claws; rewind no longer needs to recover.
+	// Filter is firmly back in the claws, out of the machine.
 	s.portafilterInMachine.Store(false)
 	return nil
 }

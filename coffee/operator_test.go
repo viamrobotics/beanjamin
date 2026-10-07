@@ -19,7 +19,8 @@ import (
 // TestCancelStopsAndNothingElse pins the contract that cancel is a stop, not a
 // recovery: it halts the arm, pauses the queue and announces, while leaving the
 // portafilter state flags and the cached frame system exactly as the
-// interruption found them so a later rewind can act on the real world.
+// interruption found them, so they keep describing the real world until the
+// operator has put it right and proceeds.
 func TestCancelStopsAndNothingElse(t *testing.T) {
 	s, speech := newTestCoffee(t, nil)
 
@@ -62,7 +63,7 @@ func TestCancelStopsAndNothingElse(t *testing.T) {
 		t.Error("queue should be paused after cancel")
 	}
 	if !s.portafilterInMachine.Load() || !s.portafilterHasGrounds.Load() {
-		t.Error("cancel must not clear the portafilter state flags — rewind reads them")
+		t.Error("cancel must not clear the portafilter state flags — a later fault log reads them")
 	}
 	if said := speech.calls(); len(said) != 1 || said[0] != cancelAnnouncement {
 		t.Errorf("speech = %v, want one cancelAnnouncement", said)
@@ -99,35 +100,6 @@ func TestCancelIdlePausesSilently(t *testing.T) {
 	if said := speech.calls(); len(said) != 0 {
 		t.Errorf("speech = %v, want silence", said)
 	}
-}
-
-// TestRewindRefusesWhileAnotherSequenceRuns covers the ownership gate: a
-// sequence that ignores its cancelled context keeps rewind out of the arm
-// rather than letting two callers plan motion at once.
-func TestRewindRefusesWhileAnotherSequenceRuns(t *testing.T) {
-	s, _ := newTestCoffee(t, nil)
-	s.lease.cancelCtx, s.lease.cancelFunc = context.WithCancel(context.Background())
-	mustClaim(t, s, "test sequence")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	if _, err := s.rewind(ctx); err == nil {
-		t.Fatal("rewind should fail while a sequence is still running")
-	}
-}
-
-// TestRewindIsDispatched covers the DoCommand wiring for the rewind key.
-func TestRewindIsDispatched(t *testing.T) {
-	cmd := map[string]any{"rewind": true}
-	for _, def := range coffeeCommands {
-		if def.key == "rewind" {
-			if !def.matches(cmd) {
-				t.Fatal("rewind command should match {\"rewind\": true}")
-			}
-			return
-		}
-	}
-	t.Fatal("no rewind entry in the DoCommand dispatch table")
 }
 
 // coffeeWithDirtyWorld returns a service whose cached frame system carries the
@@ -599,5 +571,15 @@ func TestClearQueueOnIdleQueueClearsEverythingPending(t *testing.T) {
 	}
 	if got := s.queue.Len(); got != 0 {
 		t.Errorf("Len after clear_queue = %d, want 0", got)
+	}
+}
+
+// TestRewindIsGone pins that rewind is no longer a command: recovery is by hand
+// and then proceed.
+func TestRewindIsGone(t *testing.T) {
+	for _, def := range coffeeCommands {
+		if def.key == "rewind" {
+			t.Fatal("rewind is still in the DoCommand dispatch table")
+		}
 	}
 }

@@ -121,24 +121,32 @@ export const DRINKS: Drink[] = [
     label: "Americano",
     description: "Espresso + hot water",
     image: "./americano.png",
-    available: true,
+    available: false,
   },
   {
     id: "latte",
     label: "Latte",
     description: "Espresso + steamed milk",
     image: "./latte.png",
-    available: true,
+    available: false,
   },
   {
     id: "cappuccino",
     label: "Cappuccino",
     description: "Espresso + foam + milk",
     image: "./cappuccino.png",
-    available: true,
+    available: false,
   },
 ];
 
-export const GRID_DRINKS: Drink[] = GRID_DRINK_IDS.map(
+const ALL_GRID_DRINKS: Drink[] = GRID_DRINK_IDS.map(
   (id) => DRINKS.find((d) => d.id === id)!,
+);
+
+export const GRID_DRINKS: Drink[] = ALL_GRID_DRINKS.filter((d) => d.available);
+
+// Shown greyed out under "Coming soon": the machine has no brew path for these
+// yet, so they can't be ordered.
+export const COMING_SOON_DRINKS: Drink[] = ALL_GRID_DRINKS.filter(
+  (d) => !d.available,
 );

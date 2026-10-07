@@ -24,7 +24,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 	defer span.End()
 
 	// Capture the step the order errored at while the queue still holds the arm.
-	// Cancel and rewind wait for the arm to be released and then mutate
+	// Cancel and reset_world wait for the arm to be released and then mutate
 	// currentStep, so reading it any later would race with them.
 	defer func() {
 		if err != nil {
@@ -33,8 +33,8 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 		}
 	}()
 
-	// Runs while the queue still holds the arm, because a rewind claiming it
-	// afterward starts clearing the very state this inspects. A cancelled
+	// Runs while the queue still holds the arm, because an operator command
+	// claiming it afterward can clear the very state this inspects. A cancelled
 	// cancelCtx means an operator cancel or reset_world, which own the pause.
 	defer func() {
 		if err != nil && cancelCtx.Err() == nil {
@@ -180,11 +180,11 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 }
 
 // pauseOnFault pauses the queue after a genuine fault, so the next order waits
-// for the same rewind → proceed recovery a cancel gets. The recorded state
+// for the same by-hand recovery and proceed a cancel gets. The recorded state
 // cannot be trusted to show everything a fault left behind — a cup knocked over
 // or a half-finished pour is never modeled — so the operator looks before any
 // further order runs. The log names whatever mid-cycle state is recorded, since
-// that is what rewind has to undo. Must be called while holding the arm, like
+// that is what the operator has to put right. Must be called while holding the arm, like
 // strandedState.
 func (s *beanjaminCoffee) pauseOnFault(logger logging.Logger, fault error) {
 	s.lease.pause()
@@ -192,9 +192,7 @@ func (s *beanjaminCoffee) pauseOnFault(logger logging.Logger, fault error) {
 	if stranded := s.strandedState(); len(stranded) > 0 {
 		left = "state left behind: " + strings.Join(stranded, ", ")
 	}
-	logger.Errorf("order faulted (%v), %s — queue paused; "+
-		"run 'rewind' to recover the arm (and shut the fridge by hand if it is open), then 'proceed'",
-		fault, left)
+	logger.Errorf("order faulted (%v), %s — queue paused; %s", fault, left, recoverByHand)
 }
 
 // strandedState names the mid-cycle state still recorded for the machine: a

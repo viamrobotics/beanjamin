@@ -23,7 +23,6 @@ import (
 )
 
 const (
-	frameFridge = "fridge"
 	// frameFridgeDoor is the static door obstacle whose origin is the hinge.
 	frameFridgeDoor = "fridge-door"
 	// frameFridgeHandleBall is the default grasp-target knob at the end of the

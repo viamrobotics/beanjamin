@@ -137,7 +137,7 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 	}()
 
 	// Wait out the rest of the pour even when the prep failed, so the machine is
-	// quiescent before an operator or a rewind gets near it.
+	// quiescent before an operator gets near it.
 	remaining := s.drinkBrewTime(drink) - time.Since(pourStarted)
 	s.activeOrderLogger().Infof("waiting out the remaining %s of the %s pour (prep error: %v)", remaining, drink, prepErr)
 	waitErr := waitOutPour(ctx, cancelCtx, remaining)

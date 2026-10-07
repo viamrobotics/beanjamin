@@ -423,3 +423,41 @@ func TestParseCupFlowCount(t *testing.T) {
 		})
 	}
 }
+
+// testMilks is a two-milk fridge: whole on the left, oat on the right.
+var testMilks = []MilkOption{{Name: "whole", Spot: "left"}, {Name: "oat", Spot: "right"}}
+
+// milk_options is optional for now: a latte machine validates with or without it.
+func TestValidate_CanServeIcedLatte_MilkOptionsOptional(t *testing.T) {
+	without := validCanServeIcedLatteConfig()
+	if _, _, err := without.Validate(""); err != nil {
+		t.Fatalf("without milk_options: expected no error, got %v", err)
+	}
+	with := validCanServeIcedLatteConfig()
+	with.MilkOptions = testMilks
+	if _, _, err := with.Validate(""); err != nil {
+		t.Fatalf("with milk_options: expected no error, got %v", err)
+	}
+}
+
+// A milk's spot is spliced into its pose names and its name is sent by clients,
+// so a malformed name or spot is rejected, as is an empty list, a name listed
+// twice, two milks at one spot, and a spot whose pose would be the pour pose.
+func TestValidate_CanServeIcedLatte_RejectsBadMilkOptions(t *testing.T) {
+	for _, milks := range [][]MilkOption{
+		{},
+		{{Name: "", Spot: "left"}},
+		{{Name: "Oat", Spot: "left"}},
+		{{Name: "oat", Spot: "top shelf"}},
+		{{Name: "oat", Spot: ""}},
+		{{Name: "oat", Spot: "left"}, {Name: "oat", Spot: "right"}},
+		{{Name: "whole", Spot: "left"}, {Name: "oat", Spot: "left"}},
+		{{Name: "oat", Spot: "pour"}}, // milk_pour_approach is the pour pose
+	} {
+		cfg := validCanServeIcedLatteConfig()
+		cfg.MilkOptions = milks
+		if _, _, err := cfg.Validate(""); err == nil || !strings.Contains(err.Error(), "milk_options") {
+			t.Errorf("milk_options %+v: expected a milk_options error, got %v", milks, err)
+		}
+	}
+}
