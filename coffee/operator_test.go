@@ -72,9 +72,10 @@ func TestCancelStopsAndNothingElse(t *testing.T) {
 	}
 }
 
-// TestCancelIdleIsSilent covers the no-op cancel: nothing is running, so there
-// is nothing to stop, nothing to say, and the arm is never touched.
-func TestCancelIdleIsSilent(t *testing.T) {
+// TestCancelIdlePausesSilently covers cancel with nothing running: there is
+// nothing to stop and nothing to say, and the arm is never touched, but the
+// queue still pauses — an idle cancel is a pause button.
+func TestCancelIdlePausesSilently(t *testing.T) {
 	s, speech := newTestCoffee(t, nil)
 
 	a := inject.NewArm("arm")
@@ -89,11 +90,11 @@ func TestCancelIdleIsSilent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cancel error: %v", err)
 	}
-	if resp["cancelled"] != false || resp["queue"] != "running" {
-		t.Errorf("resp = %v, want cancelled=false queue=running", resp)
+	if resp["cancelled"] != false || resp["queue"] != "paused" {
+		t.Errorf("resp = %v, want cancelled=false queue=paused", resp)
 	}
-	if s.lease.paused.Load() {
-		t.Error("an idle cancel must not pause the queue")
+	if !s.lease.paused.Load() {
+		t.Error("an idle cancel must pause the queue")
 	}
 	if said := speech.calls(); len(said) != 0 {
 		t.Errorf("speech = %v, want silence", said)

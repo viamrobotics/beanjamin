@@ -134,3 +134,23 @@ func TestClaimWaitsForTheCancelLock(t *testing.T) {
 		t.Fatal("claim never finished after the lock was released")
 	}
 }
+
+// TestSignalCancelPausesWhenIdle: cancel, rewind and reset_world all start with
+// signalCancel, and it pauses the queue even with nothing running, so an idle
+// cancel holds back the next order and keepalive purge until proceed. The
+// keepalive's own pause check is covered in keepalive_test.go.
+func TestSignalCancelPausesWhenIdle(t *testing.T) {
+	s, _ := newTestCoffee(t, nil)
+	freshLease(s)
+	before := s.lease.cancelCtx
+
+	if s.signalCancel() {
+		t.Error("signalCancel on an idle arm should report that nothing was running")
+	}
+	if !s.lease.paused.Load() {
+		t.Fatal("signalCancel on an idle arm must still pause the queue")
+	}
+	if s.lease.cancelCtx != before || before.Err() != nil {
+		t.Error("with nothing running there is no context to cancel or replace")
+	}
+}

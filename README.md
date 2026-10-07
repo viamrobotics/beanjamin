@@ -458,7 +458,7 @@ without `ice_vision_enabled`.
 {"cancel": true}
 ```
 
-Returns `{"status": "cancelled", "cancelled": true, "queue": "paused"}` — `cancelled` is `false` when nothing was running, and `queue` reports the real pause state.
+Returns `{"status": "cancelled", "cancelled": true, "queue": "paused"}` — `cancelled` is `false` when nothing was running, and `queue` reports the real pause state. With nothing running, `cancel` still pauses the queue: it works as a pause button, so no new order starts until `proceed`. `rewind` pauses the same way, since it cancels first.
 
 To get the arm back to a clean starting state afterwards, run `rewind`, then `proceed` to resume the queue.
 
