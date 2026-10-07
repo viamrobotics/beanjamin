@@ -255,10 +255,8 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 	if err := s.grabAndVerifyHolding(ctx); err != nil {
 		return fmt.Errorf("grab_staged_glass: grab gripper: %w", err)
 	}
-	// Glass is back in the gripper: drop the world obstacle, then restore it as a
-	// held item (obstacle first, so the held glass doesn't collide with its double).
-	s.removeStagedGlassObstacle()
-	if err := s.reattachGeometry(pickupLabelGlass); err != nil {
+	// Glass is back in the gripper: move it from the world obstacle to a held item.
+	if err := s.regrabStagedGlass(ctx); err != nil {
 		s.activeOrderLogger().Warnf("grab_staged_glass: reattach glass geometry failed, continuing untracked: %v", err)
 	}
 	retreatStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
