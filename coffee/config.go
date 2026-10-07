@@ -198,8 +198,9 @@ type Config struct {
 	// grab pose. Shared by every milk. Required when can_serve_iced_latte is set.
 	MilkBottleDimensions *ContainerDimensions `json:"milk_bottle_dimensions,omitempty"`
 	// MilkOptions lists the milk bottles in the fridge and the spot each stands
-	// at; the arm fetches and returns each bottle at its spot's poses. Every iced
-	// latte uses the first. Required when can_serve_iced_latte is set.
+	// at; the arm fetches and returns each bottle at its spot's poses. The first
+	// is the default for an iced latte that names no milk. Required when
+	// can_serve_iced_latte is set.
 	MilkOptions []MilkOption `json:"milk_options,omitempty"`
 
 	// Serving placement offsets are composed onto the serving-area slot anchor
@@ -325,13 +326,22 @@ func (d *ContainerDimensions) validate(path, field string) error {
 
 // MilkOption is one milk in the fridge (an entry in milk_options).
 type MilkOption struct {
-	// Name identifies the milk, e.g. "oat".
+	// Name is what prepare_order's "milk" asks for it by, e.g. "oat".
 	Name string `json:"name"`
 	// Spot is where in the fridge the bottle stands, e.g. "left". Its poses on
 	// the claws switch are named after the spot, not the milk —
 	// milk_<spot>_approach and milk_<spot>_grab — so renaming a milk or moving it
 	// to another spot is a config change, with no poses to re-teach.
 	Spot string `json:"spot"`
+}
+
+// milkNames returns the names in milk_options, the default first.
+func (c *Config) milkNames() []string {
+	names := make([]string, len(c.MilkOptions))
+	for i, m := range c.MilkOptions {
+		names[i] = m.Name
+	}
+	return names
 }
 
 // validateMilkOptions checks milk_options: at least one milk, and every name

@@ -37,3 +37,26 @@ func TestDrinkClassifiers(t *testing.T) {
 		})
 	}
 }
+
+func TestMenuResolveMilk(t *testing.T) {
+	menu := Menu{Iced: true, IcedLatte: true, Milks: []string{"whole", "oat"}}
+	tests := []struct {
+		drink, milk, want string
+		wantErr           bool
+	}{
+		{drink: "iced_latte", milk: "", want: "whole"}, // the first milk is the default
+		{drink: "iced_latte", milk: "oat", want: "oat"},
+		{drink: "iced_latte", milk: "soy", wantErr: true},
+		{drink: "espresso", milk: "", want: ""},
+		{drink: "espresso", milk: "oat", wantErr: true}, // milk on a drink without milk
+	}
+	for _, tt := range tests {
+		got, err := menu.ResolveMilk(tt.drink, tt.milk)
+		if (err != nil) != tt.wantErr || got != tt.want {
+			t.Errorf("ResolveMilk(%q, %q) = %q, %v; want %q, err=%v", tt.drink, tt.milk, got, err, tt.want, tt.wantErr)
+		}
+	}
+	if _, err := (Menu{IcedLatte: true}).ResolveMilk("iced_latte", ""); err == nil {
+		t.Error("ResolveMilk with no milks configured should fail")
+	}
+}

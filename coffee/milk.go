@@ -36,8 +36,9 @@ func (s *beanjaminCoffee) requireMilk(action string) error {
 	return nil
 }
 
-// firstMilk is the milk every iced latte and every hand-run milk action uses for
-// now: the first in milk_options, which Validate requires on a latte machine.
+// firstMilk is the milk the hand-run milk actions use: the first in
+// milk_options, which Validate requires on a latte machine. An order carries
+// its own milk.
 func (s *beanjaminCoffee) firstMilk() string {
 	if len(s.cfg.MilkOptions) == 0 {
 		return ""
