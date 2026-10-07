@@ -22,10 +22,10 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, o order.Order) (err 
 	ctx, span := trace.StartSpan(ctx, "beanjamin::prepareDrink["+drink+"]")
 	defer span.End()
 
-	if !s.running.CompareAndSwap(false, true) {
+	if !s.lease.running.CompareAndSwap(false, true) {
 		return errors.New("a sequence is already running")
 	}
-	defer s.running.Store(false)
+	defer s.lease.running.Store(false)
 	// Capture the step the order errored at before `running` flips false above
 	// (LIFO defers: this runs first). Cancel and rewind wait for idle and then
 	// mutate currentStep, so reading it any later would race with them.
@@ -36,9 +36,9 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, o order.Order) (err 
 		}
 	}()
 
-	s.mu.Lock()
-	cancelCtx := s.cancelCtx
-	s.mu.Unlock()
+	s.lease.mu.Lock()
+	cancelCtx := s.lease.cancelCtx
+	s.lease.mu.Unlock()
 	// Runs before `running` flips false, because a rewind taking the gate
 	// afterward starts clearing the very state this inspects. A cancelled
 	// cancelCtx means an operator cancel or reset_world, which own the pause.
@@ -193,7 +193,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, o order.Order) (err 
 // that is what rewind has to undo. Must be called while holding the running
 // gate, like strandedState.
 func (s *beanjaminCoffee) pauseOnFault(logger logging.Logger, fault error) {
-	s.paused.Store(true)
+	s.lease.paused.Store(true)
 	left := "no mid-cycle state recorded"
 	if stranded := s.strandedState(); len(stranded) > 0 {
 		left = "state left behind: " + strings.Join(stranded, ", ")
