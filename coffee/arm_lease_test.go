@@ -1,6 +1,7 @@
 package coffee
 
 import (
+	"beanjamin/coffee/order"
 	"context"
 	"errors"
 	"strings"
@@ -226,5 +227,53 @@ func TestGripperActionsClaimTheArm(t *testing.T) {
 	}
 	if !opened || s.lease.busy() {
 		t.Errorf("open_gripper should run and hand the arm back: opened=%v busy=%v", opened, s.lease.busy())
+	}
+}
+
+// TestShutdownRefusesLaterClaims: Close cancels whoever holds the arm, and
+// nothing can take it afterward.
+func TestShutdownRefusesLaterClaims(t *testing.T) {
+	s, _ := newTestCoffee(t, nil)
+	freshLease(s)
+	ctx, err := s.lease.claimManual("execute_action open_door")
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	s.lease.shutdown()
+	if ctx.Err() == nil {
+		t.Error("shutdown must cancel the holder's context")
+	}
+	s.lease.release()
+
+	if _, err := s.lease.claimManual("rewind"); !errors.Is(err, errServiceClosed) {
+		t.Errorf("manual claim after shutdown: err = %v, want errServiceClosed", err)
+	}
+	if _, err := s.lease.claimAutomated("order queue"); !errors.Is(err, errServiceClosed) {
+		t.Errorf("automated claim after shutdown: err = %v, want errServiceClosed", err)
+	}
+}
+
+// TestPanickingOrderPausesQueue: a panic mid-order is a fault like any other,
+// so the queue pauses for rewind → proceed instead of starting the next order
+// from an unknown state.
+func TestPanickingOrderPausesQueue(t *testing.T) {
+	s, _, _ := coffeeWithDirtyWorld(t, nil)
+	freshLease(s)
+	g := inject.NewGripper("g")
+	g.DoFunc = func(context.Context, map[string]any) (map[string]any, error) {
+		panic("gripper driver blew up")
+	}
+	s.gripper = g
+
+	cancelCtx, err := s.lease.claimAutomated("order queue")
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	s.safeExecuteOrder(cancelCtx, order.NewOrder("espresso", "Alice", "", ""))
+	s.lease.release()
+
+	if !s.lease.isPaused() {
+		t.Error("a panicking order must pause the queue")
 	}
 }
