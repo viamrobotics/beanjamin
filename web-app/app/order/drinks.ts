@@ -20,7 +20,7 @@ export const MILKS = [
   { id: "oat", label: "Oat" },
 ] as const;
 
-export const DEFAULT_MILK: string = MILKS[0].id;
+export const DEFAULT_MILK = MILKS[0].id;
 
 // hasMilkChoice reports whether the drink is made with a choice of milk (see
 // IsMilk in coffee/order/drinks.go).

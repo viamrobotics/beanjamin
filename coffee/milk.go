@@ -85,6 +85,15 @@ func (s *beanjaminCoffee) addMilk(ctx, cancelCtx context.Context, milk string) e
 	return nil
 }
 
+// fridgeLinearStep is a straight-line move between a bottle's approach and grab
+// poses — in to grab or set down, out to retreat. Only these moves pass through
+// the interior shield that keeps the free traverse off the shelves; the
+// held-item pair is included only while the bottle is in hand.
+func (s *beanjaminCoffee) fridgeLinearStep(pose string) Step {
+	return Step{PoseName: pose, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
+		Pause: shortPause, AllowedCollisions: s.pickupAreaShieldCollisions(milkAreaShieldFrameName)}
+}
+
 // milkStepErr wraps a failure inside the milk sequence, saying so when the
 // fridge is left standing open. The arm does not try to shut the door itself
 // after a failure: it may still be holding the bottle, and a sweep needs the
@@ -122,11 +131,7 @@ func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context, milk s
 		return fmt.Errorf("fetch_milk: open gripper: %w", err)
 	}
 	time.Sleep(gripperPause)
-	// The jaws reach in around the bottle, past the interior shield that keeps the
-	// free traverse off the shelves.
-	grabStep := Step{PoseName: milkGrabPose(milk), PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
-		Pause: shortPause, AllowedCollisions: s.pickupAreaShieldCollisions(milkAreaShieldFrameName)}
-	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
+	if err := s.executeStep(ctx, cancelCtx, s.fridgeLinearStep(milkGrabPose(milk))); err != nil {
 		return fmt.Errorf("fetch_milk: %w", err)
 	}
 	if err := s.grabAndVerifyHolding(ctx); err != nil {
@@ -138,9 +143,7 @@ func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context, milk s
 	if err := s.attachConfiguredGeometry(ctx, pickupLabelMilk, s.cfg.MilkBottleDimensions, &RelativePose{}); err != nil {
 		s.activeOrderLogger().Warnf("fetch_milk: model bottle from milk_bottle_dimensions failed, continuing untracked: %v", err)
 	}
-	retreatStep := Step{PoseName: milkApproachPose(milk), PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
-		Pause: shortPause, AllowedCollisions: s.pickupAreaShieldCollisions(milkAreaShieldFrameName)}
-	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
+	if err := s.executeStep(ctx, cancelCtx, s.fridgeLinearStep(milkApproachPose(milk))); err != nil {
 		return fmt.Errorf("fetch_milk: retreat with the %s milk: %w", milk, err)
 	}
 	s.activeOrderLogger().Infof("fetch_milk: %s milk in hand", milk)
@@ -207,11 +210,7 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 		return fmt.Errorf("return_milk: approach the shelf: %w", err)
 	}
 
-	// Let the gripper and the held bottle pass through the interior shield that
-	// keeps the free traverse clear of the shelves.
-	placeStep := Step{PoseName: milkGrabPose(milk), PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
-		Pause: shortPause, AllowedCollisions: s.pickupAreaShieldCollisions(milkAreaShieldFrameName)}
-	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
+	if err := s.executeStep(ctx, cancelCtx, s.fridgeLinearStep(milkGrabPose(milk))); err != nil {
 		return fmt.Errorf("return_milk: set the bottle on the shelf: %w", err)
 	}
 
@@ -223,11 +222,7 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 	s.detachHeldGeometry()
 	s.heldMilk = ""
 
-	// The gripper starts inside the interior shield, so it stays allowed for the
-	// straight-out retreat (the held-item pair drops out now that nothing is held).
-	exitStep := Step{PoseName: milkApproachPose(milk), PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
-		Pause: shortPause, AllowedCollisions: s.pickupAreaShieldCollisions(milkAreaShieldFrameName)}
-	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
+	if err := s.executeStep(ctx, cancelCtx, s.fridgeLinearStep(milkApproachPose(milk))); err != nil {
 		return fmt.Errorf("return_milk: retreat after releasing the bottle: %w", err)
 	}
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {

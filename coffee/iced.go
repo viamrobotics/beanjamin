@@ -20,8 +20,9 @@ import (
 // the iced glass (re-grabbed from staging).
 //
 // With milk set (the iced_latte drink, naming one of milk_options) the milk
-// sequence runs on the staged glass between those two placements — once the espresso cup is out of the
-// gripper and before the glass is picked back up (see addMilk, milk.go).
+// sequence runs on the staged glass between those two placements — once the
+// espresso cup is out of the gripper and before the glass is picked back up
+// (see addMilk, milk.go).
 //
 // Returns the position of the glass — the actual drink, placed last — for
 // the delivery pickup_position

@@ -134,9 +134,10 @@ type beanjaminCoffee struct {
 	// Held-item geometry tracking (held_geometry.go).
 	// heldCupGeom / heldGlassGeom / heldMilkGeom cache the gripper-local geometry
 	// of the cup / glass (detected at pickup) and the milk bottle (modeled from
-	// milk_bottle_dimensions) so a re-grab can restore it; heldItemAttached tracks whether the held-item frame is currently present
-	// in cachedFS. These are mutated only on the motion sequence goroutine (like
-	// cachedFS, gated by the running flag), so they need no extra locking.
+	// milk_bottle_dimensions) so a re-grab can restore it; heldItemAttached
+	// tracks whether the held-item frame is currently present in cachedFS. These
+	// are mutated only on the motion sequence goroutine (like cachedFS, gated by
+	// the running flag), so they need no extra locking.
 	heldCupGeom      spatialmath.Geometry
 	heldGlassGeom    spatialmath.Geometry
 	heldMilkGeom     spatialmath.Geometry

@@ -740,7 +740,7 @@ Neither pour has a switch pose: both are resolved against the staged glass (see
 | `cup_observe` | `camera_observe_pose_switcher_name` | always |
 | `glass_observe` | `glass_observe_pose_switcher_name` | `can_serve_iced` |
 
-The observe switches sweep **every** pose they carry, so additional vantages alongside these are used even though only these are required.
+Both observe switches sweep **every** pose they carry, so additional vantages alongside these are used even though only these are required.
 
 Note that `coffee_locked_final` exists on both the filter and claws switches as two genuinely different poses in two different frames.
 
