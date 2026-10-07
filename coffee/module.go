@@ -133,8 +133,8 @@ type beanjaminCoffee struct {
 
 	// Held-item geometry tracking (held_geometry.go).
 	// heldCupGeom / heldGlassGeom / heldMilkGeom cache the gripper-local geometry
-	// of the cup / glass / milk bottle detected at pickup so a re-grab can restore
-	// it; heldItemAttached tracks whether the held-item frame is currently present
+	// of the cup / glass (detected at pickup) and the milk bottle (modeled from
+	// milk_bottle_dimensions) so a re-grab can restore it; heldItemAttached tracks whether the held-item frame is currently present
 	// in cachedFS. These are mutated only on the motion sequence goroutine (like
 	// cachedFS, gated by the running flag), so they need no extra locking.
 	heldCupGeom      spatialmath.Geometry
@@ -207,7 +207,7 @@ func optionalGenericDep(deps resource.Dependencies, logger logging.Logger, confi
 }
 
 // visionPickup resolves the vision service and observe-pose switch backing one
-// vision-driven pickup (cup, glass, or milk bottle). All three share the cup
+// vision-driven pickup (cup or glass). Both share the cup
 // camera, so only the per-target pair is resolved here.
 func visionPickup(deps resource.Dependencies, logger logging.Logger, label, visionName, switchName, cameraName string) (vision.Service, toggleswitch.Switch, error) {
 	vis, err := vision.FromProvider(deps, visionName)

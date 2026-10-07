@@ -76,16 +76,6 @@ var heldItemStagingCollisions = []AllowedCollision{
 	{Frame1: heldItemFrameName, Frame2: "table-right"},
 }
 
-// heldItemFridgeCollisions allows the held milk bottle to approach the fridge
-// surfaces it legitimately gets close to while being taken out and set back
-// down: the shelf it stands on, and the open door panel beside the opening. Inert when
-// the frame system models neither.
-var heldItemFridgeCollisions = []AllowedCollision{
-	{Frame1: heldItemFrameName, Frame2: frameFridge},
-	{Frame1: componentClaws, Frame2: frameFridge},
-	{Frame1: "gripper:claws", Frame2: frameFridge},
-}
-
 // doorOpenCollisions permits the gripper to contact the grasp frame (the fridge
 // handle ball) while gripping and pulling the door open (openDoor, door.go).
 // Built from the configured frame name. If the sweep also trips on the gripper

@@ -15,7 +15,6 @@ package coffee
 import (
 	"context"
 	"fmt"
-	"slices"
 	"time"
 )
 
@@ -51,16 +50,7 @@ func withMilkChoice(ctx context.Context, milk string) context.Context {
 // named, or the default (first) milk when it named none.
 func (s *beanjaminCoffee) actionMilk(ctx context.Context) (string, error) {
 	milk, _ := ctx.Value(milkChoiceKey{}).(string)
-	if milk == "" {
-		if len(s.cfg.MilkOptions) == 0 {
-			return "", fmt.Errorf("no milk_options configured")
-		}
-		return s.cfg.MilkOptions[0], nil
-	}
-	if !slices.Contains(s.cfg.MilkOptions, milk) {
-		return "", fmt.Errorf("unknown milk %q, available: %v", milk, s.cfg.MilkOptions)
-	}
-	return milk, nil
+	return s.menu().Milk(milk)
 }
 
 // addMilk is the whole fridge trip for the named milk, run on a staged glass
@@ -148,9 +138,8 @@ func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context, milk s
 	if err := s.attachConfiguredGeometry(ctx, pickupLabelMilk, s.cfg.MilkBottleDimensions, &RelativePose{}); err != nil {
 		s.activeOrderLogger().Warnf("fetch_milk: model bottle from milk_bottle_dimensions failed, continuing untracked: %v", err)
 	}
-	retreatCollisions := append(s.pickupAreaShieldCollisions(milkAreaShieldFrameName), s.heldItemSurfaceCollisions(heldItemFridgeCollisions)...)
 	retreatStep := Step{PoseName: milkApproachPose(milk), PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
-		Pause: shortPause, AllowedCollisions: retreatCollisions}
+		Pause: shortPause, AllowedCollisions: s.pickupAreaShieldCollisions(milkAreaShieldFrameName)}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("fetch_milk: retreat with the %s milk: %w", milk, err)
 	}
@@ -218,13 +207,10 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 		return fmt.Errorf("return_milk: approach the shelf: %w", err)
 	}
 
-	// The bottle is held through the descent, so let its geometry approach the
-	// fridge surfaces it legitimately gets close to on the way in, and let the
-	// gripper and bottle pass through the interior shield that keeps the free
-	// traverse clear of the shelves.
-	placeCollisions := append(s.pickupAreaShieldCollisions(milkAreaShieldFrameName), s.heldItemSurfaceCollisions(heldItemFridgeCollisions)...)
+	// Let the gripper and the held bottle pass through the interior shield that
+	// keeps the free traverse clear of the shelves.
 	placeStep := Step{PoseName: milkGrabPose(milk), PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
-		Pause: shortPause, AllowedCollisions: placeCollisions}
+		Pause: shortPause, AllowedCollisions: s.pickupAreaShieldCollisions(milkAreaShieldFrameName)}
 	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
 		return fmt.Errorf("return_milk: set the bottle on the shelf: %w", err)
 	}
