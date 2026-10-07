@@ -90,8 +90,9 @@ func TestClearHeldGeometryForgetsHeldMilk(t *testing.T) {
 // first configured milk, and refuses one that isn't configured.
 func TestActionMilk(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{CanServeIcedLatte: true, MilkOptions: testMilks}}
-	if got, err := s.actionMilk(context.Background(), "fetch_milk"); err != nil || got != "whole" {
-		t.Errorf("default actionMilk = %q, %v; want whole", got, err)
+	// Required by hand, unlike on an order: the error lists the milks to pick from.
+	if _, err := s.actionMilk(context.Background(), "fetch_milk"); err == nil || !strings.Contains(err.Error(), "whole, oat") {
+		t.Errorf("actionMilk with no milk = %v, want an error listing whole, oat", err)
 	}
 	if got, err := s.actionMilk(withMilkChoice(context.Background(), "oat"), "fetch_milk"); err != nil || got != "oat" {
 		t.Errorf("actionMilk(oat) = %q, %v; want oat", got, err)
