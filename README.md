@@ -458,11 +458,13 @@ without `ice_vision_enabled`.
 {"cancel": true}
 ```
 
-Returns `{"status": "cancelled", "cancelled": true, "queue": "paused"}` — `cancelled` is `false` when nothing was running, and `queue` reports the real pause state.
+Returns `{"status": "cancelled", "cancelled": true, "queue": "paused"}` — `cancelled` is `false` when nothing was running, and `queue` reports the real pause state. With nothing running, `cancel` still pauses the queue: it works as a pause button, so no new order starts until `proceed`. `rewind` pauses the same way, since it cancels first.
 
 To get the arm back to a clean starting state afterwards, run `rewind`, then `proceed` to resume the queue.
 
-**Pause after a fault.** An order that fails on its own — a genuine fault, not a `cancel` or `reset_world` — always pauses the queue exactly as `cancel` does. The next order would otherwise start from an unknown physical state, grinding a second dose onto used grounds or planning against a stale world, and not everything a fault leaves behind (a knocked-over cup, a half-finished pour) is something the service can see. An error log names any mid-cycle state still recorded — the portafilter locked in the group head or holding grounds, the filter frame locked to world, an item in the gripper, a glass staged, or the fridge door modeled open — and `get_queue` reports `is_paused: true`; recover the same way as after a cancel (`rewind`, shut the fridge by hand if it is open, then `proceed`). A failed manually-stepped `execute_action` never pauses the queue.
+**Pause after a fault.** An order that fails on its own — a genuine fault, not a `cancel` or `reset_world` — always pauses the queue exactly as `cancel` does. The next order would otherwise start from an unknown physical state, grinding a second dose onto used grounds or planning against a stale world, and not everything a fault leaves behind (a knocked-over cup, a half-finished pour) is something the service can see. An error log names any mid-cycle state still recorded — the portafilter locked in the group head or holding grounds, the filter frame locked to world, an item in the gripper, a glass staged, or the fridge door modeled open — and `get_queue` reports `is_paused: true`; recover the same way as after a cancel (`rewind`, shut the fridge by hand if it is open, then `proceed`). A failed manually-stepped `execute_action` never pauses the queue. An order that crashes with a panic pauses the queue the same way. Once the service starts shutting down, every command that needs the arm is refused with `service closing`.
+
+**Waiting for the arm.** The next order claims the arm before it starts. If a keepalive purge or a troubleshooting command holds the arm, or the queue is paused, the order stays pending, still visible in `get_queue` and still removable with `cancel_order`, and starts once the arm is free and the queue unpaused. A keepalive purge skips its turn the same way.
 
 **`cancel_order`** - Drop one order out of the **backlog**, by ID. It is `clear_queue` narrowed to a single order, and it spares the drink on the arm for the same reason: the machine keeps making whatever it is making, the queue is not paused, no state flag is touched, and the orders behind the cancelled one move up a place. This is the customer-facing "actually, never mind" — `cancel` is the operator's stop button.
 
@@ -518,9 +520,12 @@ Returns:
      "completed_at": "", "cancellable": true}
   ],
   "is_paused": false,
-  "is_busy": true
+  "is_busy": true,
+  "arm_holder": "order queue"
 }
 ```
+
+`arm_holder` names what currently holds the arm — `order queue`, `keepalive purge`, `rewind`, `execute_action open_door` and so on — and is empty when the arm is free. A command refused because the arm is busy names the holder in its error too.
 
 `count` is how many drinks still have to be made — the backlog plus the one on the arm. Orders that have finished stay in the list with `completed_at` set for ~15s so a UI can render a "Ready!" card without diffing polls, but they don't count toward the depth. `cancellable` says whether `cancel_order` would accept this order.
 
@@ -634,7 +639,7 @@ The door is opened once and closed once, so the fridge stands open for the pour 
 {"action": "open_gripper"}
 ```
 
-Returns `{"status": "opened"}` or `{"status": "closed", "grabbed": true}`.
+Returns `{"status": "opened"}` or `{"status": "closed", "grabbed": true}`. Like the other troubleshooting commands, it is refused while another sequence holds the arm.
 
 ### Keeping the machine at brew temperature
 

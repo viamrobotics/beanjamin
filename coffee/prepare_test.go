@@ -28,16 +28,16 @@ func TestFaultWithStrandedStatePausesQueue(t *testing.T) {
 	s, _, _ := coffeeWithDirtyWorld(t, nil)
 	s.portafilterInMachine.Store(true)
 	s.gripper = faultingGripper()
-	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
+	s.lease.cancelCtx, s.lease.cancelFunc = context.WithCancel(context.Background())
 
-	if err := s.prepareDrink(context.Background(), order.NewOrder("espresso", "Alice", "", "")); err == nil {
+	if err := s.prepareDrink(context.Background(), s.lease.cancelCtx, order.NewOrder("espresso", "Alice", "", "")); err == nil {
 		t.Fatal("prepareDrink should fail on the unreadable gripper")
 	}
-	if !s.paused.Load() {
+	if !s.lease.isPaused() {
 		t.Error("a fault that stranded state must pause the queue")
 	}
-	if s.running.Load() {
-		t.Error("running must be released after the fault")
+	if s.lease.busy() {
+		t.Error("prepareDrink must not hold the arm itself — the queue claims it")
 	}
 }
 
@@ -50,12 +50,12 @@ func TestFaultWithCleanWorldPausesQueue(t *testing.T) {
 	s.filterFrameLocked = false
 	s.stagedGlassPlaced = false
 	s.gripper = faultingGripper()
-	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
+	s.lease.cancelCtx, s.lease.cancelFunc = context.WithCancel(context.Background())
 
-	if err := s.prepareDrink(context.Background(), order.NewOrder("espresso", "Alice", "", "")); err == nil {
+	if err := s.prepareDrink(context.Background(), s.lease.cancelCtx, order.NewOrder("espresso", "Alice", "", "")); err == nil {
 		t.Fatal("prepareDrink should fail on the unreadable gripper")
 	}
-	if !s.paused.Load() {
+	if !s.lease.isPaused() {
 		t.Error("a fault must pause the queue even with no mid-cycle state recorded")
 	}
 }
@@ -67,13 +67,13 @@ func TestOperatorCancelLeavesPauseToCancel(t *testing.T) {
 	s, _, _ := coffeeWithDirtyWorld(t, nil)
 	s.portafilterHasGrounds.Store(true)
 	s.gripper = faultingGripper()
-	s.cancelCtx, s.cancelFunc = context.WithCancel(context.Background())
-	s.cancelFunc()
+	s.lease.cancelCtx, s.lease.cancelFunc = context.WithCancel(context.Background())
+	s.lease.cancelFunc()
 
-	if err := s.prepareDrink(context.Background(), order.NewOrder("espresso", "Alice", "", "")); err == nil {
+	if err := s.prepareDrink(context.Background(), s.lease.cancelCtx, order.NewOrder("espresso", "Alice", "", "")); err == nil {
 		t.Fatal("prepareDrink should fail on the unreadable gripper")
 	}
-	if s.paused.Load() {
+	if s.lease.isPaused() {
 		t.Error("the fault path must leave an operator-cancelled order's pause to the cancel")
 	}
 }

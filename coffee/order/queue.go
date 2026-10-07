@@ -27,14 +27,12 @@ type Queue struct {
 	current *Order        // the order being made right now; nil when idle
 	recent  []Order       // completed orders, append-most-recent-last
 	notify  chan struct{} // buffered(1), poked on enqueue to wake consumer
-	proceed chan struct{} // buffered(1), operator signal to resume after inter-order pause
 }
 
 // NewQueue creates a new empty order queue.
 func NewQueue() *Queue {
 	return &Queue{
-		notify:  make(chan struct{}, 1),
-		proceed: make(chan struct{}, 1),
+		notify: make(chan struct{}, 1),
 	}
 }
 
@@ -42,26 +40,6 @@ func NewQueue() *Queue {
 // most one pending wakeup, so a consumer should drain the backlog on each receive.
 func (q *Queue) Notify() <-chan struct{} {
 	return q.notify
-}
-
-// Proceed returns the channel WakeProceed signals on, for a consumer parked
-// while the queue is paused.
-func (q *Queue) Proceed() <-chan struct{} {
-	return q.proceed
-}
-
-// WakeProceed nudges a consumer parked on Proceed. The paused flag the caller
-// has just cleared is what actually releases the queue; this only saves a
-// parked goroutine from sleeping until the next order arrives, and is a no-op
-// when nothing is parked — a cancel that interrupted a manual action or a
-// keepalive purge pauses the queue with no consumer waiting. A token that goes
-// unclaimed is harmless: the consumer re-checks the flag after every wakeup
-// rather than treating one as permission to run.
-func (q *Queue) WakeProceed() {
-	select {
-	case q.proceed <- struct{}{}:
-	default:
-	}
 }
 
 // Enqueue adds an order to the back of the backlog and returns its 1-based

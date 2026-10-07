@@ -1,6 +1,6 @@
 package geom
 
-// Resting-surface detection for dynamic pickup.
+// Resting-surface detection for dynamic pickup and for setting items down.
 //
 // A detected cup/glass stands on a surface (a shelf or table). Rather than
 // trusting the raw detected centroid Z — which depth noise pushes above or below
@@ -88,6 +88,26 @@ func SurfaceTopZUnder(boxes []SurfaceBox, x, y, refZ float64) (float64, bool) {
 		return 0, false
 	}
 	return best, true
+}
+
+// SeatOnSurface returns box geometry g translated vertically so the bottom of its
+// world bounding box rests clearanceMm above the highest surface beneath its
+// center (SurfaceTopZUnder, with the center Z as the reference), along with the
+// signed Z shift applied. It moves g down when it hangs above the surface and up
+// when it sinks into it; X/Y and orientation are kept. Returns (g, 0, false) when
+// g is not a box or no surface lies beneath it.
+func SeatOnSurface(boxes []SurfaceBox, g spatialmath.Geometry, clearanceMm float64) (spatialmath.Geometry, float64, bool) {
+	if g.ToProtobuf().GetBox() == nil {
+		return g, 0, false
+	}
+	center := g.Pose().Point()
+	topZ, ok := SurfaceTopZUnder(boxes, center.X, center.Y, center.Z)
+	if !ok {
+		return g, 0, false
+	}
+	min, _ := boxWorldAABB(g)
+	dz := topZ + clearanceMm - min.Z
+	return g.Transform(spatialmath.NewPoseFromPoint(r3.Vector{Z: dz})), dz, true
 }
 
 // boxWorldAABB returns the min and max corners of the world axis-aligned bounding

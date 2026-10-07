@@ -200,16 +200,13 @@ func (s *beanjaminCoffee) purge(ctx, cancelCtx context.Context) error {
 // gate on every path is load-bearing, since holding it would stall the queue
 // permanently.
 func (s *beanjaminCoffee) runPurge(ctx context.Context) error {
-	if !s.running.CompareAndSwap(false, true) {
-		return errors.New("keepalive: a sequence is already running")
+	// claim hands back cancelCtx along with the arm, so an operator cancel
+	// interrupts the moves mid-trajectory.
+	cancelCtx, err := s.lease.claimAutomated("keepalive purge")
+	if err != nil {
+		return fmt.Errorf("keepalive: %w", err)
 	}
-	defer s.running.Store(false)
-
-	// Snapshot cancelCtx under the mutex, as every other sequence does, so an
-	// operator cancel interrupts the moves mid-trajectory.
-	s.mu.Lock()
-	cancelCtx := s.cancelCtx
-	s.mu.Unlock()
+	defer s.lease.release()
 
 	ctx, cancel := context.WithTimeout(ctx, keepAlivePurgeTimeout)
 	defer cancel()
@@ -234,7 +231,7 @@ func (s *beanjaminCoffee) recordMachineActivity() {
 //
 // It watches queueStop rather than cancelCtx: a cancel pauses the queue rather
 // than shutting down, shouldPurge already declines while paused, and cancelCtx is
-// rotated under s.mu so reading it here would race.
+// rotated under s.lease.mu so reading it here would race.
 func (s *beanjaminCoffee) keepAliveLoop(w *keepAliveWindow) {
 	ka := s.cfg.KeepAlive
 	interval := ka.checkInterval()
@@ -256,8 +253,8 @@ func (s *beanjaminCoffee) keepAliveLoop(w *keepAliveWindow) {
 		st := keepAliveState{
 			now:          time.Now(),
 			lastActivity: s.machineActivity.get(),
-			busy:         s.running.Load(),
-			paused:       s.paused.Load(),
+			busy:         s.lease.busy(),
+			paused:       s.lease.isPaused(),
 			queued:       s.queue.Len(),
 		}
 		ok, why := shouldPurge(w, threshold, st)
@@ -268,7 +265,14 @@ func (s *beanjaminCoffee) keepAliveLoop(w *keepAliveWindow) {
 
 		idle := st.now.Sub(st.lastActivity).Round(time.Second)
 		s.logger.Infof("keepalive: machine idle %s — purging the group head to hold brew temperature", idle)
-		if err := s.runPurge(context.Background()); err != nil {
+		err := s.runPurge(context.Background())
+		if errors.Is(err, errArmBusy) || errors.Is(err, errQueuePaused) || errors.Is(err, errServiceClosed) {
+			// Something took the arm or paused the queue since shouldPurge
+			// looked; that is a skip, not a failure worth alerting on.
+			s.logger.Debugf("keepalive: skipping this tick — %v", err)
+			continue
+		}
+		if err != nil {
 			s.logger.Errorf("keepalive: purge failed, the machine may drop out of brew temperature: %v", err)
 			s.notifyKeepAliveFailureSlack(err)
 			// Back off to the next tick; whatever blocked the arm won't clear instantly.
