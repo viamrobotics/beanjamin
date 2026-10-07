@@ -193,22 +193,13 @@ type Config struct {
 	MilkPourApproachRelativePose *RelativePose `json:"milk_pour_approach_relative_pose,omitempty"`
 	MilkPourRelativePose         *RelativePose `json:"milk_pour_relative_pose,omitempty"`
 
-	// Milk-bottle pickup (iced latte) mirrors cup and glass pickup with its own
-	// vision service and observe-pose switch, whose vantages look into the open
-	// fridge. These fields are required when can_serve_iced_latte is set.
-	MilkVisionServiceName       string        `json:"milk_vision_service_name,omitempty"`
-	MilkObservePoseSwitcherName string        `json:"milk_observe_pose_switcher_name,omitempty"`
-	MilkApproachRelativePose    *RelativePose `json:"milk_approach_relative_pose,omitempty"`
-	MilkGrabRelativePose        *RelativePose `json:"milk_grab_relative_pose,omitempty"`
 	// MilkBottleDimensions is the known bottle diameter/height the held bottle is
-	// modeled from (see ContainerDimensions). The same offsets that grabbed the
-	// bottle put it back, so these are also what the return descent is planned
-	// around. Required when can_serve_iced_latte is set.
+	// modeled from (see ContainerDimensions), centered on the grip point at the
+	// grab pose. Shared by every milk. Required when can_serve_iced_latte is set.
 	MilkBottleDimensions *ContainerDimensions `json:"milk_bottle_dimensions,omitempty"`
 	// MilkOptions lists the milk bottles in the fridge and the spot each stands
-	// at, for fetching the milk from taught poses instead of vision. Optional,
-	// and not used to move the arm yet: the milk is still found by vision. When
-	// set, it is validated and each spot's poses must exist on the claws switch.
+	// at; the arm fetches and returns each bottle at its spot's poses. Every iced
+	// latte uses the first. Required when can_serve_iced_latte is set.
 	MilkOptions []MilkOption `json:"milk_options,omitempty"`
 
 	// Serving placement offsets are composed onto the serving-area slot anchor
@@ -517,30 +508,15 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		if cfg.DoorApproachRelativePose == nil {
 			return nil, nil, fmt.Errorf("%s: can_serve_iced_latte requires door_approach_relative_pose (the milk is fetched from behind the fridge door)", path)
 		}
-		if err := requireFields(path,
-			"milk_vision_service_name", cfg.MilkVisionServiceName,
-			"milk_observe_pose_switcher_name", cfg.MilkObservePoseSwitcherName,
-			"milk_approach_relative_pose", cfg.MilkApproachRelativePose,
-			"milk_grab_relative_pose", cfg.MilkGrabRelativePose,
-		); err != nil {
-			return nil, nil, err
-		}
 		if err := cfg.MilkBottleDimensions.validate(path, "milk_bottle_dimensions"); err != nil {
 			return nil, nil, err
 		}
 		if err := validatePourPair(path, "milk_pour", cfg.MilkPourApproachRelativePose, cfg.MilkPourRelativePose); err != nil {
 			return nil, nil, err
 		}
-		// Optional until the milk is fetched from the spots; checked when given.
-		if cfg.MilkOptions != nil {
-			if err := validateMilkOptions(path, cfg.MilkOptions); err != nil {
-				return nil, nil, err
-			}
+		if err := validateMilkOptions(path, cfg.MilkOptions); err != nil {
+			return nil, nil, err
 		}
-		reqDeps = append(reqDeps,
-			vision.Named(cfg.MilkVisionServiceName).String(),
-			cfg.MilkObservePoseSwitcherName,
-		)
 	}
 
 	if cfg.IceDispenseBoardName != "" {
