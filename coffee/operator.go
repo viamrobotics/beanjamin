@@ -183,15 +183,19 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 // signalCancel interrupts any in-flight motion by cancelling the shared
 // cancelCtx and pausing the queue. Returns true if a sequence was running.
 // Does not wait for the running goroutine to observe the cancellation.
+//
+// running is checked under mu, the lock claim holds, so a sequence cannot take
+// the arm between this check and the cancel and end up with the replacement
+// context.
 func (s *beanjaminCoffee) signalCancel() bool {
+	s.lease.mu.Lock()
+	defer s.lease.mu.Unlock()
 	if !s.lease.running.Load() {
 		return false
 	}
 	s.lease.paused.Store(true)
-	s.lease.mu.Lock()
 	s.lease.cancelFunc()
 	s.lease.cancelCtx, s.lease.cancelFunc = context.WithCancel(context.Background())
-	s.lease.mu.Unlock()
 	return true
 }
 
@@ -309,14 +313,11 @@ func (s *beanjaminCoffee) rewind(ctx context.Context) (map[string]any, error) {
 
 	// Take exclusive ownership of the arm before any recovery motion so
 	// other commands (execute_action, prepare_order consumer) can't race.
-	if !s.lease.running.CompareAndSwap(false, true) {
+	cancelCtx, ok := s.lease.claim()
+	if !ok {
 		return nil, errors.New("rewind: another sequence is running")
 	}
 	defer s.lease.running.Store(false)
-
-	s.lease.mu.Lock()
-	cancelCtx := s.lease.cancelCtx
-	s.lease.mu.Unlock()
 
 	// Rewind runs outside the queue goroutine, so the in-flight order's tagged
 	// logger has to be looked up rather than passed in.

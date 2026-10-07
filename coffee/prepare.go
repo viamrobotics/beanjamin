@@ -22,7 +22,8 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, o order.Order) (err 
 	ctx, span := trace.StartSpan(ctx, "beanjamin::prepareDrink["+drink+"]")
 	defer span.End()
 
-	if !s.lease.running.CompareAndSwap(false, true) {
+	cancelCtx, ok := s.lease.claim()
+	if !ok {
 		return errors.New("a sequence is already running")
 	}
 	defer s.lease.running.Store(false)
@@ -36,9 +37,6 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, o order.Order) (err 
 		}
 	}()
 
-	s.lease.mu.Lock()
-	cancelCtx := s.lease.cancelCtx
-	s.lease.mu.Unlock()
 	// Runs before `running` flips false, because a rewind taking the gate
 	// afterward starts clearing the very state this inspects. A cancelled
 	// cancelCtx means an operator cancel or reset_world, which own the pause.
