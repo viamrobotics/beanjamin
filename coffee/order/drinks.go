@@ -28,7 +28,7 @@ func IsIced(drink string) bool {
 // IsMilk reports whether the iced serving path additionally fetches the
 // milk bottle from the fridge and pours it into the glass (coffee/milk.go).
 // Every milk drink is also an iced drink — the milk goes into the same staged
-// glass, on top of the espresso.
+// glass, over the ice, before the espresso is poured on top.
 func IsMilk(drink string) bool {
 	return drink == "iced_latte"
 }

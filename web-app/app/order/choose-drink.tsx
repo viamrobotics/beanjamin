@@ -62,7 +62,7 @@ export function ChooseDrink({
       >
         <button
           onClick={() => onSelect(applyDecaf(drink.id, decaf))}
-          className={`drink-card relative w-full h-full flex flex-col items-center justify-center gap-1 py-4 rounded-2xl transition-[background-color,border-color] duration-150 ${
+          className={`drink-card relative w-full h-full flex flex-col items-center justify-center gap-1 py-4 rounded-2xl transition-[background-color,border-color,transform] duration-150 ${
             isSelected
               ? "bg-[#ebebeb] border-2 border-black"
               : "bg-neutral-100 border-2 border-transparent"

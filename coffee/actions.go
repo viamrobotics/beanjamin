@@ -126,6 +126,11 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string, withGl
 			return nil, err
 		}
 	}
+	if milk, _ := ctx.Value(milkChoiceKey{}).(string); milk != "" {
+		if err := checkMilkChoiceAllowed(name); err != nil {
+			return nil, err
+		}
+	}
 
 	if !s.running.CompareAndSwap(false, true) {
 		return nil, errors.New("a sequence is already running")

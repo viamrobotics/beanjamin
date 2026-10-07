@@ -126,3 +126,32 @@ func TestFetchMilkWhileOneIsOutFails(t *testing.T) {
 		t.Fatalf("expected an already-out error, got %v", err)
 	}
 }
+
+// "milk" only goes to the actions that pick a bottle; elsewhere it is refused
+// rather than silently ignored.
+func TestCheckMilkChoiceAllowed(t *testing.T) {
+	for _, name := range []string{"fetch_milk", "add_milk", "serve_iced_latte"} {
+		if err := checkMilkChoiceAllowed(name); err != nil {
+			t.Errorf("checkMilkChoiceAllowed(%q) = %v, want allowed", name, err)
+		}
+	}
+	for _, name := range []string{"return_milk", "pour_milk", "grind_coffee"} {
+		if err := checkMilkChoiceAllowed(name); err == nil {
+			t.Errorf("checkMilkChoiceAllowed(%q) = nil, want refused", name)
+		}
+	}
+}
+
+// A bottle out of the fridge keeps the frame system from being rebuilt between
+// hand-run actions, even when its geometry never attached: the rebuild would
+// clear heldMilk and return_milk would no longer know where it goes.
+func TestRefreshFrameSystemSkippedWhileMilkIsOut(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{}, heldMilk: "oat"}
+	// No frame system service is configured, so a rebuild attempt would fail.
+	if err := s.refreshFrameSystemIfClean(context.Background()); err != nil {
+		t.Fatalf("refreshFrameSystemIfClean = %v, want a skipped rebuild", err)
+	}
+	if s.heldMilk != "oat" {
+		t.Errorf("heldMilk = %q, want it kept", s.heldMilk)
+	}
+}

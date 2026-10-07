@@ -55,11 +55,6 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		}
 	}
 	step, _ := s.currentStep.Load().(string)
-	// []any for the same structpb reason as orders.
-	milkOptions := make([]any, len(s.cfg.MilkOptions))
-	for i, m := range s.cfg.MilkOptions {
-		milkOptions[i] = m.Name
-	}
 	resp := map[string]any{
 		// count reports pending depth only — orders waiting to be made.
 		// Recently-completed orders are visible in `orders` but don't add
@@ -72,10 +67,18 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		"is_busy":         s.running.Load(),
 		"current_step":    step,
 		"can_serve_decaf": s.cfg.CanServeDecaf,
-		// The milks an iced latte can be ordered with, the default first; the
-		// kiosk builds its milk choice from these.
-		"milk_options": milkOptions,
-		"fault_active": s.faultAlarm.Active(),
+		"fault_active":    s.faultAlarm.Active(),
+	}
+	// The milks an iced latte can be ordered with, the default first; the kiosk
+	// builds its milk choice from these. Only on a machine serving the latte,
+	// the only one whose milk_options are validated.
+	if s.cfg.CanServeIcedLatte {
+		// []any for the same structpb reason as orders.
+		milkOptions := make([]any, len(s.cfg.MilkOptions))
+		for i, m := range s.cfg.MilkOptions {
+			milkOptions[i] = m.Name
+		}
+		resp["milk_options"] = milkOptions
 	}
 	s.logger.Debugw("Status", "response", resp)
 	return resp, nil

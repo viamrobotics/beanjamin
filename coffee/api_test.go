@@ -39,7 +39,7 @@ func TestSetStepReflectedInStatus(t *testing.T) {
 }
 
 func TestStatusReportsQueueAndFlags(t *testing.T) {
-	s := newStatusService(t, &Config{CanServeDecaf: true, MilkOptions: testMilks})
+	s := newStatusService(t, &Config{CanServeDecaf: true, CanServeIcedLatte: true, MilkOptions: testMilks})
 	s.queue.Enqueue(order.Order{ID: "o1", Drink: "espresso", CustomerName: "Ada", RawStep: "Grinding"})
 	s.queue.Enqueue(order.Order{ID: "o2", Drink: "lungo", CustomerName: "Grace"})
 
@@ -65,6 +65,32 @@ func TestStatusReportsQueueAndFlags(t *testing.T) {
 	orders, ok := st["orders"].([]any)
 	if !ok || len(orders) != 2 {
 		t.Fatalf("orders = %v, want a 2-element []any", st["orders"])
+	}
+}
+
+// milk_options is validated only on a machine serving the iced latte, so only
+// that machine reports it.
+func TestStatusOmitsMilkOptionsWithoutIcedLatte(t *testing.T) {
+	s := newStatusService(t, &Config{MilkOptions: testMilks})
+	st, err := s.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status error: %v", err)
+	}
+	if v, ok := st["milk_options"]; ok {
+		t.Errorf("milk_options = %v, want absent when can_serve_iced_latte is off", v)
+	}
+}
+
+// A non-string "milk" is refused rather than read as no milk.
+func TestParseOptionalString(t *testing.T) {
+	if got, err := parseOptionalString(map[string]any{}, "milk"); err != nil || got != "" {
+		t.Errorf("absent: got %q, %v; want empty, nil", got, err)
+	}
+	if got, err := parseOptionalString(map[string]any{"milk": "oat"}, "milk"); err != nil || got != "oat" {
+		t.Errorf("string: got %q, %v; want oat, nil", got, err)
+	}
+	if _, err := parseOptionalString(map[string]any{"milk": 3.0}, "milk"); err == nil {
+		t.Error("number: want an error")
 	}
 }
 

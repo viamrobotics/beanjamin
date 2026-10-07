@@ -81,9 +81,10 @@ export function Kiosk() {
   const [fulfillment, setFulfillment] = useState<Fulfillment>("pickup");
   // The machine's milk_options (default first), read off its queue status.
   const [milkOptions, setMilkOptions] = useState<string[]>([]);
-  // The customer's pick; "" until they choose, which means the default.
+  // The customer's pick; "" until they choose, which means the default. A pick
+  // the machine no longer offers falls back to the default too.
   const [milk, setMilk] = useState("");
-  const chosenMilk = milk || milkOptions[0] || "";
+  const chosenMilk = milkOptions.includes(milk) ? milk : (milkOptions[0] ?? "");
   const [misspelled, setMisspelled] = useState("");
   const [loading, setLoading] = useState(false);
   const [drinkRejection, setDrinkRejection] = useState<string | null>(null);
