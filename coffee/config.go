@@ -6,6 +6,7 @@ package coffee
 
 import (
 	"fmt"
+	"regexp"
 
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/components/arm"
@@ -204,6 +205,11 @@ type Config struct {
 	// bottle put it back, so these are also what the return descent is planned
 	// around. Required when can_serve_iced_latte is set.
 	MilkBottleDimensions *ContainerDimensions `json:"milk_bottle_dimensions,omitempty"`
+	// MilkOptions lists the milk bottles in the fridge and the spot each stands
+	// at, for fetching the milk from taught poses instead of vision. Optional,
+	// and not used to move the arm yet: the milk is still found by vision. When
+	// set, it is validated and each spot's poses must exist on the claws switch.
+	MilkOptions []MilkOption `json:"milk_options,omitempty"`
 
 	// Serving placement offsets are composed onto the serving-area slot anchor
 	// when releasing a finished drink onto the served shelf. The same pair is
@@ -325,6 +331,53 @@ func (d *ContainerDimensions) validate(path, field string) error {
 	}
 	return nil
 }
+
+// MilkOption is one milk in the fridge (an entry in milk_options).
+type MilkOption struct {
+	// Name identifies the milk, e.g. "oat".
+	Name string `json:"name"`
+	// Spot is where in the fridge the bottle stands, e.g. "left". Its poses on
+	// the claws switch are named after the spot, not the milk —
+	// milk_<spot>_approach and milk_<spot>_grab — so renaming a milk or moving it
+	// to another spot is a config change, with no poses to re-teach.
+	Spot string `json:"spot"`
+}
+
+// validateMilkOptions checks milk_options: at least one milk, and every name
+// and spot given once, in lowercase letters, digits and underscores — the spot
+// is spliced into pose names (milk_<spot>_approach) and the name is sent by
+// clients. Two milks can't share a spot.
+func validateMilkOptions(path string, milks []MilkOption) error {
+	if len(milks) == 0 {
+		return resource.NewConfigValidationFieldRequiredError(path, "milk_options")
+	}
+	names := make(map[string]bool, len(milks))
+	spots := make(map[string]bool, len(milks))
+	for _, m := range milks {
+		for _, f := range []struct {
+			field, value string
+			seen         map[string]bool
+		}{{"name", m.Name, names}, {"spot", m.Spot, spots}} {
+			if !milkIDPattern.MatchString(f.value) {
+				return fmt.Errorf("%s: milk_options %s %q must be lowercase letters, digits and underscores", path, f.field, f.value)
+			}
+			if f.seen[f.value] {
+				return fmt.Errorf("%s: milk_options lists %s %q twice", path, f.field, f.value)
+			}
+			f.seen[f.value] = true
+		}
+	}
+	for _, m := range milks {
+		// milk_pour_approach is the glass-relative pour pose, so a spot named
+		// "pour" would send the fetch to the glass instead of the fridge.
+		if p := milkApproachPose(m.Spot); p == clawPoseMilkPourApproach || p == clawPoseMilkPour {
+			return fmt.Errorf("%s: milk_options spot %q is reserved: its pose %q is the milk pour pose", path, m.Spot, p)
+		}
+	}
+	return nil
+}
+
+var milkIDPattern = regexp.MustCompile(`^[a-z0-9_]+$`)
 
 // validatePourPair checks a required staged-glass-relative pour pair
 // (<name>_approach_relative_pose / <name>_relative_pose): both present, and at
@@ -477,6 +530,12 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 		if err := validatePourPair(path, "milk_pour", cfg.MilkPourApproachRelativePose, cfg.MilkPourRelativePose); err != nil {
 			return nil, nil, err
+		}
+		// Optional until the milk is fetched from the spots; checked when given.
+		if cfg.MilkOptions != nil {
+			if err := validateMilkOptions(path, cfg.MilkOptions); err != nil {
+				return nil, nil, err
+			}
 		}
 		reqDeps = append(reqDeps,
 			vision.Named(cfg.MilkVisionServiceName).String(),

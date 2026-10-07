@@ -87,6 +87,15 @@ const (
 // switch (parallel to camPoseCupObserve on the cup observe switch).
 const glassPoseObserve = "glass_observe"
 
+// milkApproachPose is the claws-switch pose in front of the bottle at a fridge
+// spot (MilkOption.Spot), with the door open: where the gripper lines up before
+// the straight-in grab, and where it backs out to after setting the bottle down.
+func milkApproachPose(spot string) string { return "milk_" + spot + "_approach" }
+
+// milkGrabPose is the claws-switch pose with the gripper around the bottle at a
+// fridge spot: grabbed from here, set back here.
+func milkGrabPose(spot string) string { return "milk_" + spot + "_grab" }
+
 // milkPoseObserve is the home/recovery observe pose on the milk observe switch,
 // looking into the open fridge (parallel to glassPoseObserve).
 const milkPoseObserve = "milk_observe"
@@ -202,6 +211,14 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		poses = append(poses,
 			requiredPose{s.milkObserveSw, milkPoseObserve},
 		)
+		// Each milk_options spot's approach and grab, checked now so they are
+		// taught and verified before anything moves to them.
+		for _, m := range s.cfg.MilkOptions {
+			poses = append(poses,
+				requiredPose{s.clawsSw, milkApproachPose(m.Spot)},
+				requiredPose{s.clawsSw, milkGrabPose(m.Spot)},
+			)
+		}
 	}
 
 	return poses
