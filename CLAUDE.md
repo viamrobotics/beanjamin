@@ -17,7 +17,7 @@ Each model lives in its own package. The coffee service is `coffee/` (`package c
 | Lifecycle and command API | `module.go`, `config.go`, `api.go` (DoCommand dispatch, `Status`), `operator.go` (proceed, clear_queue, reset_world, cancel, cancel_order, rewind), `actions.go` (`execute_action`), `cup_flow.go` (`run_cup_flow`) |
 | Brew cycle | `prepare.go` (`prepareDrink` and its fault pause), `steps.go` (`Step`, `runSteps`/`executeStep`, step labels and `setStep`), `brew_steps.go`, `poses.go` (pose and frame names, startup pose validation), `order_intake.go`, `queue.go` |
 | Serving and drink variants | `serving.go`, `serving_slots.go`, `iced.go`, `milk.go`, `door.go` |
-| Motion planning | `motion.go`, `held_geometry.go`, `collisions.go`, `joints.go`, `glass_relative_poses.go` (pour poses resolved against the staged glass) |
+| Motion planning | `motion.go`, `plan_ahead.go` (with `plan_ahead` on, plans the next direct moves of a step list while the arm executes the current one), `held_geometry.go`, `collisions.go`, `joints.go`, `glass_relative_poses.go` (pour poses resolved against the staged glass) |
 | Vision-driven pickup | `cup_pickup.go`, `gripper_state.go`, `detection_snapshot.go` |
 | Peripheral integrations | `slack_notify.go`, `daily_summary.go`, `sensor_usage.go`, `delivery_messaging.go`, `keepalive.go` (purge loop), `keepalive_config.go` (`KeepAlive` and its window) |
 | Order model (`coffee/order/`, `package order`) | `order.go` (`Order`), `queue.go` (`Queue`), `request.go` (`prepare_order` decoding), `drinks.go` (drink catalog and `Menu`), `reading.go` (`Reading` for the order sensor) |

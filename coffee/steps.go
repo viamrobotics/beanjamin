@@ -10,6 +10,7 @@ import (
 	"time"
 
 	toggleswitch "go.viam.com/rdk/components/switch"
+	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/module/trace"
 )
 
@@ -83,10 +84,30 @@ type Step struct {
 
 // runSteps executes each step in order, wrapping the first failure with label
 // (e.g. "tamp_ground") so the caller's error identifies the failed phase.
+//
+// With plan_ahead on, each run of two or more consecutive direct moves goes
+// through runSegment, which plans the next moves while the arm executes the
+// current one (plan_ahead.go). Everything else runs exactly as without it.
 func (s *beanjaminCoffee) runSteps(ctx, cancelCtx context.Context, label string, steps ...Step) error {
-	for _, step := range steps {
-		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-			return fmt.Errorf("%s: %w", label, err)
+	if !s.cfg.PlanAhead {
+		for _, step := range steps {
+			if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+				return fmt.Errorf("%s: %w", label, err)
+			}
+		}
+		return nil
+	}
+	for _, run := range splitIntoRuns(steps) {
+		if run.segment && len(run.steps) > 1 {
+			if err := s.runSegment(ctx, cancelCtx, run.steps); err != nil {
+				return fmt.Errorf("%s: %w", label, err)
+			}
+			continue
+		}
+		for _, step := range run.steps {
+			if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+				return fmt.Errorf("%s: %w", label, err)
+			}
 		}
 	}
 	return nil
@@ -97,12 +118,8 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 	ctx, span := trace.StartSpan(ctx, "beanjamin::executeStep::"+step.PoseName)
 	defer span.End()
 
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("cancelled before %q: %w", step.PoseName, ctx.Err())
-	case <-cancelCtx.Done():
-		return fmt.Errorf("cancelled before %q", step.PoseName)
-	default:
+	if err := stepCancelled(ctx, cancelCtx, step); err != nil {
+		return err
 	}
 
 	if step.PivotFromPose != "" {
@@ -122,17 +139,35 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 		}
 	}
 
-	if step.Pause > 0 {
-		logger.Infof("pausing %s after %q", step.Pause, step.PoseName)
-		select {
-		case <-time.After(step.Pause):
-		case <-ctx.Done():
-			return fmt.Errorf("cancelled during pause after %q: %w", step.PoseName, ctx.Err())
-		case <-cancelCtx.Done():
-			return fmt.Errorf("cancelled during pause after %q", step.PoseName)
-		}
+	return pauseAfterStep(ctx, cancelCtx, step, logger)
+}
+
+// stepCancelled reports a cancellation that landed before step started.
+func stepCancelled(ctx, cancelCtx context.Context, step Step) error {
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("cancelled before %q: %w", step.PoseName, ctx.Err())
+	case <-cancelCtx.Done():
+		return fmt.Errorf("cancelled before %q", step.PoseName)
+	default:
+		return nil
 	}
-	return nil
+}
+
+// pauseAfterStep waits out step.Pause, returning early on cancellation.
+func pauseAfterStep(ctx, cancelCtx context.Context, step Step, logger logging.Logger) error {
+	if step.Pause <= 0 {
+		return nil
+	}
+	logger.Infof("pausing %s after %q", step.Pause, step.PoseName)
+	select {
+	case <-time.After(step.Pause):
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("cancelled during pause after %q: %w", step.PoseName, ctx.Err())
+	case <-cancelCtx.Done():
+		return fmt.Errorf("cancelled during pause after %q", step.PoseName)
+	}
 }
 
 // Step labels surfaced through setStep -> get_queue, the order sensor's

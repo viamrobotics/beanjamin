@@ -45,10 +45,14 @@ type Config struct {
 	// has_separate_brew_buttons — how long to wait out a machine-controlled
 	// pour, in which case they must be >= its actual pour or the arm reaches
 	// in mid-stream. ButtonPressHoldSec applies only to the button machine.
-	BrewTimeSec                float64 `json:"brew_time_sec,omitempty"`
-	LungoBrewTimeSec           float64 `json:"lungo_brew_time_sec,omitempty"`
-	ButtonPressHoldSec         float64 `json:"button_press_hold_sec,omitempty"`
-	GrindTimeSec               float64 `json:"grind_time_sec,omitempty"`
+	BrewTimeSec        float64 `json:"brew_time_sec,omitempty"`
+	LungoBrewTimeSec   float64 `json:"lungo_brew_time_sec,omitempty"`
+	ButtonPressHoldSec float64 `json:"button_press_hold_sec,omitempty"`
+	GrindTimeSec       float64 `json:"grind_time_sec,omitempty"`
+	// PlanAhead plans the next moves of a step list while the arm executes the
+	// current one, so a run of direct moves to named poses goes back to back
+	// instead of pausing to plan between them (plan_ahead.go). Off by default.
+	PlanAhead                  bool    `json:"plan_ahead,omitempty"`
 	GripperHoldMinPos          float64 `json:"gripper_hold_min_pos,omitempty"`
 	GripperHoldMaxPos          float64 `json:"gripper_hold_max_pos,omitempty"`
 	GripperOpenTimeoutSec      float64 `json:"gripper_open_timeout_sec,omitempty"`
