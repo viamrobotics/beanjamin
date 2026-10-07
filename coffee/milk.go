@@ -6,7 +6,7 @@ package coffee
 //
 // Nothing here is new machinery — it is the three existing patterns composed:
 // the cup/glass vision pickup (cup_pickup.go) with its own vision service,
-// observe switch and grasp offsets; the fixed-point pour pivot the espresso
+// observe switch and grasp offsets; the pour pivot the espresso
 // pour uses (iced.go); and the hinge-arc door sweep (door.go).
 //
 // The one thing neither the cup nor the glass needs is a way back. The bottle
@@ -138,8 +138,10 @@ func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context) error 
 
 // pourMilk carries the held bottle over the staged glass and tilts it to pour,
 // dwells for milkPourDwell so the glass fills, then returns it upright before
-// moving away. Same fixed-point pivot as pourEspresso: the claws rotate the
-// bottle in place so the stream stays over the glass, and the staged glass
+// moving away. Same pour pivot as pourEspresso: the claws tilt the bottle
+// while moving it along the straight line between the authored approach and
+// pour points (lifting it as it tips, if milk_pour_relative_pose sits higher),
+// so the stream stays over the glass, and the staged glass
 // remains a hard obstacle throughout — the bottle must clear it, never drive
 // into it. How much milk the latte gets is the dwell, not the tilt.
 func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
@@ -159,11 +161,11 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, pourStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}
-	// Return upright along the same pivot so any residual drip stays over the
-	// glass, at the default (slow) pivot speed so the milk left in the bottle
-	// doesn't slosh out.
-	// The return is constrained the same way but must complete: carrying a
-	// still-tilted bottle away would pour milk along the whole carry.
+	// Return upright along the same pivot (lowering the bottle as it rights,
+	// mirroring the pour) so any residual drip stays over the glass, at the
+	// default (slow) pivot speed so the milk left in the bottle doesn't slosh
+	// out. The return is constrained the same way but must complete: carrying
+	// a still-tilted bottle away would pour milk along the whole carry.
 	uprightStep := Step{PoseName: clawPoseMilkPourApproach, PoseSwitch: s.clawsSw, PivotFromPose: clawPoseMilkPour, PivotDegreesPerStep: 5,
 		LinearConstraint: pourConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {

@@ -35,8 +35,8 @@ var defaultApproachConstraint = &StepLinearConstraint{
 	OrientationToleranceDegs: 2,
 }
 
-// pourConstraint keeps a pour pivot's held container within 5mm of the pivot
-// point. Beyond bounding the drift, any linear constraint whose tighter
+// pourConstraint keeps a pour pivot's held container within 5mm of the
+// straight line between consecutive waypoints. Beyond bounding the drift, any linear constraint whose tighter
 // tolerance is under 10 (mm or degrees) stops armplanning from falling back to
 // cBiRTT between waypoints, and cBiRTT's free-form detours are what swing a
 // full cup off the glass. A waypoint the planner cannot reach directly then
@@ -856,13 +856,32 @@ func (s *beanjaminCoffee) withArmInputs(base referenceframe.FrameSystemInputs, a
 	return out
 }
 
-// pivotPositionToleranceMm is how far apart a pivot's start and end poses may
-// be: a pivot is a pure rotation about one fixed point.
-const pivotPositionToleranceMm = 0.5
+// pivotMmPerStep caps how far a translating pivot's position advances between
+// waypoints, so a long shift paired with a small tilt is still sampled finely
+// enough that the planner cannot wander off the straight line between them.
+const pivotMmPerStep = 5.0
+
+// pivotSeedPoint returns the point on the segment from start to end closest to
+// actual, and actual's distance from it. A pivot may begin anywhere along that
+// segment rather than only at start: a pour tilt that ran as a partial plan
+// (Step.AcceptPartialPlan) leaves the container partway along its lift, and the
+// return upright must still start from there.
+func pivotSeedPoint(start, end, actual r3.Vector) (r3.Vector, float64) {
+	seg := end.Sub(start)
+	seed := start
+	if lenSq := seg.Norm2(); lenSq > 0 {
+		t := min(max(actual.Sub(start).Dot(seg)/lenSq, 0), 1)
+		seed = start.Add(seg.Mul(t))
+	}
+	return seed, actual.Sub(seed).Norm()
+}
 
 // executePivot fetches start and end poses, computes interpolated waypoints,
 // plans a single multi-goal trajectory through all of them, and executes it
-// in one MoveThroughJointPositions call.
+// in one MoveThroughJointPositions call. The two poses may sit at different
+// points: the position then moves in a straight line while the orientation
+// rotates, in lockstep (e.g. raising a bottle as it tilts to pour); identical
+// points give a pure rotation in place.
 func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step) error {
 	logger := s.activeOrderLogger()
 	ctx, done := mergedCancelContext(ctx, cancelCtx)
@@ -881,13 +900,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 		return fmt.Errorf("pivot %q → %q: component mismatch (%q vs %q)",
 			step.PivotFromPose, step.PoseName, startPD.componentName, endPD.componentName)
 	}
-	// The authored poses must describe the same point (a pivot is a pure
-	// rotation), and the arm must already be standing on it.
 	const pivotStartToleranceMm = 2.0
-	if dist := startPD.pose.Point().Sub(endPD.pose.Point()).Norm(); dist > pivotPositionToleranceMm {
-		return fmt.Errorf("pivot %q → %q: positions differ by %.2f mm (max %.1f mm) — pivot assumes a fixed point",
-			step.PivotFromPose, step.PoseName, dist, pivotPositionToleranceMm)
-	}
 
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
@@ -901,8 +914,8 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	// the authored pose would get one coarse planner segment to climb back onto
 	// the arc — precisely the free-form rotation the fine waypoints exist to
 	// prevent, and with a portafilter engaged in the bayonet while it happens.
-	// The authored *position* is kept so the pivot stays a rotation about the
-	// intended fixed point even if the arm has drifted a fraction of a mm.
+	// The position is snapped onto the authored start→end line so the pivot
+	// stays on it even if the arm has drifted a fraction of a mm.
 	curTF, err := fs.Transform(linearInputs,
 		referenceframe.NewPoseInFrame(startPD.componentName, spatialmath.NewZeroPose()),
 		startPD.refFrame)
@@ -910,11 +923,12 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 		return fmt.Errorf("pivot %q: current pose of %q: %w", step.PivotFromPose, startPD.componentName, err)
 	}
 	actual := curTF.(*referenceframe.PoseInFrame).Pose()
-	if dist := actual.Point().Sub(startPD.pose.Point()).Norm(); dist > pivotStartToleranceMm {
-		return fmt.Errorf("pivot %q → %q: arm is %.2f mm off the pivot start (max %.1f mm) — refusing to pivot about the wrong point",
+	seed, dist := pivotSeedPoint(startPD.pose.Point(), endPD.pose.Point(), actual.Point())
+	if dist > pivotStartToleranceMm {
+		return fmt.Errorf("pivot %q → %q: arm is %.2f mm off the pivot line (max %.1f mm) — refusing to pivot about the wrong point",
 			step.PivotFromPose, step.PoseName, dist, pivotStartToleranceMm)
 	}
-	fromPose := spatialmath.NewPose(startPD.pose.Point(), actual.Orientation())
+	fromPose := spatialmath.NewPose(seed, actual.Orientation())
 
 	// Rotate straight onto the goal, or past it and back when the step asks for
 	// an overshoot. Both segments are planned together and run as one
@@ -1212,8 +1226,10 @@ func pivotOvershootPose(startPose, endPose spatialmath.Pose, degrees float64) (s
 	return spatialmath.NewPose(endPose.Point(), rotated.Orientation()), nil
 }
 
-// computePivotPoses returns interpolated poses between startPose and endPose.
-// The step count is derived from the total rotation angle divided by degreesPerStep.
+// computePivotPoses returns interpolated poses between startPose and endPose:
+// the position moves along the straight line between them while the
+// orientation slerps, in lockstep. The step count is the larger of the
+// rotation over degreesPerStep and the translation over pivotMmPerStep.
 func computePivotPoses(logger logging.Logger, startPose, endPose spatialmath.Pose, degreesPerStep float64) []spatialmath.Pose {
 	diff := spatialmath.OrientationBetween(startPose.Orientation(), endPose.Orientation())
 	// AxisAngles().Theta is signed: the axis/angle pair can come back as
@@ -1223,9 +1239,12 @@ func computePivotPoses(logger logging.Logger, startPose, endPose spatialmath.Pos
 	totalRadians := math.Abs(diff.AxisAngles().Theta)
 	totalDegrees := totalRadians * 180.0 / math.Pi
 
-	numSteps := max(1, int(math.Round(totalDegrees/degreesPerStep)))
+	totalMm := endPose.Point().Sub(startPose.Point()).Norm()
 
-	logger.Infof("pivot rotation: %.1f° total (%d steps at %.1f°/step)", totalDegrees, numSteps, degreesPerStep)
+	numSteps := max(1, int(math.Round(totalDegrees/degreesPerStep)), int(math.Round(totalMm/pivotMmPerStep)))
+
+	logger.Infof("pivot: %.1f° rotation, %.1f mm translation (%d steps, max %.1f°/step, %.1f mm/step)",
+		totalDegrees, totalMm, numSteps, degreesPerStep, pivotMmPerStep)
 
 	poses := make([]spatialmath.Pose, numSteps+1)
 	for i := 0; i <= numSteps; i++ {

@@ -434,10 +434,11 @@ func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
-	// Tilt to pour as a fixed-point pivot: the claws rotate the cup in place
-	// (slerp waypoints follow the geodesic between the upright and poured
-	// orientations — a pure rotation about the world X axis, since both share
-	// OX=0) so the stream stays over the glass instead of spilling. The staged
+	// Tilt to pour as a pivot: the claws rotate the cup (slerp waypoints follow
+	// the geodesic between the upright and poured orientations — a pure
+	// rotation about the world X axis, since both share OX=0) while its
+	// position moves along the straight line between the two authored points,
+	// so the stream stays over the glass instead of spilling. The staged
 	// glass stays a hard obstacle here — the cup must clear it, never drive in.
 	// pourConstraint keeps the planner from detouring the cup off the glass; a
 	// tilt it can't finish is executed as far as it planned, pouring less

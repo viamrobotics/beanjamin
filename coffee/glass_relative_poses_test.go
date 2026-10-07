@@ -123,7 +123,7 @@ func TestValidatePourPair(t *testing.T) {
 		{"neither", nil, nil, true},
 		{"only approach", p(10, 0, 50), nil, true},
 		{"only pour", nil, p(10, 0, 50), true},
-		{"different points", p(10, 0, 50), p(10, 0, 55), true},
+		{"different points", p(10, 0, 50), p(10, 0, 55), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
