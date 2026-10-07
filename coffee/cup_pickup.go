@@ -40,8 +40,9 @@ import (
 	"beanjamin/coffee/geom"
 )
 
-// Pickup item labels — used for logs/spans/errors and as the cache key for
-// held-item geometry tracking (held_geometry.go).
+// Held item labels — used for logs/spans/errors and as the cache key for
+// held-item geometry tracking (held_geometry.go). The cup and glass are picked
+// up by vision; the milk bottle is grabbed at fixed poses (milk.go).
 const (
 	pickupLabelCup   = "cup"
 	pickupLabelGlass = "glass"
@@ -354,8 +355,7 @@ func (s *beanjaminCoffee) pickupAreaShieldCollisions(shieldFrame string) []Allow
 //
 // On success it returns the world-frame centroid the item was actually grasped
 // at — the grab offsets were composed onto it, so composing them onto it again
-// reproduces the same poses. Milk pickup keeps it to put the bottle back where
-// it came from (returnMilkBottle); cup and glass pickup discard it.
+// reproduces the same poses. Both callers (cup and glass pickup) discard it.
 //
 // Returned errors fall into two categories the caller distinguishes via
 // errors.Is:
@@ -577,11 +577,10 @@ func (s *beanjaminCoffee) sweepAndGrab(ctx, cancelCtx context.Context, t *pickup
 // grabs nothing it re-observes and retries up to t.maxAttempts, asking the
 // customer to place an item (nothing was seen anywhere) or to nudge the items
 // (some were seen but none reachable) and waiting noItemRetryDelay between
-// attempts. Shared by cup, glass and milk-bottle pickup.
+// attempts. Shared by cup and glass pickup.
 //
 // On success it returns the world-frame centroid the item was grasped at (see
-// tryGrab), so a caller that has to put the item back — milk pickup — can
-// reproduce the grasp without re-detecting.
+// tryGrab); neither caller uses it now that the milk bottle isn't vision-picked.
 func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupTarget) (r3.Vector, error) {
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::dynamic_pickup::"+t.label)

@@ -68,23 +68,15 @@ func TestRequiredPosesConditional(t *testing.T) {
 	}
 	// The milk pour poses belong to the latte alone: an iced-coffee machine has
 	// no fridge and must not be asked to resolve them.
-	if hasPose(iced, milkPoseObserve) {
+	if hasPose(iced, milkApproachPose("left")) {
 		t.Error("can_serve_iced alone should not require the milk poses")
 	}
 
-	latte := (&beanjaminCoffee{cfg: &Config{CanServeIced: true, CanServeIcedLatte: true}}).requiredPoses()
-	if !hasPose(latte, milkPoseObserve) {
-		t.Errorf("can_serve_iced_latte should require %q", milkPoseObserve)
-	}
-	// With milk_options, each spot's two poses are required too, named after the
-	// spot rather than the milk.
-	spots := (&beanjaminCoffee{cfg: &Config{CanServeIced: true, CanServeIcedLatte: true, MilkOptions: testMilks}}).requiredPoses()
+	latte := (&beanjaminCoffee{cfg: &Config{CanServeIced: true, CanServeIcedLatte: true, MilkOptions: testMilks}}).requiredPoses()
+	// Each spot's two poses are required, named after the spot, not the milk.
 	for _, name := range []string{"milk_left_approach", "milk_left_grab", "milk_right_approach", "milk_right_grab"} {
-		if !hasPose(spots, name) {
-			t.Errorf("milk_options should require %q", name)
-		}
-		if hasPose(latte, name) {
-			t.Errorf("%q required without milk_options", name)
+		if !hasPose(latte, name) {
+			t.Errorf("can_serve_iced_latte should require %q", name)
 		}
 	}
 	// The pours are resolved against the staged glass, so no switch carries them.
@@ -93,8 +85,6 @@ func TestRequiredPosesConditional(t *testing.T) {
 			t.Errorf("%q is resolved against the staged glass and must not be required on a switch", name)
 		}
 	}
-	// The bottle is detected and put back at the detected spot, so the fridge
-	// itself contributes no authored poses.
 	if !hasPose(latte, glassPoseObserve) {
 		t.Error("can_serve_iced_latte should still require the iced poses it builds on")
 	}
