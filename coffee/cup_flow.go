@@ -5,7 +5,6 @@ package coffee
 
 import (
 	"context"
-	"errors"
 	"fmt"
 )
 
@@ -19,11 +18,11 @@ import (
 // flow never touches portafilter state. Each placement advances the shelf-slot
 // counter inside placeFullCupOnShelf.
 func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string]any, error) {
-	cancelCtx, ok := s.lease.claim()
-	if !ok {
-		return nil, errors.New("a sequence is already running")
+	cancelCtx, err := s.lease.claim("run_cup_flow")
+	if err != nil {
+		return nil, err
 	}
-	defer s.lease.running.Store(false)
+	defer s.lease.release()
 
 	// Not tied to a queued order, so there is no order ID to tag — use the
 	// base service logger.

@@ -202,11 +202,11 @@ func (s *beanjaminCoffee) purge(ctx, cancelCtx context.Context) error {
 func (s *beanjaminCoffee) runPurge(ctx context.Context) error {
 	// claim hands back cancelCtx along with the arm, so an operator cancel
 	// interrupts the moves mid-trajectory.
-	cancelCtx, ok := s.lease.claim()
-	if !ok {
-		return errors.New("keepalive: a sequence is already running")
+	cancelCtx, err := s.lease.claim("keepalive purge")
+	if err != nil {
+		return fmt.Errorf("keepalive: %w", err)
 	}
-	defer s.lease.running.Store(false)
+	defer s.lease.release()
 
 	ctx, cancel := context.WithTimeout(ctx, keepAlivePurgeTimeout)
 	defer cancel()
@@ -253,7 +253,7 @@ func (s *beanjaminCoffee) keepAliveLoop(w *keepAliveWindow) {
 		st := keepAliveState{
 			now:          time.Now(),
 			lastActivity: s.machineActivity.get(),
-			busy:         s.lease.running.Load(),
+			busy:         s.lease.busy(),
 			paused:       s.lease.paused.Load(),
 			queued:       s.queue.Len(),
 		}

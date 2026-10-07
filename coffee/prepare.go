@@ -4,7 +4,6 @@ package coffee
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -22,11 +21,11 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, o order.Order) (err 
 	ctx, span := trace.StartSpan(ctx, "beanjamin::prepareDrink["+drink+"]")
 	defer span.End()
 
-	cancelCtx, ok := s.lease.claim()
-	if !ok {
-		return errors.New("a sequence is already running")
+	cancelCtx, err := s.lease.claim("order " + o.ID)
+	if err != nil {
+		return err
 	}
-	defer s.lease.running.Store(false)
+	defer s.lease.release()
 	// Capture the step the order errored at before `running` flips false above
 	// (LIFO defers: this runs first). Cancel and rewind wait for idle and then
 	// mutate currentStep, so reading it any later would race with them.
