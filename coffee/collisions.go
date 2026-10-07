@@ -77,8 +77,8 @@ var heldItemStagingCollisions = []AllowedCollision{
 }
 
 // heldItemFridgeCollisions allows the held milk bottle to approach the fridge
-// surfaces it legitimately gets close to while being set back down inside: the
-// shelf it stands on, and the open door panel beside the opening. Inert when
+// surfaces it legitimately gets close to while being taken out and set back
+// down: the shelf it stands on, and the open door panel beside the opening. Inert when
 // the frame system models neither.
 var heldItemFridgeCollisions = []AllowedCollision{
 	{Frame1: heldItemFrameName, Frame2: frameFridge},

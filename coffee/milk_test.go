@@ -11,40 +11,13 @@ import (
 	"beanjamin/coffee/geom"
 )
 
-// The return is the pickup replayed: the same offsets composed onto the recorded
-// grasp centroid, so the bottle is set back down exactly where it was lifted
-// from and the descent retraces the retreat.
-func TestMilkReturnPosesReplayThePickupOffsets(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{
-		MilkApproachRelativePose: &RelativePose{X: 10, Y: -20, Z: 150, OZ: -1},
-		MilkGrabRelativePose:     &RelativePose{X: 10, Y: -20, Z: 5, OZ: -1},
-	}}
-	centroid := r3.Vector{X: 300, Y: -450, Z: 620}
-
-	approach, place := s.milkReturnPoses(centroid)
-
-	wantApproach := geom.PoseRelativeTo(centroid, relativePoseToSpatial(s.cfg.MilkApproachRelativePose))
-	wantPlace := geom.PoseRelativeTo(centroid, relativePoseToSpatial(s.cfg.MilkGrabRelativePose))
-	if approach.Point() != wantApproach.Point() {
-		t.Errorf("approach point = %v, want %v", approach.Point(), wantApproach.Point())
-	}
-	if place.Point() != wantPlace.Point() {
-		t.Errorf("place point = %v, want %v", place.Point(), wantPlace.Point())
-	}
-	// The standoff must sit above the set-down pose, or the "descend onto the
-	// shelf" move would be a climb.
-	if approach.Point().Z <= place.Point().Z {
-		t.Errorf("approach Z %.1f should be above place Z %.1f", approach.Point().Z, place.Point().Z)
-	}
-}
-
-// Returning with nothing recorded must fail rather than drive an empty gripper
+// Returning with no milk out must fail rather than drive an empty gripper
 // at a shelf where the bottle may already stand.
 func TestReturnMilkBottleWithoutPickupFails(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{CanServeIcedLatte: true}, gripper: inject.NewGripper("g")}
 	err := s.returnMilkBottle(context.Background(), context.Background())
-	if err == nil || !strings.Contains(err.Error(), "no recorded pickup position") {
-		t.Fatalf("expected a no-recorded-position error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no milk is out") {
+		t.Fatalf("expected a no-milk-out error, got %v", err)
 	}
 }
 
@@ -53,8 +26,8 @@ func TestReturnMilkBottleWithoutPickupFails(t *testing.T) {
 func TestMilkActionsRequireConfiguredMilk(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{}}
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
-		"add_milk":    s.addMilk,
-		"fetch_milk":  s.fetchMilkBottle,
+		"add_milk":    func(ctx, cancelCtx context.Context) error { return s.addMilk(ctx, cancelCtx, "whole") },
+		"fetch_milk":  func(ctx, cancelCtx context.Context) error { return s.fetchMilkBottle(ctx, cancelCtx, "whole") },
 		"pour_milk":   s.pourMilk,
 		"return_milk": s.returnMilkBottle,
 	}
@@ -68,8 +41,8 @@ func TestMilkActionsRequireConfiguredMilk(t *testing.T) {
 	}
 }
 
-// The milk actions are on the execute_action surface so the poses and the grasp
-// offsets can be stepped through one at a time on hardware.
+// The milk actions are on the execute_action surface so each bottle's poses can
+// be stepped through one at a time on hardware.
 func TestMilkActionsRegistered(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{}}
 	actions := s.actionFuncs()
@@ -104,13 +77,37 @@ func TestHeldGeometryCachePerLabel(t *testing.T) {
 	}
 }
 
-// A frame-system reset drops the recorded pickup position along with the cached
-// geometry — it describes a bottle the gripper is no longer known to hold.
-func TestClearHeldGeometryForgetsMilkPickup(t *testing.T) {
-	centroid := r3.Vector{X: 1, Y: 2, Z: 3}
-	s := &beanjaminCoffee{cfg: &Config{}, milkGraspCentroid: &centroid}
+// A frame-system reset forgets which milk is out along with the cached geometry
+// — it describes a bottle the gripper is no longer known to hold.
+func TestClearHeldGeometryForgetsHeldMilk(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{}, heldMilk: "oat"}
 	s.clearHeldGeometry()
-	if s.milkGraspCentroid != nil {
-		t.Errorf("milkGraspCentroid = %v, want nil after clearHeldGeometry", *s.milkGraspCentroid)
+	if s.heldMilk != "" {
+		t.Errorf("heldMilk = %q, want empty after clearHeldGeometry", s.heldMilk)
+	}
+}
+
+// A hand-run milk action takes the milk execute_action names, defaults to the
+// first configured milk, and refuses one that isn't configured.
+func TestActionMilk(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{MilkOptions: []string{"whole", "oat"}}}
+	if got, err := s.actionMilk(context.Background()); err != nil || got != "whole" {
+		t.Errorf("default actionMilk = %q, %v; want whole", got, err)
+	}
+	if got, err := s.actionMilk(withMilkChoice(context.Background(), "oat")); err != nil || got != "oat" {
+		t.Errorf("actionMilk(oat) = %q, %v; want oat", got, err)
+	}
+	if _, err := s.actionMilk(withMilkChoice(context.Background(), "soy")); err == nil {
+		t.Error("actionMilk(soy) should fail for an unconfigured milk")
+	}
+}
+
+// Fetching a second bottle while one is out would leave nothing to say which
+// spot the first goes back to.
+func TestFetchMilkWhileOneIsOutFails(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{CanServeIcedLatte: true}, gripper: inject.NewGripper("g"), heldMilk: "whole"}
+	err := s.fetchMilkBottle(context.Background(), context.Background(), "oat")
+	if err == nil || !strings.Contains(err.Error(), "already out") {
+		t.Fatalf("expected an already-out error, got %v", err)
 	}
 }

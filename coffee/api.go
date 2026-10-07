@@ -150,6 +150,14 @@ var coffeeCommands = []commandDef{
 			if annotate {
 				ctx = icevision.WithFrameSaving(ctx)
 			}
+			// Which bottle the milk actions take; checked by the action itself.
+			if v, ok := cmd["milk"]; ok && v != nil {
+				milk, ok := v.(string)
+				if !ok {
+					return nil, fmt.Errorf("milk must be a string, got %T", v)
+				}
+				ctx = withMilkChoice(ctx, milk)
+			}
 			return s.executeAction(ctx, cmd["execute_action"].(string), withGlass)
 		}},
 	{key: "cancel", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {

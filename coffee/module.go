@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/board"
 	"go.viam.com/rdk/components/camera"
@@ -127,8 +126,6 @@ type beanjaminCoffee struct {
 	iceVision      *icevision.Detector
 	glassVision    vision.Service // optional; nil unless CanServeIced
 	glassObserveSw toggleswitch.Switch
-	milkVision     vision.Service // optional; nil unless CanServeIcedLatte
-	milkObserveSw  toggleswitch.Switch
 	// servingAreaSlotCounter is the round-robin counter for serving-area placement.
 	// It increments once per placeFullCupOnShelf and selects the shelf slot
 	// modulo the number of tiles. Process-local; resets to 0 on rebuild.
@@ -145,11 +142,11 @@ type beanjaminCoffee struct {
 	heldMilkGeom     spatialmath.Geometry
 	heldItemAttached bool
 
-	// milkGraspCentroid is the world-frame centroid the milk bottle was grasped
-	// at, recorded by fetchMilkBottle and replayed by returnMilkBottle to set the
-	// bottle back down where it came from (milk.go). nil when no bottle is held.
-	// Mutated only on the motion sequence goroutine, like cachedFS.
-	milkGraspCentroid *r3.Vector
+	// heldMilk names the milk bottle out of the fridge, set by fetchMilkBottle and
+	// read by returnMilkBottle to put it back at its own spot (milk.go). Empty
+	// when no bottle is out. Mutated only on the motion sequence goroutine, like
+	// cachedFS.
+	heldMilk string
 
 	// filterFrameLocked tracks whether lockFilterFrame has re-parented the filter
 	// frame to world in cachedFS (i.e. an in-flight lock that must be preserved).
@@ -268,8 +265,8 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, fmt.Errorf("src_camera_name %q not found in frame system — add the camera to the frame system fragment", conf.SrcCameraName)
 	}
 
-	// Cup pickup is always vision-driven; the glass and milk pipelines mirror it
-	// behind their feature flags.
+	// Cup pickup is always vision-driven; the glass pipeline mirrors it behind
+	// its feature flag. The milk bottles stand at fixed poses and need no vision.
 	cupVision, cameraObserveSw, err := visionPickup(deps, logger, "cup",
 		conf.CupVisionServiceName, conf.CameraObservePoseSwitcherName, conf.SrcCameraName)
 	if err != nil {
@@ -281,15 +278,6 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	if conf.CanServeIced {
 		if glassVision, glassObserveSw, err = visionPickup(deps, logger, "iced coffee glass",
 			conf.GlassVisionServiceName, conf.GlassObservePoseSwitcherName, conf.SrcCameraName); err != nil {
-			return nil, err
-		}
-	}
-
-	var milkVision vision.Service
-	var milkObserveSw toggleswitch.Switch
-	if conf.CanServeIcedLatte {
-		if milkVision, milkObserveSw, err = visionPickup(deps, logger, "iced latte milk",
-			conf.MilkVisionServiceName, conf.MilkObservePoseSwitcherName, conf.SrcCameraName); err != nil {
 			return nil, err
 		}
 	}
@@ -420,8 +408,6 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		iceVision:        icevision.NewDetector(srcCamera, iceVisionParams(conf)),
 		glassVision:      glassVision,
 		glassObserveSw:   glassObserveSw,
-		milkVision:       milkVision,
-		milkObserveSw:    milkObserveSw,
 	}
 
 	// Fail fast if the enabled configuration references poses that are missing

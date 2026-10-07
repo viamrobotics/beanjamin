@@ -1,68 +1,36 @@
 package coffee
 
-// The iced-latte milk path: open the fridge, vision-detect the milk bottle
-// inside, pour it into the staged glass, put the bottle back where it was
-// found, and shut the fridge. Gated by can_serve_iced_latte.
+// The iced-latte milk path: open the fridge, take the ordered milk's bottle off
+// the shelf, pour it into the staged glass, put the bottle back, and shut the
+// fridge. Gated by can_serve_iced_latte.
 //
-// Nothing here is new machinery — it is the three existing patterns composed:
-// the cup/glass vision pickup (cup_pickup.go) with its own vision service,
-// observe switch and grasp offsets; the fixed-point pour pivot the espresso
-// pour uses (iced.go); and the hinge-arc door sweep (door.go).
-//
-// The one thing neither the cup nor the glass needs is a way back. The bottle
-// belongs in the fridge, and where in the fridge it stands changes every time
-// somebody puts the milk away — so the return is not an authored pose but the
-// grasp itself, replayed: pickup records the world centroid it grabbed at, and
-// the return composes the same approach/grab offsets onto that centroid.
+// Each milk in milk_options stands at its own fixed spot in the fridge, taught
+// as two claws-switch poses: <name>_milk_approach in front of the bottle and
+// <name>_milk_grab with the jaws around it. The grab is a straight line between
+// them, and the return is the same line run backwards — so the bottle has to
+// be put back where its poses say it stands. The pour is the fixed-point pivot
+// the espresso pour uses (iced.go), and the door is the hinge-arc sweep
+// (door.go).
 
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
-
-	"github.com/golang/geo/r3"
-	"go.viam.com/rdk/referenceframe"
-	"go.viam.com/rdk/spatialmath"
-
-	"beanjamin/coffee/geom"
 )
 
 // milkAreaShieldFrameName is the optional obstacle enclosing the fridge
 // interior, the fridge-side counterpart of the clean-cup/glass area shields: a
 // hard obstacle while the arm flies to and from the fridge (so it doesn't clip
 // the shelves or the door on a free traverse), opened up only on the straight-in
-// grasp descent and the retreat back out. Inert when the frame system doesn't
-// define it, like every other shield.
+// grab and the straight-out retreat. Inert when the frame system doesn't define
+// it, like every other shield.
 const milkAreaShieldFrameName = "fridge"
 
-// milkPickupTarget describes dynamic milk-bottle pickup: its own vision service
-// and observe switch (whose vantages look into the open fridge), and grasp
-// offsets tuned for the bottle. The max-attempts knob is shared with cup pickup
-// (cup_pickup_max_attempts) — it is an item-agnostic operational setting.
-func (s *beanjaminCoffee) milkPickupTarget() *pickupTarget {
-	return &pickupTarget{
-		label:            pickupLabelMilk,
-		vision:           s.milkVision,
-		cameraName:       s.cupCameraName,
-		observeSw:        s.milkObserveSw,
-		observeHomePose:  milkPoseObserve,
-		approachRel:      s.cfg.MilkApproachRelativePose,
-		grabRel:          s.cfg.MilkGrabRelativePose,
-		maxAttempts:      pickupMaxAttempts(s.cfg.CupPickupMaxAttempts),
-		dims:             s.cfg.MilkBottleDimensions,
-		noItemSpeak:      "I can't see the milk in the fridge — could you put the bottle back on its shelf? Trying again in 15 seconds.",
-		unreachableSpeak: "I can see the milk but I'm having trouble grabbing it — could you nudge the bottle a little? Trying again in 15 seconds.",
-		// Like the tall glass: the bottle's point-cloud centroid Z lands high on
-		// the neck, while the box center is a stable mid-body grasp point.
-		graspZFromGeom: true,
-		shieldFrame:    milkAreaShieldFrameName,
-	}
-}
-
 // requireMilk rejects the milk actions on a machine that isn't set up for them.
-// Without it the milk config — the vision service, the observe switch, the grasp
-// offsets — is nil, and the failure would surface as a nil dereference or an
-// unhelpful pose error partway into a motion.
+// Without it the milk config — the milk options, the bottle dimensions — is
+// empty, and the failure would surface as an unhelpful pose error partway into
+// a motion.
 func (s *beanjaminCoffee) requireMilk(action string) error {
 	if !s.cfg.CanServeIcedLatte {
 		return fmt.Errorf("%s: milk is not configured on this machine (set can_serve_iced_latte)", action)
@@ -70,16 +38,41 @@ func (s *beanjaminCoffee) requireMilk(action string) error {
 	return nil
 }
 
-// addMilk is the whole fridge trip, run on a staged glass with an empty
-// gripper: open the door, fetch the bottle, pour, put the bottle back, shut the
-// door. Registered as the add_milk execute_action and spliced into serveIced
-// for an iced_latte.
+// milkChoiceKey carries execute_action's optional "milk" to the milk actions,
+// whose signature has no room for it.
+type milkChoiceKey struct{}
+
+// withMilkChoice returns ctx carrying the milk an execute_action names.
+func withMilkChoice(ctx context.Context, milk string) context.Context {
+	return context.WithValue(ctx, milkChoiceKey{}, milk)
+}
+
+// actionMilk is the milk a hand-run milk action uses: the one execute_action
+// named, or the default (first) milk when it named none.
+func (s *beanjaminCoffee) actionMilk(ctx context.Context) (string, error) {
+	milk, _ := ctx.Value(milkChoiceKey{}).(string)
+	if milk == "" {
+		if len(s.cfg.MilkOptions) == 0 {
+			return "", fmt.Errorf("no milk_options configured")
+		}
+		return s.cfg.MilkOptions[0], nil
+	}
+	if !slices.Contains(s.cfg.MilkOptions, milk) {
+		return "", fmt.Errorf("unknown milk %q, available: %v", milk, s.cfg.MilkOptions)
+	}
+	return milk, nil
+}
+
+// addMilk is the whole fridge trip for the named milk, run on a staged glass
+// with an empty gripper: open the door, fetch the bottle, pour, put the bottle
+// back, shut the door. Registered as the add_milk execute_action and spliced
+// into serveIced for an iced_latte.
 //
 // The door is opened once and closed once, so the fridge stands open for the
 // pour. Closing it in between would double the sweeps — the slowest and most
 // failure-prone part of the sequence — to keep the milk cold for the ~15s the
 // pour takes.
-func (s *beanjaminCoffee) addMilk(ctx, cancelCtx context.Context) error {
+func (s *beanjaminCoffee) addMilk(ctx, cancelCtx context.Context, milk string) error {
 	if err := s.requireMilk("add_milk"); err != nil {
 		return err
 	}
@@ -87,7 +80,7 @@ func (s *beanjaminCoffee) addMilk(ctx, cancelCtx context.Context) error {
 		return s.milkStepErr(err)
 	}
 	s.setStep(stepAddingMilk)
-	if err := s.fetchMilkBottle(ctx, cancelCtx); err != nil {
+	if err := s.fetchMilkBottle(ctx, cancelCtx, milk); err != nil {
 		return s.milkStepErr(err)
 	}
 	if err := s.pourMilk(ctx, cancelCtx); err != nil {
@@ -114,25 +107,54 @@ func (s *beanjaminCoffee) milkStepErr(err error) error {
 	return fmt.Errorf("add_milk: %w", err)
 }
 
-// fetchMilkBottle vision-detects the milk bottle inside the fridge and grabs it,
-// leaving it held by the gripper. The door must already be open — the observe
-// vantages look through the opening, and a shut door is an obstacle between the
-// camera and the milk.
+// fetchMilkBottle takes the named milk's bottle off the fridge shelf, leaving
+// it held by the gripper: fly to its approach pose, open, straight in to its
+// grab pose, grab, straight back out. The door must already be open — the
+// approach is through the opening.
 //
-// The centroid it was grasped at is recorded for returnMilkBottle. Recording it
-// only on success means a failed pickup can't leave a stale position behind for
-// a later return to drive at.
-func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context) error {
+// Which milk is out is recorded only once the bottle is confirmed in hand, so a
+// failed grab can't leave a return pointed at a bottle the gripper never took.
+func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context, milk string) error {
 	if err := s.requireMilk("fetch_milk"); err != nil {
 		return err
 	}
-	centroid, err := s.pickDynamic(ctx, cancelCtx, s.milkPickupTarget())
-	if err != nil {
+	if s.gripper == nil {
+		return fmt.Errorf("fetch_milk: no gripper configured")
+	}
+	if s.heldMilk != "" {
+		return fmt.Errorf("fetch_milk: the %s milk is already out of the fridge — run return_milk first", s.heldMilk)
+	}
+	approachStep := Step{PoseName: milkApproachPose(milk), PoseSwitch: s.clawsSw, Pause: shortPause}
+	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("fetch_milk: %w", err)
 	}
-	s.milkGraspCentroid = &centroid
-	s.activeOrderLogger().Infof("fetch_milk: bottle in hand, pickup position recorded at (x=%.1f, y=%.1f, z=%.1f)",
-		centroid.X, centroid.Y, centroid.Z)
+	if err := s.gripper.Open(ctx, nil); err != nil {
+		return fmt.Errorf("fetch_milk: open gripper: %w", err)
+	}
+	time.Sleep(gripperPause)
+	// The jaws reach in around the bottle, past the interior shield that keeps the
+	// free traverse off the shelves.
+	grabStep := Step{PoseName: milkGrabPose(milk), PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
+		Pause: shortPause, AllowedCollisions: s.pickupAreaShieldCollisions(milkAreaShieldFrameName)}
+	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
+		return fmt.Errorf("fetch_milk: %w", err)
+	}
+	if err := s.grabAndVerifyHolding(ctx); err != nil {
+		return fmt.Errorf("fetch_milk: grab the %s milk: %w", milk, err)
+	}
+	s.heldMilk = milk
+	// Model the bottle from milk_bottle_dimensions, centered on the grip point,
+	// so the retreat and the carry to the glass route around it.
+	if err := s.attachConfiguredGeometry(ctx, pickupLabelMilk, s.cfg.MilkBottleDimensions, &RelativePose{}); err != nil {
+		s.activeOrderLogger().Warnf("fetch_milk: model bottle from milk_bottle_dimensions failed, continuing untracked: %v", err)
+	}
+	retreatCollisions := append(s.pickupAreaShieldCollisions(milkAreaShieldFrameName), s.heldItemSurfaceCollisions(heldItemFridgeCollisions)...)
+	retreatStep := Step{PoseName: milkApproachPose(milk), PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
+		Pause: shortPause, AllowedCollisions: retreatCollisions}
+	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
+		return fmt.Errorf("fetch_milk: retreat with the %s milk: %w", milk, err)
+	}
+	s.activeOrderLogger().Infof("fetch_milk: %s milk in hand", milk)
 	return nil
 }
 
@@ -169,23 +191,14 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 	return nil
 }
 
-// milkReturnPoses returns the standoff and set-down grip-point poses for putting
-// the bottle back at centroid. They are the pickup's own offsets composed onto
-// the recorded grasp centroid, so the bottle is set down exactly where the grab
-// lifted it from and the descent retraces the retreat.
-func (s *beanjaminCoffee) milkReturnPoses(centroid r3.Vector) (approach, place spatialmath.Pose) {
-	return geom.PoseRelativeTo(centroid, relativePoseToSpatial(s.cfg.MilkApproachRelativePose)),
-		geom.PoseRelativeTo(centroid, relativePoseToSpatial(s.cfg.MilkGrabRelativePose))
-}
-
-// returnMilkBottle puts the bottle back on the fridge shelf at the centroid
-// fetchMilkBottle recorded: carry to the standoff, linear descent onto the
-// shelf, release, linear retreat, close the jaws. The reverse of the pickup's
-// approach-grab-retreat, against the same offsets.
+// returnMilkBottle puts the bottle fetchMilkBottle took back on its spot:
+// carry it level to its approach pose, straight in to its grab pose, release,
+// straight back out, close the jaws. The reverse of the fetch, on the same two
+// poses.
 //
-// The recorded position is cleared on release, so a second return with no
-// intervening pickup fails loudly instead of driving an empty gripper at a spot
-// where the bottle already stands.
+// The record of which milk is out is cleared on release, so a second return
+// with no intervening fetch fails loudly instead of driving an empty gripper at
+// a spot where the bottle already stands.
 func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error {
 	if err := s.requireMilk("return_milk"); err != nil {
 		return err
@@ -193,36 +206,27 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 	if s.gripper == nil {
 		return fmt.Errorf("return_milk: no gripper configured")
 	}
-	if s.milkGraspCentroid == nil {
-		return fmt.Errorf("return_milk: no recorded pickup position — run fetch_milk first")
+	milk := s.heldMilk
+	if milk == "" {
+		return fmt.Errorf("return_milk: no milk is out of the fridge — run fetch_milk first")
 	}
-
-	// Merge cancelCtx into ctx so operator cancel interrupts the raw moves and
-	// the gripper calls (the same merge pickDynamic does — these are raw-pose
-	// moves, not executeStep, so nothing else checks cancelCtx for us).
-	ctx, done := mergedCancelContext(ctx, cancelCtx)
-	defer done()
-
-	centroid := *s.milkGraspCentroid
-	approachPose, placePose := s.milkReturnPoses(centroid)
-	approachPD := &poseData{pose: approachPose, refFrame: referenceframe.World, componentName: gripPoint}
-	placePD := &poseData{pose: placePose, refFrame: referenceframe.World, componentName: gripPoint}
-	s.activeOrderLogger().Infof("return_milk: putting the bottle back at (x=%.1f, y=%.1f, z=%.1f)",
-		centroid.X, centroid.Y, centroid.Z)
+	s.activeOrderLogger().Infof("return_milk: putting the %s milk back", milk)
 
 	// The bottle still holds milk, so carry it level back to the fridge.
-	if err := s.carryHeldLevel(ctx, approachPD, nil, nil); err != nil {
+	approachStep := Step{PoseName: milkApproachPose(milk), PoseSwitch: s.clawsSw, Pause: shortPause, NoSpill: true}
+	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("return_milk: approach the shelf: %w", err)
 	}
 
 	// The bottle is held through the descent, so let its geometry approach the
-	// fridge surfaces it legitimately gets close to on the way down, and let the
+	// fridge surfaces it legitimately gets close to on the way in, and let the
 	// gripper and bottle pass through the interior shield that keeps the free
 	// traverse clear of the shelves.
-	descentCollisions := append([]AllowedCollision{}, s.heldItemSurfaceCollisions(heldItemFridgeCollisions)...)
-	descentCollisions = append(descentCollisions, s.pickupAreaShieldCollisions(milkAreaShieldFrameName)...)
-	if err := s.moveToRawPose(ctx, placePD, defaultApproachConstraint, descentCollisions, nil); err != nil {
-		return fmt.Errorf("return_milk: descend onto the shelf: %w", err)
+	placeCollisions := append(s.pickupAreaShieldCollisions(milkAreaShieldFrameName), s.heldItemSurfaceCollisions(heldItemFridgeCollisions)...)
+	placeStep := Step{PoseName: milkGrabPose(milk), PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
+		Pause: shortPause, AllowedCollisions: placeCollisions}
+	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
+		return fmt.Errorf("return_milk: set the bottle on the shelf: %w", err)
 	}
 
 	if err := s.gripper.Open(ctx, nil); err != nil {
@@ -231,12 +235,14 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 	time.Sleep(gripperPause)
 	// The bottle is standing on the shelf; it no longer travels with the gripper.
 	s.detachHeldGeometry()
-	s.milkGraspCentroid = nil
+	s.heldMilk = ""
 
 	// The gripper starts inside the interior shield, so it stays allowed for the
-	// straight-up retreat (the held-item pair drops out now that nothing is held).
-	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, s.pickupAreaShieldCollisions(milkAreaShieldFrameName), nil); err != nil {
-		return fmt.Errorf("return_milk: retreat after releasing the bottle: %v", err)
+	// straight-out retreat (the held-item pair drops out now that nothing is held).
+	exitStep := Step{PoseName: milkApproachPose(milk), PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
+		Pause: shortPause, AllowedCollisions: s.pickupAreaShieldCollisions(milkAreaShieldFrameName)}
+	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
+		return fmt.Errorf("return_milk: retreat after releasing the bottle: %w", err)
 	}
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("return_milk: close gripper after release: %w", err)

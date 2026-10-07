@@ -376,6 +376,9 @@ export async function prepareOrder(
     pronunciation?: string;
     /** Defaults to "pickup" on the backend when omitted. */
     fulfillment?: Fulfillment;
+    /** The milk for a milk drink (one of the machine's milk_options). Omitted,
+     * the backend uses its first milk. */
+    milk?: string;
   },
 ): Promise<{ status: string; queue_position?: number; order_id?: string }> {
   if (isDevMode()) {
@@ -414,6 +417,7 @@ export async function prepareOrder(
         ...(opts.customerEmail && { customer_email: opts.customerEmail }),
         ...(greeting && { initial_greeting: greeting }),
         ...(opts.fulfillment && { fulfillment: opts.fulfillment }),
+        ...(opts.milk && { milk: opts.milk }),
       },
     },
   );

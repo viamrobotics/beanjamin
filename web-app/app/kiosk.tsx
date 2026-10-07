@@ -4,7 +4,12 @@ import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
-import { drinkLabel } from "./order/drinks";
+import {
+  DEFAULT_MILK,
+  drinkLabel,
+  hasMilkChoice,
+  orderLabel,
+} from "./order/drinks";
 import { ChooseDrink } from "./order/choose-drink";
 import { EnterName } from "./order/enter-name";
 import dynamic from "next/dynamic";
@@ -79,6 +84,8 @@ export function Kiosk() {
   // Defaults to pickup everywhere; delivery requires an email (enforced here
   // and again by the backend).
   const [fulfillment, setFulfillment] = useState<Fulfillment>("pickup");
+  // Only sent for a drink with a milk choice (the iced latte).
+  const [milk, setMilk] = useState<string>(DEFAULT_MILK);
   const [misspelled, setMisspelled] = useState("");
   const [loading, setLoading] = useState(false);
   const [drinkRejection, setDrinkRejection] = useState<string | null>(null);
@@ -254,6 +261,7 @@ export function Kiosk() {
         customerEmail: email.trim(),
         pronunciation: undefined,
         fulfillment,
+        ...(hasMilkChoice(selectedDrink!) && { milk }),
       });
       setStep("confirmation");
       setTrackerMode("auto");
@@ -311,6 +319,7 @@ export function Kiosk() {
     setEmail(prefillEmail);
     setSelectedDrink(null);
     setFulfillment("pickup");
+    setMilk(DEFAULT_MILK);
     setWelcomeBack(null);
     setAppError(null);
   }, [prefillName, prefillEmail]);
@@ -369,7 +378,7 @@ export function Kiosk() {
         <OrderConfirmation
           misspelled={misspelled}
           actualName={name}
-          drinkLabel={drinkLabel(selectedDrink ?? "")}
+          drinkLabel={orderLabel(selectedDrink ?? "", milk)}
           onDismiss={handleConfirmationDismiss}
           showBack={!kioskMode}
         />
@@ -404,6 +413,7 @@ export function Kiosk() {
         <ChooseDrink
           selectedDrink={selectedDrink}
           fulfillment={fulfillment}
+          milk={milk}
           rejection={drinkRejection}
           connected={connected}
           onSelect={(id) => {
@@ -411,6 +421,7 @@ export function Kiosk() {
             setSelectedDrink(id);
           }}
           onFulfillmentChange={setFulfillment}
+          onMilkChange={setMilk}
           onBack={() => setStep("welcome")}
           onNext={handleDrinkNext}
         />
@@ -491,6 +502,7 @@ export function Kiosk() {
             // welcome clears it.
             setSelectedDrink(null);
             setFulfillment("pickup");
+            setMilk(DEFAULT_MILK);
             setDrinkRejection(null);
             setStep("drink");
           }}

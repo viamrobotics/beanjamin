@@ -6,6 +6,7 @@ package coffee
 
 import (
 	"fmt"
+	"regexp"
 
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/components/arm"
@@ -192,17 +193,15 @@ type Config struct {
 	MilkPourApproachRelativePose *RelativePose `json:"milk_pour_approach_relative_pose,omitempty"`
 	MilkPourRelativePose         *RelativePose `json:"milk_pour_relative_pose,omitempty"`
 
-	// Milk-bottle pickup (iced latte) mirrors cup and glass pickup with its own
-	// vision service and observe-pose switch, whose vantages look into the open
-	// fridge. These fields are required when can_serve_iced_latte is set.
-	MilkVisionServiceName       string        `json:"milk_vision_service_name,omitempty"`
-	MilkObservePoseSwitcherName string        `json:"milk_observe_pose_switcher_name,omitempty"`
-	MilkApproachRelativePose    *RelativePose `json:"milk_approach_relative_pose,omitempty"`
-	MilkGrabRelativePose        *RelativePose `json:"milk_grab_relative_pose,omitempty"`
+	// MilkOptions names the milk bottles in the fridge, as prepare_order's
+	// "milk" asks for them (e.g. ["whole", "oat"]). Each stands at a fixed spot,
+	// grabbed and set back down through the claws-switch poses
+	// <name>_milk_approach and <name>_milk_grab. The first is the default for an
+	// iced latte that names no milk. Required when can_serve_iced_latte is set.
+	MilkOptions []string `json:"milk_options,omitempty"`
 	// MilkBottleDimensions is the known bottle diameter/height the held bottle is
-	// modeled from (see ContainerDimensions). The same offsets that grabbed the
-	// bottle put it back, so these are also what the return descent is planned
-	// around. Required when can_serve_iced_latte is set.
+	// modeled from (see ContainerDimensions), centered on the grip point at the
+	// grab pose. Shared by every milk. Required when can_serve_iced_latte is set.
 	MilkBottleDimensions *ContainerDimensions `json:"milk_bottle_dimensions,omitempty"`
 
 	// Serving placement offsets are composed onto the serving-area slot anchor
@@ -325,6 +324,28 @@ func (d *ContainerDimensions) validate(path, field string) error {
 	}
 	return nil
 }
+
+// validateMilkOptions checks milk_options: at least one milk, each named,
+// named once, and named in lowercase letters, digits and underscores, since the
+// name is spliced into its pose names (<name>_milk_approach) and sent by clients.
+func validateMilkOptions(path string, milks []string) error {
+	if len(milks) == 0 {
+		return resource.NewConfigValidationFieldRequiredError(path, "milk_options")
+	}
+	seen := make(map[string]bool, len(milks))
+	for _, m := range milks {
+		if !milkNamePattern.MatchString(m) {
+			return fmt.Errorf("%s: milk_options entry %q must be lowercase letters, digits and underscores", path, m)
+		}
+		if seen[m] {
+			return fmt.Errorf("%s: milk_options lists %q twice", path, m)
+		}
+		seen[m] = true
+	}
+	return nil
+}
+
+var milkNamePattern = regexp.MustCompile(`^[a-z0-9_]+$`)
 
 // validatePourPair checks a required staged-glass-relative pour pair
 // (<name>_approach_relative_pose / <name>_relative_pose): both present, and at
@@ -464,12 +485,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		if cfg.DoorApproachRelativePose == nil {
 			return nil, nil, fmt.Errorf("%s: can_serve_iced_latte requires door_approach_relative_pose (the milk is fetched from behind the fridge door)", path)
 		}
-		if err := requireFields(path,
-			"milk_vision_service_name", cfg.MilkVisionServiceName,
-			"milk_observe_pose_switcher_name", cfg.MilkObservePoseSwitcherName,
-			"milk_approach_relative_pose", cfg.MilkApproachRelativePose,
-			"milk_grab_relative_pose", cfg.MilkGrabRelativePose,
-		); err != nil {
+		if err := validateMilkOptions(path, cfg.MilkOptions); err != nil {
 			return nil, nil, err
 		}
 		if err := cfg.MilkBottleDimensions.validate(path, "milk_bottle_dimensions"); err != nil {
@@ -478,10 +494,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		if err := validatePourPair(path, "milk_pour", cfg.MilkPourApproachRelativePose, cfg.MilkPourRelativePose); err != nil {
 			return nil, nil, err
 		}
-		reqDeps = append(reqDeps,
-			vision.Named(cfg.MilkVisionServiceName).String(),
-			cfg.MilkObservePoseSwitcherName,
-		)
 	}
 
 	if cfg.IceDispenseBoardName != "" {

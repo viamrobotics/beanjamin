@@ -13,6 +13,29 @@ export function drinkLabel(drinkId: string): string {
   return drinkId.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// The milks the iced latte comes with. Each id must match an entry in the
+// coffee service's milk_options; the first is what a machine defaults to.
+export const MILKS = [
+  { id: "whole", label: "Whole" },
+  { id: "oat", label: "Oat" },
+] as const;
+
+export const DEFAULT_MILK: string = MILKS[0].id;
+
+// hasMilkChoice reports whether the drink is made with a choice of milk (see
+// IsMilk in coffee/order/drinks.go).
+export function hasMilkChoice(drinkId: string): boolean {
+  return drinkId === "iced_latte";
+}
+
+// orderLabel is the drink's label with its milk when it has one, e.g.
+// "Iced Latte · Oat milk".
+export function orderLabel(drinkId: string, milk: string): string {
+  if (!hasMilkChoice(drinkId)) return drinkLabel(drinkId);
+  const found = MILKS.find((m) => m.id === milk);
+  return `${drinkLabel(drinkId)} · ${found?.label ?? milk} milk`;
+}
+
 // Base drinks shown in the selection grid, in display order. Decaf is no longer
 // its own card — it's a side toggle (see applyDecaf).
 export const GRID_DRINK_IDS = [

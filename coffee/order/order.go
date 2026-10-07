@@ -45,8 +45,11 @@ type Order struct {
 	Completion    string `json:"completion"`
 	// Fulfillment is how the customer receives the drink: FulfillmentPickup
 	// (default) or FulfillmentDelivery. Set at enqueue time; immutable afterward.
-	Fulfillment string    `json:"fulfillment"`
-	EnqueuedAt  time.Time `json:"enqueued_at"`
+	Fulfillment string `json:"fulfillment"`
+	// Milk is the milk a milk drink is made with (one of the configured
+	// milk_options), resolved at enqueue time; empty for a drink without milk.
+	Milk       string    `json:"milk,omitempty"`
+	EnqueuedAt time.Time `json:"enqueued_at"`
 	// PickupPosition is the 0-based serving-area slot the finished drink was
 	// placed in, returned by the serving step (placeFullCupOnShelf /
 	// serveIcedCoffee) and set on prepareDrink's in-flight copy, then carried

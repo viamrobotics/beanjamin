@@ -136,9 +136,9 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, o order.Order) (err 
 		switch {
 		case order.IsIced(drink) && armFreeDuringPour:
 			// Glass already iced and staged during the brew; finish the rest.
-			servedSlot, err = s.finishIced(ctx, cancelCtx, order.IsMilk(drink))
+			servedSlot, err = s.finishIced(ctx, cancelCtx, o.Milk)
 		case order.IsIced(drink):
-			servedSlot, err = s.serveIced(ctx, cancelCtx, order.IsMilk(drink))
+			servedSlot, err = s.serveIced(ctx, cancelCtx, o.Milk)
 		case cupApproached:
 			// Hot drink, gripper already poised over the cup: grasp it and shelf it.
 			if err = s.graspBrewedCup(ctx, cancelCtx); err != nil {
