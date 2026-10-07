@@ -137,7 +137,7 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 
 // Step labels surfaced through setStep -> get_queue, the order sensor's
 // failed_step, and the web tracker. Constants so the brew sequence
-// (prepare.go) and rewind recovery reference the same strings.
+// (prepare.go) and the operator commands reference the same strings.
 const (
 	stepGrinding             = "Grinding"
 	stepTamping              = "Tamping"
@@ -151,7 +151,6 @@ const (
 	stepCleaning             = "Cleaning"
 	stepAddingMilk           = "Adding milk"
 	stepFinishingUp          = "Finishing up"
-	stepRecoveringFilter     = "Recovering filter"
 	// stepKeepAlive is published while a keep-alive purge runs. No order is
 	// active, so it surfaces through Status/get_queue only, never on an order.
 	stepKeepAlive = "Keep-alive purge"

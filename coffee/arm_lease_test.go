@@ -40,7 +40,7 @@ func TestClaimRefusesWhileHeld(t *testing.T) {
 	if _, err := s.lease.claimManual("keepalive purge"); err != nil {
 		t.Fatalf("first claim should take the free arm: %v", err)
 	}
-	_, err := s.lease.claimManual("rewind")
+	_, err := s.lease.claimManual("reset_world")
 	if !errors.Is(err, errArmBusy) {
 		t.Fatalf("second claim err = %v, want errArmBusy", err)
 	}
@@ -48,7 +48,7 @@ func TestClaimRefusesWhileHeld(t *testing.T) {
 		t.Errorf("err = %q, want it to name the holder", err)
 	}
 	s.lease.release()
-	if _, err := s.lease.claimManual("rewind"); err != nil {
+	if _, err := s.lease.claimManual("reset_world"); err != nil {
 		t.Fatalf("claim should succeed again once the arm is released: %v", err)
 	}
 }
@@ -94,7 +94,7 @@ func TestClaimHandsBackTheContextACancelFires(t *testing.T) {
 	}
 
 	s.lease.release()
-	next, err := s.lease.claimManual("rewind")
+	next, err := s.lease.claimManual("reset_world")
 	if err != nil {
 		t.Fatalf("claim after the cancel should take the free arm: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestClaimWaitsForTheCancelLock(t *testing.T) {
 	s.lease.mu.Lock()
 	got := make(chan context.Context, 1)
 	go func() {
-		ctx, _ := s.lease.claimManual("rewind")
+		ctx, _ := s.lease.claimManual("reset_world")
 		got <- ctx
 	}()
 
@@ -138,7 +138,7 @@ func TestClaimWaitsForTheCancelLock(t *testing.T) {
 	}
 }
 
-// TestSignalCancelPausesWhenIdle: cancel, rewind and reset_world all start with
+// TestSignalCancelPausesWhenIdle: cancel and reset_world both start with
 // signalCancel, and it pauses the queue even with nothing running, so an idle
 // cancel holds back the next order and keepalive purge until proceed. The
 // keepalive's own pause check is covered in keepalive_test.go.
@@ -171,7 +171,7 @@ func TestPauseBlocksOnlyAutomatedClaims(t *testing.T) {
 	if s.lease.busy() {
 		t.Fatal("a refused claim must not take the arm")
 	}
-	if _, err := s.lease.claimManual("rewind"); err != nil {
+	if _, err := s.lease.claimManual("reset_world"); err != nil {
 		t.Fatalf("manual claim while paused: %v, want it allowed", err)
 	}
 	if _, err := s.lease.claimAutomated("keepalive purge"); !errors.Is(err, errArmBusy) {
@@ -246,7 +246,7 @@ func TestShutdownRefusesLaterClaims(t *testing.T) {
 	}
 	s.lease.release()
 
-	if _, err := s.lease.claimManual("rewind"); !errors.Is(err, errServiceClosed) {
+	if _, err := s.lease.claimManual("reset_world"); !errors.Is(err, errServiceClosed) {
 		t.Errorf("manual claim after shutdown: err = %v, want errServiceClosed", err)
 	}
 	if _, err := s.lease.claimAutomated("order queue"); !errors.Is(err, errServiceClosed) {
@@ -255,7 +255,7 @@ func TestShutdownRefusesLaterClaims(t *testing.T) {
 }
 
 // TestPanickingOrderPausesQueue: a panic mid-order is a fault like any other,
-// so the queue pauses for rewind → proceed instead of starting the next order
+// so the queue pauses for by-hand recovery and proceed instead of starting the next order
 // from an unknown state.
 func TestPanickingOrderPausesQueue(t *testing.T) {
 	s, _, _ := coffeeWithDirtyWorld(t, nil)

@@ -64,7 +64,7 @@ func (s *beanjaminCoffee) processQueue() {
 			// Reset the service-global step now that no order is current. The
 			// completed copy in recent keeps its raw_step for debugging.
 			s.currentStep.Store("")
-			// Released last, so a cancel or rewind waiting for the arm never
+			// Released last, so a cancel or reset_world waiting for the arm never
 			// races the queue's own bookkeeping above.
 			s.lease.release()
 		}
@@ -140,12 +140,12 @@ func (s *beanjaminCoffee) safeExecuteOrder(cancelCtx context.Context, o order.Or
 			step, _ := s.currentStep.Load().(string)
 			s.failedStep.Store(step)
 			// A panic is a fault like any other: pause so the next order waits
-			// for rewind → proceed instead of starting from an unknown state.
+			// for by-hand recovery and proceed instead of starting from an unknown state.
 			// The queue still holds the arm here, so nothing automated can
 			// start before the pause lands.
 			s.lease.pause()
-			logger.Errorf("panic while processing order for %s: %v — queue paused; run 'rewind' to recover the arm, then 'proceed'. "+
-				"The queue will still save video and order reading", o.CustomerName, r)
+			logger.Errorf("panic while processing order for %s: %v — queue paused; %s. "+
+				"The queue will still save video and order reading", o.CustomerName, r, recoverByHand)
 		}
 		failedStep, _ := s.failedStep.Load().(string)
 		s.notifyOrderReading(order.Reading{
@@ -288,7 +288,7 @@ func (s *beanjaminCoffee) creditLoyaltyPoint(ctx context.Context, o order.Order)
 
 // activeOrderLogger returns the order-scoped logger for the in-flight order
 // when one is being processed, otherwise the base service logger. Used by
-// entry points (cancel, rewind) that run outside the queue goroutine and so
+// entry points (such as cancel) that run outside the queue goroutine and so
 // don't receive the tagged logger as a parameter. Never returns nil.
 func (s *beanjaminCoffee) activeOrderLogger() logging.Logger {
 	if l := s.activeLogger.Load(); l != nil {

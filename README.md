@@ -185,7 +185,7 @@ Returns:
 
 **API:** `rdk:service:generic`
 
-Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` component. Supports preparing espresso and lungo orders, executing individual actions, stopping a run (`cancel`), and driving the arm back to a clean start (`rewind`).
+Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` component. Supports preparing espresso and lungo orders, executing individual actions, and stopping a run (`cancel`). Recovering afterwards is done by hand, then `proceed`.
 
 `has_separate_brew_buttons` selects which coffee machine the arm is driving, and with it which claw poses the switcher must carry:
 
@@ -349,7 +349,7 @@ Glass and milk-bottle pickup reuse `cup_pickup_max_attempts` (an item-agnostic o
 
 **No-spill carry.** Every **free traverse of a filled container** is planned with a **15° orientation constraint** (`noSpillOrientationToleranceDegs` in `coffee/motion.go`) instead of free-planning straight to the goal. RDK checks the constraint along the whole path as a tube of that width around the **direct slerp** from the carry's start orientation to its goal, so one start-to-goal segment holds the container near level for the entire traverse — no intermediate waypoints are needed. Both endpoints are upright container poses, so the slerp itself stays level and 15° leaves the drink well inside a full cup's static spill angle. The constraint **ignores theta** (spin about the container's own vertical axis): a container spills when tipped, not when spun, so only tilt is bounded. The path itself is unconstrained: the planner is free to route around the machine however it likes, subject only to collision avoidance and the orientation tube. This covers the serving-area placement of a **filled** container (the hot cup and the iced glass), carrying the ice-filled glass to the staging area, carrying the espresso cup to the pour position, and both carries of the open milk bottle (fridge to the pour position, and back to the fridge). The espresso cup's own trip to the shelf happens *after* it has been poured over the ice, so it is empty by then and free-plans straight to the slot — there is nothing left in it to slosh. Manual `place_held` assumes filled. The goal commands the **held-item (container) frame** rather than the gripper — the goal pose is converted onto it — because the orientation bound is measured in the commanded frame's own axes, and the held-item frame's **+Z is the container's vertical axis** (see **Held-item geometry** below). Tune the tolerance on hardware.
 
-**Held-item geometry.** A picked-up cup/glass/milk bottle is always tracked: its geometry — a box of the configured `cup_dimensions` / `glass_dimensions` / `milk_bottle_dimensions` centered on the grasp centroid — is attached under the `grip-point` frame in the cached frame system as a `held-item` frame, so motion planning routes around the held item until it is set down (and is restored on each re-grab — the brewed cup from under the machine, the staged glass). The frame sits **on the grip point** (its parent) and is **rotated onto the container's axes**: its +Z is the container's vertical axis, world-upright at the moment of the grab and tilting with the container thereafter as the wrist moves — that is the frame the no-spill carry commands and measures tilt against, and the frame the pour poses describe. Its pose does not move the geometry (a frame's geometry attaches at the frame's *parent*, not the frame itself), so collision behavior is unchanged by it. `addHeldItemFrame` fails if the frame system has no `grip-point` frame. When the brewed cup is re-grabbed but nothing was cached to restore — e.g. a manually-stepped serving that never ran the vision cup pickup — its held-item box is modeled from `cup_dimensions` and the grip point's current world pose, so the pour and shelf placement still track the cup. The gripper-overlap collision pairs are allowed automatically on every move while an item is held; contact phases near a modeled surface (under the machine, the serving-area shelf) allow the held item against that surface too. The held-item frame is dropped when the frame system is rebuilt (`reset_world`, `rewind`, `proceed`).
+**Held-item geometry.** A picked-up cup/glass/milk bottle is always tracked: its geometry — a box of the configured `cup_dimensions` / `glass_dimensions` / `milk_bottle_dimensions` centered on the grasp centroid — is attached under the `grip-point` frame in the cached frame system as a `held-item` frame, so motion planning routes around the held item until it is set down (and is restored on each re-grab — the brewed cup from under the machine, the staged glass). The frame sits **on the grip point** (its parent) and is **rotated onto the container's axes**: its +Z is the container's vertical axis, world-upright at the moment of the grab and tilting with the container thereafter as the wrist moves — that is the frame the no-spill carry commands and measures tilt against, and the frame the pour poses describe. Its pose does not move the geometry (a frame's geometry attaches at the frame's *parent*, not the frame itself), so collision behavior is unchanged by it. `addHeldItemFrame` fails if the frame system has no `grip-point` frame. When the brewed cup is re-grabbed but nothing was cached to restore — e.g. a manually-stepped serving that never ran the vision cup pickup — its held-item box is modeled from `cup_dimensions` and the grip point's current world pose, so the pour and shelf placement still track the cup. The gripper-overlap collision pairs are allowed automatically on every move while an item is held; contact phases near a modeled surface (under the machine, the serving-area shelf) allow the held item against that surface too. The held-item frame is dropped when the frame system is rebuilt (`reset_world`, `proceed`).
 
 **Resting-surface seating.** Pickup resolves each detection's grasp **Z** from the surface the container stands on rather than the raw detected centroid Z (which depth noise pushes above or below the true base), using the configured container height (`cup_dimensions` / `glass_dimensions`). It finds the highest **static** Box in the framesystem whose world footprint lies directly beneath the detection and whose top face is below the detected centroid, then seats the container's base **1 mm** above that top — so the grasp centroid becomes `surfaceTop + 1 mm + height/2`, keeping the detected X/Y. "Static" means world-anchored (it moves rigidly with the world frame), so the moving arm, gripper, camera, and any held item are never mistaken for a surface; non-box and rotated geometries are bounded by their world axis-aligned extent. No framesystem changes or extra config are required — the resting surface is auto-detected. When no surface is found beneath a detection, pickup uses the raw detected Z unchanged.
 
@@ -461,11 +461,11 @@ without `ice_vision_enabled`.
 {"cancel": true}
 ```
 
-Returns `{"status": "cancelled", "cancelled": true, "queue": "paused"}` — `cancelled` is `false` when nothing was running, and `queue` reports the real pause state. With nothing running, `cancel` still pauses the queue: it works as a pause button, so no new order starts until `proceed`. `rewind` pauses the same way, since it cancels first.
+Returns `{"status": "cancelled", "cancelled": true, "queue": "paused"}` — `cancelled` is `false` when nothing was running, and `queue` reports the real pause state. With nothing running, `cancel` still pauses the queue: it works as a pause button, so no new order starts until `proceed`.
 
-To get the arm back to a clean starting state afterwards, run `rewind`, then `proceed` to resume the queue.
+To recover afterwards, put the machine back to its starting state by hand — a clean portafilter held in the claws, nothing else in the gripper, the fridge door shut — then send `proceed` to resume the queue. There is no command that does this for you.
 
-**Pause after a fault.** An order that fails on its own — a genuine fault, not a `cancel` or `reset_world` — always pauses the queue exactly as `cancel` does. The next order would otherwise start from an unknown physical state, grinding a second dose onto used grounds or planning against a stale world, and not everything a fault leaves behind (a knocked-over cup, a half-finished pour) is something the service can see. An error log names any mid-cycle state still recorded — the portafilter locked in the group head or holding grounds, the filter frame locked to world, an item in the gripper, a glass staged, or the fridge door modeled open — and `get_queue` reports `is_paused: true`; recover the same way as after a cancel (`rewind`, shut the fridge by hand if it is open, then `proceed`). A failed manually-stepped `execute_action` never pauses the queue. An order that crashes with a panic pauses the queue the same way. Once the service starts shutting down, every command that needs the arm is refused with `service closing`.
+**Pause after a fault.** An order that fails on its own — a genuine fault, not a `cancel` or `reset_world` — always pauses the queue exactly as `cancel` does. The next order would otherwise start from an unknown physical state, grinding a second dose onto used grounds or planning against a stale world, and not everything a fault leaves behind (a knocked-over cup, a half-finished pour) is something the service can see. An error log names any mid-cycle state still recorded — the portafilter locked in the group head or holding grounds, the filter frame locked to world, an item in the gripper, a glass staged, or the fridge door modeled open — and `get_queue` reports `is_paused: true`; recover the same way as after a cancel (put the machine right by hand, fridge door included, then `proceed`). A failed manually-stepped `execute_action` never pauses the queue. An order that crashes with a panic pauses the queue the same way. Once the service starts shutting down, every command that needs the arm is refused with `service closing`.
 
 **Waiting for the arm.** The next order claims the arm before it starts. If a keepalive purge or a troubleshooting command holds the arm, or the queue is paused, the order stays pending, still visible in `get_queue` and still removable with `cancel_order`, and starts once the arm is free and the queue unpaused. A keepalive purge skips its turn the same way.
 
@@ -484,24 +484,6 @@ It errors rather than guessing when the order can't be dropped:
 - **An unknown ID** — it was cancelled already, or never existed.
 
 `get_queue` marks every order with a `cancellable` boolean saying which of these it is, so a UI can offer the action only where it will be accepted. Note this is not the same as "first in the list": the front of the backlog is cancellable precisely because nothing has started on it.
-
-**`rewind`** - Drive the arm back to the state a brew cycle starts from: nothing in the gripper, no grounds in the portafilter, the filter home in the claws. It stops any running sequence first, so it is safe to send at any time without a preceding `cancel`.
-
-In order: drop a cup or glass still in the jaws (open → detach the held-item geometry → close; a gripper closed on the thin filter handle reads as closed, so the portafilter is never dropped), then run whichever recovery the recorded portafilter state calls for:
-
-- Portafilter locked in the machine (after `release_filter`, before `grab_filter`): grab → unlock → clean → home.
-- Portafilter in the claws with grounds in it (after grinding, before cleaning): clean → home.
-- Neither: no arm motion.
-
-The cached frame system is rebuilt at the end, discarding any mid-cycle mutation such as a filter frame reparented to world by `lock_portafilter`. The queue stays paused with its pending orders intact; send `proceed` to resume. If recovery motion fails, the frame system is left untouched and the state flags stay set, so a second `rewind` retries from where the first stopped.
-
-> ⚠️ A cancel that fired mid-`lock_portafilter` — between the arm entering the machine and the gripper opening — leaves the bayonet partially engaged, and `rewind` may try to route the arm away from it. There is no safe automated recovery for that window: free the filter by hand first.
-
-```json
-{"rewind": true}
-```
-
-Returns `{"status": "rewound", "cancelled": false, "recovered": true, "queue": "paused"}` — `recovered` reports whether recovery motion actually ran.
 
 **`get_queue`** - Get the current order queue status.
 
@@ -528,7 +510,7 @@ Returns:
 }
 ```
 
-`arm_holder` names what currently holds the arm — `order queue`, `keepalive purge`, `rewind`, `execute_action open_door` and so on — and is empty when the arm is free. A command refused because the arm is busy names the holder in its error too.
+`arm_holder` names what currently holds the arm — `order queue`, `keepalive purge`, `reset_world`, `execute_action open_door` and so on — and is empty when the arm is free. A command refused because the arm is busy names the holder in its error too.
 
 `count` is how many drinks still have to be made — the backlog plus the one on the arm. Orders that have finished stay in the list with `completed_at` set for ~15s so a UI can render a "Ready!" card without diffing polls, but they don't count toward the depth. `cancellable` says whether `cancel_order` would accept this order.
 
@@ -542,7 +524,7 @@ The **recorded fridge-door angle is cleared too**, so the rebuilt world has a sh
 
 The pause is only released if there is one — `proceed` on a running queue rebuilds the world and reports `resumed: false`. Releasing the pause *is* clearing the queue's paused flag, done by `proceed` itself: any cancel pauses the queue, including one that interrupts an `execute_action` or a keepalive purge with no order in flight, and such a pause has no order-queue goroutine waiting to hear about it. Two `proceed`s racing therefore resume once, and the second reports `resumed: false`. `proceed` refuses outright while a sequence is still running (including one that is unwinding from a cancel): the frame system cannot be swapped under a goroutine that is planning with it.
 
-Because the rebuild forgets the modeled contents of the gripper without opening the gripper, `proceed` is the wrong command when the jaws really are holding something — a portafilter or cup a manually-stepped `execute_action` picked up. Use `cancel` then `rewind`, which physically lets go and homes the arm, and only then `proceed`. A `proceed` that forgets a held item logs a warning saying so.
+Because the rebuild forgets the modeled contents of the gripper without opening the gripper, `proceed` is the wrong command when the jaws really are holding something — a portafilter or cup a manually-stepped `execute_action` picked up. Take it out by hand first, and only then `proceed`. A `proceed` that forgets a held item logs a warning saying so.
 
 ```json
 {"proceed": true}
@@ -634,7 +616,7 @@ Then the sequence rejoins the iced flow: grab the espresso cup from under the ma
 
 The door is opened once and closed once, so the fridge stands open for the pour — a few seconds of open door in exchange for halving the door sweeps, which are the slowest and most failure-prone part of the trip.
 
-**When a milk step fails.** The arm does not try to shut the door itself: it may still be holding the bottle, and a sweep needs the gripper for the handle. So the door is left where it stands, the model keeps recording that angle, and the error says so. Take the bottle out of the gripper if it is holding one and `rewind` to recover the arm — `rewind` rebuilds the frame system with the door still held open, which is correct, because it has not been shut. Then shut the door by hand and send `proceed`, which is what declares it shut again.
+**When a milk step fails.** The arm does not try to shut the door itself: it may still be holding the bottle, and a sweep needs the gripper for the handle. So the door is left where it stands, the model keeps recording that angle, and the error says so. Take the bottle out of the gripper if it is holding one and put the rest of the machine back to its starting state by hand. Then shut the door and send `proceed`, which is what declares it shut again.
 
 **`action`** - Control the gripper. Supported values: `"open_gripper"`, `"close_gripper"`.
 
@@ -734,7 +716,7 @@ Which poses the service can reach, and which frame each moves. The frame is the 
 | `tamper_approach`, `tamper_activate` | tamp | always |
 | `coffee_approach`, `coffee_in`, `coffee_locked_final` | lock the portafilter | always |
 | `coffee_shake`, `coffee_shake_left` | dislodge a stuck puck while unlocking (the two lean opposite ways) | `portafilter_shake_sec > 0` |
-| `close_to_cleaning`, `approach_to_cleaning_scrapper`, `cleaning_scrapper_active`, `approach_to_cleaning_brush`, `cleaning_brush_active` | clean | always — `rewind` recovery cleans too |
+| `close_to_cleaning`, `approach_to_cleaning_scrapper`, `cleaning_scrapper_active`, `approach_to_cleaning_brush`, `cleaning_brush_active` | clean | always |
 | `purge_approach`, `purge_press` | hold the 1 CUP button to keep the machine at brew temperature | `keepalive` is configured |
 | `home` | end of cycle | always |
 

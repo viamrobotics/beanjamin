@@ -14,7 +14,7 @@ Each model lives in its own package. The coffee service is `coffee/` (`package c
 
 | Concern | Files |
 | --- | --- |
-| Lifecycle and command API | `module.go`, `config.go`, `api.go` (DoCommand dispatch, `Status`), `operator.go` (proceed, clear_queue, reset_world, cancel, cancel_order, rewind), `actions.go` (`execute_action`), `cup_flow.go` (`run_cup_flow`) |
+| Lifecycle and command API | `module.go`, `config.go`, `api.go` (DoCommand dispatch, `Status`), `operator.go` (proceed, clear_queue, reset_world, cancel, cancel_order), `actions.go` (`execute_action`), `cup_flow.go` (`run_cup_flow`) |
 | Brew cycle | `prepare.go` (`prepareDrink` and its fault pause), `steps.go` (`Step`, `runSteps`/`executeStep`, step labels and `setStep`), `brew_steps.go`, `poses.go` (pose and frame names, startup pose validation), `order_intake.go`, `queue.go` |
 | Serving and drink variants | `serving.go`, `serving_slots.go`, `iced.go`, `milk.go`, `door.go` |
 | Motion planning | `motion.go`, `held_geometry.go`, `collisions.go`, `joints.go`, `glass_relative_poses.go` (pour poses resolved against the staged glass) |
