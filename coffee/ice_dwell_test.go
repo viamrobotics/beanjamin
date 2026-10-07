@@ -374,7 +374,6 @@ func TestPulseIcePinReportsAFailedClose(t *testing.T) {
 // does not itself put the pin down.
 func TestCloseDrivesThePinLow(t *testing.T) {
 	s, pin := iceTestService(t, nil)
-	_, s.lease.cancelFunc = context.WithCancel(context.Background())
 	s.queueStop = make(chan struct{})
 	if err := s.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)

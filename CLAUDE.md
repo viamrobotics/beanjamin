@@ -72,7 +72,7 @@ Build the bundled web-app Viam module from repo root: `make web-app-module` (run
 4. On completion/failure, the order is moved to `recent` for `order.RecentDisplayDuration` (15s) so the UI can render "Ready!" without diffing polls.
 5. A single reading per attempt is pushed to the optional order-sensor sink (`ordersensor/`, discovered from deps through the `orderSensorSink` interface in `coffee/queue.go`), and an async clip save is requested on the optional `cam_storage_mux_name` video-store multiplexer.
 
-`cancel`, `clear_queue`, and `proceed` (`coffee/operator.go`) manipulate the same state. Only one routine runs at a time, gated by `running atomic.Bool`; a shared `cancelCtx` is captured under `mu` so cancellation can interrupt motion. `running`, `paused`, `mu`, `cancelCtx` and `cancelFunc` live together on `s.lease` (`armLease` in `coffee/arm_lease.go`).
+`cancel`, `clear_queue`, and `proceed` (`coffee/operator.go`) manipulate the same state. Only one routine holds the arm at a time, decided by `s.lease` (`armLease` in `coffee/arm_lease.go`), which keeps the holder's name, the queue pause and the shared `cancelCtx` under one mutex. Troubleshooting commands (`execute_action`, `run_cup_flow`, `rewind`, `reset_world`, `proceed`, the gripper actions) take it with `claimManual`, which ignores the pause; the order queue and the keepalive purge take it with `claimAutomated`, which is refused while paused. A claim hands back `cancelCtx` in the same critical section, and `lease.cancel` always pauses, even with the arm idle.
 
 ### Motion layer
 

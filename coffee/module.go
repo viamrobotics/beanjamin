@@ -33,6 +33,7 @@ import (
 	"beanjamin/coffee/order"
 	"beanjamin/coffee/report"
 	"beanjamin/coffee/speech"
+
 	// Register the multi-poses-execution-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
 )
@@ -459,7 +460,7 @@ const rewindAnnouncement = "Rewinding to a clean start. I'll clean up if needed 
 
 func (s *beanjaminCoffee) Close(context.Context) error {
 	close(s.queueStop)
-	s.lease.cancelFunc()
+	s.lease.shutdown()
 	// Cancelling the sequence context is not the same as closing the ice pin: a
 	// rebuild or a crash mid-dispense would otherwise leave the ice machine
 	// running until somebody notices.

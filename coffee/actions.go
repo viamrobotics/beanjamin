@@ -5,7 +5,6 @@ package coffee
 
 import (
 	"context"
-	"errors"
 	"fmt"
 )
 
@@ -113,14 +112,11 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string, withGl
 		}
 	}
 
-	if !s.lease.running.CompareAndSwap(false, true) {
-		return nil, errors.New("a sequence is already running")
+	cancelCtx, err := s.lease.claimManual("execute_action " + name)
+	if err != nil {
+		return nil, err
 	}
-	defer s.lease.running.Store(false)
-
-	s.lease.mu.Lock()
-	cancelCtx := s.lease.cancelCtx
-	s.lease.mu.Unlock()
+	defer s.lease.release()
 
 	// Pick up any out-of-band frame-system edits before planning. Guarded so a
 	// held item or locked filter established by a prior action call (manual

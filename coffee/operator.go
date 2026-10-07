@@ -23,8 +23,8 @@ import (
 // refreshFrameSystemIfClean declines to rebuild precisely because they are
 // present. A faulted order pauses the queue for this, but a
 // manually-stepped execute_action that fails leaves them behind with the queue
-// running. The running gate is required because cachedFS may only be swapped
-// while no sequence owns the arm.
+// running. Proceed claims the arm because cachedFS may only be swapped while no
+// sequence owns it.
 //
 // It clears the recorded fridge-door angle too: proceed is the operator saying
 // the machine has been put right, fridge included. A rebuild cannot shut a real
@@ -34,8 +34,8 @@ import (
 // forgets the gripper's modeled contents without opening the gripper — an
 // operator holding something manually wants rewind, which physically lets go.
 func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, error) {
-	if !s.lease.running.CompareAndSwap(false, true) {
-		return nil, errors.New("proceed: a sequence is still running — wait for it to stop, or cancel it first")
+	if _, err := s.lease.claimManual("proceed"); err != nil {
+		return nil, fmt.Errorf("proceed: %w — wait for it to stop, or cancel it first", err)
 	}
 	// Warn before the flag is cleared: forgetting a held item without opening
 	// the jaws leaves the arm planning through whatever it is still carrying.
@@ -55,7 +55,7 @@ func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, err
 		// would quietly shut a door this proceed never got to vouch for.
 		s.doorOpenDegs = doorOpenDegs
 	}
-	s.lease.running.Store(false)
+	s.lease.release()
 	if err != nil {
 		return nil, fmt.Errorf("proceed: %w", err)
 	}
@@ -67,15 +67,13 @@ func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, err
 			"the next plan will route the arm straight through the panel", doorOpenDegs)
 	}
 
-	// Clearing the flag IS the resume, and it happens here rather than in the
-	// queue goroutine so that it lands exactly when the resume is granted.
-	// Compare-and-swap so two proceeds racing cannot both claim to have released
-	// a single pause.
-	if !s.lease.paused.CompareAndSwap(true, false) {
+	// Clearing the pause IS the resume: the waiting queue and the keepalive
+	// loop see it on their next check. unpause reports whether there was a
+	// pause, so two proceeds racing cannot both claim to have released it.
+	if !s.lease.unpause() {
 		s.logger.Info("proceed: frame system rebuilt, queue was not paused")
 		return proceedResponse("reset", false, doorOpenDegs), nil
 	}
-	s.queue.WakeProceed()
 
 	s.logger.Info("proceed: frame system rebuilt, queue resumed")
 	return proceedResponse("resumed", true, doorOpenDegs), nil
@@ -122,28 +120,29 @@ func (s *beanjaminCoffee) clearQueue() (map[string]any, error) {
 // orders. Each step is best-effort and skipped when not applicable, so it is
 // safe to call from any state.
 //
-// Everything between the cancel and the unpause runs holding the running gate:
-// the rebuild swaps cachedFS and the mutation flags, which only the gate holder
-// may touch, and without it a keepalive purge or execute_action could start
-// planning against a half-swapped world. The gate is released before the
-// unpause, as in proceed, so the order the resume lets through can claim it.
+// Everything between the cancel and the unpause runs holding the arm: the
+// rebuild swaps cachedFS and the mutation flags, which only the arm holder may
+// touch, and without it an execute_action could start planning against a
+// half-swapped world. The cancel's pause keeps the queue and the keepalive out
+// meanwhile. The arm is released before the unpause, as in proceed, so the order
+// the resume lets through can claim it.
 //
 // Because it declares the world to be exactly as configured, run it only when
 // that is true — in particular, shut the fridge door by hand first, or the arm
 // will plan straight through a panel the model now believes is closed.
 func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error) {
-	cancelled := s.signalCancel()
+	cancelled := s.lease.cancel()
 	if cancelled {
 		if err := s.waitForIdle(ctx, resetCancelWaitTimeout); err != nil {
 			return nil, fmt.Errorf("reset_world: %w", err)
 		}
 	}
 
-	// A sequence can start after the cancel check — once the cancelled one has
-	// unwound, or when there was nothing running to cancel — so the arm has to
-	// be claimed, not assumed.
-	if !s.lease.running.CompareAndSwap(false, true) {
-		return nil, errors.New("reset_world: another sequence started before reset could take over — try again")
+	// The cancel paused the queue and the keepalive, but another manual command
+	// can still take the arm once the cancelled sequence has unwound, so the arm
+	// has to be claimed, not assumed.
+	if _, err := s.lease.claimManual("reset_world"); err != nil {
+		return nil, fmt.Errorf("reset_world: another sequence took the arm before reset could — try again: %w", err)
 	}
 
 	removed := s.queue.Clear()
@@ -160,15 +159,12 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 	s.doorOpenDegs = 0
 
 	err := s.resetFrameSystem(ctx)
-	s.lease.running.Store(false)
+	s.lease.release()
 	if err != nil {
 		return nil, fmt.Errorf("reset_world: %w", err)
 	}
 
-	unpaused := s.lease.paused.CompareAndSwap(true, false)
-	if unpaused {
-		s.queue.WakeProceed()
-	}
+	unpaused := s.lease.unpause()
 
 	s.logger.Infof("reset_world: cancelled=%v cleared=%d unpaused=%v frame_system_reset=true",
 		cancelled, removed, unpaused)
@@ -180,26 +176,11 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 	}, nil
 }
 
-// signalCancel interrupts any in-flight motion by cancelling the shared
-// cancelCtx and pausing the queue. Returns true if a sequence was running.
-// Does not wait for the running goroutine to observe the cancellation.
-func (s *beanjaminCoffee) signalCancel() bool {
-	if !s.lease.running.Load() {
-		return false
-	}
-	s.lease.paused.Store(true)
-	s.lease.mu.Lock()
-	s.lease.cancelFunc()
-	s.lease.cancelCtx, s.lease.cancelFunc = context.WithCancel(context.Background())
-	s.lease.mu.Unlock()
-	return true
-}
-
-// waitForIdle polls until s.lease.running flips back to false (meaning the cancelled
-// sequence has fully unwound through its defers) or the timeout / ctx expires.
+// waitForIdle polls until the arm is released (meaning the cancelled sequence
+// has fully unwound through its defers) or the timeout / ctx expires.
 func (s *beanjaminCoffee) waitForIdle(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	for s.lease.running.Load() {
+	for s.lease.busy() {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out after %s waiting for sequence to stop", timeout)
 		}
@@ -213,11 +194,12 @@ func (s *beanjaminCoffee) waitForIdle(ctx context.Context, timeout time.Duration
 }
 
 // cancel stops the machine and nothing else: it aborts the sequence, halts the
-// arm mid-trajectory and pauses the queue. No motion is planned, no state flag
+// arm mid-trajectory and pauses the queue. With nothing running it is just a
+// pause button: no new order or keepalive purge starts until proceed. No motion is planned, no state flag
 // is cleared and the frame system is left alone, so the recorded world still
 // matches the physical one for rewind to act on.
 func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]any, error) {
-	cancelled := s.signalCancel()
+	cancelled := s.lease.cancel()
 	logger := s.activeOrderLogger()
 
 	// Stop halts the trajectory where it stands. Never fatal: cancel must go on
@@ -241,12 +223,12 @@ func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]any, error) {
 	if cancelled {
 		logger.Info("cancel: sequence stopped and queue paused — run 'rewind' to recover the arm, then 'proceed'")
 	} else {
-		logger.Info("cancel: nothing was running")
+		logger.Info("cancel: nothing was running — queue paused, send 'proceed' to resume")
 	}
 	return map[string]any{
 		"status":    "cancelled",
 		"cancelled": cancelled,
-		"queue":     queueState(s.lease.paused.Load()),
+		"queue":     queueState(s.lease.isPaused()),
 	}, nil
 }
 
@@ -300,7 +282,7 @@ func queueState(paused bool) string {
 // sequence first, so it is safe to call at any time. On a failed recovery the
 // state flags stay set so a second rewind retries. See README for the cases.
 func (s *beanjaminCoffee) rewind(ctx context.Context) (map[string]any, error) {
-	cancelled := s.signalCancel()
+	cancelled := s.lease.cancel()
 	if cancelled {
 		if err := s.waitForIdle(ctx, resetCancelWaitTimeout); err != nil {
 			return nil, fmt.Errorf("rewind: %w", err)
@@ -309,14 +291,11 @@ func (s *beanjaminCoffee) rewind(ctx context.Context) (map[string]any, error) {
 
 	// Take exclusive ownership of the arm before any recovery motion so
 	// other commands (execute_action, prepare_order consumer) can't race.
-	if !s.lease.running.CompareAndSwap(false, true) {
-		return nil, errors.New("rewind: another sequence is running")
+	cancelCtx, err := s.lease.claimManual("rewind")
+	if err != nil {
+		return nil, fmt.Errorf("rewind: %w", err)
 	}
-	defer s.lease.running.Store(false)
-
-	s.lease.mu.Lock()
-	cancelCtx := s.lease.cancelCtx
-	s.lease.mu.Unlock()
+	defer s.lease.release()
 
 	// Rewind runs outside the queue goroutine, so the in-flight order's tagged
 	// logger has to be looked up rather than passed in.
@@ -384,6 +363,6 @@ func (s *beanjaminCoffee) rewind(ctx context.Context) (map[string]any, error) {
 		"status":    "rewound",
 		"cancelled": cancelled,
 		"recovered": recovered,
-		"queue":     queueState(s.lease.paused.Load()),
+		"queue":     queueState(s.lease.isPaused()),
 	}, nil
 }
