@@ -1,8 +1,7 @@
 package coffee
 
-// Queue and run control: proceed, clear_queue, reset_world, idle waiting, the
-// cancel path that stops an in-flight order, and the rewind path that drives
-// the arm back to a clean starting state.
+// Queue and run control: proceed, clear_queue, reset_world, idle waiting, and
+// the cancel path that stops an in-flight order.
 
 import (
 	"beanjamin/coffee/speech"
@@ -31,8 +30,8 @@ import (
 // door, which is why no rebuild clears the angle on its own — the assertion is
 // the operator's, so the response reports the angle forgotten and a door left
 // standing is visible before the next plan routes through the panel. It also
-// forgets the gripper's modeled contents without opening the gripper — an
-// operator holding something manually wants rewind, which physically lets go.
+// forgets the gripper's modeled contents without opening the gripper, so
+// anything still in the jaws has to be taken out by hand first.
 func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, error) {
 	if _, err := s.lease.claimManual("proceed"); err != nil {
 		return nil, fmt.Errorf("proceed: %w — wait for it to stop, or cancel it first", err)
@@ -40,7 +39,7 @@ func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, err
 	// Warn before the flag is cleared: forgetting a held item without opening
 	// the jaws leaves the arm planning through whatever it is still carrying.
 	if s.heldItemAttached {
-		s.activeOrderLogger().Warn("proceed: forgetting a held item — if the gripper really is holding something, cancel and rewind instead so it lets go first")
+		s.activeOrderLogger().Warn("proceed: forgetting a held item — if the gripper really is holding something, take it out by hand first")
 	}
 	// Clear the recorded door angle before the rebuild, so resetFrameSystem has
 	// nothing to re-apply and the door lands at its authored shut transform with
@@ -147,8 +146,8 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 	removed := s.queue.Clear()
 
 	// reset_world is an operator's "everything is fine, start over" button.
-	// Clear the portafilter state flags so a subsequent rewind doesn't try
-	// to run recovery against a state that no longer matches reality.
+	// Clear the portafilter state flags so the next fault's log doesn't report
+	// state that no longer matches reality.
 	s.portafilterInMachine.Store(false)
 	s.portafilterHasGrounds.Store(false)
 	// Only an operator can assert the fridge door is physically shut, so clearing
@@ -218,7 +217,7 @@ func (s *beanjaminCoffee) waitForIdle(ctx context.Context, timeout time.Duration
 // arm mid-trajectory and pauses the queue. With nothing running it only pauses
 // the queue, so no new order starts until proceed. No motion is planned, no state flag
 // is cleared and the frame system is left alone, so the recorded world still
-// matches the physical one for rewind to act on.
+// matches the physical one until the operator has put it right and proceeds.
 func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]any, error) {
 	cancelled := s.signalCancel()
 	logger := s.activeOrderLogger()
@@ -242,7 +241,7 @@ func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]any, error) {
 
 	s.currentStep.Store("")
 	if cancelled {
-		logger.Info("cancel: sequence stopped and queue paused — run 'rewind' to recover the arm, then 'proceed'")
+		logger.Info("cancel: sequence stopped and queue paused — " + recoverByHand)
 	} else {
 		logger.Info("cancel: nothing was running — queue paused, send 'proceed' to resume")
 	}
@@ -290,100 +289,15 @@ func (s *beanjaminCoffee) cancelOrder(ctx context.Context, v any) (map[string]an
 	}, nil
 }
 
+// recoverByHand is what every cancel and fault tells the operator to do: there
+// is no command that drives the arm back to a clean start, so the machine is
+// put right by hand and proceed resumes from there.
+const recoverByHand = "put the machine back to its starting state by hand (a clean portafilter held in the claws, nothing else in the gripper, the fridge door shut), then send 'proceed'"
+
 // queueState renders the paused flag for a command response.
 func queueState(paused bool) string {
 	if paused {
 		return "paused"
 	}
 	return "running"
-}
-
-// rewind drives the arm back to the state a brew cycle starts from: empty
-// gripper, clean portafilter, filter home in the claws. It stops any running
-// sequence first, so it is safe to call at any time. On a failed recovery the
-// state flags stay set so a second rewind retries. See README for the cases.
-func (s *beanjaminCoffee) rewind(ctx context.Context) (map[string]any, error) {
-	cancelled := s.signalCancel()
-	if cancelled {
-		if err := s.waitForIdle(ctx, resetCancelWaitTimeout); err != nil {
-			return nil, fmt.Errorf("rewind: %w", err)
-		}
-	}
-
-	// Take exclusive ownership of the arm before any recovery motion so
-	// other commands (execute_action, prepare_order consumer) can't race.
-	cancelCtx, err := s.lease.claimManual("rewind")
-	if err != nil {
-		return nil, fmt.Errorf("rewind: %w", err)
-	}
-	defer s.lease.release()
-
-	// Rewind runs outside the queue goroutine, so the in-flight order's tagged
-	// logger has to be looked up rather than passed in.
-	logger := s.activeOrderLogger()
-
-	// Announce up front so anyone standing at the machine hears what is about
-	// to move before it moves.
-	if err := s.speaker.SayAlways(ctx, rewindAnnouncement); err != nil {
-		logger.Warnf("rewind: failed to announce recovery: %v", err)
-	}
-
-	// Drop the container before recovery, so the motion that follows plans
-	// against an empty gripper rather than around an item already let go.
-	if err := s.dropHeldContainer(ctx); err != nil {
-		return nil, fmt.Errorf("rewind: %w", err)
-	}
-
-	// Both recovery paths end the same way.
-	cleanAndHome := func() error {
-		s.setStep(stepCleaning)
-		if err := s.cleanPortafilter(ctx, cancelCtx); err != nil {
-			return fmt.Errorf("recovery clean_portafilter: %w", err)
-		}
-		s.setStep(stepFinishingUp)
-		if err := s.executeStep(ctx, cancelCtx, Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw}); err != nil {
-			return fmt.Errorf("recovery home: %w", err)
-		}
-		return nil
-	}
-
-	recovered := true
-	switch {
-	case s.portafilterInMachine.Load():
-		logger.Infof("rewind: portafilter is in the machine — running recovery (grab → unlock → clean → home)")
-		s.setStep(stepRecoveringFilter)
-		if err := s.grabFilter(ctx, cancelCtx); err != nil {
-			return nil, fmt.Errorf("rewind: recovery grab_filter: %w", err)
-		}
-		s.setStep(stepUnlockingPortafilter)
-		if err := s.unlockPortaFilter(ctx, cancelCtx); err != nil {
-			return nil, fmt.Errorf("rewind: recovery unlock_portafilter: %w", err)
-		}
-		if err := cleanAndHome(); err != nil {
-			return nil, fmt.Errorf("rewind: %w", err)
-		}
-		s.portafilterInMachine.Store(false)
-	case s.portafilterHasGrounds.Load():
-		logger.Infof("rewind: portafilter has grounds — running recovery (clean → home)")
-		if err := cleanAndHome(); err != nil {
-			return nil, fmt.Errorf("rewind: %w", err)
-		}
-		// cleanPortafilter already cleared portafilterHasGrounds on success.
-	default:
-		recovered = false
-	}
-
-	if err := s.resetFrameSystem(ctx); err != nil {
-		return nil, fmt.Errorf("rewind: %w", err)
-	}
-
-	s.currentStep.Store("")
-	logger.Infof("rewind: cancelled=%v recovered=%v — queue paused, send 'proceed' to resume",
-		cancelled, recovered)
-	return map[string]any{
-		"status":    "rewound",
-		"cancelled": cancelled,
-		"recovered": recovered,
-		"queue":     queueState(s.lease.isPaused()),
-	}, nil
 }

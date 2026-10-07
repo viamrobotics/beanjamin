@@ -22,7 +22,7 @@ func faultingGripper() *inject.Gripper {
 }
 
 // TestFaultWithStrandedStatePausesQueue pins that a genuine fault leaving the
-// machine mid-cycle holds the next order back for rewind → proceed, instead of
+// machine mid-cycle holds the next order back for by-hand recovery and proceed, instead of
 // letting it start from the stranded state.
 func TestFaultWithStrandedStatePausesQueue(t *testing.T) {
 	s, _, _ := coffeeWithDirtyWorld(t, nil)

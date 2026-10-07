@@ -432,7 +432,7 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 // resetFrameSystem rebuilds the cached frame system from the service, discarding
 // any in-flight mutations (e.g. a filter frame that was reparented to world by
 // lockFilterFrame). Shared by unlockFilterFrame during the normal brew cycle and
-// by the reset_world, rewind and proceed operator commands to recover from a
+// by the reset_world and proceed operator commands to recover from a
 // mid-cycle cancel.
 //
 // The fridge door is the exception: a rebuild puts the panel back at its authored
@@ -452,7 +452,7 @@ func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 	s.cachedFS = fs
 	// The rebuilt frame system has no held-item frame, and any cached grasp no
 	// longer corresponds to reality — forget it so a stale geometry can't be
-	// re-attached after a rewind/reset. The rebuilt frame system also restores the
+	// re-attached after a reset. The rebuilt frame system also restores the
 	// filter frame to the arm subtree (undoing any lockFilterFrame mutation) and
 	// drops the staged-glass obstacle (undoing any stageGlassAsObstacle mutation).
 	s.clearHeldGeometry()
