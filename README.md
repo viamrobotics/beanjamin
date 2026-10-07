@@ -511,7 +511,7 @@ Returns:
 }
 ```
 
-`count` is how many drinks still have to be made — the backlog plus the one on the arm. Orders that have finished stay in the list with `completed_at` set for ~15s so a UI can render a "Ready!" card without diffing polls, but they don't count toward the depth. `cancellable` says whether `cancel_order` would accept this order.
+`count` is how many drinks still have to be made — the backlog plus the one on the arm. Orders that have finished stay in the list with `completed_at` set for ~15s so a UI can render a "Ready!" card without diffing polls, but they don't count toward the depth. `cancellable` says whether `cancel_order` would accept this order. An `iced_latte` order also carries its `milk`, and when `can_serve_iced_latte` is set the response lists the machine's `milk_options` (the default first), which is what the kiosk builds its milk choice from.
 
 **`proceed`** - Re-sync the recorded world with the real one, and resume queue processing after a pause — from a `cancel`, or from a fault that left the machine mid-cycle (see "Pause after a fault" above).
 

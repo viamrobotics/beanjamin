@@ -39,7 +39,7 @@ func TestSetStepReflectedInStatus(t *testing.T) {
 }
 
 func TestStatusReportsQueueAndFlags(t *testing.T) {
-	s := newStatusService(t, &Config{CanServeDecaf: true})
+	s := newStatusService(t, &Config{CanServeDecaf: true, MilkOptions: []string{"whole", "oat"}})
 	s.queue.Enqueue(order.Order{ID: "o1", Drink: "espresso", CustomerName: "Ada", RawStep: "Grinding"})
 	s.queue.Enqueue(order.Order{ID: "o2", Drink: "lungo", CustomerName: "Grace"})
 
@@ -54,6 +54,10 @@ func TestStatusReportsQueueAndFlags(t *testing.T) {
 	}
 	if st["can_serve_decaf"] != true {
 		t.Errorf("can_serve_decaf = %v, want true", st["can_serve_decaf"])
+	}
+	// []any, not []string: structpb rejects typed slices.
+	if milks, ok := st["milk_options"].([]any); !ok || len(milks) != 2 || milks[0] != "whole" || milks[1] != "oat" {
+		t.Errorf("milk_options = %v (%T), want []any{whole, oat}", st["milk_options"], st["milk_options"])
 	}
 	if st["is_paused"] != false || st["is_busy"] != false {
 		t.Errorf("is_paused/is_busy = %v/%v, want false/false", st["is_paused"], st["is_busy"])

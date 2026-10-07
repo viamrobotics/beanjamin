@@ -4,11 +4,11 @@ import Image from "next/image";
 import { useState } from "react";
 import {
   GRID_DRINKS,
-  MILKS,
   applyDecaf,
   baseDrinkId,
   hasMilkChoice,
   isDecafId,
+  milkLabel,
 } from "./drinks";
 import type { Fulfillment } from "../lib/viamClient";
 
@@ -16,6 +16,7 @@ export function ChooseDrink({
   selectedDrink,
   fulfillment,
   milk,
+  milkOptions,
   rejection,
   connected,
   onSelect,
@@ -27,6 +28,8 @@ export function ChooseDrink({
   selectedDrink: string | null;
   fulfillment: Fulfillment;
   milk: string;
+  /** The machine's milk_options; the choice shows only when there are two or more. */
+  milkOptions: string[];
   rejection: string | null;
   connected: boolean;
   onSelect: (id: string) => void;
@@ -47,7 +50,8 @@ export function ChooseDrink({
     const isSelected = selectedBase === drink.id;
     // The milk choice sits on the card itself once it's picked. It's a sibling
     // of the card button, not inside it, since buttons can't nest.
-    const showMilk = isSelected && hasMilkChoice(drink.id);
+    const showMilk =
+      isSelected && hasMilkChoice(drink.id) && milkOptions.length > 1;
     return (
       <div
         key={drink.id}
@@ -83,20 +87,20 @@ export function ChooseDrink({
             aria-label="Which milk would you like?"
             className="anim-in absolute top-1/2 -translate-y-1/2 inset-x-2 flex rounded-full bg-white p-1 shadow-sm"
           >
-            {MILKS.map((m) => (
+            {milkOptions.map((m) => (
               <button
-                key={m.id}
+                key={m}
                 type="button"
                 role="radio"
-                aria-checked={milk === m.id}
-                onClick={() => onMilkChange(m.id)}
+                aria-checked={milk === m}
+                onClick={() => onMilkChange(m)}
                 className={`flex-1 py-1.5 rounded-full font-mono font-semibold text-xs uppercase tracking-wider transition-colors duration-150 ${
-                  milk === m.id
+                  milk === m
                     ? "bg-black text-white"
                     : "text-neutral-500 hover:text-neutral-900"
                 }`}
               >
-                {m.label}
+                {milkLabel(m)}
               </button>
             ))}
           </div>

@@ -46,6 +46,7 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 			"customer_name":          o.CustomerName,
 			"modified_customer_name": o.ModifiedCustomerName,
 			"fulfillment":            o.Fulfillment,
+			"milk":                   o.Milk,
 			"enqueued_at":            o.EnqueuedAt.Format(time.RFC3339),
 			"raw_step":               o.RawStep,
 			"step_history":           history,
@@ -54,6 +55,11 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		}
 	}
 	step, _ := s.currentStep.Load().(string)
+	// []any for the same structpb reason as orders.
+	milkOptions := make([]any, len(s.cfg.MilkOptions))
+	for i, m := range s.cfg.MilkOptions {
+		milkOptions[i] = m
+	}
 	resp := map[string]any{
 		// count reports pending depth only — orders waiting to be made.
 		// Recently-completed orders are visible in `orders` but don't add
@@ -66,7 +72,10 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		"is_busy":         s.running.Load(),
 		"current_step":    step,
 		"can_serve_decaf": s.cfg.CanServeDecaf,
-		"fault_active":    s.faultAlarm.Active(),
+		// The milks an iced latte can be ordered with, the default first; the
+		// kiosk builds its milk choice from these.
+		"milk_options": milkOptions,
+		"fault_active": s.faultAlarm.Active(),
 	}
 	s.logger.Debugw("Status", "response", resp)
 	return resp, nil

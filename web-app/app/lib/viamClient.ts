@@ -254,6 +254,8 @@ export interface QueueOrder {
    * treat absent as "pickup" (the backend default).
    */
   fulfillment?: Fulfillment;
+  /** The milk for a milk drink; empty or absent otherwise, and from older modules. */
+  milk?: string;
   enqueued_at: string;
   raw_step: string;
   step_history: StepEntry[];
@@ -280,6 +282,11 @@ export interface QueueStatus {
   is_paused: boolean;
   is_busy: boolean;
   current_step: string;
+  /**
+   * The milks an iced latte can be ordered with (the machine's milk_options),
+   * the default first. Absent from older modules.
+   */
+  milk_options?: string[];
 }
 
 /**
@@ -351,6 +358,9 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
       is_paused: false,
       is_busy: devQueue.length > 0,
       current_step: devStep,
+      // Stand-in for a machine's milk_options so the kiosk's milk choice
+      // renders in dev mode.
+      milk_options: ["whole", "oat"],
     };
   }
 

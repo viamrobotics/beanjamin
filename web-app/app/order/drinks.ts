@@ -6,21 +6,23 @@ export interface Drink {
   available: boolean;
 }
 
+// titleCase turns a snake_case id into words, e.g. "oat_milk" -> "Oat Milk".
+function titleCase(id: string): string {
+  return id.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export function drinkLabel(drinkId: string): string {
   if (!drinkId) return "";
   const found = DRINKS.find((d) => d.id === drinkId);
   if (found) return found.label;
-  return drinkId.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return titleCase(drinkId);
 }
 
-// The milks the iced latte comes with. Each id must match an entry in the
-// coffee service's milk_options; the first is what a machine defaults to.
-export const MILKS = [
-  { id: "whole", label: "Whole" },
-  { id: "oat", label: "Oat" },
-] as const;
-
-export const DEFAULT_MILK = MILKS[0].id;
+// milkLabel names one of a machine's milk_options for display, e.g. "oat" ->
+// "Oat". The milks come from the machine, so there is no table to look up.
+export function milkLabel(milk: string): string {
+  return titleCase(milk);
+}
 
 // hasMilkChoice reports whether the drink is made with a choice of milk (see
 // IsMilk in coffee/order/drinks.go).
@@ -31,9 +33,8 @@ export function hasMilkChoice(drinkId: string): boolean {
 // orderLabel is the drink's label with its milk when it has one, e.g.
 // "Iced Latte · Oat milk".
 export function orderLabel(drinkId: string, milk: string): string {
-  if (!hasMilkChoice(drinkId)) return drinkLabel(drinkId);
-  const found = MILKS.find((m) => m.id === milk);
-  return `${drinkLabel(drinkId)} · ${found?.label ?? milk} milk`;
+  if (!hasMilkChoice(drinkId) || !milk) return drinkLabel(drinkId);
+  return `${drinkLabel(drinkId)} · ${milkLabel(milk)} milk`;
 }
 
 // Base drinks shown in the selection grid, in display order. Decaf is no longer
