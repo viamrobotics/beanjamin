@@ -208,7 +208,7 @@ func TestExecuteActionRefusesMilkOnOtherActions(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "milk is not accepted") {
 		t.Fatalf("got %v, want a refusal", err)
 	}
-	if s.running.Load() {
-		t.Error("run gate taken by a refused call")
+	if s.lease.busy() {
+		t.Errorf("arm claimed by a refused call (holder %q)", s.lease.holderName())
 	}
 }

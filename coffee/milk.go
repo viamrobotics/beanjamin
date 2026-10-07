@@ -267,16 +267,20 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}
+	// Held to pourConstraint so the planner can't detour the open bottle off
+	// the glass; a tilt it can't finish is executed as far as it planned.
 	pourStep := Step{PoseName: clawPoseMilkPour, PoseSwitch: s.clawsSw, PivotFromPose: clawPoseMilkPourApproach, PivotDegreesPerStep: 5,
-		MoveOptions: s.pourMoveOptions(), Pause: s.milkPourDwell()}
+		LinearConstraint: pourConstraint, AcceptPartialPlan: true, MoveOptions: s.pourMoveOptions(), Pause: s.milkPourDwell()}
 	if err := s.executeStep(ctx, cancelCtx, pourStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}
 	// Return upright along the same pivot so any residual drip stays over the
 	// glass, at the default (slow) pivot speed so the milk left in the bottle
 	// doesn't slosh out.
+	// The return is constrained the same way but must complete: carrying a
+	// still-tilted bottle away would pour milk along the whole carry.
 	uprightStep := Step{PoseName: clawPoseMilkPourApproach, PoseSwitch: s.clawsSw, PivotFromPose: clawPoseMilkPour, PivotDegreesPerStep: 5,
-		Pause: shortPause}
+		LinearConstraint: pourConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}

@@ -63,8 +63,9 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		// double on the wire).
 		"count":           float64(s.queue.Len()),
 		"orders":          orderMaps,
-		"is_paused":       s.paused.Load(),
-		"is_busy":         s.running.Load(),
+		"is_paused":       s.lease.isPaused(),
+		"is_busy":         s.lease.busy(),
+		"arm_holder":      s.lease.holderName(),
 		"current_step":    step,
 		"can_serve_decaf": s.cfg.CanServeDecaf,
 		"fault_active":    s.faultAlarm.Active(),
@@ -273,6 +274,10 @@ func (s *beanjaminCoffee) handleOpenGripper(ctx context.Context) (map[string]any
 	if s.gripper == nil {
 		return nil, fmt.Errorf("no gripper configured")
 	}
+	if _, err := s.lease.claimManual("open_gripper"); err != nil {
+		return nil, err
+	}
+	defer s.lease.release()
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		return nil, fmt.Errorf("failed to open gripper: %w", err)
 	}
@@ -283,6 +288,10 @@ func (s *beanjaminCoffee) handleCloseGripper(ctx context.Context) (map[string]an
 	if s.gripper == nil {
 		return nil, fmt.Errorf("no gripper configured")
 	}
+	if _, err := s.lease.claimManual("close_gripper"); err != nil {
+		return nil, err
+	}
+	defer s.lease.release()
 	grabbed, err := s.gripper.Grab(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to close gripper: %w", err)
