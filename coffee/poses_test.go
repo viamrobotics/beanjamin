@@ -79,6 +79,17 @@ func TestRequiredPosesConditional(t *testing.T) {
 			t.Errorf("can_serve_iced_latte should require %q", name)
 		}
 	}
+	// With milk_options, each spot's two poses are required too, named after the
+	// spot rather than the milk.
+	spots := (&beanjaminCoffee{cfg: &Config{CanServeIced: true, CanServeIcedLatte: true, MilkOptions: testMilks}}).requiredPoses()
+	for _, name := range []string{"milk_left_approach", "milk_left_grab", "milk_right_approach", "milk_right_grab"} {
+		if !hasPose(spots, name) {
+			t.Errorf("milk_options should require %q", name)
+		}
+		if hasPose(latte, name) {
+			t.Errorf("%q required without milk_options", name)
+		}
+	}
 	// The pours are resolved against the staged glass, so no switch carries them.
 	for _, name := range []string{clawPosePourApproach, clawPosePour, clawPoseMilkPourApproach, clawPoseMilkPour} {
 		if hasPose(latte, name) {
