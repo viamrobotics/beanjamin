@@ -2,25 +2,39 @@
 
 import Image from "next/image";
 import { useState } from "react";
-import { GRID_DRINKS, applyDecaf, baseDrinkId, isDecafId } from "./drinks";
+import {
+  GRID_DRINKS,
+  applyDecaf,
+  baseDrinkId,
+  hasMilkChoice,
+  isDecafId,
+  milkLabel,
+} from "./drinks";
 import type { Fulfillment } from "../lib/viamClient";
 
 export function ChooseDrink({
   selectedDrink,
   fulfillment,
+  milk,
+  milkOptions,
   rejection,
   connected,
   onSelect,
   onFulfillmentChange,
+  onMilkChange,
   onBack,
   onNext,
 }: {
   selectedDrink: string | null;
   fulfillment: Fulfillment;
+  milk: string;
+  /** The machine's milk_options; the choice shows only when there are two or more. */
+  milkOptions: string[];
   rejection: string | null;
   connected: boolean;
   onSelect: (id: string) => void;
   onFulfillmentChange: (f: Fulfillment) => void;
+  onMilkChange: (milk: string) => void;
   onBack: () => void;
   onNext: () => void;
 }) {
@@ -34,30 +48,64 @@ export function ChooseDrink({
 
   const renderDrinkCard = (drink: (typeof GRID_DRINKS)[number], i: number) => {
     const isSelected = selectedBase === drink.id;
+    // The milk choice sits on the card itself once it's picked. It's a sibling
+    // of the card button, not inside it, since buttons can't nest.
+    const showMilk =
+      isSelected && hasMilkChoice(drink.id) && milkOptions.length > 1;
     return (
-      <button
+      <div
         key={drink.id}
-        onClick={() => onSelect(applyDecaf(drink.id, decaf))}
         style={{ animationDelay: `${150 + i * 100}ms` }}
-        className={`anim-in drink-card relative w-full flex flex-col items-center justify-center gap-1 py-4 rounded-2xl transition-[background-color,border-color,transform] duration-150 ${
-          isSelected
-            ? "bg-[#ebebeb] border-2 border-black scale-[1.02]"
-            : "bg-neutral-100 border-2 border-transparent scale-100"
+        className={`anim-in relative transition-transform duration-150 ${
+          isSelected ? "scale-[1.02]" : "scale-100"
         }`}
       >
-        <div className="flex flex-col items-center gap-1 -translate-y-2">
-          <Image
-            src={drink.image}
-            alt={drink.label}
-            width={140}
-            height={140}
-            className="object-contain h-[min(140px,14vh)] w-auto"
-          />
-          <p className="font-sans font-medium text-base text-black leading-tight">
-            {drink.label}
-          </p>
-        </div>
-      </button>
+        <button
+          onClick={() => onSelect(applyDecaf(drink.id, decaf))}
+          className={`drink-card relative w-full h-full flex flex-col items-center justify-center gap-1 py-4 rounded-2xl transition-[background-color,border-color,transform] duration-150 ${
+            isSelected
+              ? "bg-[#ebebeb] border-2 border-black"
+              : "bg-neutral-100 border-2 border-transparent"
+          }`}
+        >
+          <div className="flex flex-col items-center gap-1 -translate-y-2">
+            <Image
+              src={drink.image}
+              alt={drink.label}
+              width={140}
+              height={140}
+              className="object-contain h-[min(140px,14vh)] w-auto"
+            />
+            <p className="font-sans font-medium text-base text-black leading-tight">
+              {drink.label}
+            </p>
+          </div>
+        </button>
+        {showMilk && (
+          <div
+            role="radiogroup"
+            aria-label="Which milk would you like?"
+            className="anim-in absolute top-1/2 -translate-y-1/2 inset-x-2 flex rounded-full bg-white p-1 shadow-sm"
+          >
+            {milkOptions.map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="radio"
+                aria-checked={milk === m}
+                onClick={() => onMilkChange(m)}
+                className={`flex-1 py-1.5 rounded-full font-mono font-semibold text-xs uppercase tracking-wider transition-colors duration-150 ${
+                  milk === m
+                    ? "bg-black text-white"
+                    : "text-neutral-500 hover:text-neutral-900"
+                }`}
+              >
+                {milkLabel(m)}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     );
   };
 
