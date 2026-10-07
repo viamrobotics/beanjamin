@@ -200,16 +200,13 @@ func (s *beanjaminCoffee) purge(ctx, cancelCtx context.Context) error {
 // gate on every path is load-bearing, since holding it would stall the queue
 // permanently.
 func (s *beanjaminCoffee) runPurge(ctx context.Context) error {
-	if !s.lease.running.CompareAndSwap(false, true) {
+	// claim hands back cancelCtx along with the arm, so an operator cancel
+	// interrupts the moves mid-trajectory.
+	cancelCtx, ok := s.lease.claim()
+	if !ok {
 		return errors.New("keepalive: a sequence is already running")
 	}
 	defer s.lease.running.Store(false)
-
-	// Snapshot cancelCtx under the mutex, as every other sequence does, so an
-	// operator cancel interrupts the moves mid-trajectory.
-	s.lease.mu.Lock()
-	cancelCtx := s.lease.cancelCtx
-	s.lease.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(ctx, keepAlivePurgeTimeout)
 	defer cancel()
