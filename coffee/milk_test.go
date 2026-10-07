@@ -2,6 +2,7 @@ package coffee
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -114,5 +115,36 @@ func TestFetchMilkWhileOneIsOutFails(t *testing.T) {
 	err := s.fetchMilkBottle(context.Background(), context.Background(), "oat")
 	if err == nil || !strings.Contains(err.Error(), "already out") {
 		t.Fatalf("expected an already-out error, got %v", err)
+	}
+}
+
+// A failure with the fridge open names where the bottle goes back.
+func TestMilkStepErrNamesTheSpot(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{MilkOptions: testMilks}, doorOpenDegs: 90}
+	err := s.milkStepErr("oat", errors.New("boom"))
+	if !strings.Contains(err.Error(), "oat milk") || !strings.Contains(err.Error(), "right spot") {
+		t.Errorf("milkStepErr = %v, want it to name the oat milk's right spot", err)
+	}
+}
+
+// A bottle out of the fridge is reported as stranded state on a fault.
+func TestStrandedStateReportsMilkOut(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{}, heldMilk: "oat"}
+	if got := s.strandedState(); len(got) != 1 || got[0] != "oat milk out of the fridge" {
+		t.Errorf("strandedState = %v, want [oat milk out of the fridge]", got)
+	}
+}
+
+// A bottle out of the fridge keeps the frame system from being rebuilt between
+// hand-run actions: the rebuild would clear heldMilk and return_milk would no
+// longer know where it goes.
+func TestRefreshFrameSystemSkippedWhileMilkIsOut(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{}, heldMilk: "oat"}
+	// No frame system service is configured, so a rebuild attempt would fail.
+	if err := s.refreshFrameSystemIfClean(context.Background()); err != nil {
+		t.Fatalf("refreshFrameSystemIfClean = %v, want a skipped rebuild", err)
+	}
+	if s.heldMilk != "oat" {
+		t.Errorf("heldMilk = %q, want it kept", s.heldMilk)
 	}
 }

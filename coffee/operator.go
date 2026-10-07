@@ -41,6 +41,9 @@ func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, err
 	if s.heldItemAttached {
 		s.activeOrderLogger().Warn("proceed: forgetting a held item — if the gripper really is holding something, take it out by hand first")
 	}
+	if s.heldMilk != "" {
+		s.activeOrderLogger().Warnf("proceed: forgetting that the %s milk is out of the fridge — %s", s.heldMilk, s.milkPutBackHint(s.heldMilk))
+	}
 	// Clear the recorded door angle before the rebuild, so resetFrameSystem has
 	// nothing to re-apply and the door lands at its authored shut transform with
 	// everything else. Ordering is load-bearing: cleared afterward, the rebuilt

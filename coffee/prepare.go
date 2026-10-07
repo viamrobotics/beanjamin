@@ -220,6 +220,9 @@ func (s *beanjaminCoffee) strandedState() []string {
 	if s.heldItemAttached {
 		stranded = append(stranded, "item in gripper")
 	}
+	if s.heldMilk != "" {
+		stranded = append(stranded, fmt.Sprintf("%s milk out of the fridge", s.heldMilk))
+	}
 	if s.stagedGlassPlaced {
 		stranded = append(stranded, "glass staged")
 	}
