@@ -39,9 +39,9 @@ func TestSetStepReflectedInStatus(t *testing.T) {
 }
 
 func TestStatusReportsQueueAndFlags(t *testing.T) {
-	s := newStatusService(t, &Config{CanServeDecaf: true})
+	s := newStatusService(t, &Config{CanServeDecaf: true, CanServeIcedLatte: true, MilkOptions: testMilks})
 	s.queue.Enqueue(order.Order{ID: "o1", Drink: "espresso", CustomerName: "Ada", RawStep: "Grinding"})
-	s.queue.Enqueue(order.Order{ID: "o2", Drink: "lungo", CustomerName: "Grace"})
+	s.queue.Enqueue(order.Order{ID: "o2", Drink: "iced_latte", CustomerName: "Grace", Milk: "oat"})
 
 	st, err := s.Status(context.Background())
 	if err != nil {
@@ -55,12 +55,32 @@ func TestStatusReportsQueueAndFlags(t *testing.T) {
 	if st["can_serve_decaf"] != true {
 		t.Errorf("can_serve_decaf = %v, want true", st["can_serve_decaf"])
 	}
+	// []any, not []string: structpb rejects typed slices.
+	if milks, ok := st["milk_options"].([]any); !ok || len(milks) != 2 || milks[0] != "whole" || milks[1] != "oat" {
+		t.Errorf("milk_options = %v (%T), want []any{whole, oat}", st["milk_options"], st["milk_options"])
+	}
 	if st["is_paused"] != false || st["is_busy"] != false {
 		t.Errorf("is_paused/is_busy = %v/%v, want false/false", st["is_paused"], st["is_busy"])
 	}
 	orders, ok := st["orders"].([]any)
 	if !ok || len(orders) != 2 {
 		t.Fatalf("orders = %v, want a 2-element []any", st["orders"])
+	}
+	if milk := orders[1].(map[string]any)["milk"]; milk != "oat" {
+		t.Errorf("iced latte order milk = %v, want oat", milk)
+	}
+}
+
+// milk_options is validated only on a machine serving the iced latte, so only
+// that machine reports it.
+func TestStatusOmitsMilkOptionsWithoutIcedLatte(t *testing.T) {
+	s := newStatusService(t, &Config{MilkOptions: testMilks})
+	st, err := s.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status error: %v", err)
+	}
+	if v, ok := st["milk_options"]; ok {
+		t.Errorf("milk_options = %v, want absent when can_serve_iced_latte is off", v)
 	}
 }
 

@@ -46,6 +46,7 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 			"customer_name":          o.CustomerName,
 			"modified_customer_name": o.ModifiedCustomerName,
 			"fulfillment":            o.Fulfillment,
+			"milk":                   o.Milk,
 			"enqueued_at":            o.EnqueuedAt.Format(time.RFC3339),
 			"raw_step":               o.RawStep,
 			"step_history":           history,
@@ -68,6 +69,17 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		"current_step":    step,
 		"can_serve_decaf": s.cfg.CanServeDecaf,
 		"fault_active":    s.faultAlarm.Active(),
+	}
+	// The milks an iced latte can be ordered with, the default first; the kiosk
+	// builds its milk choice from these. Only on a machine serving the latte,
+	// the only one whose milk_options are validated.
+	if s.cfg.CanServeIcedLatte {
+		// []any for the same structpb reason as orders.
+		milkOptions := make([]any, len(s.cfg.MilkOptions))
+		for i, m := range s.cfg.MilkOptions {
+			milkOptions[i] = m.Name
+		}
+		resp["milk_options"] = milkOptions
 	}
 	s.logger.Debugw("Status", "response", resp)
 	return resp, nil

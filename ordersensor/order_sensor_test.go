@@ -35,7 +35,7 @@ func TestOrderSensor_Readings_Success(t *testing.T) {
 	start := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
 	end := start.Add(1234 * time.Millisecond)
 	o := order.Order{
-		ID: "o1", Drink: "latte", CustomerName: "Ada",
+		ID: "o1", Drink: "iced_latte", CustomerName: "Ada", Milk: "oat",
 	}
 	s.PushOrderReading(order.Reading{Order: o, StartedAt: start, EndedAt: end})
 
@@ -43,7 +43,7 @@ func TestOrderSensor_Readings_Success(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r["order_id"] != "o1" || r["drink"] != "latte" || r["customer_name"] != "Ada" {
+	if r["order_id"] != "o1" || r["drink"] != "iced_latte" || r["customer_name"] != "Ada" || r["milk"] != "oat" {
 		t.Fatalf("unexpected order fields: %#v", r)
 	}
 	if ok, _ := r["order_ok"].(bool); !ok {
