@@ -21,7 +21,9 @@ package coffee
 // cached this order) and removed on release (detachHeldGeometry). The grasp is
 // assumed consistent across release/re-grab — the item is released and re-grabbed
 // at the same pose — so the gripper-local geometry cached at pickup is reused
-// verbatim on the re-grab.
+// verbatim on the re-grab. The staged glass is the exception: it is seated on
+// the table when released (stageHeldGlass), and its re-grab is modeled from
+// where it stands (regrabStagedGlass).
 //
 // This mirrors lockFilterFrame's frame-system mutation in motion.go, but the
 // parent is the moving gripper rather than the world, and the geometry comes
@@ -88,7 +90,7 @@ func (s *beanjaminCoffee) attachDetectedGeometry(ctx context.Context, label stri
 }
 
 // reattachGeometry restores the held-item frame for an item being re-grabbed
-// (the brewed cup from under the machine, or the staged glass) using the geometry
+// (the brewed cup from under the machine) using the geometry
 // cached at its initial pickup. No-op when nothing was cached for this label
 // (e.g. a manually-stepped serving that never ran the vision pickup, or a frame
 // system reset that dropped the cached grasp).
@@ -328,6 +330,19 @@ func (s *beanjaminCoffee) stageGlassAsObstacle(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	return s.stageHeldGlass(fsInputs)
+}
+
+// stageHeldGlass is stageGlassAsObstacle at the given inputs, split out so it is
+// testable against a static frame system.
+//
+// The released glass is seated on the surface beneath it (geom.SeatOnSurface)
+// rather than left where the gripper held it: the staging pose releases the
+// glass slightly above the table, so the glass drops onto it, and the box must
+// follow — the pours resolve against its rim, and the re-grab models the grasp
+// from where it stands (regrabStagedGlass). When no surface is modeled beneath
+// it, the glass is staged where it was released.
+func (s *beanjaminCoffee) stageHeldGlass(fsInputs referenceframe.FrameSystemInputs) error {
 	heldFrame := s.cachedFS.Frame(heldItemFrameName)
 	if heldFrame == nil {
 		s.heldItemAttached = false
@@ -360,6 +375,21 @@ func (s *beanjaminCoffee) stageGlassAsObstacle(ctx context.Context) error {
 	}
 	worldGeom := worldGeos[0]
 
+	// Surfaces are enumerated while the glass is still gripper-parented, so the
+	// glass itself is never taken for the surface it stands on.
+	surfaces, err := geom.WorldAnchoredSurfaceBoxes(s.cachedFS, fsInputs)
+	if err != nil {
+		return fmt.Errorf("find the surface under the staged glass: %w", err)
+	}
+	logger := s.activeOrderLogger()
+	released := worldGeom.Pose().Point()
+	if seated, dz, ok := geom.SeatOnSurface(surfaces, worldGeom, surfaceRestClearanceMm); ok {
+		worldGeom = seated
+		logger.Infof("staged glass seated on the surface beneath it: released at Z=%.1f, shifted %.1fmm", released.Z, dz)
+	} else {
+		logger.Warnf("no surface modeled beneath the staged glass at (x=%.1f, y=%.1f); staging it where it was released", released.X, released.Y)
+	}
+
 	// Release the gripper-parented held-item frame.
 	s.cachedFS.RemoveFrame(heldFrame)
 	s.heldItemAttached = false
@@ -377,8 +407,26 @@ func (s *beanjaminCoffee) stageGlassAsObstacle(ctx context.Context) error {
 		return fmt.Errorf("add staged-glass obstacle to world: %w", err)
 	}
 	s.stagedGlassPlaced = true
-	s.activeOrderLogger().Infof("staged glass as world obstacle at %v", worldGeom.Pose().Point())
+	logger.Infof("staged glass as world obstacle at %v", worldGeom.Pose().Point())
 	return nil
+}
+
+// regrabStagedGlass moves the staged glass from the world back into the gripper
+// once the jaws have closed on it. The grasp is modeled from where the glass
+// stands rather than restored from the pickup: seating it on the surface
+// (stageHeldGlass) moved it relative to the grip point, and the glass really is
+// held at that new height now. Falls back to the cached pickup grasp when no
+// glass is staged (e.g. a manually stepped grab_staged_glass).
+func (s *beanjaminCoffee) regrabStagedGlass(ctx context.Context) error {
+	glass, err := s.stagedGlassGeometry()
+	// The obstacle comes out before the held item goes in, so the held glass never
+	// collides with its double.
+	s.removeStagedGlassObstacle()
+	if err != nil {
+		s.activeOrderLogger().Debugf("regrab staged glass: %v; restoring the cached grasp", err)
+		return s.reattachGeometry(pickupLabelGlass)
+	}
+	return s.attachDetectedGeometry(ctx, pickupLabelGlass, glass)
 }
 
 // removeStagedGlassObstacle drops the static world obstacle created by

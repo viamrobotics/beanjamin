@@ -35,6 +35,19 @@ var defaultApproachConstraint = &StepLinearConstraint{
 	OrientationToleranceDegs: 2,
 }
 
+// pourConstraint keeps a pour pivot's held container within 5mm of the pivot
+// point. Beyond bounding the drift, any linear constraint whose tighter
+// tolerance is under 10 (mm or degrees) stops armplanning from falling back to
+// cBiRTT between waypoints, and cBiRTT's free-form detours are what swing a
+// full cup off the glass. A waypoint the planner cannot reach directly then
+// fails instead, which the pour tilt turns into a partial plan
+// (Step.AcceptPartialPlan). The 5° orientation bound is twice the deviation the
+// 5°-per-waypoint slerp ever needs.
+var pourConstraint = &StepLinearConstraint{
+	LineToleranceMm:          5,
+	OrientationToleranceDegs: 5,
+}
+
 // mergedCancelContext derives a context cancelled by either ctx or the shared
 // cancelCtx, so an operator cancel interrupts planning and execution alike. The
 // returned func must be deferred.
@@ -78,9 +91,16 @@ func withPlanTimeout(opts *armplanning.PlannerOptions) *armplanning.PlannerOptio
 // armplanning returns one of those with a *nil* error when its deadline expires
 // between goals, so without this check a timed-out multi-waypoint plan (pivot,
 // circular) would execute as though complete and stop the arm short of the pose
-// the next step assumes it reached.
+// the next step assumes it reached. It also returns one, flagged Partial, when
+// ReturnPartialPlan is set and a goal fails to plan.
 func incompletePlanErr(meta *armplanning.PlanMeta, goals int) error {
-	if meta == nil || meta.GoalsProcessed >= goals {
+	if meta == nil {
+		return nil
+	}
+	if meta.Partial {
+		return fmt.Errorf("planner solved %d of %d goals: %w", meta.GoalsProcessed, goals, meta.PartialError)
+	}
+	if meta.GoalsProcessed >= goals {
 		return nil
 	}
 	return fmt.Errorf("planner solved %d of %d goals before the %s timeout",
@@ -103,13 +123,22 @@ func planDuration(meta *armplanning.PlanMeta) time.Duration {
 // leaves the arm where it stood, which is what lets callers with a recovery path
 // (dynamic pickup falling back to another candidate, placeHeldInServingArea
 // trying the next slot) tell them apart from execution errors via errors.Is.
+//
+// A request with PlannerOptions.ReturnPartialPlan set instead gets back the
+// solved prefix of an incomplete plan, logged at warn level.
 func (s *beanjaminCoffee) planMotion(ctx context.Context, req *armplanning.PlanRequest, label string) (motionplan.Plan, error) {
 	logger := s.activeOrderLogger()
 	req.PlannerOptions = withPlanTimeout(req.PlannerOptions)
 
 	plan, meta, err := armplanning.PlanMotion(ctx, logger, req)
 	if err == nil {
-		err = incompletePlanErr(meta, len(req.Goals))
+		if incomplete := incompletePlanErr(meta, len(req.Goals)); incomplete != nil {
+			if req.PlannerOptions.ReturnPartialPlan {
+				logger.Warnf("executing partial %s plan (%s): %v", label, planDuration(meta), incomplete)
+			} else {
+				err = incomplete
+			}
+		}
 	}
 	s.savePlanRequestAndResponse(req, plan, label, err)
 	if err != nil {
@@ -919,13 +948,20 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 		return err
 	}
 
+	var plannerOpts *armplanning.PlannerOptions
+	if step.AcceptPartialPlan {
+		plannerOpts = armplanning.NewBasicPlannerOptions()
+		plannerOpts.ReturnPartialPlan = true
+	}
+
 	// Every waypoint is planned in a single call and run as one trajectory, so
 	// the arm never stops partway through the arc.
 	positions, err := s.planTrajectory(ctx, &armplanning.PlanRequest{
-		FrameSystem: fs,
-		Goals:       goals,
-		StartState:  armplanning.NewPlanState(nil, fsInputs),
-		Constraints: buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.appendHeldItemCollisions(step.AllowedCollisions))),
+		FrameSystem:    fs,
+		Goals:          goals,
+		StartState:     armplanning.NewPlanState(nil, fsInputs),
+		Constraints:    buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.appendHeldItemCollisions(step.AllowedCollisions))),
+		PlannerOptions: plannerOpts,
 	}, "pivot")
 	if err != nil {
 		return err

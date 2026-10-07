@@ -72,7 +72,7 @@ Build the bundled web-app Viam module from repo root: `make web-app-module` (run
 4. On completion/failure, the order is moved to `recent` for `order.RecentDisplayDuration` (15s) so the UI can render "Ready!" without diffing polls.
 5. A single reading per attempt is pushed to the optional order-sensor sink (`ordersensor/`, discovered from deps through the `orderSensorSink` interface in `coffee/queue.go`), and an async clip save is requested on the optional `cam_storage_mux_name` video-store multiplexer.
 
-`cancel`, `clear_queue`, and `proceed` (`coffee/operator.go`) manipulate the same state. Only one routine runs at a time, gated by `running atomic.Bool`; a shared `cancelCtx` is captured under `mu` so cancellation can interrupt motion.
+`cancel`, `clear_queue`, and `proceed` (`coffee/operator.go`) manipulate the same state. Only one routine runs at a time: `s.lease` (`armLease` in `coffee/arm_lease.go`) keeps the holder's name, the pause and the shared `cancelCtx` under one `mu`. Troubleshooting commands take the arm with `claimManual`, which ignores the pause; the order queue (before it starts each order) and the keepalive purge use `claimAutomated`, which is refused while paused. A claim hands back `cancelCtx` in the same step so cancellation can interrupt motion; `release` gives the arm back.
 
 ### Motion layer
 

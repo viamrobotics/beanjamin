@@ -2,6 +2,7 @@ package coffee
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -22,19 +23,23 @@ func (s *beanjaminCoffee) processQueue() {
 		case <-s.queue.Notify():
 		}
 
-		// Drain orders one by one.
-		for {
-			// Honour a pause before every order, not just after the one that
-			// was cancelled or faulted: a cancel that interrupted a manual
-			// execute_action or a keepalive purge pauses the queue too, and that
-			// pause has to hold the next order back just the same.
-			if !s.waitForProceed() {
+		// Drain orders one by one. Len counts only pending orders here, since
+		// nothing is current between orders.
+		for s.queue.Len() > 0 {
+			// Claim the arm before taking the order, so an order never starts
+			// while something else holds the arm or the queue is paused. Until
+			// the claim the order stays pending: get_queue shows it waiting and
+			// cancel_order can still remove it.
+			cancelCtx, ok := s.waitForArm()
+			if !ok {
 				return
 			}
 
 			order, ok := s.queue.Start()
 			if !ok {
-				s.logger.Debugf("queue empty, waiting for new orders")
+				// cancel_order or clear_queue emptied the backlog while we
+				// waited for the arm.
+				s.lease.release()
 				break
 			}
 
@@ -50,7 +55,7 @@ func (s *beanjaminCoffee) processQueue() {
 			// out-of-goroutine entry points like cancel — pick it up via
 			// activeOrderLogger().
 			s.activeLogger.Store(&orderLogger)
-			s.safeExecuteOrder(order)
+			s.safeExecuteOrder(cancelCtx, order)
 			s.activeLogger.Store(nil)
 			// Retire the order into recent with CompletedAt set. The frontend
 			// renders recent orders as the green "Ready!" card for
@@ -59,44 +64,63 @@ func (s *beanjaminCoffee) processQueue() {
 			// Reset the service-global step now that no order is current. The
 			// completed copy in recent keeps its raw_step for debugging.
 			s.currentStep.Store("")
+			// Released last, so a cancel or rewind waiting for the arm never
+			// races the queue's own bookkeeping above.
+			s.lease.release()
 		}
+		s.logger.Debugf("queue empty, waiting for new orders")
 	}
 }
 
-// waitForProceed blocks while a cancel or an order fault has the queue paused,
-// and reports false when the service is shutting down.
-//
-// The paused flag is never cleared here. It is the single source of truth that
-// proceedQueue, resetWorld, Status and the keepalive loop all read, so only the
-// command granting the resume may clear it: a consumer that cleared it on the
-// way into the wait would be invisible to a proceed arriving in that window,
-// which would then report "queue was not paused", send no signal, and leave
-// this goroutine parked with nothing left that can ever wake it — the queue
-// silently stops making drinks while Status still reports it idle and unpaused.
-//
-// The wakeup is re-checked rather than trusted, so a signal parked while
-// nothing was waiting cannot release a later pause nobody asked to release.
-func (s *beanjaminCoffee) waitForProceed() bool {
-	if !s.paused.Load() {
-		return true
-	}
-	logger := s.activeOrderLogger()
-	logger.Infof("queue paused — send 'proceed' to resume")
-	for s.paused.Load() {
+// queueArmPollInterval is how often a waiting queue asks for the arm again.
+const queueArmPollInterval = 100 * time.Millisecond
+
+// waitForArm claims the arm for the next order, asking again every
+// queueArmPollInterval while the arm is held or the queue is paused. It
+// returns the context the order must run under, or false when the service is
+// shutting down.
+func (s *beanjaminCoffee) waitForArm() (context.Context, bool) {
+	logged := ""
+	for {
+		cancelCtx, err := s.lease.claimAutomated("order queue")
+		if errors.Is(err, errServiceClosed) {
+			return nil, false
+		}
+		if err == nil {
+			if logged == "paused" {
+				s.logger.Infof("received 'proceed', resuming queue processing")
+			}
+			return cancelCtx, true
+		}
+		// Log each reason once, not on every retry.
+		reason := "busy"
+		if errors.Is(err, errQueuePaused) {
+			reason = "paused"
+		}
+		if reason != logged {
+			if reason == "paused" {
+				s.logger.Infof("queue paused — send 'proceed' to resume")
+			} else {
+				s.logger.Infof("next order waits for the arm: %v", err)
+			}
+			logged = reason
+		}
 		select {
-		case <-s.queue.Proceed():
 		case <-s.queueStop:
-			return false
+			return nil, false
+		case <-time.After(queueArmPollInterval):
 		}
 	}
-	logger.Infof("received 'proceed', resuming queue processing")
-	return true
 }
 
 // safeExecuteOrder wraps executeQueuedOrder with panic recovery so that a
 // single failing order cannot kill the queue-processing goroutine and strand
 // every order behind it. Notifies the optional order sensor and queues a clip from each camera via cam storage when configured.
-func (s *beanjaminCoffee) safeExecuteOrder(o order.Order) {
+//
+// cancelCtx is the context the queue's claim on the arm returned. The order runs
+// under it, and a cancelled cancelCtx after a failure is what marks the order as
+// an operator cancel rather than a fault.
+func (s *beanjaminCoffee) safeExecuteOrder(cancelCtx context.Context, o order.Order) {
 	// Runs entirely within the window where processQueue has published the
 	// order-scoped logger, so activeOrderLogger() returns the tagged logger
 	// here and in everything it calls.
@@ -110,24 +134,18 @@ func (s *beanjaminCoffee) safeExecuteOrder(o order.Order) {
 	s.failedStep.Store("")
 	s.clips.WritePendingSave(o, videoFrom, logger)
 
-	// Snapshot the cancel context this order will run under so we can tell an
-	// operator cancel from a genuine fault. signalCancel cancels this exact
-	// context and then rotates s.cancelCtx to a fresh one, so we must capture
-	// it now: prepareDrink reads the same s.cancelCtx (it can't rotate while
-	// running is false), and reading s.cancelCtx later would see the fresh,
-	// un-cancelled replacement and miss the cancellation. Relying on the error
-	// unwrapping to context.Canceled is unreliable — executeStep's cancelCtx
-	// branch returns a plain (non-wrapped) error.
-	s.mu.Lock()
-	orderCancelCtx := s.cancelCtx
-	s.mu.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
 			execErr = fmt.Errorf("panic: %v", r)
 			step, _ := s.currentStep.Load().(string)
 			s.failedStep.Store(step)
-			logger.Errorf("panic while processing order for %s: %v — queue will still save video and order reading",
-				o.CustomerName, r)
+			// A panic is a fault like any other: pause so the next order waits
+			// for rewind → proceed instead of starting from an unknown state.
+			// The queue still holds the arm here, so nothing automated can
+			// start before the pause lands.
+			s.lease.pause()
+			logger.Errorf("panic while processing order for %s: %v — queue paused; run 'rewind' to recover the arm, then 'proceed'. "+
+				"The queue will still save video and order reading", o.CustomerName, r)
 		}
 		failedStep, _ := s.failedStep.Load().(string)
 		s.notifyOrderReading(order.Reading{
@@ -135,9 +153,11 @@ func (s *beanjaminCoffee) safeExecuteOrder(o order.Order) {
 			ExecErr:    execErr,
 			FailedStep: failedStep,
 			// An operator cancel (or reset_world) interrupts the order by
-			// cancelling orderCancelCtx; a genuine fault leaves it un-cancelled.
-			// Only meaningful alongside a failure, hence the execErr guard.
-			OperatorCancelled: execErr != nil && orderCancelCtx.Err() != nil,
+			// cancelling cancelCtx; a genuine fault leaves it un-cancelled.
+			// Relying on the error unwrapping to context.Canceled is unreliable,
+			// since executeStep's cancel branch returns a plain error. Only
+			// meaningful alongside a failure, hence the execErr guard.
+			OperatorCancelled: execErr != nil && cancelCtx.Err() != nil,
 			TraceID:           traceIDFromContext(ctx),
 			Decaf:             order.IsDecaf(o.Drink),
 			StartedAt:         startedAt,
@@ -165,12 +185,12 @@ func (s *beanjaminCoffee) safeExecuteOrder(o order.Order) {
 		s.clips.SaveOrderVideoAsync(o, videoFrom, execErr, s.activeOrderLogger())
 		span.End()
 	}()
-	execErr = s.executeQueuedOrder(ctx, o)
+	execErr = s.executeQueuedOrder(ctx, cancelCtx, o)
 }
 
 // executeQueuedOrder runs a single order: says greeting, brews, says completion.
 // A non-nil return means the brew sequence failed; the caller still notifies the sensor and saves video via safeExecuteOrder.
-func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order order.Order) error {
+func (s *beanjaminCoffee) executeQueuedOrder(ctx, cancelCtx context.Context, order order.Order) error {
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::executeQueuedOrder")
 	defer span.End()
@@ -184,7 +204,7 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx context.Context, order order.Or
 		}
 	}
 
-	if err := s.prepareDrink(ctx, order); err != nil {
+	if err := s.prepareDrink(ctx, cancelCtx, order); err != nil {
 		logger.Errorf("order for %s failed: %v", order.CustomerName, err)
 		return err
 	}
