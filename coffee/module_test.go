@@ -56,7 +56,7 @@ func validCanServeIcedLatteConfig() *Config {
 	cfg := validCanServeIcedConfig()
 	cfg.CanServeIcedLatte = true
 	cfg.DoorApproachRelativePose = &RelativePose{}
-	cfg.MilkOptions = []string{"whole", "oat"}
+	cfg.MilkOptions = testMilks
 	cfg.MilkBottleDimensions = &ContainerDimensions{DiameterMm: 90, HeightMm: 250}
 	cfg.MilkPourApproachRelativePose = &RelativePose{}
 	cfg.MilkPourRelativePose = &RelativePose{}
@@ -262,14 +262,22 @@ func TestValidate_IgnoresMilkFieldsWhenNotServingLatte(t *testing.T) {
 	}
 }
 
-// Each milk name is spliced into its pose names and sent by clients, so a
-// name that would make a malformed pose, or a milk listed twice, is rejected.
+// A milk's spot is spliced into its pose names and its name is sent by clients,
+// so a malformed name or spot is rejected, as is a name listed twice or two
+// milks at one spot.
 func TestValidate_CanServeIcedLatte_RejectsBadMilkOptions(t *testing.T) {
-	for _, milks := range [][]string{{""}, {"Oat"}, {"oat milk"}, {"oat", "oat"}} {
+	for _, milks := range [][]MilkOption{
+		{{Name: "", Spot: "left"}},
+		{{Name: "Oat", Spot: "left"}},
+		{{Name: "oat", Spot: "top shelf"}},
+		{{Name: "oat", Spot: ""}},
+		{{Name: "oat", Spot: "left"}, {Name: "oat", Spot: "right"}},
+		{{Name: "whole", Spot: "left"}, {Name: "oat", Spot: "left"}},
+	} {
 		cfg := validCanServeIcedLatteConfig()
 		cfg.MilkOptions = milks
 		if _, _, err := cfg.Validate(""); err == nil || !strings.Contains(err.Error(), "milk_options") {
-			t.Errorf("milk_options %q: expected a milk_options error, got %v", milks, err)
+			t.Errorf("milk_options %+v: expected a milk_options error, got %v", milks, err)
 		}
 	}
 }

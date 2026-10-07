@@ -65,7 +65,7 @@ const (
 	clawPosePour               = "pour"                 // espresso cup tilted to pour over the ice (pour_relative_pose)
 
 	// iced-latte pour poses, resolved against the staged glass rather than read
-	// from the switch. The fridge poses are per milk (milkApproachPose /
+	// from the switch. The fridge poses are per spot (milkApproachPose /
 	// milkGrabPose).
 	clawPoseMilkPourApproach = "milk_pour_approach" // milk bottle upright above the staged glass (milk_pour_approach_relative_pose)
 	clawPoseMilkPour         = "milk_pour"          // milk bottle tilted to pour into the glass (milk_pour_relative_pose)
@@ -86,14 +86,14 @@ const (
 // switch (parallel to camPoseCupObserve on the cup observe switch).
 const glassPoseObserve = "glass_observe"
 
-// milkApproachPose is the claws-switch pose in front of the named milk's bottle
-// inside the open fridge: where the gripper lines up before the straight-in
-// grab, and where it backs out to after setting the bottle down.
-func milkApproachPose(milk string) string { return milk + "_milk_approach" }
+// milkApproachPose is the claws-switch pose in front of the bottle at a fridge
+// spot (MilkOption.Spot), with the door open: where the gripper lines up before
+// the straight-in grab, and where it backs out to after setting the bottle down.
+func milkApproachPose(spot string) string { return "milk_" + spot + "_approach" }
 
-// milkGrabPose is the claws-switch pose with the gripper around the named
-// milk's bottle where it stands on the shelf: grabbed from here, set back here.
-func milkGrabPose(milk string) string { return milk + "_milk_grab" }
+// milkGrabPose is the claws-switch pose with the gripper around the bottle at a
+// fridge spot: grabbed from here, set back here.
+func milkGrabPose(spot string) string { return "milk_" + spot + "_grab" }
 
 // requiredPose pairs a pose name with the switch it must resolve on. Used by
 // validateConfiguredPoses.
@@ -203,10 +203,10 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		// Each bottle's approach and grab. The door is tracked through its hinge
 		// arc, and the pour is resolved against the staged glass
 		// (glass_relative_poses.go), so neither is on the switch.
-		for _, milk := range s.cfg.MilkOptions {
+		for _, m := range s.cfg.MilkOptions {
 			poses = append(poses,
-				requiredPose{s.clawsSw, milkApproachPose(milk)},
-				requiredPose{s.clawsSw, milkGrabPose(milk)},
+				requiredPose{s.clawsSw, milkApproachPose(m.Spot)},
+				requiredPose{s.clawsSw, milkGrabPose(m.Spot)},
 			)
 		}
 	}

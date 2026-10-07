@@ -58,7 +58,7 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 	// []any for the same structpb reason as orders.
 	milkOptions := make([]any, len(s.cfg.MilkOptions))
 	for i, m := range s.cfg.MilkOptions {
-		milkOptions[i] = m
+		milkOptions[i] = m.Name
 	}
 	resp := map[string]any{
 		// count reports pending depth only — orders waiting to be made.

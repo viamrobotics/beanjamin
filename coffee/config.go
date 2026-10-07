@@ -193,12 +193,10 @@ type Config struct {
 	MilkPourApproachRelativePose *RelativePose `json:"milk_pour_approach_relative_pose,omitempty"`
 	MilkPourRelativePose         *RelativePose `json:"milk_pour_relative_pose,omitempty"`
 
-	// MilkOptions names the milk bottles in the fridge, as prepare_order's
-	// "milk" asks for them (e.g. ["whole", "oat"]). Each stands at a fixed spot,
-	// grabbed and set back down through the claws-switch poses
-	// <name>_milk_approach and <name>_milk_grab. The first is the default for an
-	// iced latte that names no milk. Required when can_serve_iced_latte is set.
-	MilkOptions []string `json:"milk_options,omitempty"`
+	// MilkOptions lists the milk bottles in the fridge and the spot each stands
+	// at. The first is the default for an iced latte that names no milk.
+	// Required when can_serve_iced_latte is set.
+	MilkOptions []MilkOption `json:"milk_options,omitempty"`
 	// MilkBottleDimensions is the known bottle diameter/height the held bottle is
 	// modeled from (see ContainerDimensions), centered on the grip point at the
 	// grab pose. Shared by every milk. Required when can_serve_iced_latte is set.
@@ -325,27 +323,54 @@ func (d *ContainerDimensions) validate(path, field string) error {
 	return nil
 }
 
-// validateMilkOptions checks milk_options: at least one milk, each named,
-// named once, and named in lowercase letters, digits and underscores, since the
-// name is spliced into its pose names (<name>_milk_approach) and sent by clients.
-func validateMilkOptions(path string, milks []string) error {
+// MilkOption is one milk in the fridge (an entry in milk_options).
+type MilkOption struct {
+	// Name is what prepare_order's "milk" asks for it by, e.g. "oat".
+	Name string `json:"name"`
+	// Spot is where in the fridge the bottle stands, e.g. "left". Its poses on
+	// the claws switch are named after the spot, not the milk —
+	// milk_<spot>_approach and milk_<spot>_grab — so renaming a milk or moving it
+	// to another spot is a config change, with no poses to re-teach.
+	Spot string `json:"spot"`
+}
+
+// milkNames returns the names in milk_options, the default first.
+func (c *Config) milkNames() []string {
+	names := make([]string, len(c.MilkOptions))
+	for i, m := range c.MilkOptions {
+		names[i] = m.Name
+	}
+	return names
+}
+
+// validateMilkOptions checks milk_options: at least one milk, and every name
+// and spot given once, in lowercase letters, digits and underscores — the spot
+// is spliced into pose names (milk_<spot>_approach) and the name is sent by
+// clients. Two milks can't share a spot.
+func validateMilkOptions(path string, milks []MilkOption) error {
 	if len(milks) == 0 {
 		return resource.NewConfigValidationFieldRequiredError(path, "milk_options")
 	}
-	seen := make(map[string]bool, len(milks))
+	names := make(map[string]bool, len(milks))
+	spots := make(map[string]bool, len(milks))
 	for _, m := range milks {
-		if !milkNamePattern.MatchString(m) {
-			return fmt.Errorf("%s: milk_options entry %q must be lowercase letters, digits and underscores", path, m)
+		for _, f := range []struct {
+			field, value string
+			seen         map[string]bool
+		}{{"name", m.Name, names}, {"spot", m.Spot, spots}} {
+			if !milkIDPattern.MatchString(f.value) {
+				return fmt.Errorf("%s: milk_options %s %q must be lowercase letters, digits and underscores", path, f.field, f.value)
+			}
+			if f.seen[f.value] {
+				return fmt.Errorf("%s: milk_options lists %s %q twice", path, f.field, f.value)
+			}
+			f.seen[f.value] = true
 		}
-		if seen[m] {
-			return fmt.Errorf("%s: milk_options lists %q twice", path, m)
-		}
-		seen[m] = true
 	}
 	return nil
 }
 
-var milkNamePattern = regexp.MustCompile(`^[a-z0-9_]+$`)
+var milkIDPattern = regexp.MustCompile(`^[a-z0-9_]+$`)
 
 // validatePourPair checks a required staged-glass-relative pour pair
 // (<name>_approach_relative_pose / <name>_relative_pose): both present, and at

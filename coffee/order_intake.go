@@ -15,7 +15,7 @@ func (s *beanjaminCoffee) menu() order.Menu {
 		Decaf:     s.cfg.CanServeDecaf,
 		Iced:      s.cfg.CanServeIced,
 		IcedLatte: s.cfg.CanServeIcedLatte,
-		Milks:     s.cfg.MilkOptions,
+		Milks:     s.cfg.milkNames(),
 	}
 }
 

@@ -90,7 +90,7 @@ func TestClearHeldGeometryForgetsHeldMilk(t *testing.T) {
 // A hand-run milk action takes the milk execute_action names, defaults to the
 // first configured milk, and refuses one that isn't configured.
 func TestActionMilk(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{MilkOptions: []string{"whole", "oat"}}}
+	s := &beanjaminCoffee{cfg: &Config{MilkOptions: testMilks}}
 	if got, err := s.actionMilk(context.Background()); err != nil || got != "whole" {
 		t.Errorf("default actionMilk = %q, %v; want whole", got, err)
 	}
@@ -99,6 +99,21 @@ func TestActionMilk(t *testing.T) {
 	}
 	if _, err := s.actionMilk(withMilkChoice(context.Background(), "soy")); err == nil {
 		t.Error("actionMilk(soy) should fail for an unconfigured milk")
+	}
+}
+
+// testMilks is a two-milk fridge: whole on the left, oat on the right.
+var testMilks = []MilkOption{{Name: "whole", Spot: "left"}, {Name: "oat", Spot: "right"}}
+
+// Each milk is looked up to the spot it stands at; a milk that isn't configured
+// has no spot.
+func TestMilkSpot(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{MilkOptions: testMilks}}
+	if spot, err := s.milkSpot("oat"); err != nil || spot != "right" {
+		t.Errorf("milkSpot(oat) = %q, %v; want right", spot, err)
+	}
+	if _, err := s.milkSpot("soy"); err == nil {
+		t.Error("milkSpot(soy) should fail for an unconfigured milk")
 	}
 }
 

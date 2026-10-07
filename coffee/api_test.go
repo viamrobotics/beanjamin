@@ -39,7 +39,7 @@ func TestSetStepReflectedInStatus(t *testing.T) {
 }
 
 func TestStatusReportsQueueAndFlags(t *testing.T) {
-	s := newStatusService(t, &Config{CanServeDecaf: true, MilkOptions: []string{"whole", "oat"}})
+	s := newStatusService(t, &Config{CanServeDecaf: true, MilkOptions: testMilks})
 	s.queue.Enqueue(order.Order{ID: "o1", Drink: "espresso", CustomerName: "Ada", RawStep: "Grinding"})
 	s.queue.Enqueue(order.Order{ID: "o2", Drink: "lungo", CustomerName: "Grace"})
 

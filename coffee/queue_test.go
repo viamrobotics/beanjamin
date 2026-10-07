@@ -341,7 +341,7 @@ func TestEnqueueOrder_IcedLatteGatedByCanServeIcedLatte(t *testing.T) {
 		t.Errorf("queue should stay empty after rejection, got len=%d", c.queue.Len())
 	}
 
-	c2, _ := newTestCoffee(t, &Config{CanServeIced: true, CanServeIcedLatte: true, MilkOptions: []string{"whole"}})
+	c2, _ := newTestCoffee(t, &Config{CanServeIced: true, CanServeIcedLatte: true, MilkOptions: []MilkOption{{Name: "whole", Spot: "left"}}})
 	if _, err := c2.enqueueOrder(context.Background(), map[string]any{
 		"drink": "iced_latte",
 	}); err != nil {
@@ -355,7 +355,7 @@ func TestEnqueueOrder_IcedLatteGatedByCanServeIcedLatte(t *testing.T) {
 // The order carries the milk it asked for, or the first configured milk when it
 // named none, and an unknown milk is rejected before anything is queued.
 func TestEnqueueOrder_IcedLatteMilkChoice(t *testing.T) {
-	cfg := &Config{CanServeIced: true, CanServeIcedLatte: true, MilkOptions: []string{"whole", "oat"}}
+	cfg := &Config{CanServeIced: true, CanServeIcedLatte: true, MilkOptions: testMilks}
 	for _, tt := range []struct{ milk, want string }{{"", "whole"}, {"oat", "oat"}} {
 		c, _ := newTestCoffee(t, cfg)
 		if _, err := c.enqueueOrder(context.Background(), map[string]any{"drink": "iced_latte", "milk": tt.milk}); err != nil {
