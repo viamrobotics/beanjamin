@@ -180,9 +180,12 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 	}, nil
 }
 
-// signalCancel interrupts any in-flight motion by cancelling the shared
-// cancelCtx and pausing the queue. Returns true if a sequence was running.
+// signalCancel pauses the queue and interrupts any in-flight motion by
+// cancelling the shared cancelCtx. Returns true if a sequence was running.
 // Does not wait for the running goroutine to observe the cancellation.
+//
+// The pause happens even when the arm is idle, so a cancel always works as a
+// pause button: no new order starts until proceed.
 //
 // The holder is checked under mu, the lock claim holds, so a sequence cannot
 // take the arm between this check and the cancel and end up with the
@@ -190,10 +193,10 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 func (s *beanjaminCoffee) signalCancel() bool {
 	s.lease.mu.Lock()
 	defer s.lease.mu.Unlock()
+	s.lease.paused.Store(true)
 	if s.lease.holder == "" {
 		return false
 	}
-	s.lease.paused.Store(true)
 	s.lease.cancelFunc()
 	s.lease.cancelCtx, s.lease.cancelFunc = context.WithCancel(context.Background())
 	return true
@@ -217,7 +220,8 @@ func (s *beanjaminCoffee) waitForIdle(ctx context.Context, timeout time.Duration
 }
 
 // cancel stops the machine and nothing else: it aborts the sequence, halts the
-// arm mid-trajectory and pauses the queue. No motion is planned, no state flag
+// arm mid-trajectory and pauses the queue. With nothing running it only pauses
+// the queue, so no new order starts until proceed. No motion is planned, no state flag
 // is cleared and the frame system is left alone, so the recorded world still
 // matches the physical one for rewind to act on.
 func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]any, error) {
@@ -245,7 +249,7 @@ func (s *beanjaminCoffee) cancel(ctx context.Context) (map[string]any, error) {
 	if cancelled {
 		logger.Info("cancel: sequence stopped and queue paused — run 'rewind' to recover the arm, then 'proceed'")
 	} else {
-		logger.Info("cancel: nothing was running")
+		logger.Info("cancel: nothing was running — queue paused, send 'proceed' to resume")
 	}
 	return map[string]any{
 		"status":    "cancelled",
