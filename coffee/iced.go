@@ -439,18 +439,23 @@ func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 	// orientations — a pure rotation about the world X axis, since both share
 	// OX=0) so the stream stays over the glass instead of spilling. The staged
 	// glass stays a hard obstacle here — the cup must clear it, never drive in.
-	// Pivots default to the slow-movement velocity; override it so the pour
-	// isn't dragged out (tune via pour_vel_degs_per_sec).
+	// pourConstraint keeps the planner from detouring the cup off the glass; a
+	// tilt it can't finish is executed as far as it planned, pouring less
+	// rather than spilling. Pivots default to the slow-movement velocity;
+	// override it so the pour isn't dragged out (tune via
+	// pour_vel_degs_per_sec).
 	pourStep := Step{PoseName: clawPosePour, PoseSwitch: s.clawsSw, PivotFromPose: clawPosePourApproach, PivotDegreesPerStep: 5,
-		MoveOptions: s.pourMoveOptions(), Pause: pourPause}
+		LinearConstraint: pourConstraint, AcceptPartialPlan: true, MoveOptions: s.pourMoveOptions(), Pause: pourPause}
 	if err := s.executeStep(ctx, cancelCtx, pourStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
 	// Return upright along the same pivot so any residual drip stays over the
 	// glass, at the default (slow) pivot speed: a fast return flicks the dregs
-	// left in the cup over the rim.
+	// left in the cup over the rim. Constrained like the tilt, but it must
+	// complete: the cup is carried away next, and a still-tilted one drips the
+	// whole way.
 	uprightStep := Step{PoseName: clawPosePourApproach, PoseSwitch: s.clawsSw, PivotFromPose: clawPosePour, PivotDegreesPerStep: 5,
-		Pause: shortPause}
+		LinearConstraint: pourConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
