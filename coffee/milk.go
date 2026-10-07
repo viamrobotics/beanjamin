@@ -56,7 +56,8 @@ var milkChoiceActions = map[string]bool{
 }
 
 // checkMilkChoiceAllowed refuses a "milk" on an action that wouldn't use it,
-// rather than silently ignoring it.
+// rather than silently ignoring it — as prepare_order refuses a milk on a drink
+// without one.
 func checkMilkChoiceAllowed(name string) error {
 	if milkChoiceActions[name] {
 		return nil

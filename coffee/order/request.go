@@ -22,6 +22,7 @@ type Request struct {
 	CompletionStatement  string   `json:"completion_statement"`
 	Count                *float64 `json:"count"`
 	Fulfillment          string   `json:"fulfillment"`
+	Milk                 string   `json:"milk"`
 }
 
 // requestKeys lists the wire keys of Request in declaration order, for error

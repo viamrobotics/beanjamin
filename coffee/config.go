@@ -194,7 +194,7 @@ type Config struct {
 	MilkPourRelativePose         *RelativePose `json:"milk_pour_relative_pose,omitempty"`
 
 	// MilkOptions lists the milk bottles in the fridge and the spot each stands
-	// at. Every iced latte uses the first.
+	// at. The first is the default for an iced latte that names no milk.
 	// Required when can_serve_iced_latte is set.
 	MilkOptions []MilkOption `json:"milk_options,omitempty"`
 	// MilkBottleDimensions is the known bottle diameter/height the held bottle is
@@ -325,7 +325,7 @@ func (d *ContainerDimensions) validate(path, field string) error {
 
 // MilkOption is one milk in the fridge (an entry in milk_options).
 type MilkOption struct {
-	// Name identifies the milk, e.g. "oat"; execute_action's "milk" names it.
+	// Name is what prepare_order's "milk" asks for it by, e.g. "oat".
 	Name string `json:"name"`
 	// Spot is where in the fridge the bottle stands, e.g. "left". Its poses on
 	// the claws switch are named after the spot, not the milk —

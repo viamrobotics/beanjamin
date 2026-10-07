@@ -34,7 +34,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 	}
 	drink := req.Drink
 	customerName := strings.TrimSpace(req.CustomerName)
-	s.logger.Infof("order request: drink=%q customer=%q", drink, customerName)
+	s.logger.Infof("order request: drink=%q milk=%q customer=%q", drink, req.Milk, customerName)
 
 	if ok, reason := s.menu().Supports(drink); !ok {
 		s.logger.Infof("rejected order for drink %q from %s (%s)", drink, customerName, reason)
@@ -43,6 +43,12 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 			s.logger.Warnf("failed to say rejection: %v", err)
 		}
 		return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
+	}
+
+	milk, err := s.menu().ResolveMilk(drink, req.Milk)
+	if err != nil {
+		s.logger.Warnf("rejected order: %v", err)
+		return nil, err
 	}
 
 	fulfillment, err := order.ParseFulfillment(req.Fulfillment)
@@ -87,6 +93,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		o.ModifiedCustomerName = req.ModifiedCustomerName
 		o.CustomerEmail = req.CustomerEmail
 		o.Fulfillment = fulfillment
+		o.Milk = milk
 		if count > 1 {
 			o.BatchIndex = i + 1
 			o.BatchSize = count

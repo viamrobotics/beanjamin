@@ -341,7 +341,7 @@ func TestEnqueueOrder_IcedLatteGatedByCanServeIcedLatte(t *testing.T) {
 		t.Errorf("queue should stay empty after rejection, got len=%d", c.queue.Len())
 	}
 
-	c2, _ := newTestCoffee(t, &Config{CanServeIced: true, CanServeIcedLatte: true})
+	c2, _ := newTestCoffee(t, &Config{CanServeIced: true, CanServeIcedLatte: true, MilkOptions: []MilkOption{{Name: "whole", Spot: "left"}}})
 	if _, err := c2.enqueueOrder(context.Background(), map[string]any{
 		"drink": "iced_latte",
 	}); err != nil {
@@ -349,6 +349,40 @@ func TestEnqueueOrder_IcedLatteGatedByCanServeIcedLatte(t *testing.T) {
 	}
 	if c2.queue.Len() != 1 {
 		t.Errorf("queue length = %d, want 1", c2.queue.Len())
+	}
+}
+
+// The order carries the milk it asked for, or the first configured milk when it
+// named none, and an unknown milk is rejected before anything is queued.
+func TestEnqueueOrder_IcedLatteMilkChoice(t *testing.T) {
+	cfg := &Config{CanServeIced: true, CanServeIcedLatte: true, MilkOptions: testMilks}
+	for _, tt := range []struct{ milk, want string }{{"", "whole"}, {"oat", "oat"}} {
+		c, _ := newTestCoffee(t, cfg)
+		if _, err := c.enqueueOrder(context.Background(), map[string]any{"drink": "iced_latte", "milk": tt.milk}); err != nil {
+			t.Fatalf("milk %q: unexpected error: %v", tt.milk, err)
+		}
+		if got := c.queue.List()[0].Milk; got != tt.want {
+			t.Errorf("milk %q: queued order has milk %q, want %q", tt.milk, got, tt.want)
+		}
+	}
+
+	// Every order in a batch carries the milk.
+	batch, _ := newTestCoffee(t, cfg)
+	if _, err := batch.enqueueOrder(context.Background(), map[string]any{"drink": "iced_latte", "milk": "oat", "count": float64(3)}); err != nil {
+		t.Fatalf("batch: unexpected error: %v", err)
+	}
+	for i, o := range batch.queue.List() {
+		if o.Milk != "oat" {
+			t.Errorf("batch order %d has milk %q, want oat", i, o.Milk)
+		}
+	}
+
+	c, _ := newTestCoffee(t, cfg)
+	if _, err := c.enqueueOrder(context.Background(), map[string]any{"drink": "iced_latte", "milk": "soy"}); err == nil {
+		t.Fatal("expected rejection for an unconfigured milk")
+	}
+	if c.queue.Len() != 0 {
+		t.Errorf("queue should stay empty after rejection, got len=%d", c.queue.Len())
 	}
 }
 

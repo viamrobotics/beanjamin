@@ -64,6 +64,20 @@ func (m Menu) Supports(drink string) (supported bool, reason string) {
 	}
 }
 
+// ResolveMilk validates an order's milk choice against the menu and returns the
+// milk the drink will be made with (see Milk), or "" for a drink without milk.
+// Naming a milk on a drink that has none is an error rather than silently
+// ignored, so a client that thinks it ordered oat milk finds out it didn't.
+func (m Menu) ResolveMilk(drink, milk string) (string, error) {
+	if !IsMilk(drink) {
+		if milk != "" {
+			return "", fmt.Errorf("milk %q given for %q, which has no milk", milk, drink)
+		}
+		return "", nil
+	}
+	return m.Milk(milk)
+}
+
 // Milk returns the named milk when the menu has it, or the default (first) milk
 // when milk is empty.
 func (m Menu) Milk(milk string) (string, error) {
