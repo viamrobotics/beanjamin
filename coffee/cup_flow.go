@@ -18,7 +18,7 @@ import (
 // flow never touches portafilter state. Each placement advances the shelf-slot
 // counter inside placeFullCupOnShelf.
 func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string]any, error) {
-	cancelCtx, err := s.lease.claim("run_cup_flow")
+	cancelCtx, err := s.lease.claimManual("run_cup_flow")
 	if err != nil {
 		return nil, err
 	}

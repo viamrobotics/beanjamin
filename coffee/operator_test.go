@@ -58,7 +58,7 @@ func TestCancelStopsAndNothingElse(t *testing.T) {
 	if got := stops.Load(); got != 1 {
 		t.Errorf("arm.Stop called %d times, want 1", got)
 	}
-	if !s.lease.paused.Load() {
+	if !s.lease.isPaused() {
 		t.Error("queue should be paused after cancel")
 	}
 	if !s.portafilterInMachine.Load() || !s.portafilterHasGrounds.Load() {
@@ -93,7 +93,7 @@ func TestCancelIdlePausesSilently(t *testing.T) {
 	if resp["cancelled"] != false || resp["queue"] != "paused" {
 		t.Errorf("resp = %v, want cancelled=false queue=paused", resp)
 	}
-	if !s.lease.paused.Load() {
+	if !s.lease.isPaused() {
 		t.Error("an idle cancel must pause the queue")
 	}
 	if said := speech.calls(); len(said) != 0 {
@@ -165,7 +165,7 @@ func coffeeWithDirtyWorld(t *testing.T, cfgErr error) (*beanjaminCoffee, *refere
 func pausedCoffeeWithDirtyWorld(t *testing.T, cfgErr error) (*beanjaminCoffee, *referenceframe.FrameSystem, *int) {
 	t.Helper()
 	s, dirty, rebuilds := coffeeWithDirtyWorld(t, cfgErr)
-	s.lease.paused.Store(true)
+	s.lease.pause()
 	return s, dirty, rebuilds
 }
 
@@ -196,10 +196,8 @@ func TestProceedRebuildsFrameSystemWhenPaused(t *testing.T) {
 	if s.lease.busy() {
 		t.Error("proceed must hand the arm back after rebuilding")
 	}
-	select {
-	case <-s.queue.Proceed():
-	default:
-		t.Error("proceed signal should have been sent to unpause the queue")
+	if s.lease.isPaused() {
+		t.Error("proceed should have lifted the pause")
 	}
 }
 
@@ -232,23 +230,6 @@ func TestProceedRebuildsFrameSystemWhenNotPaused(t *testing.T) {
 	}
 }
 
-// TestProceedOnRunningQueueParksNoSignal pins the other half of the unpaused
-// case: the resume signal must not be sent when nothing is waiting for it. A
-// token left in the cap-1 buffer would be consumed by the next cancel-induced
-// pause the instant it arrived, resuming the queue without an operator asking.
-func TestProceedOnRunningQueueParksNoSignal(t *testing.T) {
-	s, _, _ := coffeeWithDirtyWorld(t, nil)
-
-	if _, err := s.proceedQueue(context.Background()); err != nil {
-		t.Fatalf("proceed error: %v", err)
-	}
-	select {
-	case <-s.queue.Proceed():
-		t.Error("proceed must not park a resume signal while the queue is running")
-	default:
-	}
-}
-
 // TestProceedTwiceResumesOnce: the first proceed claims the pause, the second
 // finds none left. Only one of them may report resumed, or an operator
 // double-clicking would release a pause that a cancel between the two clicks
@@ -274,26 +255,25 @@ func TestProceedTwiceResumesOnce(t *testing.T) {
 }
 
 // TestProceedClearsThePauseItself guards against a queue that silently stops
-// making drinks. proceed must clear the paused flag itself rather than leave it
-// to the queue goroutine; otherwise proceed reports success while the flag stays
-// set: Status keeps claiming the queue is paused, the keepalive loop keeps
-// declining to purge, and the resume signal sits in the buffer waiting to
-// release a pause nobody asked to release.
+// making drinks. proceed must clear the pause itself rather than leave it to the
+// queue goroutine; otherwise proceed reports success while the pause stays set:
+// Status keeps claiming the queue is paused and the keepalive loop keeps
+// declining to purge.
 func TestProceedClearsThePauseItself(t *testing.T) {
 	s, _, _ := pausedCoffeeWithDirtyWorld(t, nil)
 
 	if _, err := s.proceedQueue(context.Background()); err != nil {
 		t.Fatalf("proceed error: %v", err)
 	}
-	if s.lease.paused.Load() {
+	if s.lease.isPaused() {
 		t.Error("proceed must clear the paused flag, not leave it for the queue goroutine")
 	}
 }
 
 // TestCancelledManualActionPauseIsReleasable covers the pause nobody is waiting
 // on: cancelling an execute_action or a keepalive purge pauses the queue while
-// processQueue sits idle between orders, so no consumer is parked to take the
-// resume signal. proceed still has to be able to release it.
+// processQueue sits idle between orders, so no consumer is waiting on it.
+// proceed still has to be able to release it.
 func TestCancelledManualActionPauseIsReleasable(t *testing.T) {
 	s, _, _ := coffeeWithDirtyWorld(t, nil)
 	s.lease.cancelCtx, s.lease.cancelFunc = context.WithCancel(context.Background())
@@ -312,7 +292,7 @@ func TestCancelledManualActionPauseIsReleasable(t *testing.T) {
 	if resp["resumed"] != true {
 		t.Errorf("resumed = %v, want true — the cancel did pause the queue", resp["resumed"])
 	}
-	if s.lease.paused.Load() {
+	if s.lease.isPaused() {
 		t.Error("the queue must not stay paused after proceed released it")
 	}
 }
@@ -426,10 +406,8 @@ func TestProceedRefusesWhileASequenceRuns(t *testing.T) {
 	if s.cachedFS != dirty {
 		t.Error("a refused proceed must leave the cached frame system alone")
 	}
-	select {
-	case <-s.queue.Proceed():
+	if !s.lease.isPaused() {
 		t.Error("a refused proceed must not unpause the queue")
-	default:
 	}
 }
 
@@ -445,13 +423,8 @@ func TestProceedRebuildFailureKeepsQueuePaused(t *testing.T) {
 	if s.lease.busy() {
 		t.Error("a failed rebuild must still hand the arm back")
 	}
-	if !s.lease.paused.Load() {
+	if !s.lease.isPaused() {
 		t.Error("queue should still be paused after a failed rebuild")
-	}
-	select {
-	case <-s.queue.Proceed():
-		t.Error("a failed rebuild must not unpause the queue")
-	default:
 	}
 }
 
@@ -517,7 +490,7 @@ func TestResetWorldHoldsTheGateWhileRebuilding(t *testing.T) {
 	fsSvc := inject.NewFrameSystemService("fs")
 	fsSvc.FrameSystemConfigFunc = func(context.Context) (*framesystem.Config, error) {
 		heldDuringRebuild = s.lease.busy()
-		_, competeErr := s.lease.claim("competing sequence")
+		_, competeErr := s.lease.claimManual("competing sequence")
 		claimedDuringRebuild = competeErr == nil
 		return &framesystem.Config{}, nil
 	}
@@ -554,7 +527,7 @@ func TestResetWorldReleasesTheGateOnRebuildFailure(t *testing.T) {
 	if s.lease.busy() {
 		t.Error("a failed reset_world must still hand the arm back")
 	}
-	if !s.lease.paused.Load() {
+	if !s.lease.isPaused() {
 		t.Error("queue should still be paused after a failed rebuild")
 	}
 }

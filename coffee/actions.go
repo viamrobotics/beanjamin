@@ -112,7 +112,7 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string, withGl
 		}
 	}
 
-	cancelCtx, err := s.lease.claim("execute_action " + name)
+	cancelCtx, err := s.lease.claimManual("execute_action " + name)
 	if err != nil {
 		return nil, err
 	}
