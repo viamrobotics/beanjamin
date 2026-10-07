@@ -304,13 +304,17 @@ func (s *beanjaminCoffee) observeAtPose(ctx, cancelCtx context.Context, t *picku
 		return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, pass, err)
 	}
 
-	// Merge/rank operate on centroids; the geometry is matched back to each
-	// ranked centroid afterward (geom.MergeNearbyCentroids averages centroids, so
-	// geometry can't be threaded through the merge directly).
+	// Merge/rank operate on centroids, and the held-item box is then rebuilt on
+	// each merged centroid. geom.MergeNearbyCentroids averages detections up to
+	// observeDedupMm apart, so reusing any one detection's box would leave the
+	// held item off the grasp point by an amount that varies from grab to grab.
 	centroids := geom.Centroids(detected)
 	merged := geom.MergeNearbyCentroids(centroids, observeDedupMm)
 	ranked := geom.RankCentroidsByProximity(merged, gripperPosition)
-	candidates := geom.CandidatesForCentroids(ranked, detected)
+	candidates, err := geom.ContainerCandidates(ranked, t.dims.boxDims(), t.label)
+	if err != nil {
+		return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, pass, err)
+	}
 	logger.Infof("dynamic %s pickup: pass %d/%d — gripper=(x=%.1f, y=%.1f, z=%.1f) — %d candidate(s) (%d before merge), closest first:",
 		t.label, pass, passes, gripperPosition.X, gripperPosition.Y, gripperPosition.Z, len(candidates), len(detected))
 	for j, c := range candidates {

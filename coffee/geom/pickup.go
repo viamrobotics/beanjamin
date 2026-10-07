@@ -7,7 +7,6 @@ package geom
 
 import (
 	"fmt"
-	"math"
 	"sort"
 
 	"github.com/golang/geo/r3"
@@ -125,32 +124,19 @@ func Centroids(candidates []Candidate) []r3.Vector {
 	return out
 }
 
-// CandidatesForCentroids pairs each ranked centroid with the geometry of the
-// nearest original detection, so the held-item tracker can attach the detected
-// shape after the grab. Geometry is matched back by nearest original rather than
-// threaded through the merge (which averages centroids).
-func CandidatesForCentroids(ranked []r3.Vector, originals []Candidate) []Candidate {
-	out := make([]Candidate, len(ranked))
-	for i, c := range ranked {
-		out[i] = Candidate{Centroid: c, Geom: NearestGeometry(c, originals)}
-	}
-	return out
-}
-
-// NearestGeometry returns the geometry of the original detection whose centroid
-// is closest to c, skipping detections with no geometry. Returns nil when no
-// original carries a geometry.
-func NearestGeometry(c r3.Vector, originals []Candidate) spatialmath.Geometry {
-	var best spatialmath.Geometry
-	bestDist := math.MaxFloat64
-	for _, o := range originals {
-		if o.Geom == nil {
-			continue
+// ContainerCandidates pairs each centroid with a container box of the given
+// size centered on it (ContainerBox). The box must be built on the centroid the
+// gripper is sent to — not on any single detection behind a merged centroid —
+// so the held item lands at the same grip-point offset on every grab. label is
+// set on each box.
+func ContainerCandidates(centroids []r3.Vector, dims r3.Vector, label string) ([]Candidate, error) {
+	out := make([]Candidate, len(centroids))
+	for i, c := range centroids {
+		box, err := ContainerBox(c, dims, label)
+		if err != nil {
+			return nil, err
 		}
-		if d := o.Centroid.Sub(c).Norm(); d < bestDist {
-			bestDist = d
-			best = o.Geom
-		}
+		out[i] = Candidate{Centroid: c, Geom: box}
 	}
-	return best
+	return out, nil
 }
