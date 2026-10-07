@@ -412,14 +412,14 @@ func (s *beanjaminCoffee) stagedGlassGrabCollisions() []AllowedCollision {
 // clearHeldGeometry forgets all cached item geometry and clears the attached
 // flag. Called from resetFrameSystem: rebuilding the cached frame system from the
 // service already drops the held-item frame, and any cached grasp no longer
-// corresponds to reality. The recorded milk pickup position goes with it — it
-// describes a bottle the gripper is no longer known to hold.
+// corresponds to reality. Which milk is out goes with it — it describes a
+// bottle the gripper is no longer known to hold.
 func (s *beanjaminCoffee) clearHeldGeometry() {
 	s.heldItemAttached = false
 	s.heldCupGeom = nil
 	s.heldGlassGeom = nil
 	s.heldMilkGeom = nil
-	s.milkGraspCentroid = nil
+	s.heldMilk = ""
 }
 
 // cachedHeldGeometry returns the cached gripper-local geometry for the given item

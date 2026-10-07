@@ -51,15 +51,12 @@ func validCanServeIcedConfig() *Config {
 // validCanServeIcedLatteConfig returns a Config with every field required by
 // Validate when CanServeIcedLatte=true populated to a valid entry. The milk path
 // is the iced flow plus a fridge trip, so it builds on the iced config and adds
-// the milk-vision fields and the door grasp offset.
+// the milk options and the door grasp offset.
 func validCanServeIcedLatteConfig() *Config {
 	cfg := validCanServeIcedConfig()
 	cfg.CanServeIcedLatte = true
 	cfg.DoorApproachRelativePose = &RelativePose{}
-	cfg.MilkVisionServiceName = "milk-vis"
-	cfg.MilkObservePoseSwitcherName = "milk-observe-switch"
-	cfg.MilkApproachRelativePose = &RelativePose{}
-	cfg.MilkGrabRelativePose = &RelativePose{}
+	cfg.MilkOptions = testMilks
 	cfg.MilkBottleDimensions = &ContainerDimensions{DiameterMm: 90, HeightMm: 250}
 	cfg.MilkPourApproachRelativePose = &RelativePose{}
 	cfg.MilkPourRelativePose = &RelativePose{}
@@ -234,10 +231,7 @@ func TestValidate_CanServeIcedLatte_RequiresMilkFields(t *testing.T) {
 		field string
 		clear func(*Config)
 	}{
-		{"milk_vision_service_name", func(c *Config) { c.MilkVisionServiceName = "" }},
-		{"milk_observe_pose_switcher_name", func(c *Config) { c.MilkObservePoseSwitcherName = "" }},
-		{"milk_approach_relative_pose", func(c *Config) { c.MilkApproachRelativePose = nil }},
-		{"milk_grab_relative_pose", func(c *Config) { c.MilkGrabRelativePose = nil }},
+		{"milk_options", func(c *Config) { c.MilkOptions = nil }},
 		{"milk_bottle_dimensions", func(c *Config) { c.MilkBottleDimensions = nil }},
 		{"milk_bottle_dimensions.height_mm", func(c *Config) { c.MilkBottleDimensions = &ContainerDimensions{DiameterMm: 90} }},
 		{"milk_pour_approach_relative_pose", func(c *Config) { c.MilkPourApproachRelativePose = nil }},
@@ -260,7 +254,7 @@ func TestValidate_CanServeIcedLatte_RequiresMilkFields(t *testing.T) {
 func TestValidate_IgnoresMilkFieldsWhenNotServingLatte(t *testing.T) {
 	cfg := validCanServeIcedConfig()
 	cfg.MilkBottleDimensions = nil
-	cfg.MilkVisionServiceName = ""
+	cfg.MilkOptions = nil
 	cfg.MilkPourApproachRelativePose = nil
 	cfg.MilkPourRelativePose = nil
 	if _, _, err := cfg.Validate(""); err != nil {
@@ -268,24 +262,24 @@ func TestValidate_IgnoresMilkFieldsWhenNotServingLatte(t *testing.T) {
 	}
 }
 
-func TestValidate_CanServeIcedLatte_AppendsMilkDeps(t *testing.T) {
-	cfg := validCanServeIcedLatteConfig()
-	req, _, err := cfg.Validate("")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	wantVis := vision.Named("milk-vis").String()
-	var sawVision, sawSwitch bool
-	for _, d := range req {
-		if d == wantVis {
-			sawVision = true
+// A milk's spot is spliced into its pose names and its name is sent by clients,
+// so a malformed name or spot is rejected, as is a name listed twice or two
+// milks at one spot.
+func TestValidate_CanServeIcedLatte_RejectsBadMilkOptions(t *testing.T) {
+	for _, milks := range [][]MilkOption{
+		{{Name: "", Spot: "left"}},
+		{{Name: "Oat", Spot: "left"}},
+		{{Name: "oat", Spot: "top shelf"}},
+		{{Name: "oat", Spot: ""}},
+		{{Name: "oat", Spot: "left"}, {Name: "oat", Spot: "right"}},
+		{{Name: "whole", Spot: "left"}, {Name: "oat", Spot: "left"}},
+		{{Name: "oat", Spot: "pour"}}, // milk_pour_approach is the pour pose
+	} {
+		cfg := validCanServeIcedLatteConfig()
+		cfg.MilkOptions = milks
+		if _, _, err := cfg.Validate(""); err == nil || !strings.Contains(err.Error(), "milk_options") {
+			t.Errorf("milk_options %+v: expected a milk_options error, got %v", milks, err)
 		}
-		if d == "milk-observe-switch" {
-			sawSwitch = true
-		}
-	}
-	if !sawVision || !sawSwitch {
-		t.Fatalf("expected milk vision + observe switch deps in required deps, got %v", req)
 	}
 }
 

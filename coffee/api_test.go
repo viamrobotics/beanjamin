@@ -64,6 +64,19 @@ func TestStatusReportsQueueAndFlags(t *testing.T) {
 	}
 }
 
+// A non-string "milk" is refused rather than read as no milk.
+func TestParseOptionalString(t *testing.T) {
+	if got, err := parseOptionalString(map[string]any{}, "milk"); err != nil || got != "" {
+		t.Errorf("absent: got %q, %v; want empty, nil", got, err)
+	}
+	if got, err := parseOptionalString(map[string]any{"milk": "oat"}, "milk"); err != nil || got != "oat" {
+		t.Errorf("string: got %q, %v; want oat, nil", got, err)
+	}
+	if _, err := parseOptionalString(map[string]any{"milk": 3.0}, "milk"); err == nil {
+		t.Error("number: want an error")
+	}
+}
+
 func TestStatusReportsFaultActive(t *testing.T) {
 	s := newStatusService(t, &Config{})
 	s.faultAlarm = speech.NewFaultAlarm(nil, s.logger)

@@ -42,6 +42,9 @@ func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, err
 	if s.heldItemAttached {
 		s.activeOrderLogger().Warn("proceed: forgetting a held item — if the gripper really is holding something, cancel and rewind instead so it lets go first")
 	}
+	if s.heldMilk != "" {
+		s.activeOrderLogger().Warnf("proceed: forgetting that the %s milk is out of the fridge — %s", s.heldMilk, s.milkPutBackHint(s.heldMilk))
+	}
 	// Clear the recorded door angle before the rebuild, so resetFrameSystem has
 	// nothing to re-apply and the door lands at its authored shut transform with
 	// everything else. Ordering is load-bearing: cleared afterward, the rebuilt
@@ -329,7 +332,11 @@ func (s *beanjaminCoffee) rewind(ctx context.Context) (map[string]any, error) {
 	}
 
 	// Drop the container before recovery, so the motion that follows plans
-	// against an empty gripper rather than around an item already let go.
+	// against an empty gripper rather than around an item already let go — but
+	// never a milk bottle, which has to go back on its spot.
+	if err := s.refuseDropWhileMilkHeld(ctx); err != nil {
+		return nil, fmt.Errorf("rewind: %w", err)
+	}
 	if err := s.dropHeldContainer(ctx); err != nil {
 		return nil, fmt.Errorf("rewind: %w", err)
 	}

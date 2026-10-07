@@ -2,6 +2,7 @@ package coffee
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -11,40 +12,13 @@ import (
 	"beanjamin/coffee/geom"
 )
 
-// The return is the pickup replayed: the same offsets composed onto the recorded
-// grasp centroid, so the bottle is set back down exactly where it was lifted
-// from and the descent retraces the retreat.
-func TestMilkReturnPosesReplayThePickupOffsets(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{
-		MilkApproachRelativePose: &RelativePose{X: 10, Y: -20, Z: 150, OZ: -1},
-		MilkGrabRelativePose:     &RelativePose{X: 10, Y: -20, Z: 5, OZ: -1},
-	}}
-	centroid := r3.Vector{X: 300, Y: -450, Z: 620}
-
-	approach, place := s.milkReturnPoses(centroid)
-
-	wantApproach := geom.PoseRelativeTo(centroid, relativePoseToSpatial(s.cfg.MilkApproachRelativePose))
-	wantPlace := geom.PoseRelativeTo(centroid, relativePoseToSpatial(s.cfg.MilkGrabRelativePose))
-	if approach.Point() != wantApproach.Point() {
-		t.Errorf("approach point = %v, want %v", approach.Point(), wantApproach.Point())
-	}
-	if place.Point() != wantPlace.Point() {
-		t.Errorf("place point = %v, want %v", place.Point(), wantPlace.Point())
-	}
-	// The standoff must sit above the set-down pose, or the "descend onto the
-	// shelf" move would be a climb.
-	if approach.Point().Z <= place.Point().Z {
-		t.Errorf("approach Z %.1f should be above place Z %.1f", approach.Point().Z, place.Point().Z)
-	}
-}
-
-// Returning with nothing recorded must fail rather than drive an empty gripper
+// Returning with no milk out must fail rather than drive an empty gripper
 // at a shelf where the bottle may already stand.
 func TestReturnMilkBottleWithoutPickupFails(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{CanServeIcedLatte: true}, gripper: inject.NewGripper("g")}
 	err := s.returnMilkBottle(context.Background(), context.Background())
-	if err == nil || !strings.Contains(err.Error(), "no recorded pickup position") {
-		t.Fatalf("expected a no-recorded-position error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "no milk is out") {
+		t.Fatalf("expected a no-milk-out error, got %v", err)
 	}
 }
 
@@ -52,13 +26,11 @@ func TestReturnMilkBottleWithoutPickupFails(t *testing.T) {
 // rather than failing partway through a motion on nil config.
 func TestMilkActionsRequireConfiguredMilk(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{}}
-	actions := map[string]func(ctx, cancelCtx context.Context) error{
-		"add_milk":    s.addMilk,
-		"fetch_milk":  s.fetchMilkBottle,
-		"pour_milk":   s.pourMilk,
-		"return_milk": s.returnMilkBottle,
-	}
-	for name, run := range actions {
+	// Through the registered actions, so the wrappers that read execute_action's
+	// "milk" are covered too.
+	registered := s.actionFuncs()
+	for _, name := range []string{"add_milk", "fetch_milk", "pour_milk", "return_milk", "serve_iced_latte"} {
+		run := registered[name]
 		t.Run(name, func(t *testing.T) {
 			err := run(context.Background(), context.Background())
 			if err == nil || !strings.Contains(err.Error(), "can_serve_iced_latte") {
@@ -68,8 +40,8 @@ func TestMilkActionsRequireConfiguredMilk(t *testing.T) {
 	}
 }
 
-// The milk actions are on the execute_action surface so the poses and the grasp
-// offsets can be stepped through one at a time on hardware.
+// The milk actions are on the execute_action surface so each bottle's poses can
+// be stepped through one at a time on hardware.
 func TestMilkActionsRegistered(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{}}
 	actions := s.actionFuncs()
@@ -104,13 +76,139 @@ func TestHeldGeometryCachePerLabel(t *testing.T) {
 	}
 }
 
-// A frame-system reset drops the recorded pickup position along with the cached
-// geometry — it describes a bottle the gripper is no longer known to hold.
-func TestClearHeldGeometryForgetsMilkPickup(t *testing.T) {
-	centroid := r3.Vector{X: 1, Y: 2, Z: 3}
-	s := &beanjaminCoffee{cfg: &Config{}, milkGraspCentroid: &centroid}
+// A frame-system reset forgets which milk is out along with the cached geometry
+// — it describes a bottle the gripper is no longer known to hold.
+func TestClearHeldGeometryForgetsHeldMilk(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{}, heldMilk: "oat"}
 	s.clearHeldGeometry()
-	if s.milkGraspCentroid != nil {
-		t.Errorf("milkGraspCentroid = %v, want nil after clearHeldGeometry", *s.milkGraspCentroid)
+	if s.heldMilk != "" {
+		t.Errorf("heldMilk = %q, want empty after clearHeldGeometry", s.heldMilk)
+	}
+}
+
+// A hand-run milk action takes the milk execute_action names, defaults to the
+// first configured milk, and refuses one that isn't configured.
+func TestActionMilk(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{CanServeIcedLatte: true, MilkOptions: testMilks}}
+	if got, err := s.actionMilk(context.Background(), "fetch_milk"); err != nil || got != "whole" {
+		t.Errorf("default actionMilk = %q, %v; want whole", got, err)
+	}
+	if got, err := s.actionMilk(withMilkChoice(context.Background(), "oat"), "fetch_milk"); err != nil || got != "oat" {
+		t.Errorf("actionMilk(oat) = %q, %v; want oat", got, err)
+	}
+	if _, err := s.actionMilk(withMilkChoice(context.Background(), "soy"), "fetch_milk"); err == nil {
+		t.Error("actionMilk(soy) should fail for an unconfigured milk")
+	}
+}
+
+// testMilks is a two-milk fridge: whole on the left, oat on the right.
+var testMilks = []MilkOption{{Name: "whole", Spot: "left"}, {Name: "oat", Spot: "right"}}
+
+// Each milk is looked up to the spot it stands at; a milk that isn't configured
+// has no spot.
+func TestMilkSpot(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{MilkOptions: testMilks}}
+	if spot, err := s.milkSpot("oat"); err != nil || spot != "right" {
+		t.Errorf("milkSpot(oat) = %q, %v; want right", spot, err)
+	}
+	if _, err := s.milkSpot("soy"); err == nil {
+		t.Error("milkSpot(soy) should fail for an unconfigured milk")
+	}
+}
+
+// Fetching a second bottle while one is out would leave nothing to say which
+// spot the first goes back to.
+func TestFetchMilkWhileOneIsOutFails(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{CanServeIcedLatte: true}, gripper: inject.NewGripper("g"), heldMilk: "whole"}
+	err := s.fetchMilkBottle(context.Background(), context.Background(), "oat")
+	if err == nil || !strings.Contains(err.Error(), "already out") {
+		t.Fatalf("expected an already-out error, got %v", err)
+	}
+}
+
+// "milk" only goes to the actions that pick a bottle; elsewhere it is refused
+// rather than silently ignored.
+func TestCheckMilkChoiceAllowed(t *testing.T) {
+	for _, name := range []string{"fetch_milk", "add_milk", "serve_iced_latte"} {
+		if err := checkMilkChoiceAllowed(name); err != nil {
+			t.Errorf("checkMilkChoiceAllowed(%q) = %v, want allowed", name, err)
+		}
+	}
+	for _, name := range []string{"return_milk", "pour_milk", "grind_coffee"} {
+		if err := checkMilkChoiceAllowed(name); err == nil {
+			t.Errorf("checkMilkChoiceAllowed(%q) = nil, want refused", name)
+		}
+	}
+}
+
+// A bottle out of the fridge keeps the frame system from being rebuilt between
+// hand-run actions, even when its geometry never attached: the rebuild would
+// clear heldMilk and return_milk would no longer know where it goes.
+func TestRefreshFrameSystemSkippedWhileMilkIsOut(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{}, heldMilk: "oat"}
+	// No frame system service is configured, so a rebuild attempt would fail.
+	if err := s.refreshFrameSystemIfClean(context.Background()); err != nil {
+		t.Fatalf("refreshFrameSystemIfClean = %v, want a skipped rebuild", err)
+	}
+	if s.heldMilk != "oat" {
+		t.Errorf("heldMilk = %q, want it kept", s.heldMilk)
+	}
+}
+
+// gripperAt fakes a gripper whose jaws read pos.
+func gripperAt(pos float64) *inject.Gripper {
+	g := inject.NewGripper("g")
+	g.DoFunc = func(context.Context, map[string]any) (map[string]any, error) {
+		return map[string]any{"pos": pos}, nil
+	}
+	return g
+}
+
+// rewind must not open the jaws on a milk bottle wherever the arm is; once the
+// operator has taken it out, rewind goes ahead.
+func TestRefuseDropWhileMilkHeld(t *testing.T) {
+	cfg := &Config{CanServeIcedLatte: true, MilkOptions: testMilks}
+	holding := &beanjaminCoffee{cfg: cfg, gripper: gripperAt(500), heldMilk: "oat"}
+	err := holding.refuseDropWhileMilkHeld(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "oat milk") || !strings.Contains(err.Error(), "right spot") {
+		t.Fatalf("holding the oat bottle: got %v, want a refusal naming the oat milk and its right spot", err)
+	}
+	removed := &beanjaminCoffee{cfg: cfg, gripper: gripperAt(0), heldMilk: "oat"}
+	if err := removed.refuseDropWhileMilkHeld(context.Background()); err != nil {
+		t.Errorf("bottle already taken out: got %v, want rewind allowed", err)
+	}
+	noMilk := &beanjaminCoffee{cfg: cfg, gripper: gripperAt(500)}
+	if err := noMilk.refuseDropWhileMilkHeld(context.Background()); err != nil {
+		t.Errorf("holding a cup, no milk out: got %v, want rewind allowed", err)
+	}
+}
+
+// A failure with the fridge open names where the bottle goes back.
+func TestMilkStepErrNamesTheSpot(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{MilkOptions: testMilks}, doorOpenDegs: 90}
+	err := s.milkStepErr("oat", errors.New("boom"))
+	if !strings.Contains(err.Error(), "oat milk") || !strings.Contains(err.Error(), "right spot") {
+		t.Errorf("milkStepErr = %v, want it to name the oat milk's right spot", err)
+	}
+}
+
+// A bottle out of the fridge is reported as stranded state on a fault.
+func TestStrandedStateReportsMilkOut(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{}, heldMilk: "oat"}
+	if got := s.strandedState(); len(got) != 1 || got[0] != "oat milk out of the fridge" {
+		t.Errorf("strandedState = %v, want [oat milk out of the fridge]", got)
+	}
+}
+
+// execute_action refuses "milk" on an action that doesn't pick a bottle before
+// it takes the run gate, so a rejected flag costs no state.
+func TestExecuteActionRefusesMilkOnOtherActions(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{}}
+	_, err := s.executeAction(withMilkChoice(context.Background(), "oat"), "grind_coffee", false)
+	if err == nil || !strings.Contains(err.Error(), "milk is not accepted") {
+		t.Fatalf("got %v, want a refusal", err)
+	}
+	if s.running.Load() {
+		t.Error("run gate taken by a refused call")
 	}
 }

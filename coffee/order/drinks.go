@@ -1,5 +1,11 @@
 package order
 
+import (
+	"fmt"
+	"slices"
+	"strings"
+)
+
 // IsDecaf reports whether the drink uses the decaf grinding path.
 func IsDecaf(drink string) bool {
 	return drink == "decaf" || drink == "decaf_lungo"
@@ -22,7 +28,7 @@ func IsIced(drink string) bool {
 // IsMilk reports whether the iced serving path additionally fetches the
 // milk bottle from the fridge and pours it into the glass (coffee/milk.go).
 // Every milk drink is also an iced drink — the milk goes into the same staged
-// glass, on top of the espresso.
+// glass, over the ice, before the espresso is poured on top.
 func IsMilk(drink string) bool {
 	return drink == "iced_latte"
 }
@@ -35,6 +41,9 @@ type Menu struct {
 	// IcedLatte implies Iced (the coffee config's Validate rejects it
 	// otherwise), so the one flag is the whole gate for an iced latte.
 	IcedLatte bool
+	// Milks are the milks in the fridge, by the name an order asks for one with.
+	// The first is the default for a milk drink that names none.
+	Milks []string
 }
 
 // Supports reports whether a machine serving this menu can make drink and,
@@ -53,4 +62,19 @@ func (m Menu) Supports(drink string) (supported bool, reason string) {
 	default:
 		return false, "unsupported drink"
 	}
+}
+
+// Milk returns the named milk when the menu has it, or the default (first) milk
+// when milk is empty.
+func (m Menu) Milk(milk string) (string, error) {
+	if len(m.Milks) == 0 {
+		return "", fmt.Errorf("no milk options are configured")
+	}
+	if milk == "" {
+		return m.Milks[0], nil
+	}
+	if !slices.Contains(m.Milks, milk) {
+		return "", fmt.Errorf("unknown milk %q, available: %s", milk, strings.Join(m.Milks, ", "))
+	}
+	return milk, nil
 }
