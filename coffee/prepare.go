@@ -14,21 +14,18 @@ import (
 	"go.viam.com/rdk/module/trace"
 )
 
-func (s *beanjaminCoffee) prepareDrink(ctx context.Context, o order.Order) (err error) {
+// prepareDrink runs the brew cycle for one order. The order queue holds the arm
+// for the whole call and passes the context its claim returned as cancelCtx.
+func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.Order) (err error) {
 	drink, customerName := o.Drink, o.DisplayName()
 	batchIndex, batchSize := o.BatchIndex, o.BatchSize
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::prepareDrink["+drink+"]")
 	defer span.End()
 
-	cancelCtx, err := s.lease.claim("order " + o.ID)
-	if err != nil {
-		return err
-	}
-	defer s.lease.release()
-	// Capture the step the order errored at before `running` flips false above
-	// (LIFO defers: this runs first). Cancel and rewind wait for idle and then
-	// mutate currentStep, so reading it any later would race with them.
+	// Capture the step the order errored at while the queue still holds the arm.
+	// Cancel and rewind wait for the arm to be released and then mutate
+	// currentStep, so reading it any later would race with them.
 	defer func() {
 		if err != nil {
 			step, _ := s.currentStep.Load().(string)
@@ -36,7 +33,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, o order.Order) (err 
 		}
 	}()
 
-	// Runs before `running` flips false, because a rewind taking the gate
+	// Runs while the queue still holds the arm, because a rewind claiming it
 	// afterward starts clearing the very state this inspects. A cancelled
 	// cancelCtx means an operator cancel or reset_world, which own the pause.
 	defer func() {
@@ -187,10 +184,10 @@ func (s *beanjaminCoffee) prepareDrink(ctx context.Context, o order.Order) (err 
 // cannot be trusted to show everything a fault left behind — a cup knocked over
 // or a half-finished pour is never modeled — so the operator looks before any
 // further order runs. The log names whatever mid-cycle state is recorded, since
-// that is what rewind has to undo. Must be called while holding the running
-// gate, like strandedState.
+// that is what rewind has to undo. Must be called while holding the arm, like
+// strandedState.
 func (s *beanjaminCoffee) pauseOnFault(logger logging.Logger, fault error) {
-	s.lease.paused.Store(true)
+	s.lease.pause()
 	left := "no mid-cycle state recorded"
 	if stranded := s.strandedState(); len(stranded) > 0 {
 		left = "state left behind: " + strings.Join(stranded, ", ")
@@ -204,7 +201,7 @@ func (s *beanjaminCoffee) pauseOnFault(logger logging.Logger, fault error) {
 // portafilter left in the group head or holding grounds, a filter frame locked
 // to world, an item modeled in the gripper, a glass staged as an obstacle, or a
 // fridge door modeled open. Empty means the recorded world is the one a brew
-// cycle starts from. The non-atomic fields are owned by the running gate, so
+// cycle starts from. The non-atomic fields are owned by the arm holder, so
 // the caller must hold it.
 func (s *beanjaminCoffee) strandedState() []string {
 	var stranded []string
