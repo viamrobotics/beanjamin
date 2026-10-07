@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go.viam.com/rdk/testutils/inject"
 )
 
 // freshLease resets s.lease to an idle arm with a live cancelCtx, as NewCoffee
@@ -197,5 +199,32 @@ func TestRunPurgeYieldsToAPause(t *testing.T) {
 	}
 	if s.lease.busy() {
 		t.Error("a refused purge must not hold the arm")
+	}
+}
+
+// TestGripperActionsClaimTheArm: the gripper DoCommand actions are
+// troubleshooting, so they refuse while another sequence holds the arm.
+func TestGripperActionsClaimTheArm(t *testing.T) {
+	s, _ := newTestCoffee(t, nil)
+	freshLease(s)
+	g := inject.NewGripper("g")
+	opened := false
+	g.OpenFunc = func(context.Context, map[string]any) error { opened = true; return nil }
+	s.gripper = g
+
+	mustClaim(t, s, "order queue")
+	if _, err := s.handleOpenGripper(context.Background()); !errors.Is(err, errArmBusy) {
+		t.Errorf("open_gripper while held: err = %v, want errArmBusy", err)
+	}
+	if opened {
+		t.Error("open_gripper must not move the gripper while another sequence holds the arm")
+	}
+	s.lease.release()
+
+	if _, err := s.handleOpenGripper(context.Background()); err != nil {
+		t.Fatalf("open_gripper on a free arm: %v", err)
+	}
+	if !opened || s.lease.busy() {
+		t.Errorf("open_gripper should run and hand the arm back: opened=%v busy=%v", opened, s.lease.busy())
 	}
 }

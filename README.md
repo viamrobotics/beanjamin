@@ -639,7 +639,7 @@ The door is opened once and closed once, so the fridge stands open for the pour 
 {"action": "open_gripper"}
 ```
 
-Returns `{"status": "opened"}` or `{"status": "closed", "grabbed": true}`.
+Returns `{"status": "opened"}` or `{"status": "closed", "grabbed": true}`. Like the other troubleshooting commands, it is refused while another sequence holds the arm.
 
 ### Keeping the machine at brew temperature
 

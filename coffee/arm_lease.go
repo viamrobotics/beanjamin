@@ -23,9 +23,9 @@ import (
 //
 //   - Automated work (the order queue and the keepalive purge) claims with
 //     claimAutomated, which is refused while paused.
-//   - Troubleshooting (execute_action, run_cup_flow, rewind, reset_world and
-//     proceed) claims with claimManual, which ignores the pause so an operator
-//     can recover the machine.
+//   - Troubleshooting (execute_action, run_cup_flow, rewind, reset_world,
+//     proceed and the gripper actions) claims with claimManual, which ignores
+//     the pause so an operator can recover the machine.
 type armLease struct {
 	mu         sync.Mutex
 	cancelCtx  context.Context
