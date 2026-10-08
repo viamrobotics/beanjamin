@@ -270,7 +270,7 @@ func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, drink string) err
 
 	brewTime := s.drinkBrewTime(drink)
 	// Handed off so the wait starts when the button is actually pressed.
-	if err := s.handOff(ctx, "", false, func(ctx context.Context) error {
+	if err := s.handOff(ctx, "", func(ctx context.Context) error {
 		logger.Infof("waiting %s for the %s pour to finish", brewTime, drink)
 		return waitOutPour(ctx, cancelCtx, brewTime)
 	}); err != nil {

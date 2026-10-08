@@ -48,7 +48,7 @@ func TestHandOffRunsNowWithoutAFlow(t *testing.T) {
 		t.Fatal("plan_ahead off must not start a flow")
 	}
 	var r recorder
-	if err := s.handOff(context.Background(), "a", false, r.action("a", nil)); err != nil {
+	if err := s.handOff(context.Background(), "a", r.action("a", nil)); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.got(); !slices.Equal(got, []string{"a"}) {
@@ -65,12 +65,12 @@ func TestHandOffDoesNotWaitAndRunsInOrder(t *testing.T) {
 	release := make(chan struct{})
 	slow := func(context.Context) error { <-release; return nil }
 
-	if err := s.handOff(context.Background(), "slow", false, slow); err != nil {
+	if err := s.handOff(context.Background(), "slow", slow); err != nil {
 		t.Fatal(err)
 	}
 	// The planning thread is free while the slow action runs.
 	for _, name := range []string{"a", "b"} {
-		if err := s.handOff(context.Background(), name, false, r.action(name, nil)); err != nil {
+		if err := s.handOff(context.Background(), name, r.action(name, nil)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -86,24 +86,23 @@ func TestHandOffDoesNotWaitAndRunsInOrder(t *testing.T) {
 	}
 }
 
-func TestFailureSkipsTheRestExceptAlways(t *testing.T) {
+func TestFailureSkipsTheRest(t *testing.T) {
 	s, _ := flowCoffee(t)
 	var r recorder
 	boom := errors.New("arm faulted")
 	ctx := context.Background()
-	_ = s.handOff(ctx, "a", false, r.action("a", boom))
-	_ = s.handOff(ctx, "b", false, r.action("b", nil))
-	_ = s.handOff(ctx, "wait out pour", true, r.action("wait out pour", nil))
+	_ = s.handOff(ctx, "a", r.action("a", boom))
+	_ = s.handOff(ctx, "b", r.action("b", nil))
 
 	err := s.settle()
 	if !errors.Is(err, boom) {
 		t.Fatalf("settle err = %v, want the failure", err)
 	}
-	if got := r.got(); !slices.Equal(got, []string{"a", "wait out pour"}) {
-		t.Errorf("ran %v, want a and the always action only", got)
+	if got := r.got(); !slices.Equal(got, []string{"a"}) {
+		t.Errorf("ran %v, want only a", got)
 	}
 	// The error is sticky: nothing more is queued.
-	if err := s.handOff(ctx, "c", false, r.action("c", nil)); !errors.Is(err, boom) {
+	if err := s.handOff(ctx, "c", r.action("c", nil)); !errors.Is(err, boom) {
 		t.Errorf("handOff after a failure = %v, want the failure", err)
 	}
 	if got := r.got(); slices.Contains(got, "c") {
@@ -115,7 +114,7 @@ func TestSetStepFollowsTheArm(t *testing.T) {
 	s, _ := flowCoffee(t)
 	s.setStepNow(stepTamping)
 	release := make(chan struct{})
-	_ = s.handOff(context.Background(), "move", false, func(context.Context) error { <-release; return nil })
+	_ = s.handOff(context.Background(), "move", func(context.Context) error { <-release; return nil })
 
 	s.setStep(stepLockingPortafilter)
 	if got, _ := s.currentStep.Load().(string); got != stepTamping {
@@ -137,7 +136,7 @@ func TestSyncRegionRunsNow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = s.handOff(context.Background(), "a", false, r.action("a", nil))
+	_ = s.handOff(context.Background(), "a", r.action("a", nil))
 	if got := r.got(); !slices.Equal(got, []string{"a"}) {
 		t.Errorf("ran %v, want a to run immediately inside the region", got)
 	}
@@ -150,7 +149,7 @@ func TestSyncRegionRunsNow(t *testing.T) {
 func TestEndFlowReportsAQueuedFailure(t *testing.T) {
 	s, end := flowCoffee(t)
 	boom := errors.New("gripper faulted")
-	_ = s.handOff(context.Background(), "open gripper", false, func(context.Context) error {
+	_ = s.handOff(context.Background(), "open gripper", func(context.Context) error {
 		time.Sleep(10 * time.Millisecond)
 		return boom
 	})

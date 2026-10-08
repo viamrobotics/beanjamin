@@ -140,8 +140,9 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 	}()
 
 	// Wait out the rest of the pour even when the prep failed, so the machine is
-	// quiescent before an operator gets near it.
-	waitErr := s.handOff(ctx, "", true, func(ctx context.Context) error {
+	// quiescent before an operator gets near it. With plan_ahead, a failed
+	// handed-off action ends the order without this wait.
+	waitErr := s.handOff(ctx, "", func(ctx context.Context) error {
 		remaining := s.drinkBrewTime(drink) - time.Since(time.Unix(0, pourStarted.Load()))
 		s.activeOrderLogger().Infof("waiting out the remaining %s of the %s pour (prep error: %v)", remaining, drink, prepErr)
 		return waitOutPour(ctx, cancelCtx, remaining)

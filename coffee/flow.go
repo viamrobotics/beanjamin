@@ -22,18 +22,13 @@ const (
 	flowQueueSize = 64
 )
 
-type flowAction struct {
-	run    func(ctx context.Context) error
-	always bool // runs even after an earlier action failed
-}
-
 // flow is one order's plan-ahead state, owned by the planning thread.
 type flow struct {
 	ctx       context.Context // order ctx merged with cancelCtx
 	cancelCtx context.Context
 
-	from      []referenceframe.Input // end of the last handed-off move; nil means read the arm
-	actions   chan flowAction        // nil when execution is idle
+	from      []referenceframe.Input           // end of the last handed-off move; nil means read the arm
+	actions   chan func(context.Context) error // nil when execution is idle
 	done      chan error
 	failed    atomic.Bool // set by the execution thread
 	err       error       // first execution error; ends the order
@@ -84,7 +79,7 @@ func (s *beanjaminCoffee) settle() error {
 
 // handOff runs fn on the execution thread, or now when there's no active flow.
 // A non-empty name prefixes fn's error either way.
-func (s *beanjaminCoffee) handOff(ctx context.Context, name string, always bool, fn func(context.Context) error) error {
+func (s *beanjaminCoffee) handOff(ctx context.Context, name string, fn func(context.Context) error) error {
 	run := fn
 	if name != "" {
 		run = func(ctx context.Context) error {
@@ -99,22 +94,18 @@ func (s *beanjaminCoffee) handOff(ctx context.Context, name string, always bool,
 		return run(ctx)
 	}
 	if f.err != nil || f.failed.Load() {
-		err := s.settle()
-		if always {
-			_ = run(ctx) //nolint:errcheck // the earlier failure is the one to report
-		}
-		return err
+		return s.settle()
 	}
 	if f.actions == nil {
 		f.startExecution()
 	}
-	f.actions <- flowAction{run: run, always: always}
+	f.actions <- run
 	return nil
 }
 
 // handOffEffect runs a side effect in step with the arm, e.g. a step label.
 func (s *beanjaminCoffee) handOffEffect(effect func()) {
-	_ = s.handOff(context.Background(), "", false, func(context.Context) error { //nolint:errcheck // effects can't fail
+	_ = s.handOff(context.Background(), "", func(context.Context) error { //nolint:errcheck // effects can't fail
 		effect()
 		return nil
 	})
@@ -134,19 +125,18 @@ func (s *beanjaminCoffee) syncRegion() (release func(), err error) {
 	return func() { f.syncDepth-- }, nil
 }
 
-// startExecution runs actions in order. After the first failure it skips all
-// but the always actions.
+// startExecution runs actions in order, skipping the rest after a failure.
 func (f *flow) startExecution() {
-	actions := make(chan flowAction, flowQueueSize)
+	actions := make(chan func(context.Context) error, flowQueueSize)
 	done := make(chan error, 1)
 	f.actions, f.done = actions, done
 	go func() {
 		var first error
-		for a := range actions {
-			if first != nil && !a.always {
-				continue
+		for run := range actions {
+			if first != nil {
+				continue // drain so the planner never blocks
 			}
-			if err := a.run(f.ctx); err != nil && first == nil {
+			if err := run(f.ctx); err != nil {
 				first = err
 				f.failed.Store(true)
 			}
@@ -174,7 +164,7 @@ func (s *beanjaminCoffee) handOffMove(ctx context.Context, f *flow, step Step) e
 		return planErr
 	}
 	f.from = end
-	return s.handOff(ctx, "", false, func(ctx context.Context) error {
+	return s.handOff(ctx, "", func(ctx context.Context) error {
 		return s.runHandedOffMove(ctx, f.cancelCtx, step, plan, from)
 	})
 }
