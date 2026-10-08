@@ -189,22 +189,10 @@ func (s *beanjaminCoffee) normalizeGripperAtStart(ctx context.Context) error {
 
 // openGripper opens the jaws and waits gripperPause.
 func (s *beanjaminCoffee) openGripper(ctx context.Context) error {
-	return s.handOff(ctx, "open gripper", func(ctx context.Context) error {
-		if err := s.gripper.Open(ctx, nil); err != nil {
-			return err
-		}
-		time.Sleep(gripperPause)
-		return nil
-	})
+	return s.handOff(ctx, move{gripper: openGripperAction, sleep: gripperPause})
 }
 
 // closeGripper closes the jaws and waits gripperPause.
 func (s *beanjaminCoffee) closeGripper(ctx context.Context) error {
-	return s.handOff(ctx, "close gripper", func(ctx context.Context) error {
-		if _, err := s.gripper.Grab(ctx, nil); err != nil {
-			return err
-		}
-		time.Sleep(gripperPause)
-		return nil
-	})
+	return s.handOff(ctx, move{gripper: closeGripperAction, sleep: gripperPause})
 }

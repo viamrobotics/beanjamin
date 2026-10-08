@@ -11,7 +11,6 @@ import (
 
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/module/trace"
-	"go.viam.com/rdk/motionplan"
 )
 
 const (
@@ -80,9 +79,6 @@ type Step struct {
 	CircularRadiusMm     float64
 	CircularDurationSec  float64
 	CircularPointsPerRev int
-
-	// plan, set by plan-ahead (flow.go), is run instead of planning the move.
-	plan motionplan.Plan
 }
 
 // runSteps executes each step in order, wrapping the first failure with label
@@ -98,13 +94,11 @@ func (s *beanjaminCoffee) runSteps(ctx, cancelCtx context.Context, label string,
 
 func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step) error {
 	// With plan_ahead, direct moves are handed off; anything else is a stopping point.
-	if step.plan == nil {
-		if f := s.activeFlow(); f != nil && isDirectMove(step) {
-			return s.handOffMove(ctx, f, step)
-		}
-		if err := s.settle(); err != nil {
-			return err
-		}
+	if f := s.activeFlow(); f != nil && isDirectMove(step) {
+		return s.handOffStep(ctx, f, step)
+	}
+	if err := s.settle(); err != nil {
+		return err
 	}
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::executeStep::"+step.PoseName)

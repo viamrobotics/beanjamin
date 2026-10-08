@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.viam.com/rdk/referenceframe"
+	"go.viam.com/rdk/testutils/inject"
 )
 
 // flowCoffee returns a service with plan_ahead on and a flow started.
@@ -20,25 +21,36 @@ func flowCoffee(t *testing.T) (*beanjaminCoffee, func() error) {
 	return s, end
 }
 
-// recorder collects the order actions ran in.
+// failingGripper is a gripper whose Open fails with err.
+func failingGripper(err error) *inject.Gripper {
+	g := inject.NewGripper("g")
+	g.OpenFunc = func(context.Context, map[string]any) error { return err }
+	return g
+}
+
+// recorder records the moves that ran, by name.
 type recorder struct {
 	mu  sync.Mutex
 	ran []string
 }
 
-func (r *recorder) action(name string, err error) func(context.Context) error {
-	return func(context.Context) error {
+func (r *recorder) move(name string) move {
+	return move{name: name, bookkeep: func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.ran = append(r.ran, name)
-		return err
-	}
+	}}
 }
 
 func (r *recorder) got() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return slices.Clone(r.ran)
+}
+
+// blocking returns a move that runs until release is closed.
+func blocking(release chan struct{}) move {
+	return move{bookkeep: func() { <-release }}
 }
 
 func TestHandOffRunsNowWithoutAFlow(t *testing.T) {
@@ -48,7 +60,7 @@ func TestHandOffRunsNowWithoutAFlow(t *testing.T) {
 		t.Fatal("plan_ahead off must not start a flow")
 	}
 	var r recorder
-	if err := s.handOff(context.Background(), "a", r.action("a", nil)); err != nil {
+	if err := s.handOff(context.Background(), r.move("a")); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.got(); !slices.Equal(got, []string{"a"}) {
@@ -63,19 +75,19 @@ func TestHandOffDoesNotWaitAndRunsInOrder(t *testing.T) {
 	s, _ := flowCoffee(t)
 	var r recorder
 	release := make(chan struct{})
-	slow := func(context.Context) error { <-release; return nil }
+	ctx := context.Background()
 
-	if err := s.handOff(context.Background(), "slow", slow); err != nil {
+	if err := s.handOff(ctx, blocking(release)); err != nil {
 		t.Fatal(err)
 	}
-	// The planning thread is free while the slow action runs.
+	// The planning thread is free while the blocking move runs.
 	for _, name := range []string{"a", "b"} {
-		if err := s.handOff(context.Background(), name, r.action(name, nil)); err != nil {
+		if err := s.handOff(ctx, r.move(name)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if got := r.got(); len(got) != 0 {
-		t.Fatalf("ran %v before the slow action finished", got)
+		t.Fatalf("ran %v before the blocking move finished", got)
 	}
 	close(release)
 	if err := s.settle(); err != nil {
@@ -88,25 +100,41 @@ func TestHandOffDoesNotWaitAndRunsInOrder(t *testing.T) {
 
 func TestFailureSkipsTheRest(t *testing.T) {
 	s, _ := flowCoffee(t)
+	boom := errors.New("gripper faulted")
+	s.gripper = failingGripper(boom)
 	var r recorder
-	boom := errors.New("arm faulted")
 	ctx := context.Background()
-	_ = s.handOff(ctx, "a", r.action("a", boom))
-	_ = s.handOff(ctx, "b", r.action("b", nil))
 
-	err := s.settle()
-	if !errors.Is(err, boom) {
-		t.Fatalf("settle err = %v, want the failure", err)
+	_ = s.openGripper(ctx)
+	_ = s.handOff(ctx, r.move("b"))
+	if err := s.settle(); !errors.Is(err, boom) {
+		t.Fatalf("settle err = %v, want the gripper failure", err)
 	}
-	if got := r.got(); !slices.Equal(got, []string{"a"}) {
-		t.Errorf("ran %v, want only a", got)
+	if got := r.got(); len(got) != 0 {
+		t.Errorf("ran %v after the failure", got)
 	}
-	// The error is sticky: nothing more is queued.
-	if err := s.handOff(ctx, "c", r.action("c", nil)); !errors.Is(err, boom) {
+	// The error is sticky: nothing more is handed off.
+	if err := s.handOff(ctx, r.move("c")); !errors.Is(err, boom) {
 		t.Errorf("handOff after a failure = %v, want the failure", err)
 	}
-	if got := r.got(); slices.Contains(got, "c") {
-		t.Error("an action ran after the order failed")
+	if got := r.got(); len(got) != 0 {
+		t.Error("a move ran after the order failed")
+	}
+}
+
+func TestRunMoveOrder(t *testing.T) {
+	s, _ := newTestCoffee(t, nil)
+	var order []string
+	g := inject.NewGripper("g")
+	g.OpenFunc = func(context.Context, map[string]any) error { order = append(order, "gripper"); return nil }
+	s.gripper = g
+
+	m := move{bookkeep: func() { order = append(order, "bookkeep") }, gripper: openGripperAction, sleep: time.Millisecond}
+	if err := s.runMove(context.Background(), m); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(order, []string{"bookkeep", "gripper"}) {
+		t.Errorf("ran %v, want bookkeep then gripper", order)
 	}
 }
 
@@ -114,7 +142,7 @@ func TestSetStepFollowsTheArm(t *testing.T) {
 	s, _ := flowCoffee(t)
 	s.setStepNow(stepTamping)
 	release := make(chan struct{})
-	_ = s.handOff(context.Background(), "move", func(context.Context) error { <-release; return nil })
+	_ = s.handOff(context.Background(), blocking(release))
 
 	s.setStep(stepLockingPortafilter)
 	if got, _ := s.currentStep.Load().(string); got != stepTamping {
@@ -136,7 +164,7 @@ func TestSyncRegionRunsNow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = s.handOff(context.Background(), "a", r.action("a", nil))
+	_ = s.handOff(context.Background(), r.move("a"))
 	if got := r.got(); !slices.Equal(got, []string{"a"}) {
 		t.Errorf("ran %v, want a to run immediately inside the region", got)
 	}
@@ -149,10 +177,8 @@ func TestSyncRegionRunsNow(t *testing.T) {
 func TestEndFlowReportsAQueuedFailure(t *testing.T) {
 	s, end := flowCoffee(t)
 	boom := errors.New("gripper faulted")
-	_ = s.handOff(context.Background(), "open gripper", func(context.Context) error {
-		time.Sleep(10 * time.Millisecond)
-		return boom
-	})
+	s.gripper = failingGripper(boom)
+	_ = s.openGripper(context.Background())
 	if err := end(); !errors.Is(err, boom) {
 		t.Fatalf("end = %v, want the queued failure", err)
 	}

@@ -245,12 +245,6 @@ func (s *beanjaminCoffee) moveToPose(ctx, cancelCtx context.Context, step Step) 
 	ctx, done := mergedCancelContext(ctx, cancelCtx)
 	defer done()
 
-	if step.plan != nil {
-		if err := s.executePlan(ctx, step.plan, step.LinearConstraint, step.MoveOptions); err != nil {
-			return fmt.Errorf("move to %q failed: %w", step.PoseName, err)
-		}
-		return nil
-	}
 	pd, err := s.resolvePose(ctx, step.PoseSwitch, step.PoseName)
 	if err != nil {
 		return err
@@ -836,13 +830,17 @@ func (s *beanjaminCoffee) executePlan(ctx context.Context, plan motionplan.Plan,
 	if err != nil {
 		return err
 	}
-	// A constrained move with no explicit speed defaults to the slow tier; a free
-	// traverse keeps the arm's own default speed (nil).
+	return s.arm.MoveThroughJointPositions(ctx, positions, s.moveOptionsFor(lc, moveOpts), nil)
+}
+
+// moveOptionsFor is the speed for a move: a constrained move with no explicit
+// speed defaults to the slow tier; a free traverse keeps the arm's default (nil).
+func (s *beanjaminCoffee) moveOptionsFor(lc *StepLinearConstraint, moveOpts *StepMoveOptions) *arm.MoveOptions {
 	opts := buildMoveOptions(moveOpts)
 	if opts == nil && lc != nil {
 		opts = buildMoveOptions(s.slowMoveOptions())
 	}
-	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
+	return opts
 }
 
 // planEndArmInputs returns the arm's joint configuration at the end of a plan's
