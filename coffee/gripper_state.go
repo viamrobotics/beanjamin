@@ -180,3 +180,21 @@ func (s *beanjaminCoffee) normalizeGripperAtStart(ctx context.Context) error {
 	}
 	return nil
 }
+
+// openGripper opens the jaws and waits gripperPause.
+func (s *beanjaminCoffee) openGripper(ctx context.Context) error {
+	if err := s.gripper.Open(ctx, nil); err != nil {
+		return fmt.Errorf("open gripper: %w", err)
+	}
+	time.Sleep(gripperPause)
+	return nil
+}
+
+// closeGripper closes the jaws and waits gripperPause.
+func (s *beanjaminCoffee) closeGripper(ctx context.Context) error {
+	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		return fmt.Errorf("close gripper: %w", err)
+	}
+	time.Sleep(gripperPause)
+	return nil
+}
