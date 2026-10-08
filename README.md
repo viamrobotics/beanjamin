@@ -290,7 +290,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `slack_notifier_name`      | string | No       | Name of a [`viam:notifications:slack`](https://github.com/viam-modules/notifications) generic service. When set, the coffee service sends a best-effort Slack message on every non-successful order attempt (faults and operator cancels). See "Slack notifications" above. |
 | `customer_detector_name`   | string | No       | Name of a `viam:beanjamin:customer-detector` service. When set, the coffee service credits each **successfully** completed order (when the `prepare_order` carried a `customer_email`) to that customer's order history via the detector's `record_order` DoCommand, powering "the usual". Setting the field automatically registers it as a dependency. Unset disables order-history recording. |
 | `crm_name`                 | string | No       | Name of a `viam:beanjamin:crm` service. When set, each **successfully** completed order that carried a `customer_email` earns that email one loyalty point through the CRM's `credit_points` DoCommand (keyed by order ID, so a drink is never credited twice). Registered as an optional dependency: a CRM that is down costs the points (logged with the email and order ID, for a backfill), never the drink. Unset disables loyalty points. |
-| `delivery_handler_name`    | string | No       | Name of a generic service on a peer delivery machine, reached through a remote part (e.g. `"delivery-bot:mission-control"` after adding the peer machine as a remote named `delivery-bot` in app.viam.com). Setting the field automatically registers it as an (optional) dependency. When a `fulfillment: "delivery"` order's drink lands in the serving area, the coffee service sends that service a `delivery_request` DoCommand (see `send_delivery_message` below for the payload and the manual test hook). Unset disables outbound peer messaging; delivery orders then just announce and rely on pickup from the serving area. |
+| `delivery_handler_name`    | string | No       | Name of a generic service on a peer delivery machine, reached through a remote part (e.g. `"delivery-bot:mission-control"` after adding the peer machine as a remote named `delivery-bot` in app.viam.com). Setting the field automatically registers it as an (optional) dependency. When a `fulfillment: "delivery"` order's drink lands in the serving area, the coffee service sends that service a `delivery_request` DoCommand (see `send_delivery_message` below for the payload and the manual test hook). Unset disables outbound peer messaging; delivery orders then just announce, and a rover can still find them by polling `get_pending_deliveries`. |
 | `input_range_override`     | object | No       | Narrows joint limits on named frames before motion planning. Outer key is the frame name (typically the arm); inner key is either the joint name or its stringified index (e.g. `"5"` for the last joint of a 6-DoF arm). Each value is `{ "min_degs": number, "max_degs": number }`. |
 | `conversational`           | bool   | No       | When true, the coffee service speaks its own greetings, almost-ready prompts, order-received lines, and rejection quips through `speech_service_name`. When false (default), the service stays silent except for the drink-ready announcement at cup handoff — leaving the rest of the talking to an external orchestrator (e.g. `viam:conversation-bundle:voice-command`). |
 | `cup_vision_service_name`             | string | Yes      | Name of a `rdk:service:vision` segmenter that returns cup detections via `GetObjectPointClouds`. Cup pickup is always vision-guided — the arm detects the empty cup rather than grabbing from a fixed pose. |
@@ -556,7 +556,44 @@ Returns `{"saved": 1, "failed": 0, "skipped": 0}`.
 
 Returns `{"sent": true, "peer_response": {...}}` where `peer_response` is whatever the peer's service returned.
 
-In normal operation this fires automatically: when a `fulfillment: "delivery"` order's drink lands in the serving area, the coffee service sends the peer a `delivery_request` with the shape above — `order_id`/`order_timestamp` (RFC3339 enqueue time) from the order, `customer_email` (required for delivery orders, so always non-empty here), `cup_type` — the container label, `"glass"` for iced drinks and `"cup"` for everything else (same labels the cup-pickup pipeline uses) — and `pickup_position` the 0-based serving-area slot the drink was placed in. The send is deliberately synchronous: the service waits (up to 10s) for the bot's `{"received": true}` acknowledgment before the drink-ready announcement, so an unconfirmed handoff is logged rather than assumed. Failures never fail the order — the drink is already in the serving area. The channel is otherwise one-way: the coffee machine observes its own serving slots by camera rather than waiting for delivery progress reports.
+In normal operation this fires automatically: when a `fulfillment: "delivery"` order's drink lands in the serving area, the coffee service sends the peer a `delivery_request` with the shape above — `order_id`/`order_timestamp` (RFC3339 enqueue time) from the order, `customer_email` (required for delivery orders, so always non-empty here), `cup_type` — the container label, `"glass"` for iced drinks and `"cup"` for everything else (same labels the cup-pickup pipeline uses) — and `pickup_position` the 0-based serving-area slot the drink was placed in. The send is deliberately synchronous: the service waits (up to 10s) for the bot's `{"received": true}` acknowledgment before the drink-ready announcement, so an unconfirmed handoff is logged rather than assumed. Failures never fail the order — the drink is already in the serving area. Whatever the outcome, the order is also listed by `get_pending_deliveries` until the rover reports it collected. The coffee machine doesn't wait on delivery progress reports: it observes its own serving slots by camera.
+
+**`get_pending_deliveries`** - List the delivery orders whose drink is sitting in the serving area and hasn't been collected yet, oldest first. The `delivery_request` push above is still sent for every delivery order; this pull API exists so a rover that was busy or offline when the push went out — or whose push failed — can still find the drink by polling (every couple of seconds is fine). Any value works.
+
+```json
+{"get_pending_deliveries": true}
+```
+
+Returns:
+
+```json
+{
+  "count": 1,
+  "deliveries": [
+    {
+      "order_id": "6f1c…",
+      "drink": "iced_coffee",
+      "cup_type": "glass",
+      "customer_name": "Alice",
+      "customer_email": "alice@example.com",
+      "pickup_position": 1,
+      "order_timestamp": "2026-07-16T15:04:05Z",
+      "served_at": "2026-07-16T15:07:41Z",
+      "acknowledged": true
+    }
+  ]
+}
+```
+
+`cup_type`, `pickup_position` (0-based slot), `customer_email` and `order_timestamp` (RFC3339 enqueue time) match the `delivery_request`; `served_at` is when the drink landed in the slot; `acknowledged` is whether the push got `{"received": true}` back (`false` when `delivery_handler_name` is unset or the send failed). An order leaves the list when the rover sends `delivery_collected`, when anything else is served into the same slot (slot selection is round-robin with no vision and assumes the earlier cup was taken by the time its slot comes round again, so the entry is dropped with a warning), 30 minutes after it was served, or on `reset_world`. `clear_queue` and `cancel` leave it alone. The list is in memory, so a module restart empties it.
+
+**`delivery_collected`** - Tell the coffee service the rover has picked up a delivery order's drink, taking it off `get_pending_deliveries`. The value is the order ID.
+
+```json
+{"delivery_collected": "6f1c…"}
+```
+
+Returns `{"collected": true, "order_id": "6f1c…"}`. An order that isn't pending — already collected, expired, or never served — returns `"collected": false` rather than an error, so a rover can safely retry after a lost response. Errors only when the value isn't a non-empty string.
 
 **`send_daily_summary`** - Post a Slack digest of the orders from the last 24 hours. Normally fired on a schedule by viam-server's job manager (see "Daily order summary in Slack" below); calling it by hand is how you test the digest off-schedule. Requires both `slack_notifier_name` and `order_sensor_name`.
 
@@ -566,7 +603,7 @@ In normal operation this fires automatically: when a `fulfillment: "delivery"` o
 
 The command takes no options — the window is a rolling 24 hours ending now, and timestamps render in the host's timezone. Returns `{"sent": true, "orders": N}`.
 
-**`reset_world`** - Recover the service to a clean idle state from anywhere. In order: cancels any running sequence (waiting for it to actually stop), clears the queue (pending + recently completed), rebuilds the cached frame system from the framesystem service (discarding mid-cycle mutations like a portafilter frame reparented to world by `lock_portafilter`), forgets that the fridge door is standing open, and releases the queue pause left by a cancel or a fault. Safe to call from any state — each step is skipped when not applicable. The queue clear and rebuild run holding the arm, so if another sequence (a manual action, a keep-alive purge) claims it first, `reset_world` fails without changing anything past the cancel — send it again. Does not move the arm — if you want to re-home, run `execute_action` afterward.
+**`reset_world`** - Recover the service to a clean idle state from anywhere. In order: cancels any running sequence (waiting for it to actually stop), clears the queue (pending + recently completed) and the `get_pending_deliveries` list, rebuilds the cached frame system from the framesystem service (discarding mid-cycle mutations like a portafilter frame reparented to world by `lock_portafilter`), forgets that the fridge door is standing open, and releases the queue pause left by a cancel or a fault. Safe to call from any state — each step is skipped when not applicable. The queue clear and rebuild run holding the arm, so if another sequence (a manual action, a keep-alive purge) claims it first, `reset_world` fails without changing anything past the cancel — send it again. Does not move the arm — if you want to re-home, run `execute_action` afterward.
 
 > ⚠️ `reset_world` asserts that the physical world matches the configured frame system. Like `proceed`, it clears the recorded fridge-door angle, so **shut the door by hand before running it** — otherwise the model believes the panel is closed while it stands open, and the next plan will route the arm straight through it.
 
@@ -574,7 +611,7 @@ The command takes no options — the window is a rolling 24 hours ending now, an
 {"reset_world": true}
 ```
 
-Returns `{"status": "reset", "cancelled": true, "cleared": 2, "unpaused": true}` — fields reflect which steps actually fired.
+Returns `{"status": "reset", "cancelled": true, "cleared": 2, "pending_deliveries_cleared": 0, "unpaused": true}` — fields reflect which steps actually fired.
 
 **`run_cup_flow`** - Exercise the full cup-handling path without brewing, `count` times. Each iteration sweeps the camera-observe poses grabbing the first reachable cup across them (closest-first, continuing past a pose whose cups are all unreachable), sets it under the machine, retrieves it, and places it on the next sequential served-shelf slot (round-robin). Intended for tuning the observe-pose sweep and shelf placement on hardware.
 

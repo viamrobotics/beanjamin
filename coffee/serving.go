@@ -131,6 +131,9 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context,
 			// Next placement starts at the slot after the one just used.
 			s.servingAreaSlotCounter.Store(start + uint64(off) + 1)
 			logger.Infof("place_in_serving_area: placed item in slot %d/%d", idx+1, n)
+			// Whatever delivery was waiting in this slot is gone; a delivery
+			// order served here is recorded afresh by readyForDelivery.
+			s.releaseServingSlot(idx)
 			return idx, nil
 		}
 		lastErr = err

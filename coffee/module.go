@@ -129,6 +129,10 @@ type beanjaminCoffee struct {
 	// It increments once per placeFullCupOnShelf and selects the shelf slot
 	// modulo the number of tiles. Process-local; resets to 0 on rebuild.
 	servingAreaSlotCounter atomic.Uint64
+	// pendingDeliveries lists delivery orders served but not yet collected by
+	// the rover, for get_pending_deliveries (pending_deliveries.go).
+	// Process-local, like the slot counter it shares slot numbers with.
+	pendingDeliveries order.Deliveries
 
 	// Held-item geometry tracking (held_geometry.go).
 	// heldCupGeom / heldGlassGeom / heldMilkGeom cache the gripper-local geometry

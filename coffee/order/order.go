@@ -50,7 +50,8 @@ type Order struct {
 	// PickupPosition is the 0-based serving-area slot the finished drink was
 	// placed in, returned by the serving step (placeFullCupOnShelf /
 	// serveIcedCoffee) and set on prepareDrink's in-flight copy, then carried
-	// into the delivery_request; the queue's copy never has it.
+	// into the delivery_request and the Deliveries ledger; the queue's copy
+	// never has it.
 	PickupPosition int `json:"pickup_position,omitempty"`
 
 	// BatchIndex / BatchSize identify this order's slot within a multi-drink

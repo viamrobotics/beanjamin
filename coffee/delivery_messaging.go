@@ -6,7 +6,9 @@ package coffee
 // delivery_request command the delivery bot's own service understands) and
 // doesn't need progress reports back — slot availability is observed by this
 // machine's own camera. send_delivery_message additionally forwards an
-// arbitrary command verbatim, as a manual test hook for the channel.
+// arbitrary command verbatim, as a manual test hook for the channel. The
+// pull side, which a rover that missed the push polls and reports collections
+// to, is pending_deliveries.go.
 
 import (
 	"context"
@@ -27,21 +29,25 @@ const deliveryMessageTimeout = 10 * time.Second
 // customer_email is always non-empty here: enqueueOrder rejects delivery
 // orders without one.
 func buildDeliveryRequest(o order.Order) map[string]any {
-	// Iced drinks are served in the tall glass; everything else in the
-	// standard espresso cup. Same container labels as the pickup pipeline.
-	container := pickupLabelCup
-	if order.IsIced(o.Drink) {
-		container = pickupLabelGlass
-	}
 	return map[string]any{
 		"delivery_request": map[string]any{
 			"order_id":        o.ID,
 			"order_timestamp": o.EnqueuedAt.UTC().Format(time.RFC3339),
-			"cup_type":        container,
+			"cup_type":        deliveryCupType(o.Drink),
 			"customer_email":  o.CustomerEmail,
 			"pickup_position": o.PickupPosition,
 		},
 	}
+}
+
+// deliveryCupType is the container a drink is served in, as the delivery bot
+// knows it: iced drinks go in the tall glass, everything else in the standard
+// espresso cup. Same container labels as the pickup pipeline.
+func deliveryCupType(drink string) string {
+	if order.IsIced(drink) {
+		return pickupLabelGlass
+	}
+	return pickupLabelCup
 }
 
 // notifyDeliveryRequest sends the delivery_request for a finished delivery
@@ -52,10 +58,11 @@ func buildDeliveryRequest(o order.Order) map[string]any {
 // before this machine moves on. Best-effort beyond that: a no-op when no
 // delivery_handler_name is configured, and failures are logged rather than
 // failing the order (the drink is already sitting in the serving area).
-func (s *beanjaminCoffee) notifyDeliveryRequest(ctx context.Context, order order.Order) {
+// Reports whether the bot acknowledged the request.
+func (s *beanjaminCoffee) notifyDeliveryRequest(ctx context.Context, order order.Order) bool {
 	if s.deliveryHandler == nil {
 		s.logger.Warnf("no delivery_handler_name configured — skipping delivery request for order %s", order.ID)
-		return
+		return false
 	}
 	logger := s.logger.WithFields("order_id", order.ID)
 	ctx, cancel := context.WithTimeout(ctx, deliveryMessageTimeout)
@@ -63,13 +70,14 @@ func (s *beanjaminCoffee) notifyDeliveryRequest(ctx context.Context, order order
 	resp, err := s.deliveryHandler.DoCommand(ctx, buildDeliveryRequest(order))
 	if err != nil {
 		logger.Warnf("failed to send delivery request: %v", err)
-		return
+		return false
 	}
 	if received, _ := resp["received"].(bool); !received {
 		logger.Warnf("delivery request not acknowledged by the delivery machine (response: %v)", resp)
-		return
+		return false
 	}
 	logger.Infof("delivery request acknowledged, pickup position %d", order.PickupPosition)
+	return true
 }
 
 // sendDeliveryMessage runs command verbatim as a DoCommand on the configured
@@ -103,8 +111,15 @@ func (s *beanjaminCoffee) sendDeliveryMessage(ctx context.Context, command any) 
 // (bounded by deliveryMessageTimeout) before speaking, so the order isn't
 // announced as handed off on the strength of a request nobody confirmed.
 // The caller sets order.PickupPosition from the serving step.
+//
+// The order goes on the pending-deliveries ledger before the push, so a rover
+// that collects the drink the moment it is told about it can't race the record,
+// and whether the push landed or not, get_pending_deliveries can still find it.
 func (s *beanjaminCoffee) readyForDelivery(ctx context.Context, order order.Order) error {
-	s.notifyDeliveryRequest(ctx, order)
+	s.recordPendingDelivery(order)
+	if s.notifyDeliveryRequest(ctx, order) {
+		s.pendingDeliveries.Acknowledge(order.ID)
+	}
 	drink := speech.SpeakableDrink(order.Drink)
 	text := fmt.Sprintf("%s ready for delivery!", drink)
 	if name := order.DisplayName(); name != "" {

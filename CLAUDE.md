@@ -19,8 +19,8 @@ Each model lives in its own package. The coffee service is `coffee/` (`package c
 | Serving and drink variants | `serving.go`, `serving_slots.go`, `iced.go`, `milk.go`, `door.go` |
 | Motion planning | `motion.go`, `held_geometry.go`, `collisions.go`, `joints.go`, `glass_relative_poses.go` (pour poses resolved against the staged glass) |
 | Vision-driven pickup | `cup_pickup.go`, `gripper_state.go`, `detection_snapshot.go` |
-| Peripheral integrations | `slack_notify.go`, `daily_summary.go`, `sensor_usage.go`, `delivery_messaging.go`, `keepalive.go` (purge loop), `keepalive_config.go` (`KeepAlive` and its window) |
-| Order model (`coffee/order/`, `package order`) | `order.go` (`Order`), `queue.go` (`Queue`), `request.go` (`prepare_order` decoding), `drinks.go` (drink catalog and `Menu`), `reading.go` (`Reading` for the order sensor) |
+| Peripheral integrations | `slack_notify.go`, `daily_summary.go`, `sensor_usage.go`, `delivery_messaging.go` (the `delivery_request` push), `pending_deliveries.go` (`get_pending_deliveries`/`delivery_collected`, the pull side), `keepalive.go` (purge loop), `keepalive_config.go` (`KeepAlive` and its window) |
+| Order model (`coffee/order/`, `package order`) | `order.go` (`Order`), `queue.go` (`Queue`), `request.go` (`prepare_order` decoding), `drinks.go` (drink catalog and `Menu`), `reading.go` (`Reading` for the order sensor), `deliveries.go` (`Deliveries`, the served-but-uncollected delivery ledger) |
 | Speech (`coffee/speech/`, `package speech`) | `phrases.go` (spoken line tables and pickers), `speaker.go` (`Speaker`, `say_async` to the speech service), `fault_alarm.go` (`FaultAlarm`, the `fault_active` flag and failure line) |
 | Slack reports (`coffee/report/`, `package report`) | `notifier.go` (`Notifier`, the one Slack send path), `failure.go` (failed-order alert), `daily_summary.go` (order digest), `links.go` (app.viam.com deep-links) |
 | Camera clips (`coffee/clips/`, `package clips`) | `saver.go` (`Saver`: per-order clip saves through the video-store multiplexer, pending-clip records, and the `cleanup_pending_clips` recovery sweep) |
