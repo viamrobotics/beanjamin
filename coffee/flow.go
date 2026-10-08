@@ -84,6 +84,7 @@ func (s *beanjaminCoffee) activeFlow() *flow {
 func (s *beanjaminCoffee) settle() error {
 	f := s.flow
 	if f == nil {
+		s.activeOrderLogger().Warn("settle: no order flow, nothing to wait for")
 		return nil
 	}
 	if f.moves != nil {
@@ -102,6 +103,7 @@ func (s *beanjaminCoffee) settle() error {
 func (s *beanjaminCoffee) handOff(ctx context.Context, m move) error {
 	f := s.activeFlow()
 	if f == nil {
+		s.activeOrderLogger().Warnf("handOff: no active order flow, running %q directly", m.name)
 		return s.runMove(ctx, m)
 	}
 	if f.err != nil || f.failed.Load() {
@@ -124,6 +126,7 @@ func (s *beanjaminCoffee) handOffEffect(effect func()) {
 func (s *beanjaminCoffee) syncRegion() (release func(), err error) {
 	f := s.flow
 	if f == nil {
+		s.activeOrderLogger().Warn("syncRegion: no order flow, moves already run directly")
 		return func() {}, nil
 	}
 	if err := s.settle(); err != nil {
