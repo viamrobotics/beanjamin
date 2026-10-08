@@ -7,6 +7,7 @@ package coffee
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"beanjamin/coffee/order"
@@ -125,7 +126,9 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 	if err := press(ctx, cancelCtx); err != nil {
 		return fmt.Errorf("brew_and_prep: %w", err)
 	}
-	pourStarted := time.Now()
+	// Recorded when the arm actually presses, not when the planner gets here.
+	var pourStarted atomic.Int64
+	s.handOffEffect(func() { pourStarted.Store(time.Now().UnixNano()) })
 
 	// Fill the pour time with prep: an iced drink stages its glass, anything else
 	// lines the gripper up over the cup so only the grasp is left afterward.
@@ -138,9 +141,11 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 
 	// Wait out the rest of the pour even when the prep failed, so the machine is
 	// quiescent before an operator gets near it.
-	remaining := s.drinkBrewTime(drink) - time.Since(pourStarted)
-	s.activeOrderLogger().Infof("waiting out the remaining %s of the %s pour (prep error: %v)", remaining, drink, prepErr)
-	waitErr := waitOutPour(ctx, cancelCtx, remaining)
+	waitErr := s.handOff(ctx, "", true, func(ctx context.Context) error {
+		remaining := s.drinkBrewTime(drink) - time.Since(time.Unix(0, pourStarted.Load()))
+		s.activeOrderLogger().Infof("waiting out the remaining %s of the %s pour (prep error: %v)", remaining, drink, prepErr)
+		return waitOutPour(ctx, cancelCtx, remaining)
+	})
 	if prepErr != nil {
 		return fmt.Errorf("brew_and_prep: %w", prepErr)
 	}
@@ -296,6 +301,10 @@ func (s *beanjaminCoffee) moveToIceDispense(ctx, cancelCtx context.Context) erro
 func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 	if err := s.moveToIceDispense(ctx, cancelCtx); err != nil {
 		return err
+	}
+	// The glass has to be under the chute before the pin opens.
+	if err := s.settle(); err != nil {
+		return fmt.Errorf("dispense_ice: %w", err)
 	}
 
 	if err := s.pulseIcePin(ctx, cancelCtx); err != nil {

@@ -240,6 +240,13 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	ctx, done := mergedCancelContext(ctx, cancelCtx)
 	defer done()
 
+	// The sweep reads the arm and moves the door model throughout.
+	release, err := s.syncRegion()
+	if err != nil {
+		return fmt.Errorf("%s: %w", action, err)
+	}
+	defer release()
+
 	if s.cfg.DoorApproachRelativePose == nil {
 		return fmt.Errorf("%s requires door_approach_relative_pose", action)
 	}

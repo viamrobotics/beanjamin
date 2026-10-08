@@ -245,6 +245,12 @@ func (s *beanjaminCoffee) moveToPose(ctx, cancelCtx context.Context, step Step) 
 	ctx, done := mergedCancelContext(ctx, cancelCtx)
 	defer done()
 
+	if step.plan != nil {
+		if err := s.executePlan(ctx, step.plan, step.LinearConstraint, step.MoveOptions); err != nil {
+			return fmt.Errorf("move to %q failed: %w", step.PoseName, err)
+		}
+		return nil
+	}
 	pd, err := s.resolvePose(ctx, step.PoseSwitch, step.PoseName)
 	if err != nil {
 		return err
@@ -311,6 +317,10 @@ func (s *beanjaminCoffee) fetchPose(ctx context.Context, sw toggleswitch.Switch,
 // which iterates all resources and can fail on modular arms whose kinematics
 // proto round-trip produces KINEMATICS_FILE_FORMAT_UNSPECIFIED.
 func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.FrameSystem, referenceframe.FrameSystemInputs, error) {
+	// Reading the arm is a stopping point.
+	if err := s.settle(); err != nil {
+		return nil, nil, err
+	}
 	logger := s.activeOrderLogger()
 	fsInputs := referenceframe.NewZeroInputs(s.cachedFS)
 
@@ -573,6 +583,9 @@ func (s *beanjaminCoffee) reattachFilterFrame(removed []descendantEntry) error {
 // unlockFilterFrame rebuilds the cached frame system from the service,
 // restoring the filter frame to its original position in the arm subtree.
 func (s *beanjaminCoffee) unlockFilterFrame(ctx context.Context) error {
+	if err := s.settle(); err != nil {
+		return err
+	}
 	logger := s.activeOrderLogger()
 	if err := s.resetFrameSystem(ctx); err != nil {
 		return err

@@ -82,6 +82,8 @@ type beanjaminCoffee struct {
 	// lease holds running, paused and the shared cancelCtx (arm_lease.go).
 	lease       armLease
 	currentStep atomic.Value // string: current step label for the active order (debug)
+	// flow is the running order's plan-ahead state (flow.go), else nil.
+	flow *flow
 	// failedStep holds the step label the most recent order errored at,
 	// captured inside prepareDrink before `running` flips false so cancel
 	// recovery can't overwrite it. "" when the order succeeded. Reported on
