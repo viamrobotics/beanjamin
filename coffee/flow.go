@@ -18,7 +18,7 @@ import (
 
 const (
 	// planAheadStartToleranceRad is how far, per joint, the arm may be from a
-	// move's start before the move is replanned.
+	// move's start before the move fails.
 	planAheadStartToleranceRad = 0.01
 	// flowQueueSize bounds how far planning can get ahead of execution.
 	flowQueueSize = 64
@@ -41,8 +41,6 @@ type move struct {
 	positions [][]referenceframe.Input // arm trajectory; nil for no arm motion
 	start     []referenceframe.Input   // where positions starts
 	speed     *arm.MoveOptions
-	// replan replans the trajectory from where the arm is, if it isn't at start.
-	replan func(ctx context.Context, from []referenceframe.Input) ([][]referenceframe.Input, error)
 
 	gripper gripperAction
 	sleep   time.Duration
@@ -52,12 +50,12 @@ type move struct {
 type flow struct {
 	ctx context.Context // order ctx merged with cancelCtx
 
-	from      []referenceframe.Input // end of the last handed-off move; nil means read the arm
-	moves     chan move              // nil when execution is idle
-	done      chan error
-	failed    atomic.Bool // set by the execution thread
-	err       error       // first execution error; ends the order
-	syncDepth int         // >0 inside syncRegion
+	from   []referenceframe.Input // end of the last handed-off move; nil means read the arm
+	moves  chan move              // nil when execution is idle
+	done   chan error
+	failed atomic.Bool // set by the execution thread
+	err    error       // first execution error; ends the order
+	synced bool        // true inside syncRegion
 }
 
 // startFlow starts plan-ahead for an order. end settles and returns the first
@@ -75,7 +73,7 @@ func (s *beanjaminCoffee) startFlow(ctx, cancelCtx context.Context) (end func() 
 
 // activeFlow returns the flow when moves should be handed off, else nil.
 func (s *beanjaminCoffee) activeFlow() *flow {
-	if s.flow == nil || s.flow.syncDepth > 0 {
+	if s.flow == nil || s.flow.synced {
 		return nil
 	}
 	return s.flow
@@ -131,8 +129,8 @@ func (s *beanjaminCoffee) syncRegion() (release func(), err error) {
 	if err := s.settle(); err != nil {
 		return nil, err
 	}
-	f.syncDepth++
-	return func() { f.syncDepth-- }, nil
+	f.synced = true
+	return func() { f.synced = false }, nil
 }
 
 // startExecution runs moves in order, skipping the rest after a failure.
@@ -197,25 +195,21 @@ func (s *beanjaminCoffee) runMove(ctx context.Context, m move) error {
 	return nil
 }
 
-// runTrajectory moves the arm through m's trajectory, replanning first if the
-// arm isn't where it starts.
+// runTrajectory moves the arm through m's trajectory, failing if the arm isn't
+// where it starts.
 func (s *beanjaminCoffee) runTrajectory(ctx context.Context, m move) error {
 	ctx, span := trace.StartSpan(ctx, "beanjamin::executeStep::"+m.name)
 	defer span.End()
 
-	positions := m.positions
 	now, err := s.arm.CurrentInputs(ctx)
 	if err != nil {
 		return fmt.Errorf("get current inputs: %w", err)
 	}
 	if !armNear(now, m.start) {
-		s.activeOrderLogger().Infof("arm is off the plan's start, replanning %q", m.name)
-		if positions, err = m.replan(ctx, now); err != nil {
-			return err
-		}
+		return fmt.Errorf("arm is at %v, not where the plan starts (%v)", now, m.start)
 	}
 	s.activeOrderLogger().Infof("moving to %q", m.name)
-	return s.arm.MoveThroughJointPositions(ctx, positions, m.speed, nil)
+	return s.arm.MoveThroughJointPositions(ctx, m.positions, m.speed, nil)
 }
 
 // handOffStep turns a direct-move step into a move, planned from where the last
@@ -242,10 +236,7 @@ func (s *beanjaminCoffee) handOffStep(ctx context.Context, f *flow, step Step) e
 		positions: positions,
 		start:     from,
 		speed:     s.moveOptionsFor(step.LinearConstraint, step.MoveOptions),
-		replan: func(ctx context.Context, from []referenceframe.Input) ([][]referenceframe.Input, error) {
-			return s.planStep(ctx, step, from)
-		},
-		sleep: step.Pause,
+		sleep:     step.Pause,
 	})
 }
 
