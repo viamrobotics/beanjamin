@@ -5,10 +5,14 @@ import { StreamClient } from "@viamrobotics/sdk";
 import {
   registerCustomerFace,
   finishRegistration,
+  cancelRegistration,
   getCustomerDetectorInfo,
   type ViamConnection,
 } from "../lib/viamClient";
 
+// How long the opt-in prompt waits for a choice before skipping, so an
+// unattended kiosk never photographs whoever walks up next.
+const OPT_IN_TIMEOUT_MS = 10000;
 const INITIAL_DELAY_MS = 3000;
 const DELAY_BETWEEN_CAPTURES_MS = 1500;
 
@@ -50,8 +54,11 @@ export function FaceRegister({
   const [poseIdx, setPoseIdx] = useState(0);
   const [capturing, setCapturing] = useState(false);
   const [status, setStatus] = useState<
-    "running" | "retaking" | "review" | "finishing" | "done"
-  >("running");
+    "prompt" | "running" | "retaking" | "review" | "finishing" | "done"
+  >("prompt");
+  const [optInSecondsLeft, setOptInSecondsLeft] = useState(
+    Math.ceil(OPT_IN_TIMEOUT_MS / 1000)
+  );
   const [error, setError] = useState<string | null>(null);
   const [cameraName, setCameraName] = useState<string | null>(null);
   const [streamReady, setStreamReady] = useState(false);
@@ -62,12 +69,56 @@ export function FaceRegister({
   const streamClientRef = useRef<StreamClient | null>(null);
   const cancelled = useRef(false);
 
-  // Keep latest onSkip in a ref so the fetch effect doesn't refire on every
-  // parent render (onSkip is an inline arrow in page.tsx).
-  const onSkipRef = useRef(onSkip);
+  // Captures are only staged on the machine until handleConfirm commits
+  // them. Leaving this screen any other way (Skip, Back, navigating off)
+  // must discard them, or a customer who declined would still be enrolled.
+  const committed = useRef(false);
+  const discardTarget = useRef({ viamConn, email });
   useEffect(() => {
-    onSkipRef.current = onSkip;
-  }, [onSkip]);
+    discardTarget.current = { viamConn, email };
+  }, [viamConn, email]);
+  const discardCaptures = useCallback(() => {
+    const { viamConn: conn, email: target } = discardTarget.current;
+    if (committed.current || !conn) return;
+    cancelRegistration(conn, target).catch((err) => {
+      console.error("[face-register] failed to discard captures:", err);
+    });
+  }, []);
+  useEffect(() => discardCaptures, [discardCaptures]);
+
+  // Every Skip path (buttons and the opt-in timeout) places the order, so
+  // only the first one may run.
+  const skipped = useRef(false);
+  function handleSkip() {
+    if (skipped.current) return;
+    skipped.current = true;
+    cancelled.current = true;
+    discardCaptures();
+    onSkip();
+  }
+  // Effects and timers call the latest handleSkip through this ref, so they
+  // don't re-run on every parent render (onSkip is an inline arrow).
+  const handleSkipRef = useRef(handleSkip);
+  useEffect(() => {
+    handleSkipRef.current = handleSkip;
+  });
+
+  // Opt-in prompt: no camera stream and no capture until the customer taps
+  // "Take photos"; no answer within the timeout counts as Skip.
+  useEffect(() => {
+    if (status !== "prompt") return;
+    const deadline = Date.now() + OPT_IN_TIMEOUT_MS;
+    const tick = setInterval(() => {
+      const left = Math.ceil((deadline - Date.now()) / 1000);
+      if (left <= 0) {
+        clearInterval(tick);
+        handleSkipRef.current();
+      } else {
+        setOptInSecondsLeft(left);
+      }
+    }, 250);
+    return () => clearInterval(tick);
+  }, [status]);
 
   // Fetch camera name
   useEffect(() => {
@@ -83,7 +134,7 @@ export function FaceRegister({
           "[face-register] failed to get camera name, skipping face registration:",
           err
         );
-        onSkipRef.current();
+        handleSkipRef.current();
       });
   }, [viamConn]);
 
@@ -143,7 +194,7 @@ export function FaceRegister({
         console.log(
           `[face-register] capturing pose ${idx + 1}/${POSES.length}: ${POSES[idx].label}`
         );
-        await registerCustomerFace(viamConn, name, email);
+        await registerCustomerFace(viamConn, name, email, idx);
         const snap = snapshotVideo(videoRef.current);
         setSnapshots((prev) => {
           const next = [...prev];
@@ -245,6 +296,7 @@ export function FaceRegister({
     console.log("[face-register] finishing registration");
     try {
       const result = await finishRegistration(viamConn!, email);
+      committed.current = true;
       console.log("[face-register] registration complete:", result);
       setStatus("done");
       onComplete();
@@ -263,6 +315,64 @@ export function FaceRegister({
       : (poseIdx + (capturing ? 0.5 : 0)) / POSES.length;
 
   const currentPose = POSES[poseIdx];
+
+  // --- Opt-in prompt ---
+  if (status === "prompt") {
+    return (
+      <main className="relative h-full bg-white flex flex-col items-center justify-center p-8 font-sans">
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Go back"
+          className="anim-in absolute left-6 top-6 h-11 w-11 rounded-full border border-neutral-200 bg-white text-neutral-900 transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400"
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+            className="mx-auto h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
+        <div className="w-full max-w-[512px] flex flex-col items-center gap-6">
+          <p className="anim-in text-6xl">{"\uD83D\uDCF7"}</p>
+          <h1 className="anim-in text-2xl font-semibold text-neutral-900 text-center">
+            Want us to remember your face?
+          </h1>
+          <p className="anim-in text-neutral-500 text-center text-sm -mt-2">
+            We&apos;ll take three photos so we can greet you next time. They
+            are kept on this machine only if you tap &ldquo;Looks good!&rdquo;
+            at the end &mdash; skipping deletes them.
+          </p>
+
+          <div className="flex gap-4 w-full">
+            <button
+              onClick={handleSkip}
+              className="press flex-1 py-4 text-base font-medium bg-neutral-100 text-neutral-600 rounded-full hover:bg-neutral-200 transition-colors"
+            >
+              Skip
+            </button>
+            <button
+              onClick={() => setStatus("running")}
+              disabled={!cameraName}
+              className="press flex-1 py-4 text-base font-medium bg-black text-white rounded-full hover:bg-neutral-800 transition-colors disabled:opacity-30"
+            >
+              Take photos
+            </button>
+          </div>
+
+          <p className="text-neutral-400 text-sm">
+            Skipping in {optInSecondsLeft}s
+          </p>
+        </div>
+      </main>
+    );
+  }
 
   // --- Review screen ---
   if (status === "review" || status === "finishing") {
@@ -335,7 +445,7 @@ export function FaceRegister({
 
           <div className="flex gap-4 w-full">
             <button
-              onClick={onSkip}
+              onClick={handleSkip}
               disabled={status === "finishing"}
               className="press flex-1 py-4 text-base font-medium bg-neutral-100 text-neutral-600 rounded-full hover:bg-neutral-200 transition-colors disabled:opacity-30"
             >
@@ -480,7 +590,7 @@ export function FaceRegister({
         )}
 
         <button
-          onClick={onSkip}
+          onClick={handleSkip}
           className="anim-in press w-full py-4 text-base font-medium bg-neutral-100 text-neutral-600 rounded-full hover:bg-neutral-200 transition-colors"
           style={{ animationDelay: "160ms" }}
         >
