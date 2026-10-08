@@ -55,6 +55,14 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 		return fmt.Errorf("normalize gripper before brew: %w", err)
 	}
 
+	// Registered last so it settles before the defers above read err.
+	endFlow := s.startFlow(ctx, cancelCtx)
+	defer func() {
+		if flowErr := endFlow(); err == nil {
+			err = flowErr
+		}
+	}()
+
 	// runPhase publishes the step label, logs the progress line and runs the
 	// phase in its own trace span. Keep the label and the "step N/9" line in
 	// sync: both surface to the UI, which collapses on the raw label.

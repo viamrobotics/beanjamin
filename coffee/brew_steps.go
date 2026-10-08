@@ -30,7 +30,7 @@ func (s *beanjaminCoffee) grind(ctx, cancelCtx context.Context, approachPose, ac
 		// keeps the filter clean, and the grinder dispenses once it's under the
 		// chute. From here onward the filter needs cleaning before it goes home.
 		if step.PoseName == activatePose {
-			s.portafilterHasGrounds.Store(true)
+			s.handOffEffect(func() { s.portafilterHasGrounds.Store(true) })
 		}
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 			return fmt.Errorf("%s: %w", label, err)
@@ -150,7 +150,7 @@ func (s *beanjaminCoffee) releaseFilter(ctx, cancelCtx context.Context) error {
 	}
 	// Bayonet now holds the filter; arm is committed to leaving it behind.
 	// Set the flag before motion so a mid-move cancel still reports it.
-	s.portafilterInMachine.Store(true)
+	s.handOffEffect(func() { s.portafilterInMachine.Store(true) })
 	if err := s.moveGripperToPoseWithVerify(ctx, cancelCtx, clawPoseFilterReleased); err != nil {
 		return fmt.Errorf("release_filter: %w", err)
 	}
@@ -171,7 +171,7 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("grab_filter: %w", err)
 	}
 	// Filter is firmly back in the claws, out of the machine.
-	s.portafilterInMachine.Store(false)
+	s.handOffEffect(func() { s.portafilterInMachine.Store(false) })
 	return nil
 }
 
@@ -269,8 +269,10 @@ func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, drink string) err
 	}
 
 	brewTime := s.drinkBrewTime(drink)
-	logger.Infof("waiting %s for the %s pour to finish", brewTime, drink)
-	if err := waitOutPour(ctx, cancelCtx, brewTime); err != nil {
+	logger.Infof("waiting %s for the %s brew to finish", brewTime, drink)
+	brewCtx, done := mergedCancelContext(ctx, cancelCtx) // cancel stops the wait
+	defer done()
+	if err := s.handOff(brewCtx, move{name: "brew", sleep: brewTime}); err != nil {
 		return fmt.Errorf("brew_coffee: %w", err)
 	}
 
@@ -288,10 +290,10 @@ func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, drink string) err
 	return nil
 }
 
-// waitOutPour blocks until d elapses or either context is cancelled.
+// waitOutBrew blocks until d elapses or either context is cancelled.
 // Non-positive durations return immediately, so overlapped callers can pass
 // brewTime - elapsed unclamped.
-func waitOutPour(ctx, cancelCtx context.Context, d time.Duration) error {
+func waitOutBrew(ctx, cancelCtx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return nil
 	}
@@ -342,7 +344,7 @@ func (s *beanjaminCoffee) cleanPortafilter(ctx, cancelCtx context.Context) error
 	); err != nil {
 		return err
 	}
-	s.portafilterHasGrounds.Store(false)
+	s.handOffEffect(func() { s.portafilterHasGrounds.Store(false) })
 	return nil
 }
 

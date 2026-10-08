@@ -599,6 +599,12 @@ func (s *beanjaminCoffee) pickDynamic(ctx, cancelCtx context.Context, t *pickupT
 	if s.gripper == nil {
 		return r3.Vector{}, fmt.Errorf("dynamic_%s_pickup: no gripper configured", t.label)
 	}
+	// The candidate fallthrough needs each move's result right away.
+	release, err := s.syncRegion()
+	if err != nil {
+		return r3.Vector{}, fmt.Errorf("dynamic_%s_pickup: %w", t.label, err)
+	}
+	defer release()
 
 	// Observe poses don't change between attempts, so enumerate them once.
 	poseNames, err := s.observationPoseNames(ctx, t.observeSw)

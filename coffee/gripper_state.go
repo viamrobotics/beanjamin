@@ -99,6 +99,9 @@ func (s *beanjaminCoffee) gripperPos(ctx context.Context) (float64, error) {
 // so callers never treat an unreadable gripper as a missed grab. Absorbs the
 // post-grab settle pause so the read happens at rest.
 func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context) error {
+	if err := s.settle(); err != nil {
+		return err
+	}
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("grab: %w", err)
 	}
@@ -126,6 +129,9 @@ func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context) error {
 // rather than releasing it. Polling costs nothing when the jaws are quick and
 // fails loudly instead of silently when they are not.
 func (s *beanjaminCoffee) openAndVerifyOpen(ctx context.Context) error {
+	if err := s.settle(); err != nil {
+		return err
+	}
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		return fmt.Errorf("open: %w", err)
 	}
@@ -183,18 +189,10 @@ func (s *beanjaminCoffee) normalizeGripperAtStart(ctx context.Context) error {
 
 // openGripper opens the jaws and waits gripperPause.
 func (s *beanjaminCoffee) openGripper(ctx context.Context) error {
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("open gripper: %w", err)
-	}
-	time.Sleep(gripperPause)
-	return nil
+	return s.handOff(ctx, move{name: "open gripper", gripper: openGripperAction, sleep: gripperPause})
 }
 
 // closeGripper closes the jaws and waits gripperPause.
 func (s *beanjaminCoffee) closeGripper(ctx context.Context) error {
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		return fmt.Errorf("close gripper: %w", err)
-	}
-	time.Sleep(gripperPause)
-	return nil
+	return s.handOff(ctx, move{name: "close gripper", gripper: closeGripperAction, sleep: gripperPause})
 }

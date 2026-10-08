@@ -61,6 +61,9 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
 	// Cup is released under the machine; it no longer travels with the gripper.
+	if err := s.settle(); err != nil {
+		return fmt.Errorf("set_cup_for_coffee: %w", err)
+	}
 	s.detachHeldGeometry()
 
 	// Move away from the cup.

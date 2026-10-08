@@ -311,6 +311,10 @@ func (s *beanjaminCoffee) fetchPose(ctx context.Context, sw toggleswitch.Switch,
 // which iterates all resources and can fail on modular arms whose kinematics
 // proto round-trip produces KINEMATICS_FILE_FORMAT_UNSPECIFIED.
 func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.FrameSystem, referenceframe.FrameSystemInputs, error) {
+	// Reading the arm is a stopping point.
+	if err := s.settle(); err != nil {
+		return nil, nil, err
+	}
 	logger := s.activeOrderLogger()
 	fsInputs := referenceframe.NewZeroInputs(s.cachedFS)
 
@@ -573,6 +577,9 @@ func (s *beanjaminCoffee) reattachFilterFrame(removed []descendantEntry) error {
 // unlockFilterFrame rebuilds the cached frame system from the service,
 // restoring the filter frame to its original position in the arm subtree.
 func (s *beanjaminCoffee) unlockFilterFrame(ctx context.Context) error {
+	if err := s.settle(); err != nil {
+		return err
+	}
 	logger := s.activeOrderLogger()
 	if err := s.resetFrameSystem(ctx); err != nil {
 		return err
@@ -823,13 +830,17 @@ func (s *beanjaminCoffee) executePlan(ctx context.Context, plan motionplan.Plan,
 	if err != nil {
 		return err
 	}
-	// A constrained move with no explicit speed defaults to the slow tier; a free
-	// traverse keeps the arm's own default speed (nil).
+	return s.arm.MoveThroughJointPositions(ctx, positions, s.moveOptionsFor(lc, moveOpts), nil)
+}
+
+// moveOptionsFor is the speed for a move: a constrained move with no explicit
+// speed defaults to the slow tier; a free traverse keeps the arm's default (nil).
+func (s *beanjaminCoffee) moveOptionsFor(lc *StepLinearConstraint, moveOpts *StepMoveOptions) *arm.MoveOptions {
 	opts := buildMoveOptions(moveOpts)
 	if opts == nil && lc != nil {
 		opts = buildMoveOptions(s.slowMoveOptions())
 	}
-	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
+	return opts
 }
 
 // planEndArmInputs returns the arm's joint configuration at the end of a plan's

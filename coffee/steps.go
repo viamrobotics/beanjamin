@@ -93,6 +93,13 @@ func (s *beanjaminCoffee) runSteps(ctx, cancelCtx context.Context, label string,
 }
 
 func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step) error {
+	// During an order, direct moves are handed off; anything else is a stopping point.
+	if f := s.activeFlow(); f != nil && isDirectMove(step) {
+		return s.handOffStep(ctx, f, step)
+	}
+	if err := s.settle(); err != nil {
+		return err
+	}
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::executeStep::"+step.PoseName)
 	defer span.End()
@@ -157,6 +164,11 @@ const (
 )
 
 func (s *beanjaminCoffee) setStep(step string) {
+	// Handed off so the label tracks the arm, not the planner.
+	s.handOffEffect(func() { s.setStepNow(step) })
+}
+
+func (s *beanjaminCoffee) setStepNow(step string) {
 	s.currentStep.Store(step)
 	// No-op when nothing is on the arm, which is what a keep-alive purge wants:
 	// its step is service-global and belongs to no order.
