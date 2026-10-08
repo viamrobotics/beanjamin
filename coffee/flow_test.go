@@ -12,10 +12,10 @@ import (
 	"go.viam.com/rdk/testutils/inject"
 )
 
-// flowCoffee returns a service with plan_ahead on and a flow started.
+// flowCoffee returns a service with a flow started, as during an order.
 func flowCoffee(t *testing.T) (*beanjaminCoffee, func() error) {
 	t.Helper()
-	s, _ := newTestCoffee(t, &Config{PlanAhead: true})
+	s, _ := newTestCoffee(t, nil)
 	end := s.startFlow(context.Background(), context.Background())
 	t.Cleanup(func() { _ = end() })
 	return s, end
@@ -53,21 +53,15 @@ func blocking(release chan struct{}) move {
 	return move{bookkeep: func() { <-release }}
 }
 
+// Outside an order (execute_action, rewind, keepalive) there is no flow.
 func TestHandOffRunsNowWithoutAFlow(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	end := s.startFlow(context.Background(), context.Background())
-	if s.flow != nil {
-		t.Fatal("plan_ahead off must not start a flow")
-	}
 	var r recorder
 	if err := s.handOff(context.Background(), r.move("a")); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.got(); !slices.Equal(got, []string{"a"}) {
 		t.Errorf("ran %v, want a to run immediately", got)
-	}
-	if err := end(); err != nil {
-		t.Fatal(err)
 	}
 }
 

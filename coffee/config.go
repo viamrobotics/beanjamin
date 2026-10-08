@@ -50,7 +50,6 @@ type Config struct {
 	LungoBrewTimeSec           float64 `json:"lungo_brew_time_sec,omitempty"`
 	ButtonPressHoldSec         float64 `json:"button_press_hold_sec,omitempty"`
 	GrindTimeSec               float64 `json:"grind_time_sec,omitempty"`
-	PlanAhead                  bool    `json:"plan_ahead,omitempty"` // plans upcoming moves while the arm moves (flow.go)
 	GripperHoldMinPos          float64 `json:"gripper_hold_min_pos,omitempty"`
 	GripperHoldMaxPos          float64 `json:"gripper_hold_max_pos,omitempty"`
 	GripperOpenTimeoutSec      float64 `json:"gripper_open_timeout_sec,omitempty"`

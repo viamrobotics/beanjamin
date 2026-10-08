@@ -1,6 +1,6 @@
 package coffee
 
-// Plan-ahead (plan_ahead): during an order the brew code is the planning thread.
+// Plan-ahead: during an order the brew code is the planning thread.
 // It turns each step into a move (trajectory, gripper action, sleep) and hands it
 // to an execution goroutine, which only ever sees moves. At a stopping point it
 // settles: closes the channel and waits for execution to drain.
@@ -63,9 +63,6 @@ type flow struct {
 // startFlow starts plan-ahead for an order. end settles and returns the first
 // execution error.
 func (s *beanjaminCoffee) startFlow(ctx, cancelCtx context.Context) (end func() error) {
-	if !s.cfg.PlanAhead {
-		return func() error { return nil }
-	}
 	merged, cancel := mergedCancelContext(ctx, cancelCtx)
 	s.flow = &flow{ctx: merged}
 	return func() error {

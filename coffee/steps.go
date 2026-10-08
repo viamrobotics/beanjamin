@@ -93,7 +93,7 @@ func (s *beanjaminCoffee) runSteps(ctx, cancelCtx context.Context, label string,
 }
 
 func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step) error {
-	// With plan_ahead, direct moves are handed off; anything else is a stopping point.
+	// During an order, direct moves are handed off; anything else is a stopping point.
 	if f := s.activeFlow(); f != nil && isDirectMove(step) {
 		return s.handOffStep(ctx, f, step)
 	}
