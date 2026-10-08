@@ -138,10 +138,9 @@ func (s *beanjaminCoffee) moveGripperToPoseWithVerify(ctx, cancelCtx context.Con
 	if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 		return err
 	}
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		return fmt.Errorf("grab gripper: %w", err)
+	if err := s.closeGripper(ctx); err != nil {
+		return err
 	}
-	time.Sleep(gripperPause)
 	return nil
 }
 

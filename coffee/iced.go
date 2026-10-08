@@ -177,10 +177,9 @@ func (s *beanjaminCoffee) approachBrewedCup(ctx, cancelCtx context.Context) erro
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("approach_brewed_cup: %w", err)
 	}
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("approach_brewed_cup: open gripper: %w", err)
+	if err := s.openGripper(ctx); err != nil {
+		return fmt.Errorf("approach_brewed_cup: %w", err)
 	}
-	time.Sleep(gripperPause)
 	return nil
 }
 
@@ -242,10 +241,9 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("grab_staged_glass: open gripper: %w", err)
+	if err := s.openGripper(ctx); err != nil {
+		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
-	time.Sleep(gripperPause)
 	// Descend onto the glass; it stays a world obstacle, but allow the jaws to
 	// contact it for this step (the rest of the arm still routes around it).
 	grabStep := Step{PoseName: clawPoseStaging, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.stagedGlassGrabCollisions()}
@@ -404,10 +402,9 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("stage_glass: open gripper: %w", err)
+	if err := s.openGripper(ctx); err != nil {
+		return fmt.Errorf("stage_glass: %w", err)
 	}
-	time.Sleep(gripperPause)
 	// Glass is set down; keep it as a static world obstacle (rather than dropping
 	// it) so the cup-retrieval, pour, and serving moves route around it.
 	if err := s.stageGlassAsObstacle(ctx); err != nil {
@@ -417,10 +414,9 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		return fmt.Errorf("stage_glass: close gripper: %w", err)
+	if err := s.closeGripper(ctx); err != nil {
+		return fmt.Errorf("stage_glass: %w", err)
 	}
-	time.Sleep(gripperPause)
 	return nil
 }
 
