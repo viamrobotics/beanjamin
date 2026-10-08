@@ -114,12 +114,6 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context,
 	if s.gripper == nil {
 		return -1, fmt.Errorf("place_in_serving_area: no gripper configured")
 	}
-	// The slot fallthrough needs each move's result right away.
-	release, err := s.syncRegion()
-	if err != nil {
-		return -1, fmt.Errorf("place_in_serving_area: %w", err)
-	}
-	defer release()
 
 	slots, shelfTopZ, err := s.servingAreaSlots(ctx)
 	if err != nil {

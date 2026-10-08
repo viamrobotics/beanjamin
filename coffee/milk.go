@@ -209,12 +209,6 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 	ctx, done := mergedCancelContext(ctx, cancelCtx)
 	defer done()
 
-	release, err := s.syncRegion()
-	if err != nil {
-		return fmt.Errorf("return_milk: %w", err)
-	}
-	defer release()
-
 	centroid := *s.milkGraspCentroid
 	approachPose, placePose := s.milkReturnPoses(centroid)
 	approachPD := &poseData{pose: approachPose, refFrame: referenceframe.World, componentName: gripPoint}

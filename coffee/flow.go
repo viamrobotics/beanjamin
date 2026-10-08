@@ -264,8 +264,9 @@ func (s *beanjaminCoffee) planStep(ctx context.Context, step Step, from []refere
 	return positions, nil
 }
 
-// isDirectMove reports whether a step can be planned ahead. Pivots, circles and
-// no-spill carries plan from the arm's live pose, so they can't.
+// isDirectMove reports whether a step is handed off. Pivots, circles and no-spill
+// carries plan and run inside their own executors, so for now they're stopping
+// points.
 func isDirectMove(step Step) bool {
 	return step.PivotFromPose == "" && step.CircularRadiusMm == 0 && !step.NoSpill
 }

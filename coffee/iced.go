@@ -127,8 +127,8 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 		return fmt.Errorf("brew_and_prep: %w", err)
 	}
 	// Recorded when the arm actually presses, not when the planner gets here.
-	var pourStarted atomic.Int64
-	s.handOffEffect(func() { pourStarted.Store(time.Now().UnixNano()) })
+	var brewStarted atomic.Int64
+	s.handOffEffect(func() { brewStarted.Store(time.Now().UnixNano()) })
 
 	// Fill the pour time with prep: an iced drink stages its glass, anything else
 	// lines the gripper up over the cup so only the grasp is left afterward.
@@ -145,9 +145,9 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 	// ends the order without the wait.
 	waitErr := s.settle()
 	if waitErr == nil {
-		remaining := s.drinkBrewTime(drink) - time.Since(time.Unix(0, pourStarted.Load()))
-		s.activeOrderLogger().Infof("waiting out the remaining %s of the %s pour (prep error: %v)", remaining, drink, prepErr)
-		waitErr = waitOutPour(ctx, cancelCtx, remaining)
+		remaining := s.drinkBrewTime(drink) - time.Since(time.Unix(0, brewStarted.Load()))
+		s.activeOrderLogger().Infof("waiting out the remaining %s of the %s brew (prep error: %v)", remaining, drink, prepErr)
+		waitErr = waitOutBrew(ctx, cancelCtx, remaining)
 	}
 	if prepErr != nil {
 		return fmt.Errorf("brew_and_prep: %w", prepErr)

@@ -269,10 +269,10 @@ func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, drink string) err
 	}
 
 	brewTime := s.drinkBrewTime(drink)
-	logger.Infof("waiting %s for the %s pour to finish", brewTime, drink)
-	pourCtx, done := mergedCancelContext(ctx, cancelCtx) // cancel stops the wait
+	logger.Infof("waiting %s for the %s brew to finish", brewTime, drink)
+	brewCtx, done := mergedCancelContext(ctx, cancelCtx) // cancel stops the wait
 	defer done()
-	if err := s.handOff(pourCtx, move{name: "pour", sleep: brewTime}); err != nil {
+	if err := s.handOff(brewCtx, move{name: "brew", sleep: brewTime}); err != nil {
 		return fmt.Errorf("brew_coffee: %w", err)
 	}
 
@@ -290,10 +290,10 @@ func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, drink string) err
 	return nil
 }
 
-// waitOutPour blocks until d elapses or either context is cancelled.
+// waitOutBrew blocks until d elapses or either context is cancelled.
 // Non-positive durations return immediately, so overlapped callers can pass
 // brewTime - elapsed unclamped.
-func waitOutPour(ctx, cancelCtx context.Context, d time.Duration) error {
+func waitOutBrew(ctx, cancelCtx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return nil
 	}
