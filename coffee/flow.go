@@ -146,13 +146,24 @@ func (f *flow) startExecution(s *beanjaminCoffee) {
 			if first != nil {
 				continue // drain so the planner never blocks
 			}
-			if err := s.runMove(f.ctx, m); err != nil {
+			if err := s.runMoveRecovered(f.ctx, m); err != nil {
 				first = err
 				f.failed.Store(true)
 			}
 		}
 		done <- first
 	}()
+}
+
+// runMoveRecovered runs m, turning a panic into an error. The queue's recover
+// only covers its own goroutine, so without this a panic here kills the module.
+func (s *beanjaminCoffee) runMoveRecovered(ctx context.Context, m move) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic during %q: %v", m.name, r)
+		}
+	}()
+	return s.runMove(ctx, m)
 }
 
 // runMove executes a move: bookkeeping, trajectory, gripper, then sleep.

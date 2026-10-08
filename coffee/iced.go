@@ -140,14 +140,19 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 	}()
 
 	// Wait out the rest of the pour even when the prep failed, so the machine is
-	// quiescent before an operator gets near it. A stopping point, since the wait
-	// is timed from the actual press; a failed handed-off move
-	// ends the order without the wait.
-	waitErr := s.settle()
-	if waitErr == nil {
-		remaining := s.drinkBrewTime(drink) - time.Since(time.Unix(0, brewStarted.Load()))
+	// quiescent before an operator gets near it. Settle first, since the wait is
+	// timed from the actual press; skip it only if the press never ran.
+	settleErr := s.settle()
+	var waitErr error
+	if started := brewStarted.Load(); started != 0 {
+		if prepErr == nil {
+			prepErr = settleErr
+		}
+		remaining := s.drinkBrewTime(drink) - time.Since(time.Unix(0, started))
 		s.activeOrderLogger().Infof("waiting out the remaining %s of the %s brew (prep error: %v)", remaining, drink, prepErr)
 		waitErr = waitOutBrew(ctx, cancelCtx, remaining)
+	} else if settleErr != nil {
+		return fmt.Errorf("brew_and_prep: %w", settleErr)
 	}
 	if prepErr != nil {
 		return fmt.Errorf("brew_and_prep: %w", prepErr)

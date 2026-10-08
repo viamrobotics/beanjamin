@@ -116,6 +116,20 @@ func TestFailureSkipsTheRest(t *testing.T) {
 	}
 }
 
+func TestExecutionPanicFailsTheOrder(t *testing.T) {
+	s, _ := flowCoffee(t)
+	var r recorder
+	ctx := context.Background()
+	_ = s.handOff(ctx, move{name: "boom", bookkeep: func() { panic("boom") }})
+	_ = s.handOff(ctx, r.move("b"))
+	if err := s.settle(); err == nil {
+		t.Fatal("settle err = nil, want the panic as an error")
+	}
+	if got := r.got(); len(got) != 0 {
+		t.Errorf("ran %v after the panic", got)
+	}
+}
+
 func TestRunMoveOrder(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
 	var order []string
