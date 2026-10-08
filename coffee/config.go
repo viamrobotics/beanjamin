@@ -380,20 +380,12 @@ func validateMilkOptions(path string, milks []MilkOption) error {
 var milkIDPattern = regexp.MustCompile(`^[a-z0-9_]+$`)
 
 // validatePourPair checks a required staged-glass-relative pour pair
-// (<name>_approach_relative_pose / <name>_relative_pose): both present, and at
-// the same offset, since the tilt between them is a fixed-point pivot that
-// refuses to run between two different points.
+// (<name>_approach_relative_pose / <name>_relative_pose): both must be present.
+// They may sit at different offsets — the tilt between them translates as it
+// rotates (executePivot).
 func validatePourPair(path, name string, approach, pour *RelativePose) error {
 	approachField, pourField := name+"_approach_relative_pose", name+"_relative_pose"
-	if err := requireFields(path, approachField, approach, pourField, pour); err != nil {
-		return err
-	}
-	offset := r3.Vector{X: approach.X - pour.X, Y: approach.Y - pour.Y, Z: approach.Z - pour.Z}
-	if dist := offset.Norm(); dist > pivotPositionToleranceMm {
-		return fmt.Errorf("%s: %s and %s must share the same x/y/z (the pour is a pivot in place), but differ by %.2f mm",
-			path, approachField, pourField, dist)
-	}
-	return nil
+	return requireFields(path, approachField, approach, pourField, pour)
 }
 
 // requireFields returns a field-required error for the first empty value in
