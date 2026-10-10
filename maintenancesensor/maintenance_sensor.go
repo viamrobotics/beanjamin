@@ -1,11 +1,14 @@
 // Package maintenancesensor registers a viam:beanjamin:maintenance-sensor model
 // that implements the rdk:component:sensor API. It reports is_safe=false while
 // the arm is moving or the coffee service has orders queued or in progress.
+// A dependency that cannot be queried counts as idle, so a failing arm or
+// coffee service never blocks the reconfiguration that would repair it.
 package maintenancesensor
 
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/sensor"
@@ -16,6 +19,11 @@ import (
 )
 
 var Model = resource.NewModel("viam", "beanjamin", "maintenance-sensor")
+
+// dependencyCheckTimeout bounds each dependency call so both checks finish
+// inside viam-server's 5s maintenance-sensor deadline; a hung dependency would
+// otherwise time out the whole reading, which also blocks reconfiguration.
+const dependencyCheckTimeout = 2 * time.Second
 
 func init() {
 	resource.RegisterComponent(sensor.API, Model,
@@ -87,27 +95,23 @@ func (m *maintenanceSensor) Status(ctx context.Context) (map[string]any, error) 
 func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]any) (map[string]any, error) {
 	ctx, span := trace.StartSpan(ctx, "maintenance-sensor::Readings")
 	defer span.End()
-	isArmMoving, err := m.arm.IsMoving(ctx)
+
+	// A failed check is reported but never returned as an error: viam-server
+	// refuses to reconfigure whenever this sensor's Readings fails, which would
+	// lock out the config change needed to fix a broken arm or coffee service.
+	readings := map[string]any{}
+
+	isArmMoving, err := m.armMoving(ctx)
 	if err != nil {
-		m.logger.CWarnw(
-			ctx, "is_safe debugging: failed to check arm movement",
-			"err", err,
-		)
-		return nil, fmt.Errorf("failed to check arm movement: %w", err)
+		m.logger.CWarnw(ctx, "maintenance sensor: arm check failed, treating arm as idle", "err", err)
+		readings["arm_error"] = err.Error()
 	}
 
-	// Query the coffee service for queue and running state via DoCommand.
-	resp, err := m.coffee.DoCommand(ctx, map[string]any{"get_queue": true})
+	isBusy, queueCount, err := m.coffeeActivity(ctx)
 	if err != nil {
-		m.logger.CWarnw(
-			ctx, "is_safe debugging: failed to query coffee service",
-			"err", err,
-		)
-		return nil, fmt.Errorf("failed to query coffee service: %w", err)
+		m.logger.CWarnw(ctx, "maintenance sensor: coffee check failed, treating coffee service as idle", "err", err)
+		readings["coffee_error"] = err.Error()
 	}
-
-	isBusy, _ := resp["is_busy"].(bool)
-	queueCount, _ := resp["count"].(float64)
 
 	isSafe := !isArmMoving && !isBusy && queueCount == 0
 	m.logger.CDebugf(
@@ -115,9 +119,30 @@ func (m *maintenanceSensor) Readings(ctx context.Context, extra map[string]any) 
 		isSafe, isArmMoving, isBusy, queueCount,
 	)
 
-	return map[string]any{
-		"is_safe": isSafe,
-	}, nil
+	readings["is_safe"] = isSafe
+	return readings, nil
+}
+
+func (m *maintenanceSensor) armMoving(ctx context.Context) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, dependencyCheckTimeout)
+	defer cancel()
+	moving, err := m.arm.IsMoving(ctx)
+	if err != nil {
+		return false, fmt.Errorf("failed to check arm movement: %w", err)
+	}
+	return moving, nil
+}
+
+func (m *maintenanceSensor) coffeeActivity(ctx context.Context) (isBusy bool, queueCount float64, err error) {
+	ctx, cancel := context.WithTimeout(ctx, dependencyCheckTimeout)
+	defer cancel()
+	resp, err := m.coffee.DoCommand(ctx, map[string]any{"get_queue": true})
+	if err != nil {
+		return false, 0, fmt.Errorf("failed to query coffee service: %w", err)
+	}
+	isBusy, _ = resp["is_busy"].(bool)
+	queueCount, _ = resp["count"].(float64)
+	return isBusy, queueCount, nil
 }
 
 func (m *maintenanceSensor) DoCommand(ctx context.Context, cmd map[string]any) (map[string]any, error) {

@@ -881,6 +881,14 @@ Returns a single reading:
 - An order is currently running
 - There are orders in the queue
 
+A dependency that cannot be queried (error, or no answer within 2s) is treated as idle rather than failing the reading, because viam-server blocks reconfiguration whenever the maintenance sensor's `Readings` errors — which would make a broken arm or coffee service impossible to fix through config. The failure is reported alongside `is_safe` as `arm_error` and/or `coffee_error`:
+
+```json
+{"is_safe": true, "coffee_error": "failed to query coffee service: ..."}
+```
+
+The remaining dependency is still checked, so a failing coffee service with a moving arm (or the reverse) still reports `is_safe: false`.
+
 ---
 
 ## Model: `viam:beanjamin:order-sensor`
