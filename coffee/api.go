@@ -62,8 +62,9 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		// double on the wire).
 		"count":           float64(s.queue.Len()),
 		"orders":          orderMaps,
-		"is_paused":       s.paused.Load(),
-		"is_busy":         s.running.Load(),
+		"is_paused":       s.lease.isPaused(),
+		"is_busy":         s.lease.busy(),
+		"arm_holder":      s.lease.holderName(),
 		"current_step":    step,
 		"can_serve_decaf": s.cfg.CanServeDecaf,
 		"fault_active":    s.faultAlarm.Active(),
@@ -158,9 +159,6 @@ var coffeeCommands = []commandDef{
 	{key: "cancel_order", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
 		return s.cancelOrder(ctx, cmd["cancel_order"])
 	}},
-	{key: "rewind", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
-		return s.rewind(ctx)
-	}},
 	{key: "get_queue", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.Status(ctx)
 	}},
@@ -183,11 +181,6 @@ var coffeeCommands = []commandDef{
 	// (see README); safe to invoke by hand to test the digest off-schedule.
 	{key: "send_daily_summary", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.sendDailySummary(ctx)
-	}},
-	// Fired by a cron job on Mondays. `true` posts the current week;
-	// {"date": "2026-10-05"} posts a different week instead.
-	{key: "send_weekly_chores", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
-		return s.sendWeeklyChores(ctx, cmd["send_weekly_chores"])
 	}},
 	{key: "run_cup_flow", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
 		count, err := parseCupFlowCount(cmd["run_cup_flow"])
@@ -221,7 +214,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]any) (ma
 		}
 	}
 
-	err := fmt.Errorf("unknown command, supported commands: cancel, cancel_order, rewind, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action, send_delivery_message, send_daily_summary, send_weekly_chores")
+	err := fmt.Errorf("unknown command, supported commands: cancel, cancel_order, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action, send_delivery_message, send_daily_summary")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }
@@ -247,6 +240,10 @@ func (s *beanjaminCoffee) handleOpenGripper(ctx context.Context) (map[string]any
 	if s.gripper == nil {
 		return nil, fmt.Errorf("no gripper configured")
 	}
+	if _, err := s.lease.claimManual("open_gripper"); err != nil {
+		return nil, err
+	}
+	defer s.lease.release()
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		return nil, fmt.Errorf("failed to open gripper: %w", err)
 	}
@@ -257,6 +254,10 @@ func (s *beanjaminCoffee) handleCloseGripper(ctx context.Context) (map[string]an
 	if s.gripper == nil {
 		return nil, fmt.Errorf("no gripper configured")
 	}
+	if _, err := s.lease.claimManual("close_gripper"); err != nil {
+		return nil, err
+	}
+	defer s.lease.release()
 	grabbed, err := s.gripper.Grab(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to close gripper: %w", err)

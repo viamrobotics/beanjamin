@@ -46,6 +46,12 @@
       "model": "viam:beanjamin:crm",
       "short_description": "Customer profiles: loyalty points per drink and shared rewards they can be pooled toward.",
       "markdown_link": "README.md#model-viambeanjamincrm"
+    },
+    {
+      "api": "rdk:service:generic",
+      "model": "viam:beanjamin:chore-wheel",
+      "short_description": "Posts the weekly maintenance rota to Slack, rotating people through chores.",
+      "markdown_link": "README.md#model-viambeanjaminchore-wheel"
     }
   ],
   "entrypoint": "bin/beanjamin",

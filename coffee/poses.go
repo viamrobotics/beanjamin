@@ -87,6 +87,15 @@ const (
 // switch (parallel to camPoseCupObserve on the cup observe switch).
 const glassPoseObserve = "glass_observe"
 
+// milkApproachPose is the claws-switch pose in front of the bottle at a fridge
+// spot (MilkOption.Spot), with the door open: where the gripper lines up before
+// the straight-in grab, and where it backs out to after setting the bottle down.
+func milkApproachPose(spot string) string { return "milk_" + spot + "_approach" }
+
+// milkGrabPose is the claws-switch pose with the gripper around the bottle at a
+// fridge spot: grabbed from here, set back here.
+func milkGrabPose(spot string) string { return "milk_" + spot + "_grab" }
+
 // milkPoseObserve is the home/recovery observe pose on the milk observe switch,
 // looking into the open fridge (parallel to glassPoseObserve).
 const milkPoseObserve = "milk_observe"
@@ -101,9 +110,8 @@ type requiredPose struct {
 // requiredPoses returns the set of switch poses that the currently-enabled
 // configuration can drive the arm to. The core brew cycle (grind → tamp →
 // lock → release → brew → grab → unlock → home) always runs, so its poses are
-// always required. Cleaning poses are likewise always included: the
-// recovery path in rewind() runs cleanPortafilter whenever the portafilter
-// holds grounds, which is the case for every order once grinding starts. Optional features (decaf, iced coffee) contribute their
+// always required. Cleaning poses are likewise always included: every order
+// cleans the portafilter after brewing. Optional features (decaf, iced coffee) contribute their
 // poses only when their config flag is set.
 func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 	poses := []requiredPose{
@@ -123,7 +131,7 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		{s.clawsSw, clawPoseCoffeeLockedFinal},
 		// step 9: home
 		{s.filterSw, filterPoseHome},
-		// cleaning (post-brew and rewind recovery)
+		// cleaning (post-brew)
 		{s.filterSw, filterPoseCloseToCleaning},
 		{s.filterSw, filterPoseApproachToCleaningScrapper},
 		{s.filterSw, filterPoseCleaningScrapperActive},
@@ -203,6 +211,14 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		poses = append(poses,
 			requiredPose{s.milkObserveSw, milkPoseObserve},
 		)
+		// Each milk_options spot's approach and grab, checked now so they are
+		// taught and verified before anything moves to them.
+		for _, m := range s.cfg.MilkOptions {
+			poses = append(poses,
+				requiredPose{s.clawsSw, milkApproachPose(m.Spot)},
+				requiredPose{s.clawsSw, milkGrabPose(m.Spot)},
+			)
+		}
 	}
 
 	return poses

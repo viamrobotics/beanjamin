@@ -9,6 +9,7 @@ The `viam:beanjamin` module provides these models for arm-based automation workf
 5. **`viam:beanjamin:dial-control-motion`** - A generic service that translates Stream Deck dial inputs into relative arm motions.
 6. **`viam:beanjamin:customer-detector`** - A generic service that identifies return customers via facial recognition using the [`viam:vision:face-identification`](https://github.com/viam-modules/viam-face-identification) vision service.
 7. **`viam:beanjamin:crm`** - A generic service holding customer profiles keyed by email: a loyalty point per completed drink, and shared rewards customers pool those points toward.
+8. **`viam:beanjamin:chore-wheel`** - A generic service that posts the weekly maintenance rota to Slack, rotating a roster of people through a list of chores.
 
 ---
 
@@ -184,7 +185,7 @@ Returns:
 
 **API:** `rdk:service:generic`
 
-Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` component. Supports preparing espresso and lungo orders, executing individual actions, stopping a run (`cancel`), and driving the arm back to a clean start (`rewind`).
+Orchestrates a full coffee brew cycle using a `multi-poses-execution-switch` component. Supports preparing espresso and lungo orders, executing individual actions, and stopping a run (`cancel`). Recovering afterwards is done by hand, then `proceed`.
 
 `has_separate_brew_buttons` selects which coffee machine the arm is driving, and with it which claw poses the switcher must carry:
 
@@ -287,7 +288,6 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `cam_storage_mux_name` | string | No   | Name of a [`viam:multiplexer:resource-multiplexer`](https://github.com/viam-modules/multiplexer) generic service whose dependencies are `viam:video:storage` stores; when set, saves a clip per order attempt (synchronous `save`) to all configured stores. |
 | `data_dir`                 | string | No       | Directory for persistent module data. When set alongside `cam_storage_mux_name`, a pending-clip record is written under `<data_dir>/pending-clips` when each order starts and removed only once that order's clip has been saved successfully — a save that fails (or never runs because the process died first) leaves the record in place. Use with a Viam scheduled job calling `cleanup_pending_clips` to recover clips for any order whose save was interrupted or failed. |
 | `slack_notifier_name`      | string | No       | Name of a [`viam:notifications:slack`](https://github.com/viam-modules/notifications) generic service. When set, the coffee service sends a best-effort Slack message on every non-successful order attempt (faults and operator cancels). See "Slack notifications" above. |
-| `chore_wheel`              | object | No       | Roster and chores for the weekly maintenance rota posted by `send_weekly_chores`: `{ "people": [...], "chores": [...] }`. Requires `slack_notifier_name`. See "Weekly chore wheel in Slack" below. |
 | `customer_detector_name`   | string | No       | Name of a `viam:beanjamin:customer-detector` service. When set, the coffee service credits each **successfully** completed order (when the `prepare_order` carried a `customer_email`) to that customer's order history via the detector's `record_order` DoCommand, powering "the usual". Setting the field automatically registers it as a dependency. Unset disables order-history recording. |
 | `crm_name`                 | string | No       | Name of a `viam:beanjamin:crm` service. When set, each **successfully** completed order that carried a `customer_email` earns that email one loyalty point through the CRM's `credit_points` DoCommand (keyed by order ID, so a drink is never credited twice). Registered as an optional dependency: a CRM that is down costs the points (logged with the email and order ID, for a backfill), never the drink. Unset disables loyalty points. |
 | `delivery_handler_name`    | string | No       | Name of a generic service on a peer delivery machine, reached through a remote part (e.g. `"delivery-bot:mission-control"` after adding the peer machine as a remote named `delivery-bot` in app.viam.com). Setting the field automatically registers it as an (optional) dependency. When a `fulfillment: "delivery"` order's drink lands in the serving area, the coffee service sends that service a `delivery_request` DoCommand (see `send_delivery_message` below for the payload and the manual test hook). Unset disables outbound peer messaging; delivery orders then just announce and rely on pickup from the serving area. |
@@ -331,14 +331,15 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `glass_approach_relative_pose`        | object | When `can_serve_iced` is enabled | 6-DoF gripper offset composed onto the detected glass centroid for the pre-grab pose (same shape as `cup_approach_relative_pose`), tuned for the taller glass. |
 | `glass_grab_relative_pose`            | object | When `can_serve_iced` is enabled | 6-DoF gripper offset for the final glass grab pose. |
 | `glass_dimensions`                    | object | When `can_serve_iced` is enabled | Known glass size. Same shape and behavior as `cup_dimensions` (`{ "diameter_mm", "height_mm" }`, both > 0), applied to the glass held-item geometry; its `height_mm` likewise drives resting-surface seating (below). Only the iced flow picks up a glass, so it is required — and only checked — when `can_serve_iced` is set. |
-| `pour_approach_relative_pose` / `pour_relative_pose` | object | When `can_serve_iced` is enabled | The pose of the held espresso cup upright above the staged glass, and tilted to pour, relative to the **center of the staged glass's rim**. Same shape as `cup_approach_relative_pose`, but it describes the **held container** (the `held-item` frame), not the gripper: `x`/`y`/`z` in mm along world axes places the grip point, and `o_x`/`o_y`/`o_z`/`theta` is the container's absolute world orientation — upright is `o_z: 1`, and e.g. `o_x: 1, o_z: 1` tilts it 45° toward +X. Both must share the same `x`/`y`/`z` (the tilt is a pivot in place) and differ only in orientation. See **Staged-glass-relative pours** below. |
+| `pour_approach_relative_pose` / `pour_relative_pose` | object | When `can_serve_iced` is enabled | The pose of the held espresso cup upright above the staged glass, and tilted to pour, relative to the **center of the staged glass's rim**. Same shape as `cup_approach_relative_pose`, but it describes the **held container** (the `held-item` frame), not the gripper: `x`/`y`/`z` in mm along world axes places the grip point, and `o_x`/`o_y`/`o_z`/`theta` is the container's absolute world orientation — upright is `o_z: 1`, and e.g. `o_x: 1, o_z: 1` tilts it 45° toward +X. They may differ in `x`/`y`/`z` as well as orientation: the tilt moves the container along the straight line between the two points while it rotates, in lockstep — e.g. set `z` higher on the pour pose to lift the container as it tips (and lower it as it rights on the way back). Identical `x`/`y`/`z` gives a tilt in place. See **Staged-glass-relative pours** below. |
 | `milk_pour_approach_relative_pose` / `milk_pour_relative_pose` | object | When `can_serve_iced_latte` is enabled | Same as the espresso pair, for the milk bottle. The bottle is taller and heavier than the espresso cup, so it has its own pair; the tilt only has to clear the rim — how much milk lands is `milk_pour_sec`. |
-| `can_serve_iced_latte`                | bool   | No       | Enables the `iced_latte` drink: the whole iced-coffee sequence, plus a fridge trip for milk between placing the empty espresso cup and picking the glass back up. The arm opens the fridge door, vision-detects the milk bottle inside, pours it into the staged glass, sets the bottle back down where it found it, and shuts the door. Requires `can_serve_iced` (the latte is served in the iced glass, over ice), `door_approach_relative_pose` (the milk is behind the fridge door), the `milk_*` fields below and the iced-latte claws poses below. Default `false`. |
+| `can_serve_iced_latte`                | bool   | No       | Enables the `iced_latte` drink: the whole iced-coffee sequence, plus a fridge trip for milk once the iced glass is staged, before the espresso is poured over it. The arm opens the fridge door, vision-detects the milk bottle inside, pours it into the staged glass, sets the bottle back down where it found it, and shuts the door. Requires `can_serve_iced` (the latte is served in the iced glass, over ice), `door_approach_relative_pose` (the milk is behind the fridge door), the `milk_*` fields below and the iced-latte claws poses below. Default `false`. |
 | `milk_vision_service_name`            | string | When `can_serve_iced_latte` is enabled | Name of a `rdk:service:vision` segmenter that returns milk-bottle detections via `GetObjectPointClouds`. Milk pickup mirrors cup and glass pickup with its own vision service and observe poses; it shares the cup camera (`src_camera_name`). |
 | `milk_observe_pose_switcher_name`     | string | When `can_serve_iced_latte` is enabled | Switcher holding the milk observation vantages, looking into the **open** fridge. Must include a pose named `milk_observe` (home/recovery), and all poses must move the `cam` frame. Same sweep semantics as the cup observe switch. |
 | `milk_approach_relative_pose`         | object | When `can_serve_iced_latte` is enabled | 6-DoF gripper offset composed onto the detected bottle centroid for the pre-grab standoff (same shape as `cup_approach_relative_pose`). It is also what the **return** aims at, so it must be a clean straight-up standoff over the bottle's spot on the shelf. |
 | `milk_grab_relative_pose`             | object | When `can_serve_iced_latte` is enabled | 6-DoF gripper offset for the final bottle grab pose — and, replayed onto the recorded pickup centroid, the pose the bottle is set back down at. |
 | `milk_bottle_dimensions`              | object | When `can_serve_iced_latte` is enabled | Known bottle size. Same shape and behavior as `cup_dimensions` (`{ "diameter_mm", "height_mm" }`, both > 0), applied to the held-bottle geometry; its `height_mm` likewise drives resting-surface seating (below). Required — and only checked — when `can_serve_iced_latte` is set. |
+| `milk_options`                        | list of objects | No | The milks in the fridge, each `{"name", "spot"}`, e.g. `[{"name": "whole", "spot": "left"}, {"name": "oat", "spot": "right"}]`, for fetching the milk from taught poses instead of vision. **Not used to move the arm yet** — the milk is still found by vision — but when set it is validated and each spot's poses must exist on the claws switch (see the iced-latte claws poses below). `spot` names where the bottle stands; its poses are named after it, `milk_<spot>_approach` and `milk_<spot>_grab`, so renaming a milk or moving it is a config change, with no poses to re-teach. Names and spots are lowercase letters, digits and underscores; none may repeat, and the spot `pour` is reserved. |
 | `milk_pour_sec`                       | float  | No       | How long the tilted bottle is held over the glass, in seconds. This — not the tilt angle — is the milk dose, so tune it on the machine against the bottle and glass in use. Defaults to 4. |
 | `serving_approach_relative_pose`      | object | Yes      | 6-DoF gripper offset composed onto the serving-area slot anchor for the pre-release approach pose (same shape as `cup_approach_relative_pose`). Used for both the hot cup and the iced glass. |
 | `serving_grab_relative_pose`          | object | Yes      | 6-DoF gripper offset composed onto the serving-area slot anchor for the release pose. Same shape as `serving_approach_relative_pose`; shared by cup and glass placement. |
@@ -348,7 +349,7 @@ Glass and milk-bottle pickup reuse `cup_pickup_max_attempts` (an item-agnostic o
 
 **No-spill carry.** Every **free traverse of a filled container** is planned with a **15° orientation constraint** (`noSpillOrientationToleranceDegs` in `coffee/motion.go`) instead of free-planning straight to the goal. RDK checks the constraint along the whole path as a tube of that width around the **direct slerp** from the carry's start orientation to its goal, so one start-to-goal segment holds the container near level for the entire traverse — no intermediate waypoints are needed. Both endpoints are upright container poses, so the slerp itself stays level and 15° leaves the drink well inside a full cup's static spill angle. The constraint **ignores theta** (spin about the container's own vertical axis): a container spills when tipped, not when spun, so only tilt is bounded. The path itself is unconstrained: the planner is free to route around the machine however it likes, subject only to collision avoidance and the orientation tube. This covers the serving-area placement of a **filled** container (the hot cup and the iced glass), carrying the ice-filled glass to the staging area, carrying the espresso cup to the pour position, and both carries of the open milk bottle (fridge to the pour position, and back to the fridge). The espresso cup's own trip to the shelf happens *after* it has been poured over the ice, so it is empty by then and free-plans straight to the slot — there is nothing left in it to slosh. Manual `place_held` assumes filled. The goal commands the **held-item (container) frame** rather than the gripper — the goal pose is converted onto it — because the orientation bound is measured in the commanded frame's own axes, and the held-item frame's **+Z is the container's vertical axis** (see **Held-item geometry** below). Tune the tolerance on hardware.
 
-**Held-item geometry.** A picked-up cup/glass/milk bottle is always tracked: its geometry — a box of the configured `cup_dimensions` / `glass_dimensions` / `milk_bottle_dimensions` centered on the grasp centroid — is attached under the `grip-point` frame in the cached frame system as a `held-item` frame, so motion planning routes around the held item until it is set down (and is restored on each re-grab — the brewed cup from under the machine, the staged glass). The frame sits **on the grip point** (its parent) and is **rotated onto the container's axes**: its +Z is the container's vertical axis, world-upright at the moment of the grab and tilting with the container thereafter as the wrist moves — that is the frame the no-spill carry commands and measures tilt against, and the frame the pour poses describe. Its pose does not move the geometry (a frame's geometry attaches at the frame's *parent*, not the frame itself), so collision behavior is unchanged by it. `addHeldItemFrame` fails if the frame system has no `grip-point` frame. When the brewed cup is re-grabbed but nothing was cached to restore — e.g. a manually-stepped serving that never ran the vision cup pickup — its held-item box is modeled from `cup_dimensions` and the grip point's current world pose, so the pour and shelf placement still track the cup. The gripper-overlap collision pairs are allowed automatically on every move while an item is held; contact phases near a modeled surface (under the machine, the serving-area shelf) allow the held item against that surface too. The held-item frame is dropped when the frame system is rebuilt (`reset_world`, `rewind`, `proceed`).
+**Held-item geometry.** A picked-up cup/glass/milk bottle is always tracked: its geometry — a box of the configured `cup_dimensions` / `glass_dimensions` / `milk_bottle_dimensions` centered on the grasp centroid — is attached under the `grip-point` frame in the cached frame system as a `held-item` frame, so motion planning routes around the held item until it is set down (and is restored on each re-grab — the brewed cup from under the machine, the staged glass). The frame sits **on the grip point** (its parent) and is **rotated onto the container's axes**: its +Z is the container's vertical axis, world-upright at the moment of the grab and tilting with the container thereafter as the wrist moves — that is the frame the no-spill carry commands and measures tilt against, and the frame the pour poses describe. Its pose does not move the geometry (a frame's geometry attaches at the frame's *parent*, not the frame itself), so collision behavior is unchanged by it. `addHeldItemFrame` fails if the frame system has no `grip-point` frame. When the brewed cup is re-grabbed but nothing was cached to restore — e.g. a manually-stepped serving that never ran the vision cup pickup — its held-item box is modeled from `cup_dimensions` and the grip point's current world pose, so the pour and shelf placement still track the cup. The gripper-overlap collision pairs are allowed automatically on every move while an item is held; contact phases near a modeled surface (under the machine, the serving-area shelf) allow the held item against that surface too. The held-item frame is dropped when the frame system is rebuilt (`reset_world`, `proceed`).
 
 **Resting-surface seating.** Pickup resolves each detection's grasp **Z** from the surface the container stands on rather than the raw detected centroid Z (which depth noise pushes above or below the true base), using the configured container height (`cup_dimensions` / `glass_dimensions`). It finds the highest **static** Box in the framesystem whose world footprint lies directly beneath the detection and whose top face is below the detected centroid, then seats the container's base **1 mm** above that top — so the grasp centroid becomes `surfaceTop + 1 mm + height/2`, keeping the detected X/Y. "Static" means world-anchored (it moves rigidly with the world frame), so the moving arm, gripper, camera, and any held item are never mistaken for a surface; non-box and rotated geometries are bounded by their world axis-aligned extent. No framesystem changes or extra config are required — the resting surface is auto-detected. When no surface is found beneath a detection, pickup uses the raw detected Z unchanged.
 
@@ -366,6 +367,8 @@ When `can_serve_iced` is enabled, the claws switch must additionally hold these 
 | `staging`              | Down in the staging area; the glass is set here to free the gripper for the pour, then re-grabbed and placed in the serving area. |
 
 The iced latte adds nothing to the claws switch: the bottle is vision-detected (see the milk-observe switch below) and set back down at the spot it was detected at, the door is tracked through its hinge arc, and the milk pour is resolved against the staged glass like the espresso pour.
+
+With `milk_options` set, the claws switch must also hold a pair of poses for each `spot`, taught with the fridge door **open**: `milk_<spot>_approach` (gripper open in front of the bottle at that spot) and `milk_<spot>_grab` (jaws around the bottle where it stands). They are checked at startup but not moved to yet.
 
 **Staged-glass-relative pours.** The pour poses are not stored on the claws switch. `pour_approach`/`pour` (espresso) and `milk_pour_approach`/`milk_pour` (milk) are computed from `pour_approach_relative_pose`/`pour_relative_pose` and `milk_pour_approach_relative_pose`/`milk_pour_relative_pose`, applied to the **center of the staged glass's rim**. The rim is read off the `staged-glass` obstacle in the frame system — the glass `stage_glass` released, at the position it was actually set down — plus half that box's height along the glass axis. The poses are applied like the pickup offsets (translation along world axes from the rim, orientation absolute), but to the **held-item frame**: its origin is the grip point and its +Z is the held container's own axis, so the orientation is the cup's or bottle's tilt whatever angle the gripper grasped it at, and the pour pivots about the grip point. A pour also **fails when no container is modeled in the gripper**. Moving the staging area therefore only means re-teaching `staging`. A pour **fails when no glass is staged** (e.g. `pour_espresso` run by hand without a `stage_glass` first, or a glass staged without tracked geometry). Each resolution logs the rim position; to convert an absolute pour pose, subtract that position from its `x`/`y`/`z` and keep its orientation.
 
@@ -458,11 +461,13 @@ without `ice_vision_enabled`.
 {"cancel": true}
 ```
 
-Returns `{"status": "cancelled", "cancelled": true, "queue": "paused"}` — `cancelled` is `false` when nothing was running, and `queue` reports the real pause state.
+Returns `{"status": "cancelled", "cancelled": true, "queue": "paused"}` — `cancelled` is `false` when nothing was running, and `queue` reports the real pause state. With nothing running, `cancel` still pauses the queue: it works as a pause button, so no new order starts until `proceed`.
 
-To get the arm back to a clean starting state afterwards, run `rewind`, then `proceed` to resume the queue.
+To recover afterwards, put the machine back to its starting state by hand — a clean portafilter held in the claws, nothing else in the gripper, the fridge door shut — then send `proceed` to resume the queue. There is no command that does this for you.
 
-**Pause after a fault.** An order that fails on its own — a genuine fault, not a `cancel` or `reset_world` — always pauses the queue exactly as `cancel` does. The next order would otherwise start from an unknown physical state, grinding a second dose onto used grounds or planning against a stale world, and not everything a fault leaves behind (a knocked-over cup, a half-finished pour) is something the service can see. An error log names any mid-cycle state still recorded — the portafilter locked in the group head or holding grounds, the filter frame locked to world, an item in the gripper, a glass staged, or the fridge door modeled open — and `get_queue` reports `is_paused: true`; recover the same way as after a cancel (`rewind`, shut the fridge by hand if it is open, then `proceed`). A failed manually-stepped `execute_action` never pauses the queue.
+**Pause after a fault.** An order that fails on its own — a genuine fault, not a `cancel` or `reset_world` — always pauses the queue exactly as `cancel` does. The next order would otherwise start from an unknown physical state, grinding a second dose onto used grounds or planning against a stale world, and not everything a fault leaves behind (a knocked-over cup, a half-finished pour) is something the service can see. An error log names any mid-cycle state still recorded — the portafilter locked in the group head or holding grounds, the filter frame locked to world, an item in the gripper, a glass staged, or the fridge door modeled open — and `get_queue` reports `is_paused: true`; recover the same way as after a cancel (put the machine right by hand, fridge door included, then `proceed`). A failed manually-stepped `execute_action` never pauses the queue. An order that crashes with a panic pauses the queue the same way. Once the service starts shutting down, every command that needs the arm is refused with `service closing`.
+
+**Waiting for the arm.** The next order claims the arm before it starts. If a keepalive purge or a troubleshooting command holds the arm, or the queue is paused, the order stays pending, still visible in `get_queue` and still removable with `cancel_order`, and starts once the arm is free and the queue unpaused. A keepalive purge skips its turn the same way.
 
 **`cancel_order`** - Drop one order out of the **backlog**, by ID. It is `clear_queue` narrowed to a single order, and it spares the drink on the arm for the same reason: the machine keeps making whatever it is making, the queue is not paused, no state flag is touched, and the orders behind the cancelled one move up a place. This is the customer-facing "actually, never mind" — `cancel` is the operator's stop button.
 
@@ -479,24 +484,6 @@ It errors rather than guessing when the order can't be dropped:
 - **An unknown ID** — it was cancelled already, or never existed.
 
 `get_queue` marks every order with a `cancellable` boolean saying which of these it is, so a UI can offer the action only where it will be accepted. Note this is not the same as "first in the list": the front of the backlog is cancellable precisely because nothing has started on it.
-
-**`rewind`** - Drive the arm back to the state a brew cycle starts from: nothing in the gripper, no grounds in the portafilter, the filter home in the claws. It stops any running sequence first, so it is safe to send at any time without a preceding `cancel`.
-
-In order: drop a cup or glass still in the jaws (open → detach the held-item geometry → close; a gripper closed on the thin filter handle reads as closed, so the portafilter is never dropped), then run whichever recovery the recorded portafilter state calls for:
-
-- Portafilter locked in the machine (after `release_filter`, before `grab_filter`): grab → unlock → clean → home.
-- Portafilter in the claws with grounds in it (after grinding, before cleaning): clean → home.
-- Neither: no arm motion.
-
-The cached frame system is rebuilt at the end, discarding any mid-cycle mutation such as a filter frame reparented to world by `lock_portafilter`. The queue stays paused with its pending orders intact; send `proceed` to resume. If recovery motion fails, the frame system is left untouched and the state flags stay set, so a second `rewind` retries from where the first stopped.
-
-> ⚠️ A cancel that fired mid-`lock_portafilter` — between the arm entering the machine and the gripper opening — leaves the bayonet partially engaged, and `rewind` may try to route the arm away from it. There is no safe automated recovery for that window: free the filter by hand first.
-
-```json
-{"rewind": true}
-```
-
-Returns `{"status": "rewound", "cancelled": false, "recovered": true, "queue": "paused"}` — `recovered` reports whether recovery motion actually ran.
 
 **`get_queue`** - Get the current order queue status.
 
@@ -518,9 +505,12 @@ Returns:
      "completed_at": "", "cancellable": true}
   ],
   "is_paused": false,
-  "is_busy": true
+  "is_busy": true,
+  "arm_holder": "order queue"
 }
 ```
+
+`arm_holder` names what currently holds the arm — `order queue`, `keepalive purge`, `reset_world`, `execute_action open_door` and so on — and is empty when the arm is free. A command refused because the arm is busy names the holder in its error too.
 
 `count` is how many drinks still have to be made — the backlog plus the one on the arm. Orders that have finished stay in the list with `completed_at` set for ~15s so a UI can render a "Ready!" card without diffing polls, but they don't count toward the depth. `cancellable` says whether `cancel_order` would accept this order.
 
@@ -534,7 +524,7 @@ The **recorded fridge-door angle is cleared too**, so the rebuilt world has a sh
 
 The pause is only released if there is one — `proceed` on a running queue rebuilds the world and reports `resumed: false`. Releasing the pause *is* clearing the queue's paused flag, done by `proceed` itself: any cancel pauses the queue, including one that interrupts an `execute_action` or a keepalive purge with no order in flight, and such a pause has no order-queue goroutine waiting to hear about it. Two `proceed`s racing therefore resume once, and the second reports `resumed: false`. `proceed` refuses outright while a sequence is still running (including one that is unwinding from a cancel): the frame system cannot be swapped under a goroutine that is planning with it.
 
-Because the rebuild forgets the modeled contents of the gripper without opening the gripper, `proceed` is the wrong command when the jaws really are holding something — a portafilter or cup a manually-stepped `execute_action` picked up. Use `cancel` then `rewind`, which physically lets go and homes the arm, and only then `proceed`. A `proceed` that forgets a held item logs a warning saying so.
+Because the rebuild forgets the modeled contents of the gripper without opening the gripper, `proceed` is the wrong command when the jaws really are holding something — a portafilter or cup a manually-stepped `execute_action` picked up. Take it out by hand first, and only then `proceed`. A `proceed` that forgets a held item logs a warning saying so.
 
 ```json
 {"proceed": true}
@@ -576,20 +566,6 @@ In normal operation this fires automatically: when a `fulfillment: "delivery"` o
 
 The command takes no options — the window is a rolling 24 hours ending now, and timestamps render in the host's timezone. Returns `{"sent": true, "orders": N}`.
 
-**`send_weekly_chores`** - Post this week's chore assignments to Slack. Normally fired every Monday by viam-server's job manager (see "Weekly chore wheel in Slack" below). Requires `chore_wheel` and `slack_notifier_name`.
-
-```
-{"send_weekly_chores": true}
-```
-
-Pass an object with a date to read the wheel for a different week — how you preview next Monday, or check what last Monday should have said — without waiting for it:
-
-```
-{"send_weekly_chores": {"date": "2026-10-05"}}
-```
-
-Returns `{"sent": true, "week": N, "<chore>": "<person>", ...}`.
-
 **`reset_world`** - Recover the service to a clean idle state from anywhere. In order: cancels any running sequence (waiting for it to actually stop), clears the queue (pending + recently completed), rebuilds the cached frame system from the framesystem service (discarding mid-cycle mutations like a portafilter frame reparented to world by `lock_portafilter`), forgets that the fridge door is standing open, and releases the queue pause left by a cancel or a fault. Safe to call from any state — each step is skipped when not applicable. The queue clear and rebuild run holding the arm, so if another sequence (a manual action, a keep-alive purge) claims it first, `reset_world` fails without changing anything past the cancel — send it again. Does not move the arm — if you want to re-home, run `execute_action` afterward.
 
 > ⚠️ `reset_world` asserts that the physical world matches the configured frame system. Like `proceed`, it clears the recorded fridge-door angle, so **shut the door by hand before running it** — otherwise the model believes the panel is closed while it stands open, and the next plan will route the arm straight through it.
@@ -628,19 +604,19 @@ Returns `{"status": "complete", "action": "open_door"}`.
 
 ### Iced latte: the milk step
 
-An `iced_latte` is an `iced_coffee` with one extra stretch spliced into the serving step. Everything up to and including "place the empty espresso cup in the serving area" is identical; then, with the gripper free and the iced glass still standing in the staging area:
+An `iced_latte` is an `iced_coffee` with one extra stretch spliced into the serving step. Everything up to and including staging the iced glass is identical; then, before the espresso is fetched, with the gripper free and the iced glass standing in the staging area:
 
 1. **Open the fridge** — the `open_door` sweep, so the modeled panel tracks the real one and every plan that follows routes around it.
 2. **Fetch the bottle** — the same vision pickup cups and glasses use, against `milk_vision_service_name` and the vantages on `milk_observe_pose_switcher_name`. Detections are seated on the shelf beneath them (resting-surface seating), ranked closest-first, and grabbed via `milk_approach_relative_pose` / `milk_grab_relative_pose`. **The world centroid it was grasped at is recorded.** If no bottle is seen — or none can be reached — the arm asks the customer to put the milk back on its shelf (or nudge it) and retries, exactly like a missing cup.
-3. **Pour** — carry the bottle to `milk_pour_approach` and tilt to `milk_pour` as a fixed-point pivot, the same pour the espresso gets. The dwell at the tilted pose (`milk_pour_sec`) is the milk dose; the staged glass stays a hard obstacle throughout.
+3. **Pour** — carry the bottle to `milk_pour_approach` and tilt to `milk_pour` as a pivot (lifting the bottle as it tips if `milk_pour_relative_pose` sits higher than the approach), the same pour the espresso gets. The dwell at the tilted pose (`milk_pour_sec`) is the milk dose; the staged glass stays a hard obstacle throughout.
 4. **Put the bottle back** — not at an authored pose, but at the centroid step 2 recorded, with the same two offsets composed onto it. Where the milk stands in the fridge changes every time somebody puts it away, so the return is the grasp replayed rather than a spot to calibrate.
 5. **Shut the fridge** — the `close_door` sweep.
 
-Then the sequence rejoins the iced flow: re-grab the staged glass and place it in the serving area. As with iced coffee, two serving slots are consumed per order (the empty espresso cup, then the latte).
+Then the sequence rejoins the iced flow: grab the espresso cup from under the machine, pour it over the ice and milk, place the empty cup in the serving area, then re-grab the glass and place it beside it. As with iced coffee, two serving slots are consumed per order (the empty espresso cup, then the latte).
 
 The door is opened once and closed once, so the fridge stands open for the pour — a few seconds of open door in exchange for halving the door sweeps, which are the slowest and most failure-prone part of the trip.
 
-**When a milk step fails.** The arm does not try to shut the door itself: it may still be holding the bottle, and a sweep needs the gripper for the handle. So the door is left where it stands, the model keeps recording that angle, and the error says so. Take the bottle out of the gripper if it is holding one and `rewind` to recover the arm — `rewind` rebuilds the frame system with the door still held open, which is correct, because it has not been shut. Then shut the door by hand and send `proceed`, which is what declares it shut again.
+**When a milk step fails.** The arm does not try to shut the door itself: it may still be holding the bottle, and a sweep needs the gripper for the handle. So the door is left where it stands, the model keeps recording that angle, and the error says so. Take the bottle out of the gripper if it is holding one and put the rest of the machine back to its starting state by hand. Then shut the door and send `proceed`, which is what declares it shut again.
 
 **`action`** - Control the gripper. Supported values: `"open_gripper"`, `"close_gripper"`.
 
@@ -648,7 +624,7 @@ The door is opened once and closed once, so the fridge stands open for the pour 
 {"action": "open_gripper"}
 ```
 
-Returns `{"status": "opened"}` or `{"status": "closed", "grabbed": true}`.
+Returns `{"status": "opened"}` or `{"status": "closed", "grabbed": true}`. Like the other troubleshooting commands, it is refused while another sequence holds the arm.
 
 ### Keeping the machine at brew temperature
 
@@ -727,60 +703,6 @@ One consequence worth knowing: a job that fails is only a log line plus an entry
 
 **Prerequisite:** the query authenticates from the `VIAM_API_KEY` / `VIAM_API_KEY_ID` environment variables, which viam-server only injects into modules when the machine config carries an api-key auth handler. Without one, the digest fails at call time with an auth error while everything else about the service keeps working.
 
-### Weekly chore wheel in Slack
-
-[#weekly-chore-wheel-in-slack](#weekly-chore-wheel-in-slack)
-
-The machine has upkeep that isn't the arm's job — the ice maker, the table, the claws — and `send_weekly_chores` posts who has which of it this week. It is the paper chore wheel: names on an inner disc, chores on an outer ring, turned one notch every Monday.
-
-```
-"chore_wheel": {
-  "people": ["Vijay", "Nicolas P", "Julie", "Daniel", "Cheuk", "Ale"],
-  "chores": [
-    "Cleaning the ice maker",
-    "Cleaning the table",
-    "Tightening the claws",
-    "Cleaning the cleaner brushes",
-    "Cleaning the milk bottle"
-  ]
-}
-```
-
-The message reads:
-
-```
-🎡 Chore wheel — week of Sep 21
-
-• Cleaning the ice maker — Nicolas P
-• Cleaning the table — Julie
-• Tightening the claws — Daniel
-• Cleaning the cleaner brushes — Cheuk
-• Cleaning the milk bottle — Ale
-• free week — Vijay
-```
-
-**Any number of chores works.** Fewer chores than people leaves free weeks — six people and five chores means one person is off each week. More chores than people sends the wheel round again, so some people draw two that week. Either way every chore is assigned every week.
-
-**The rotation is a function of the calendar, not of state.** Person *i* draws slot `(i − week) mod n` and every *n*-th slot after it, where the slots are the chores padded with free weeks to a whole number of turns, and `week` counts Mondays since a fixed epoch. So over one cycle — one week per person — everyone does every chore exactly once and takes the same number of free weeks, and there is nothing to persist: a module restart, a redeploy, or running the command twice in one morning all read the same wheel. The cost is that the order is predictable to anyone who works it out; the benefit is that nobody can draw the ice maker three weeks running.
-
-**The roster order is the wheel.** `people` is the order around the disc and the order in the message. Reordering it, or inserting someone in the middle, reshuffles who has what this week — append new people at the end. Removing someone shortens the cycle and likewise reshuffles.
-
-**Scheduling lives in the machine config**, exactly as for the daily digest:
-
-```
-"jobs": [
-  {
-    "name": "weekly-chore-wheel",
-    "schedule": "CRON_TZ=America/New_York 0 9 * * 1",
-    "resource": "coffee",
-    "method": "DoCommand",
-    "command": { "send_weekly_chores": true }
-  }
-]
-```
-
-The `CRON_TZ=` caveat from the digest applies here too, with one wrinkle of its own: the week number comes from the calendar *date* in the timezone the command runs in. A job firing at 9am New York and a hand-run at 9am London on the same Monday agree; a hand-run late Sunday evening in New York is still last week. Fire it on Mondays and none of this matters.
-
 ### Pose reference
 
 Which poses the service can reach, and which frame each moves. The frame is the switch's `component_name`; the table records what those switches are expected to carry.
@@ -794,7 +716,7 @@ Which poses the service can reach, and which frame each moves. The frame is the 
 | `tamper_approach`, `tamper_activate` | tamp | always |
 | `coffee_approach`, `coffee_in`, `coffee_locked_final` | lock the portafilter | always |
 | `coffee_shake`, `coffee_shake_left` | dislodge a stuck puck while unlocking (the two lean opposite ways) | `portafilter_shake_sec > 0` |
-| `close_to_cleaning`, `approach_to_cleaning_scrapper`, `cleaning_scrapper_active`, `approach_to_cleaning_brush`, `cleaning_brush_active` | clean | always — `rewind` recovery cleans too |
+| `close_to_cleaning`, `approach_to_cleaning_scrapper`, `cleaning_scrapper_active`, `approach_to_cleaning_brush`, `cleaning_brush_active` | clean | always |
 | `purge_approach`, `purge_press` | hold the 1 CUP button to keep the machine at brew temperature | `keepalive` is configured |
 | `home` | end of cycle | always |
 
@@ -807,6 +729,7 @@ Which poses the service can reach, and which frame each moves. The frame is the 
 | `espresso_button_approach`/`_press`, `lungo_button_approach`/`_press` | poke the per-shot buttons | `has_separate_brew_buttons: true` |
 | `cup_under_machine_approach`, `cup_ready_for_coffee` | place and retrieve the cup | always |
 | `ice_machine_approach`, `ice_machine_dispense`, `staging_approach`, `staging` | iced coffee | `can_serve_iced` |
+| `milk_<spot>_approach`, `milk_<spot>_grab` (one pair per `spot` in `milk_options`) | checked at startup; not moved to yet | `can_serve_iced_latte` with `milk_options` set |
 
 The milk bottle needs no authored pickup or return poses: it is vision-detected
 inside the fridge and set back down at the centroid it was grasped at. Neither pour
@@ -1313,6 +1236,103 @@ A single credit returns `{"credited": true, "account": {...}}`; a list returns `
 `Status()` returns `{"rewards": [...]}` in the same shape as `get_rewards`.
 
 > **Trust:** the CRM believes the email it is sent. viam-server verifies each caller but doesn't tell modules who the caller is, so the rewards page reads the viewer's email from their own Viam access token and sends that. Anyone who can issue DoCommands on the machine can credit or spend any email's points.
+
+---
+
+## Model: `viam:beanjamin:chore-wheel`
+
+**API:** `rdk:service:generic`
+
+The machine has upkeep that isn't the arm's job — the ice maker, the table, the claws — and this service posts to Slack who has which of it this week. It is the paper chore wheel: names on an inner disc, chores on an outer ring, turned one notch every Monday.
+
+### Configuration
+
+```json
+{
+  "slack_notifier_name": "<string>",
+  "people": ["<string>"],
+  "chores": ["<string>"]
+}
+```
+
+| Name                  | Type   | Required | Description |
+| --------------------- | ------ | -------- | ----------- |
+| `slack_notifier_name` | string | Yes      | A [`viam:notifications:slack`](https://github.com/viam-modules/notifications) generic service the wheel is posted through. |
+| `people`              | list   | Yes      | The roster, in wheel order — at least 2 distinct names. Append newcomers at the end (see "The roster order is the wheel" below). |
+| `chores`              | list   | Yes      | The chores to hand out each week — at least 1, no duplicates. Any count works. |
+
+### Example Configuration
+
+```json
+{
+  "slack_notifier_name": "slack",
+  "people": ["Vijay", "Nicolas P", "Julie", "Daniel", "Cheuk", "Ale"],
+  "chores": [
+    "Cleaning the ice maker",
+    "Cleaning the table",
+    "Tightening the claws",
+    "Cleaning the cleaner brushes",
+    "Cleaning the milk bottle"
+  ]
+}
+```
+
+The message reads:
+
+```
+🎡 Chore wheel — week of Sep 21
+
+• Cleaning the ice maker — Nicolas P
+• Cleaning the table — Julie
+• Tightening the claws — Daniel
+• Cleaning the cleaner brushes — Cheuk
+• Cleaning the milk bottle — Ale
+• free week — Vijay
+```
+
+### DoCommand
+
+**`send_weekly_chores`** - Post this week's chore assignments to Slack. Normally fired every Monday by viam-server's job manager (see "Scheduling" below).
+
+```json
+{"send_weekly_chores": true}
+```
+
+Pass an object with a date to read the wheel for a different week — how you preview next Monday, or check what last Monday should have said — without waiting for it:
+
+```json
+{"send_weekly_chores": {"date": "2026-10-05"}}
+```
+
+Returns `{"sent": true, "week": N, "<chore>": "<person>", ...}`.
+
+`Status()` returns this week's assignment, `{"week": N, "<chore>": "<person>", ...}`, without posting it.
+
+### How the wheel turns
+
+**Any number of chores works.** Fewer chores than people leaves free weeks — six people and five chores means one person is off each week. More chores than people sends the wheel round again, so some people draw two that week. Either way every chore is assigned every week.
+
+**The rotation is a function of the calendar, not of state.** Person *i* draws slot `(i − week) mod n` and every *n*-th slot after it, where the slots are the chores padded with free weeks to a whole number of turns, and `week` counts Mondays since a fixed epoch. So over one cycle — one week per person — everyone does every chore exactly once and takes the same number of free weeks, and there is nothing to persist: a module restart, a redeploy, or running the command twice in one morning all read the same wheel. The cost is that the order is predictable to anyone who works it out; the benefit is that nobody can draw the ice maker three weeks running.
+
+**The roster order is the wheel.** `people` is the order around the disc and the order in the message. Reordering it, or inserting someone in the middle, reshuffles who has what this week — append new people at the end. Removing someone shortens the cycle and likewise reshuffles.
+
+### Scheduling
+
+Scheduling lives in the machine config, exactly as for the coffee service's [daily digest](#daily-order-summary-in-slack):
+
+```
+"jobs": [
+  {
+    "name": "weekly-chore-wheel",
+    "schedule": "CRON_TZ=America/New_York 0 9 * * 1",
+    "resource": "chore-wheel",
+    "method": "DoCommand",
+    "command": { "send_weekly_chores": true }
+  }
+]
+```
+
+The digest's `CRON_TZ=` caveat applies here too, with one wrinkle of its own: the week number comes from the calendar *date* in the timezone the command runs in. A job firing at 9am New York and a hand-run at 9am London on the same Monday agree; a hand-run late Sunday evening in New York is still last week. Fire it on Mondays and none of this matters.
 
 ---
 

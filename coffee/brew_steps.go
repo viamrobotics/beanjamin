@@ -13,38 +13,47 @@ import (
 )
 
 func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
-	return s.grind(ctx, cancelCtx, filterPoseGrinderApproach, filterPoseGrinderActivate, "grind_coffee")
+	return s.grind(ctx, cancelCtx, filterPoseGrinderApproach, filterPoseGrinderActivate, grinderButtonCollisions, "grind_coffee")
 }
 
 func (s *beanjaminCoffee) grindDecaf(ctx, cancelCtx context.Context) error {
-	return s.grind(ctx, cancelCtx, filterPoseDecafGrinderApproach, filterPoseDecafGrinderActivate, "grind_decaf")
+	return s.grind(ctx, cancelCtx, filterPoseDecafGrinderApproach, filterPoseDecafGrinderActivate, decafGrinderButtonCollisions, "grind_decaf")
 }
 
 // grind approaches a grinder chute, circles under it to distribute grounds
 // evenly while the grinder dispenses, then returns to the approach pose. The
 // approach and activate poses select which grinder (regular vs decaf); label
 // identifies the phase in wrapped errors.
-func (s *beanjaminCoffee) grind(ctx, cancelCtx context.Context, approachPose, activatePose, label string) error {
-	steps := []Step{
-		{PoseName: approachPose, PoseSwitch: s.filterSw, Pause: shortPause},
-		{PoseName: activatePose, PoseSwitch: s.filterSw, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
-		{PoseName: approachPose, PoseSwitch: s.filterSw, Pause: shortPause, LinearConstraint: defaultApproachConstraint},
-		{PoseName: approachPose, PoseSwitch: s.filterSw,
-			CircularRadiusMm: 8, CircularDurationSec: s.grindDurationSec(), CircularPointsPerRev: 8,
-			LinearConstraint: defaultApproachConstraint},
-	}
-	for _, step := range steps {
+func (s *beanjaminCoffee) grind(ctx, cancelCtx context.Context, approachPose, activatePose string, buttonCollisions []AllowedCollision, label string) error {
+	for _, step := range s.grindSteps(approachPose, activatePose, buttonCollisions) {
 		// Mark grounds only as we reach the activate pose: the approach move
 		// keeps the filter clean, and the grinder dispenses once it's under the
-		// chute. From here onward a rewind must clean the filter before home.
+		// chute. From here onward the filter needs cleaning before it goes home.
 		if step.PoseName == activatePose {
-			s.portafilterHasGrounds.Store(true)
+			s.handOffEffect(func() { s.portafilterHasGrounds.Store(true) })
 		}
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 			return fmt.Errorf("%s: %w", label, err)
 		}
 	}
 	return nil
+}
+
+// grindSteps builds the grind sequence. buttonCollisions covers only the linear
+// moves that press the grinder button and rotate the filter under the chute:
+// an allowance applies to the whole plan, so granting it on the free-planned
+// approach would let the planner route the traverse through the button shield.
+func (s *beanjaminCoffee) grindSteps(approachPose, activatePose string, buttonCollisions []AllowedCollision) []Step {
+	return []Step{
+		{PoseName: approachPose, PoseSwitch: s.filterSw, Pause: shortPause},
+		{PoseName: activatePose, PoseSwitch: s.filterSw, Pause: shortPause, LinearConstraint: defaultApproachConstraint,
+			AllowedCollisions: buttonCollisions},
+		{PoseName: approachPose, PoseSwitch: s.filterSw, Pause: shortPause, LinearConstraint: defaultApproachConstraint,
+			AllowedCollisions: buttonCollisions},
+		{PoseName: approachPose, PoseSwitch: s.filterSw,
+			CircularRadiusMm: 8, CircularDurationSec: s.grindDurationSec(), CircularPointsPerRev: 8,
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: buttonCollisions},
+	}
 }
 
 func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
@@ -129,10 +138,9 @@ func (s *beanjaminCoffee) moveGripperToPoseWithVerify(ctx, cancelCtx context.Con
 	if err := s.executeStep(ctx, cancelCtx, step); err != nil {
 		return err
 	}
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		return fmt.Errorf("grab gripper: %w", err)
+	if err := s.closeGripper(ctx); err != nil {
+		return err
 	}
-	time.Sleep(gripperPause)
 	return nil
 }
 
@@ -141,8 +149,8 @@ func (s *beanjaminCoffee) releaseFilter(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("release_filter: no gripper configured")
 	}
 	// Bayonet now holds the filter; arm is committed to leaving it behind.
-	// Set the flag before motion so a rewind after a mid-move cancel recovers.
-	s.portafilterInMachine.Store(true)
+	// Set the flag before motion so a mid-move cancel still reports it.
+	s.handOffEffect(func() { s.portafilterInMachine.Store(true) })
 	if err := s.moveGripperToPoseWithVerify(ctx, cancelCtx, clawPoseFilterReleased); err != nil {
 		return fmt.Errorf("release_filter: %w", err)
 	}
@@ -162,8 +170,8 @@ func (s *beanjaminCoffee) grabFilter(ctx, cancelCtx context.Context) error {
 	if err := s.moveGripperToPoseWithVerify(ctx, cancelCtx, clawPoseCoffeeLockedFinal); err != nil {
 		return fmt.Errorf("grab_filter: %w", err)
 	}
-	// Filter is firmly back in the claws; rewind no longer needs to recover.
-	s.portafilterInMachine.Store(false)
+	// Filter is firmly back in the claws, out of the machine.
+	s.handOffEffect(func() { s.portafilterInMachine.Store(false) })
 	return nil
 }
 
@@ -261,8 +269,10 @@ func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, drink string) err
 	}
 
 	brewTime := s.drinkBrewTime(drink)
-	logger.Infof("waiting %s for the %s pour to finish", brewTime, drink)
-	if err := waitOutPour(ctx, cancelCtx, brewTime); err != nil {
+	logger.Infof("waiting %s for the %s brew to finish", brewTime, drink)
+	brewCtx, done := mergedCancelContext(ctx, cancelCtx) // cancel stops the wait
+	defer done()
+	if err := s.handOff(brewCtx, move{name: "brew", sleep: brewTime}); err != nil {
 		return fmt.Errorf("brew_coffee: %w", err)
 	}
 
@@ -280,10 +290,10 @@ func (s *beanjaminCoffee) brew(ctx, cancelCtx context.Context, drink string) err
 	return nil
 }
 
-// waitOutPour blocks until d elapses or either context is cancelled.
+// waitOutBrew blocks until d elapses or either context is cancelled.
 // Non-positive durations return immediately, so overlapped callers can pass
 // brewTime - elapsed unclamped.
-func waitOutPour(ctx, cancelCtx context.Context, d time.Duration) error {
+func waitOutBrew(ctx, cancelCtx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return nil
 	}
@@ -334,7 +344,7 @@ func (s *beanjaminCoffee) cleanPortafilter(ctx, cancelCtx context.Context) error
 	); err != nil {
 		return err
 	}
-	s.portafilterHasGrounds.Store(false)
+	s.handOffEffect(func() { s.portafilterHasGrounds.Store(false) })
 	return nil
 }
 

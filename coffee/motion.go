@@ -35,6 +35,19 @@ var defaultApproachConstraint = &StepLinearConstraint{
 	OrientationToleranceDegs: 2,
 }
 
+// pourConstraint keeps a pour pivot's held container within 5mm of the
+// straight line between consecutive waypoints. Beyond bounding the drift, any linear constraint whose tighter
+// tolerance is under 10 (mm or degrees) stops armplanning from falling back to
+// cBiRTT between waypoints, and cBiRTT's free-form detours are what swing a
+// full cup off the glass. A waypoint the planner cannot reach directly then
+// fails instead, which the pour tilt turns into a partial plan
+// (Step.AcceptPartialPlan). The 5° orientation bound is twice the deviation the
+// 5°-per-waypoint slerp ever needs.
+var pourConstraint = &StepLinearConstraint{
+	LineToleranceMm:          5,
+	OrientationToleranceDegs: 5,
+}
+
 // mergedCancelContext derives a context cancelled by either ctx or the shared
 // cancelCtx, so an operator cancel interrupts planning and execution alike. The
 // returned func must be deferred.
@@ -78,9 +91,16 @@ func withPlanTimeout(opts *armplanning.PlannerOptions) *armplanning.PlannerOptio
 // armplanning returns one of those with a *nil* error when its deadline expires
 // between goals, so without this check a timed-out multi-waypoint plan (pivot,
 // circular) would execute as though complete and stop the arm short of the pose
-// the next step assumes it reached.
+// the next step assumes it reached. It also returns one, flagged Partial, when
+// ReturnPartialPlan is set and a goal fails to plan.
 func incompletePlanErr(meta *armplanning.PlanMeta, goals int) error {
-	if meta == nil || meta.GoalsProcessed >= goals {
+	if meta == nil {
+		return nil
+	}
+	if meta.Partial {
+		return fmt.Errorf("planner solved %d of %d goals: %w", meta.GoalsProcessed, goals, meta.PartialError)
+	}
+	if meta.GoalsProcessed >= goals {
 		return nil
 	}
 	return fmt.Errorf("planner solved %d of %d goals before the %s timeout",
@@ -103,13 +123,22 @@ func planDuration(meta *armplanning.PlanMeta) time.Duration {
 // leaves the arm where it stood, which is what lets callers with a recovery path
 // (dynamic pickup falling back to another candidate, placeHeldInServingArea
 // trying the next slot) tell them apart from execution errors via errors.Is.
+//
+// A request with PlannerOptions.ReturnPartialPlan set instead gets back the
+// solved prefix of an incomplete plan, logged at warn level.
 func (s *beanjaminCoffee) planMotion(ctx context.Context, req *armplanning.PlanRequest, label string) (motionplan.Plan, error) {
 	logger := s.activeOrderLogger()
 	req.PlannerOptions = withPlanTimeout(req.PlannerOptions)
 
 	plan, meta, err := armplanning.PlanMotion(ctx, logger, req)
 	if err == nil {
-		err = incompletePlanErr(meta, len(req.Goals))
+		if incomplete := incompletePlanErr(meta, len(req.Goals)); incomplete != nil {
+			if req.PlannerOptions.ReturnPartialPlan {
+				logger.Warnf("executing partial %s plan (%s): %v", label, planDuration(meta), incomplete)
+			} else {
+				err = incomplete
+			}
+		}
 	}
 	s.savePlanRequestAndResponse(req, plan, label, err)
 	if err != nil {
@@ -282,6 +311,10 @@ func (s *beanjaminCoffee) fetchPose(ctx context.Context, sw toggleswitch.Switch,
 // which iterates all resources and can fail on modular arms whose kinematics
 // proto round-trip produces KINEMATICS_FILE_FORMAT_UNSPECIFIED.
 func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.FrameSystem, referenceframe.FrameSystemInputs, error) {
+	// Reading the arm is a stopping point.
+	if err := s.settle(); err != nil {
+		return nil, nil, err
+	}
 	logger := s.activeOrderLogger()
 	fsInputs := referenceframe.NewZeroInputs(s.cachedFS)
 
@@ -403,7 +436,7 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 // resetFrameSystem rebuilds the cached frame system from the service, discarding
 // any in-flight mutations (e.g. a filter frame that was reparented to world by
 // lockFilterFrame). Shared by unlockFilterFrame during the normal brew cycle and
-// by the reset_world, rewind and proceed operator commands to recover from a
+// by the reset_world and proceed operator commands to recover from a
 // mid-cycle cancel.
 //
 // The fridge door is the exception: a rebuild puts the panel back at its authored
@@ -423,7 +456,7 @@ func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 	s.cachedFS = fs
 	// The rebuilt frame system has no held-item frame, and any cached grasp no
 	// longer corresponds to reality — forget it so a stale geometry can't be
-	// re-attached after a rewind/reset. The rebuilt frame system also restores the
+	// re-attached after a reset. The rebuilt frame system also restores the
 	// filter frame to the arm subtree (undoing any lockFilterFrame mutation) and
 	// drops the staged-glass obstacle (undoing any stageGlassAsObstacle mutation).
 	s.clearHeldGeometry()
@@ -544,6 +577,9 @@ func (s *beanjaminCoffee) reattachFilterFrame(removed []descendantEntry) error {
 // unlockFilterFrame rebuilds the cached frame system from the service,
 // restoring the filter frame to its original position in the arm subtree.
 func (s *beanjaminCoffee) unlockFilterFrame(ctx context.Context) error {
+	if err := s.settle(); err != nil {
+		return err
+	}
 	logger := s.activeOrderLogger()
 	if err := s.resetFrameSystem(ctx); err != nil {
 		return err
@@ -794,13 +830,17 @@ func (s *beanjaminCoffee) executePlan(ctx context.Context, plan motionplan.Plan,
 	if err != nil {
 		return err
 	}
-	// A constrained move with no explicit speed defaults to the slow tier; a free
-	// traverse keeps the arm's own default speed (nil).
+	return s.arm.MoveThroughJointPositions(ctx, positions, s.moveOptionsFor(lc, moveOpts), nil)
+}
+
+// moveOptionsFor is the speed for a move: a constrained move with no explicit
+// speed defaults to the slow tier; a free traverse keeps the arm's default (nil).
+func (s *beanjaminCoffee) moveOptionsFor(lc *StepLinearConstraint, moveOpts *StepMoveOptions) *arm.MoveOptions {
 	opts := buildMoveOptions(moveOpts)
 	if opts == nil && lc != nil {
 		opts = buildMoveOptions(s.slowMoveOptions())
 	}
-	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
+	return opts
 }
 
 // planEndArmInputs returns the arm's joint configuration at the end of a plan's
@@ -827,13 +867,32 @@ func (s *beanjaminCoffee) withArmInputs(base referenceframe.FrameSystemInputs, a
 	return out
 }
 
-// pivotPositionToleranceMm is how far apart a pivot's start and end poses may
-// be: a pivot is a pure rotation about one fixed point.
-const pivotPositionToleranceMm = 0.5
+// pivotMmPerStep caps how far a translating pivot's position advances between
+// waypoints, so a long shift paired with a small tilt is still sampled finely
+// enough that the planner cannot wander off the straight line between them.
+const pivotMmPerStep = 5.0
+
+// pivotSeedPoint returns the point on the segment from start to end closest to
+// actual, and actual's distance from it. A pivot may begin anywhere along that
+// segment rather than only at start: a pour tilt that ran as a partial plan
+// (Step.AcceptPartialPlan) leaves the container partway along its lift, and the
+// return upright must still start from there.
+func pivotSeedPoint(start, end, actual r3.Vector) (r3.Vector, float64) {
+	seg := end.Sub(start)
+	seed := start
+	if lenSq := seg.Norm2(); lenSq > 0 {
+		t := min(max(actual.Sub(start).Dot(seg)/lenSq, 0), 1)
+		seed = start.Add(seg.Mul(t))
+	}
+	return seed, actual.Sub(seed).Norm()
+}
 
 // executePivot fetches start and end poses, computes interpolated waypoints,
 // plans a single multi-goal trajectory through all of them, and executes it
-// in one MoveThroughJointPositions call.
+// in one MoveThroughJointPositions call. The two poses may sit at different
+// points: the position then moves in a straight line while the orientation
+// rotates, in lockstep (e.g. raising a bottle as it tilts to pour); identical
+// points give a pure rotation in place.
 func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step) error {
 	logger := s.activeOrderLogger()
 	ctx, done := mergedCancelContext(ctx, cancelCtx)
@@ -852,13 +911,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 		return fmt.Errorf("pivot %q → %q: component mismatch (%q vs %q)",
 			step.PivotFromPose, step.PoseName, startPD.componentName, endPD.componentName)
 	}
-	// The authored poses must describe the same point (a pivot is a pure
-	// rotation), and the arm must already be standing on it.
 	const pivotStartToleranceMm = 2.0
-	if dist := startPD.pose.Point().Sub(endPD.pose.Point()).Norm(); dist > pivotPositionToleranceMm {
-		return fmt.Errorf("pivot %q → %q: positions differ by %.2f mm (max %.1f mm) — pivot assumes a fixed point",
-			step.PivotFromPose, step.PoseName, dist, pivotPositionToleranceMm)
-	}
 
 	fs, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
@@ -872,8 +925,8 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	// the authored pose would get one coarse planner segment to climb back onto
 	// the arc — precisely the free-form rotation the fine waypoints exist to
 	// prevent, and with a portafilter engaged in the bayonet while it happens.
-	// The authored *position* is kept so the pivot stays a rotation about the
-	// intended fixed point even if the arm has drifted a fraction of a mm.
+	// The position is snapped onto the authored start→end line so the pivot
+	// stays on it even if the arm has drifted a fraction of a mm.
 	curTF, err := fs.Transform(linearInputs,
 		referenceframe.NewPoseInFrame(startPD.componentName, spatialmath.NewZeroPose()),
 		startPD.refFrame)
@@ -881,11 +934,12 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 		return fmt.Errorf("pivot %q: current pose of %q: %w", step.PivotFromPose, startPD.componentName, err)
 	}
 	actual := curTF.(*referenceframe.PoseInFrame).Pose()
-	if dist := actual.Point().Sub(startPD.pose.Point()).Norm(); dist > pivotStartToleranceMm {
-		return fmt.Errorf("pivot %q → %q: arm is %.2f mm off the pivot start (max %.1f mm) — refusing to pivot about the wrong point",
+	seed, dist := pivotSeedPoint(startPD.pose.Point(), endPD.pose.Point(), actual.Point())
+	if dist > pivotStartToleranceMm {
+		return fmt.Errorf("pivot %q → %q: arm is %.2f mm off the pivot line (max %.1f mm) — refusing to pivot about the wrong point",
 			step.PivotFromPose, step.PoseName, dist, pivotStartToleranceMm)
 	}
-	fromPose := spatialmath.NewPose(startPD.pose.Point(), actual.Orientation())
+	fromPose := spatialmath.NewPose(seed, actual.Orientation())
 
 	// Rotate straight onto the goal, or past it and back when the step asks for
 	// an overshoot. Both segments are planned together and run as one
@@ -916,13 +970,20 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 		return err
 	}
 
+	var plannerOpts *armplanning.PlannerOptions
+	if step.AcceptPartialPlan {
+		plannerOpts = armplanning.NewBasicPlannerOptions()
+		plannerOpts.ReturnPartialPlan = true
+	}
+
 	// Every waypoint is planned in a single call and run as one trajectory, so
 	// the arm never stops partway through the arc.
 	positions, err := s.planTrajectory(ctx, &armplanning.PlanRequest{
-		FrameSystem: fs,
-		Goals:       goals,
-		StartState:  armplanning.NewPlanState(nil, fsInputs),
-		Constraints: buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.appendHeldItemCollisions(step.AllowedCollisions))),
+		FrameSystem:    fs,
+		Goals:          goals,
+		StartState:     armplanning.NewPlanState(nil, fsInputs),
+		Constraints:    buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.appendHeldItemCollisions(step.AllowedCollisions))),
+		PlannerOptions: plannerOpts,
 	}, "pivot")
 	if err != nil {
 		return err
@@ -1176,8 +1237,10 @@ func pivotOvershootPose(startPose, endPose spatialmath.Pose, degrees float64) (s
 	return spatialmath.NewPose(endPose.Point(), rotated.Orientation()), nil
 }
 
-// computePivotPoses returns interpolated poses between startPose and endPose.
-// The step count is derived from the total rotation angle divided by degreesPerStep.
+// computePivotPoses returns interpolated poses between startPose and endPose:
+// the position moves along the straight line between them while the
+// orientation slerps, in lockstep. The step count is the larger of the
+// rotation over degreesPerStep and the translation over pivotMmPerStep.
 func computePivotPoses(logger logging.Logger, startPose, endPose spatialmath.Pose, degreesPerStep float64) []spatialmath.Pose {
 	diff := spatialmath.OrientationBetween(startPose.Orientation(), endPose.Orientation())
 	// AxisAngles().Theta is signed: the axis/angle pair can come back as
@@ -1187,9 +1250,12 @@ func computePivotPoses(logger logging.Logger, startPose, endPose spatialmath.Pos
 	totalRadians := math.Abs(diff.AxisAngles().Theta)
 	totalDegrees := totalRadians * 180.0 / math.Pi
 
-	numSteps := max(1, int(math.Round(totalDegrees/degreesPerStep)))
+	totalMm := endPose.Point().Sub(startPose.Point()).Norm()
 
-	logger.Infof("pivot rotation: %.1f° total (%d steps at %.1f°/step)", totalDegrees, numSteps, degreesPerStep)
+	numSteps := max(1, int(math.Round(totalDegrees/degreesPerStep)), int(math.Round(totalMm/pivotMmPerStep)))
+
+	logger.Infof("pivot: %.1f° rotation, %.1f mm translation (%d steps, max %.1f°/step, %.1f mm/step)",
+		totalDegrees, totalMm, numSteps, degreesPerStep, pivotMmPerStep)
 
 	poses := make([]spatialmath.Pose, numSteps+1)
 	for i := 0; i <= numSteps; i++ {

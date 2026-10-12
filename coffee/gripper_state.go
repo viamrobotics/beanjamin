@@ -99,6 +99,9 @@ func (s *beanjaminCoffee) gripperPos(ctx context.Context) (float64, error) {
 // so callers never treat an unreadable gripper as a missed grab. Absorbs the
 // post-grab settle pause so the read happens at rest.
 func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context) error {
+	if err := s.settle(); err != nil {
+		return err
+	}
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("grab: %w", err)
 	}
@@ -126,6 +129,9 @@ func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context) error {
 // rather than releasing it. Polling costs nothing when the jaws are quick and
 // fails loudly instead of silently when they are not.
 func (s *beanjaminCoffee) openAndVerifyOpen(ctx context.Context) error {
+	if err := s.settle(); err != nil {
+		return err
+	}
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		return fmt.Errorf("open: %w", err)
 	}
@@ -148,45 +154,6 @@ func (s *beanjaminCoffee) openAndVerifyOpen(ctx context.Context) error {
 				errGripperNotOpen, s.gripperOpenTimeout(), pos, s.classifyGripper(pos))
 		}
 	}
-}
-
-// dropHeldContainer releases a cup or glass the gripper is holding so rewind
-// recovery starts from an empty gripper and the cached frame system stops
-// tracking a container that has been let go. It opens the jaws to drop whatever
-// is held, detaches the held-item geometry, then closes the jaws again —
-// mirroring the open→close handoff the brew cycle uses at every place/release.
-//
-// It acts only when the jaws are in the holding band (a cup or glass); a gripper
-// closed on the thin filter handle reads as gripperClosed, so the portafilter is
-// never dropped. A failed position read is logged and skipped rather than
-// aborting the rewind: without a confirmed read we must not blindly open and
-// risk dropping the filter. No-op when no gripper is configured.
-func (s *beanjaminCoffee) dropHeldContainer(ctx context.Context) error {
-	if s.gripper == nil {
-		return nil
-	}
-	logger := s.activeOrderLogger()
-	pos, err := s.gripperPos(ctx)
-	if err != nil {
-		logger.Warnf("rewind: skipping held-container drop, gripper position unreadable: %v", err)
-		return nil
-	}
-	if s.classifyGripper(pos) != gripperHolding {
-		return nil
-	}
-	logger.Infof("rewind: gripper holding a container (pos=%.0f); opening to drop it", pos)
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("drop held container: open: %w", err)
-	}
-	// Detach the geometry the moment the jaws release so any recovery motion
-	// that follows isn't planned around a container that's no longer there.
-	s.detachHeldGeometry()
-	// Let the jaws fully open so the container clears before re-closing.
-	time.Sleep(gripperPause)
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		return fmt.Errorf("drop held container: close: %w", err)
-	}
-	return nil
 }
 
 // normalizeGripperAtStart ensures the gripper is closed before a brew cycle
@@ -218,4 +185,14 @@ func (s *beanjaminCoffee) normalizeGripperAtStart(ctx context.Context) error {
 		return fmt.Errorf("gripper won't close at cycle start (pos=%.0f); item jammed between claws?", pos)
 	}
 	return nil
+}
+
+// openGripper opens the jaws and waits gripperPause.
+func (s *beanjaminCoffee) openGripper(ctx context.Context) error {
+	return s.handOff(ctx, move{name: "open gripper", gripper: openGripperAction, sleep: gripperPause})
+}
+
+// closeGripper closes the jaws and waits gripperPause.
+func (s *beanjaminCoffee) closeGripper(ctx context.Context) error {
+	return s.handOff(ctx, move{name: "close gripper", gripper: closeGripperAction, sleep: gripperPause})
 }

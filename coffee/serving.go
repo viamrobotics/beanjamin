@@ -57,12 +57,13 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	}
 
 	// Release the cup.
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("set_cup_for_coffee: open gripper: %w", err)
+	if err := s.openGripper(ctx); err != nil {
+		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
-	// Give time for the gripper to open
-	time.Sleep(gripperPause)
 	// Cup is released under the machine; it no longer travels with the gripper.
+	if err := s.settle(); err != nil {
+		return fmt.Errorf("set_cup_for_coffee: %w", err)
+	}
 	s.detachHeldGeometry()
 
 	// Move away from the cup.
@@ -72,10 +73,9 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	}
 
 	// Close the gripper after moving away.
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		return fmt.Errorf("set_cup_for_coffee: close gripper: %w", err)
+	if err := s.closeGripper(ctx); err != nil {
+		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
-	time.Sleep(gripperPause)
 	return nil
 }
 

@@ -1,6 +1,7 @@
 package coffee
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +52,12 @@ func TestIncompletePlanErr(t *testing.T) {
 		{name: "nil meta", meta: nil, goals: 3},
 		{name: "prefix of a multi-goal plan", meta: &armplanning.PlanMeta{GoalsProcessed: 2}, goals: 5, wantErr: true},
 		{name: "nothing solved", meta: &armplanning.PlanMeta{}, goals: 1, wantErr: true},
+		{
+			name:    "partial plan returned on a goal failure",
+			meta:    &armplanning.PlanMeta{Partial: true, PartialError: errors.New("no direct solution"), GoalsProcessed: 4},
+			goals:   9,
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -71,5 +78,17 @@ func TestPlanDuration(t *testing.T) {
 	}
 	if got, want := planDuration(&armplanning.PlanMeta{Duration: 1234567 * time.Nanosecond}), time.Millisecond; got != want {
 		t.Errorf("planDuration = %v, want %v", got, want)
+	}
+}
+
+// TestPourConstraintDisablesCBiRRT pins pourConstraint below the 10mm/10°
+// threshold at which armplanning lets cBiRTT plan between waypoints: its
+// free-form detours are what swing a full cup off the glass mid-pour.
+func TestPourConstraintDisablesCBiRRT(t *testing.T) {
+	if tightest := min(pourConstraint.LineToleranceMm, pourConstraint.OrientationToleranceDegs); tightest >= 10 {
+		t.Errorf("pourConstraint tightest tolerance = %v, want < 10 so cBiRTT stays disabled", tightest)
+	}
+	if pourConstraint.LineToleranceMm != 5 {
+		t.Errorf("pourConstraint.LineToleranceMm = %v, want 5", pourConstraint.LineToleranceMm)
 	}
 }

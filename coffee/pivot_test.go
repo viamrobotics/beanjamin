@@ -27,6 +27,84 @@ func TestComputePivotPoses_StepCount(t *testing.T) {
 	}
 }
 
+func TestComputePivotPoses_TranslationDrivesStepCount(t *testing.T) {
+	// 10° of tilt alone would be 2 steps at 5°/step, but a 60 mm lift at
+	// pivotMmPerStep (5 mm) needs 12, so the translation sets the count.
+	start := spatialmath.NewPose(
+		r3.Vector{X: 100, Y: 200, Z: 300},
+		&spatialmath.OrientationVectorDegrees{OX: 0, OY: 0, OZ: 1, Theta: 0},
+	)
+	end := spatialmath.NewPose(
+		r3.Vector{X: 100, Y: 200, Z: 360},
+		&spatialmath.OrientationVectorDegrees{OX: 0, OY: 0, OZ: 1, Theta: 10},
+	)
+
+	poses := computePivotPoses(logging.NewTestLogger(t), start, end, 5)
+
+	if len(poses) != 13 {
+		t.Errorf("expected 13 poses (12 steps + start), got %d", len(poses))
+	}
+}
+
+func TestComputePivotPoses_TranslatesInLockstepWithRotation(t *testing.T) {
+	// A pour that lifts 40 mm while tilting 90°: every waypoint's rise must
+	// track its share of the tilt, so the container is halfway up when it is
+	// halfway tipped.
+	start := spatialmath.NewPose(
+		r3.Vector{X: 0, Y: 0, Z: 100},
+		&spatialmath.OrientationVectorDegrees{OX: 0, OY: 0, OZ: 1},
+	)
+	end := spatialmath.NewPose(
+		r3.Vector{X: 0, Y: 0, Z: 140},
+		&spatialmath.OrientationVectorDegrees{OX: 1, OY: 0, OZ: 0},
+	)
+
+	poses := computePivotPoses(logging.NewTestLogger(t), start, end, 5)
+
+	totalDeg := math.Abs(spatialmath.OrientationBetween(start.Orientation(), end.Orientation()).AxisAngles().Theta) * 180 / math.Pi
+	for i, p := range poses {
+		rotFrac := math.Abs(spatialmath.OrientationBetween(start.Orientation(), p.Orientation()).AxisAngles().Theta) * 180 / math.Pi / totalDeg
+		liftFrac := (p.Point().Z - 100) / 40
+		if math.Abs(rotFrac-liftFrac) > 1e-3 {
+			t.Errorf("waypoint %d: %.3f of the tilt but %.3f of the lift", i, rotFrac, liftFrac)
+		}
+		if math.Hypot(p.Point().X, p.Point().Y) > 1e-6 {
+			t.Errorf("waypoint %d left the straight line: %v", i, p.Point())
+		}
+	}
+}
+
+func TestPivotSeedPoint(t *testing.T) {
+	start := r3.Vector{X: 0, Y: 0, Z: 100}
+	end := r3.Vector{X: 0, Y: 0, Z: 140}
+	tests := []struct {
+		name     string
+		start    r3.Vector
+		end      r3.Vector
+		actual   r3.Vector
+		wantSeed r3.Vector
+		wantDist float64
+	}{
+		{"on start", start, end, start, start, 0},
+		{"partway up after a partial tilt", end, start, r3.Vector{X: 0, Y: 0, Z: 125}, r3.Vector{X: 0, Y: 0, Z: 125}, 0},
+		{"beside the line", start, end, r3.Vector{X: 1.5, Y: 0, Z: 110}, r3.Vector{X: 0, Y: 0, Z: 110}, 1.5},
+		{"before start clamps to start", start, end, r3.Vector{X: 0, Y: 0, Z: 97}, start, 3},
+		{"past end clamps to end", start, end, r3.Vector{X: 0, Y: 0, Z: 150}, end, 10},
+		{"fixed point", start, start, r3.Vector{X: 0, Y: 1, Z: 100}, start, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			seed, dist := pivotSeedPoint(tt.start, tt.end, tt.actual)
+			if seed.Sub(tt.wantSeed).Norm() > 1e-9 {
+				t.Errorf("seed = %v, want %v", seed, tt.wantSeed)
+			}
+			if math.Abs(dist-tt.wantDist) > 1e-9 {
+				t.Errorf("dist = %.4f, want %.4f", dist, tt.wantDist)
+			}
+		})
+	}
+}
+
 func TestComputePivotPoses_Endpoints(t *testing.T) {
 	start := spatialmath.NewPose(
 		r3.Vector{X: 10, Y: 20, Z: 30},

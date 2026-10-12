@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -34,6 +33,7 @@ import (
 	"beanjamin/coffee/order"
 	"beanjamin/coffee/report"
 	"beanjamin/coffee/speech"
+
 	// Register the multi-poses-execution-switch model.
 	_ "beanjamin/multiposesexecutionswitch"
 )
@@ -79,11 +79,12 @@ type beanjaminCoffee struct {
 	machineLogsURL   string           // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
 	dataLocationID   string           // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
 	primaryOrgID     string           // VIAM_PRIMARY_ORG_ID env; scopes app.viam.com deep-links to the owning org; "" when unavailable
-	mu               sync.Mutex
-	cancelCtx        context.Context
-	cancelFunc       func()
-	running          atomic.Bool
-	currentStep      atomic.Value // string: current step label for the active order (debug)
+	// lease holds running, paused and the shared cancelCtx (arm_lease.go).
+	lease       armLease
+	currentStep atomic.Value // string: current step label for the active order (debug)
+	// flow is the running order's plan-ahead state (flow.go). nil outside an
+	// order, where moves run directly.
+	flow *flow
 	// failedStep holds the step label the most recent order errored at,
 	// captured inside prepareDrink before `running` flips false so cancel
 	// recovery can't overwrite it. "" when the order succeeded. Reported on
@@ -93,21 +94,19 @@ type beanjaminCoffee struct {
 	faultAlarm *speech.FaultAlarm
 	// activeLogger holds the order-scoped logger (tagged with order_id) for the
 	// order currently being processed; set by processQueue and cleared when it
-	// finishes. Entry points that run outside the queue goroutine — cancel and
-	// rewind — read it via activeOrderLogger() so their logs carry the in-flight
+	// finishes. Entry points that run outside the queue goroutine, such as
+	// cancel, read it via activeOrderLogger() so their logs carry the in-flight
 	// order's order_id. nil when idle.
 	activeLogger atomic.Pointer[logging.Logger]
 	queue        *order.Queue
 	queueStop    chan struct{}
-	paused       atomic.Bool
 	// portafilterInMachine is true between releaseFilter and grabFilter:
-	// the bayonet holds the filter and the arm is free. Rewind uses this
-	// to decide whether recovery (re-grip + clean + home) is required.
+	// the bayonet holds the filter and the arm is free. A fault's log reports
+	// it, since the operator then has to take the filter out by hand.
 	portafilterInMachine atomic.Bool
 	// portafilterHasGrounds is true once grinding has put grounds in the
-	// filter, until cleanPortafilter clears them. Rewind uses this (when
-	// portafilterInMachine is false) to drive a clean + home recovery so
-	// the filter doesn't get stranded with grounds in it.
+	// filter, until cleanPortafilter clears them. A fault's log reports it,
+	// since the operator then has to clean the filter by hand.
 	portafilterHasGrounds atomic.Bool
 	orderSensorSink       orderSensorSink // optional; named order-sensor from deps, nil if unset
 	// Optional usage sensor updated during the brew lifecycle (sensor_usage.go).
@@ -409,8 +408,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		primaryOrgID:     os.Getenv("VIAM_PRIMARY_ORG_ID"),
 		clips:            clips.NewSaver(camStorage, pendingOrderClipsDir, logger),
 		gripper:          gripperComp,
-		cancelCtx:        cancelCtx,
-		cancelFunc:       cancelFunc,
+		lease:            armLease{cancelCtx: cancelCtx, cancelFunc: cancelFunc},
 		queue:            order.NewQueue(),
 		queueStop:        make(chan struct{}),
 		orderSensorSink:  sink,
@@ -451,7 +449,7 @@ func (s *beanjaminCoffee) Name() resource.Name {
 	return s.name
 }
 
-// resetCancelWaitTimeout caps how long cancel, rewind and reset_world wait for
+// resetCancelWaitTimeout caps how long cancel and reset_world wait for
 // a running sequence to observe its cancelled context and return. Generous
 // enough to cover any motion-plan cleanup; if exceeded, something is wedged and
 // the operator should look at logs rather than have the command appear to
@@ -460,11 +458,9 @@ const resetCancelWaitTimeout = 30 * time.Second
 
 const cancelAnnouncement = "Stopping the current order. Nothing else will move until an operator says so."
 
-const rewindAnnouncement = "Rewinding to a clean start. I'll clean up if needed and return to home. Click proceed when you're ready for the next order."
-
 func (s *beanjaminCoffee) Close(context.Context) error {
 	close(s.queueStop)
-	s.cancelFunc()
+	s.lease.shutdown()
 	// Cancelling the sequence context is not the same as closing the ice pin: a
 	// rebuild or a crash mid-dispense would otherwise leave the ice machine
 	// running until somebody notices.

@@ -202,44 +202,26 @@ func TestCentroidsOf(t *testing.T) {
 	}
 }
 
-func TestNearestGeometry(t *testing.T) {
-	near, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 100}), r3.Vector{X: 10, Y: 10, Z: 10}, "near")
-	far, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 200}), r3.Vector{X: 10, Y: 10, Z: 10}, "far")
-	originals := []Candidate{
-		{Centroid: r3.Vector{X: 200}, Geom: far},
-		{Centroid: r3.Vector{X: 100}, Geom: near},
-		{Centroid: r3.Vector{X: 150}, Geom: nil}, // skipped — no geometry
+func TestContainerCandidates(t *testing.T) {
+	dims := r3.Vector{X: 70, Y: 70, Z: 60}
+	centroids := []r3.Vector{{X: 100, Y: 5, Z: 50}, {X: 0}}
+	got, err := ContainerCandidates(centroids, dims, "cup")
+	if err != nil {
+		t.Fatalf("ContainerCandidates: %v", err)
 	}
-	// Closest original to (110) is the one at (100) -> "near".
-	got := NearestGeometry(r3.Vector{X: 110}, originals)
-	if got == nil || got.Label() != "near" {
-		t.Fatalf("expected nearest geometry 'near', got %v", got)
+	if len(got) != len(centroids) {
+		t.Fatalf("expected %d candidates, got %d", len(centroids), len(got))
 	}
-
-	// No originals carry geometry -> nil.
-	if g := NearestGeometry(r3.Vector{}, []Candidate{{Centroid: r3.Vector{X: 1}}}); g != nil {
-		t.Fatalf("expected nil when no geometry available, got %v", g)
-	}
-}
-
-func TestCandidatesForCentroids(t *testing.T) {
-	a, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 0}), r3.Vector{X: 10, Y: 10, Z: 10}, "a")
-	b, _ := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 100}), r3.Vector{X: 10, Y: 10, Z: 10}, "b")
-	originals := []Candidate{
-		{Centroid: r3.Vector{X: 0}, Geom: a},
-		{Centroid: r3.Vector{X: 100}, Geom: b},
-	}
-	// Ranked order swaps the two; each ranked centroid should keep its own geom.
-	ranked := []r3.Vector{{X: 100}, {X: 0}}
-	got := CandidatesForCentroids(ranked, originals)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 candidates, got %d", len(got))
-	}
-	if got[0].Centroid != (r3.Vector{X: 100}) || got[0].Geom.Label() != "b" {
-		t.Fatalf("candidate[0] = %v/%v, want centroid (100) geom 'b'", got[0].Centroid, got[0].Geom)
-	}
-	if got[1].Centroid != (r3.Vector{X: 0}) || got[1].Geom.Label() != "a" {
-		t.Fatalf("candidate[1] = %v/%v, want centroid (0) geom 'a'", got[1].Centroid, got[1].Geom)
+	for i, c := range got {
+		if c.Centroid != centroids[i] {
+			t.Fatalf("candidate[%d] centroid = %v, want %v", i, c.Centroid, centroids[i])
+		}
+		if c.Geom == nil || c.Geom.Label() != "cup" {
+			t.Fatalf("candidate[%d] geom = %v, want a box labeled cup", i, c.Geom)
+		}
+		if p := c.Geom.Pose().Point(); p != centroids[i] {
+			t.Fatalf("candidate[%d] box center = %v, want its centroid %v", i, p, centroids[i])
+		}
 	}
 }
 

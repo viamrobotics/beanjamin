@@ -6,7 +6,7 @@ package coffee
 //
 // Nothing here is new machinery — it is the three existing patterns composed:
 // the cup/glass vision pickup (cup_pickup.go) with its own vision service,
-// observe switch and grasp offsets; the fixed-point pour pivot the espresso
+// observe switch and grasp offsets; the pour pivot the espresso
 // pour uses (iced.go); and the hinge-arc door sweep (door.go).
 //
 // The one thing neither the cup nor the glass needs is a way back. The bottle
@@ -109,7 +109,7 @@ func (s *beanjaminCoffee) addMilk(ctx, cancelCtx context.Context) error {
 // angle it really is at, and the message tells the operator what to fix.
 func (s *beanjaminCoffee) milkStepErr(err error) error {
 	if s.doorOpenDegs != 0 {
-		return fmt.Errorf("add_milk: %w (the fridge door is standing open at %.0f° — take the bottle out of the gripper if it's holding one, rewind to recover the arm, then shut the door by hand before sending proceed: proceed is what declares the door shut again)", err, s.doorOpenDegs)
+		return fmt.Errorf("add_milk: %w (the fridge door is standing open at %.0f° — take the bottle out of the gripper if it's holding one, put the rest of the machine back to its starting state by hand, then shut the door before sending proceed: proceed is what declares the door shut again)", err, s.doorOpenDegs)
 	}
 	return fmt.Errorf("add_milk: %w", err)
 }
@@ -138,8 +138,10 @@ func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context) error 
 
 // pourMilk carries the held bottle over the staged glass and tilts it to pour,
 // dwells for milkPourDwell so the glass fills, then returns it upright before
-// moving away. Same fixed-point pivot as pourEspresso: the claws rotate the
-// bottle in place so the stream stays over the glass, and the staged glass
+// moving away. Same pour pivot as pourEspresso: the claws tilt the bottle
+// while moving it along the straight line between the authored approach and
+// pour points (lifting it as it tips, if milk_pour_relative_pose sits higher),
+// so the stream stays over the glass, and the staged glass
 // remains a hard obstacle throughout — the bottle must clear it, never drive
 // into it. How much milk the latte gets is the dwell, not the tilt.
 func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
@@ -152,16 +154,20 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}
+	// Held to pourConstraint so the planner can't detour the open bottle off
+	// the glass; a tilt it can't finish is executed as far as it planned.
 	pourStep := Step{PoseName: clawPoseMilkPour, PoseSwitch: s.clawsSw, PivotFromPose: clawPoseMilkPourApproach, PivotDegreesPerStep: 5,
-		MoveOptions: s.pourMoveOptions(), Pause: s.milkPourDwell()}
+		LinearConstraint: pourConstraint, AcceptPartialPlan: true, MoveOptions: s.pourMoveOptions(), Pause: s.milkPourDwell()}
 	if err := s.executeStep(ctx, cancelCtx, pourStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}
-	// Return upright along the same pivot so any residual drip stays over the
-	// glass, at the default (slow) pivot speed so the milk left in the bottle
-	// doesn't slosh out.
+	// Return upright along the same pivot (lowering the bottle as it rights,
+	// mirroring the pour) so any residual drip stays over the glass, at the
+	// default (slow) pivot speed so the milk left in the bottle doesn't slosh
+	// out. The return is constrained the same way but must complete: carrying
+	// a still-tilted bottle away would pour milk along the whole carry.
 	uprightStep := Step{PoseName: clawPoseMilkPourApproach, PoseSwitch: s.clawsSw, PivotFromPose: clawPoseMilkPour, PivotDegreesPerStep: 5,
-		Pause: shortPause}
+		LinearConstraint: pourConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}
@@ -215,12 +221,10 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 		return fmt.Errorf("return_milk: approach the shelf: %w", err)
 	}
 
-	// The bottle is held through the descent, so let its geometry approach the
-	// fridge surfaces it legitimately gets close to on the way down, and let the
-	// gripper and bottle pass through the interior shield that keeps the free
-	// traverse clear of the shelves.
-	descentCollisions := append([]AllowedCollision{}, s.heldItemSurfaceCollisions(heldItemFridgeCollisions)...)
-	descentCollisions = append(descentCollisions, s.pickupAreaShieldCollisions(milkAreaShieldFrameName)...)
+	// Let the gripper and the held bottle pass through the interior shield that
+	// keeps the free traverse clear of the shelves. The shield is the "fridge"
+	// frame itself, so this also lets the bottle reach the shelf it stands on.
+	descentCollisions := s.pickupAreaShieldCollisions(milkAreaShieldFrameName)
 	if err := s.moveToRawPose(ctx, placePD, defaultApproachConstraint, descentCollisions, nil); err != nil {
 		return fmt.Errorf("return_milk: descend onto the shelf: %w", err)
 	}

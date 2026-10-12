@@ -60,6 +60,12 @@ type Step struct {
 	// the handle slides back through them.
 	PivotExtraDegrees float64
 
+	// AcceptPartialPlan lets a pivot execute the waypoints the planner solved
+	// when a later one fails, stopping the arm short of PoseName rather than
+	// failing the step. Only for moves where falling short is harmless, like a
+	// pour that tilts less far.
+	AcceptPartialPlan bool
+
 	// NoSpill routes this step's move through the level carry (carryHeldLevel)
 	// rather than a direct plan.
 	NoSpill bool
@@ -87,6 +93,13 @@ func (s *beanjaminCoffee) runSteps(ctx, cancelCtx context.Context, label string,
 }
 
 func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step) error {
+	// During an order, direct moves are handed off; anything else is a stopping point.
+	if f := s.activeFlow(); f != nil && isDirectMove(step) {
+		return s.handOffStep(ctx, f, step)
+	}
+	if err := s.settle(); err != nil {
+		return err
+	}
 	logger := s.activeOrderLogger()
 	ctx, span := trace.StartSpan(ctx, "beanjamin::executeStep::"+step.PoseName)
 	defer span.End()
@@ -131,7 +144,7 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 
 // Step labels surfaced through setStep -> get_queue, the order sensor's
 // failed_step, and the web tracker. Constants so the brew sequence
-// (prepare.go) and rewind recovery reference the same strings.
+// (prepare.go) and the operator commands reference the same strings.
 const (
 	stepGrinding             = "Grinding"
 	stepTamping              = "Tamping"
@@ -145,13 +158,17 @@ const (
 	stepCleaning             = "Cleaning"
 	stepAddingMilk           = "Adding milk"
 	stepFinishingUp          = "Finishing up"
-	stepRecoveringFilter     = "Recovering filter"
 	// stepKeepAlive is published while a keep-alive purge runs. No order is
 	// active, so it surfaces through Status/get_queue only, never on an order.
 	stepKeepAlive = "Keep-alive purge"
 )
 
 func (s *beanjaminCoffee) setStep(step string) {
+	// Handed off so the label tracks the arm, not the planner.
+	s.handOffEffect(func() { s.setStepNow(step) })
+}
+
+func (s *beanjaminCoffee) setStepNow(step string) {
 	s.currentStep.Store(step)
 	// No-op when nothing is on the arm, which is what a keep-alive purge wants:
 	// its step is service-global and belongs to no order.

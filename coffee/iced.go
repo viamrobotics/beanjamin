@@ -7,6 +7,7 @@ package coffee
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"beanjamin/coffee/order"
@@ -125,7 +126,9 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 	if err := press(ctx, cancelCtx); err != nil {
 		return fmt.Errorf("brew_and_prep: %w", err)
 	}
-	pourStarted := time.Now()
+	// Recorded when the arm actually presses, not when the planner gets here.
+	var brewStarted atomic.Int64
+	s.handOffEffect(func() { brewStarted.Store(time.Now().UnixNano()) })
 
 	// Fill the pour time with prep: an iced drink stages its glass, anything else
 	// lines the gripper up over the cup so only the grasp is left afterward.
@@ -137,10 +140,20 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 	}()
 
 	// Wait out the rest of the pour even when the prep failed, so the machine is
-	// quiescent before an operator or a rewind gets near it.
-	remaining := s.drinkBrewTime(drink) - time.Since(pourStarted)
-	s.activeOrderLogger().Infof("waiting out the remaining %s of the %s pour (prep error: %v)", remaining, drink, prepErr)
-	waitErr := waitOutPour(ctx, cancelCtx, remaining)
+	// quiescent before an operator gets near it. Settle first, since the wait is
+	// timed from the actual press; skip it only if the press never ran.
+	settleErr := s.settle()
+	var waitErr error
+	if started := brewStarted.Load(); started != 0 {
+		if prepErr == nil {
+			prepErr = settleErr
+		}
+		remaining := s.drinkBrewTime(drink) - time.Since(time.Unix(0, started))
+		s.activeOrderLogger().Infof("waiting out the remaining %s of the %s brew (prep error: %v)", remaining, drink, prepErr)
+		waitErr = waitOutBrew(ctx, cancelCtx, remaining)
+	} else if settleErr != nil {
+		return fmt.Errorf("brew_and_prep: %w", settleErr)
+	}
 	if prepErr != nil {
 		return fmt.Errorf("brew_and_prep: %w", prepErr)
 	}
@@ -177,10 +190,9 @@ func (s *beanjaminCoffee) approachBrewedCup(ctx, cancelCtx context.Context) erro
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("approach_brewed_cup: %w", err)
 	}
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("approach_brewed_cup: open gripper: %w", err)
+	if err := s.openGripper(ctx); err != nil {
+		return fmt.Errorf("approach_brewed_cup: %w", err)
 	}
-	time.Sleep(gripperPause)
 	return nil
 }
 
@@ -242,10 +254,9 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("grab_staged_glass: open gripper: %w", err)
+	if err := s.openGripper(ctx); err != nil {
+		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
-	time.Sleep(gripperPause)
 	// Descend onto the glass; it stays a world obstacle, but allow the jaws to
 	// contact it for this step (the rest of the arm still routes around it).
 	grabStep := Step{PoseName: clawPoseStaging, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.stagedGlassGrabCollisions()}
@@ -255,10 +266,8 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 	if err := s.grabAndVerifyHolding(ctx); err != nil {
 		return fmt.Errorf("grab_staged_glass: grab gripper: %w", err)
 	}
-	// Glass is back in the gripper: drop the world obstacle, then restore it as a
-	// held item (obstacle first, so the held glass doesn't collide with its double).
-	s.removeStagedGlassObstacle()
-	if err := s.reattachGeometry(pickupLabelGlass); err != nil {
+	// Glass is back in the gripper: move it from the world obstacle to a held item.
+	if err := s.regrabStagedGlass(ctx); err != nil {
 		s.activeOrderLogger().Warnf("grab_staged_glass: reattach glass geometry failed, continuing untracked: %v", err)
 	}
 	retreatStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
@@ -300,6 +309,10 @@ func (s *beanjaminCoffee) moveToIceDispense(ctx, cancelCtx context.Context) erro
 func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 	if err := s.moveToIceDispense(ctx, cancelCtx); err != nil {
 		return err
+	}
+	// The glass has to be under the chute before the pin opens.
+	if err := s.settle(); err != nil {
+		return fmt.Errorf("dispense_ice: %w", err)
 	}
 
 	if err := s.pulseIcePin(ctx, cancelCtx); err != nil {
@@ -406,10 +419,9 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("stage_glass: open gripper: %w", err)
+	if err := s.openGripper(ctx); err != nil {
+		return fmt.Errorf("stage_glass: %w", err)
 	}
-	time.Sleep(gripperPause)
 	// Glass is set down; keep it as a static world obstacle (rather than dropping
 	// it) so the cup-retrieval, pour, and serving moves route around it.
 	if err := s.stageGlassAsObstacle(ctx); err != nil {
@@ -419,10 +431,9 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		return fmt.Errorf("stage_glass: close gripper: %w", err)
+	if err := s.closeGripper(ctx); err != nil {
+		return fmt.Errorf("stage_glass: %w", err)
 	}
-	time.Sleep(gripperPause)
 	return nil
 }
 
@@ -436,23 +447,29 @@ func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
-	// Tilt to pour as a fixed-point pivot: the claws rotate the cup in place
-	// (slerp waypoints follow the geodesic between the upright and poured
-	// orientations — a pure rotation about the world X axis, since both share
-	// OX=0) so the stream stays over the glass instead of spilling. The staged
+	// Tilt to pour as a pivot: the claws rotate the cup (slerp waypoints follow
+	// the geodesic between the upright and poured orientations — a pure
+	// rotation about the world X axis, since both share OX=0) while its
+	// position moves along the straight line between the two authored points,
+	// so the stream stays over the glass instead of spilling. The staged
 	// glass stays a hard obstacle here — the cup must clear it, never drive in.
-	// Pivots default to the slow-movement velocity; override it so the pour
-	// isn't dragged out (tune via pour_vel_degs_per_sec).
+	// pourConstraint keeps the planner from detouring the cup off the glass; a
+	// tilt it can't finish is executed as far as it planned, pouring less
+	// rather than spilling. Pivots default to the slow-movement velocity;
+	// override it so the pour isn't dragged out (tune via
+	// pour_vel_degs_per_sec).
 	pourStep := Step{PoseName: clawPosePour, PoseSwitch: s.clawsSw, PivotFromPose: clawPosePourApproach, PivotDegreesPerStep: 5,
-		MoveOptions: s.pourMoveOptions(), Pause: pourPause}
+		LinearConstraint: pourConstraint, AcceptPartialPlan: true, MoveOptions: s.pourMoveOptions(), Pause: pourPause}
 	if err := s.executeStep(ctx, cancelCtx, pourStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
 	// Return upright along the same pivot so any residual drip stays over the
 	// glass, at the default (slow) pivot speed: a fast return flicks the dregs
-	// left in the cup over the rim.
+	// left in the cup over the rim. Constrained like the tilt, but it must
+	// complete: the cup is carried away next, and a still-tilted one drips the
+	// whole way.
 	uprightStep := Step{PoseName: clawPosePourApproach, PoseSwitch: s.clawsSw, PivotFromPose: clawPosePour, PivotDegreesPerStep: 5,
-		Pause: shortPause}
+		LinearConstraint: pourConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}

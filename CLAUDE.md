@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `viam:beanjamin` is a Viam module that automates a Viam OK-1 arm to prepare espresso. The repo ships two deployables:
 
-- A Go **Viam module** (`cmd/module/main.go`) registering seven models — see `meta.json` and `README.md` for the full list and per-model configuration docs. The headline model is `viam:beanjamin:coffee` (generic service) which orchestrates the full brew cycle.
+- A Go **Viam module** (`cmd/module/main.go`) registering eight models — see `meta.json` and `README.md` for the full list and per-model configuration docs. The headline model is `viam:beanjamin:coffee` (generic service) which orchestrates the full brew cycle.
 - A Next.js **web app** (`web-app/`) that exposes the customer-facing ordering UI and talks to the machine via `@viamrobotics/sdk`. Packaged as its own Viam module via `web-app-module`.
 - A **CLI** (`cmd/cli/`) for reading a machine's brew history off the data page — `make orders` and `make fetch-order`, documented in the README's Development section.
 
@@ -14,20 +14,20 @@ Each model lives in its own package. The coffee service is `coffee/` (`package c
 
 | Concern | Files |
 | --- | --- |
-| Lifecycle and command API | `module.go`, `config.go`, `api.go` (DoCommand dispatch, `Status`), `operator.go` (proceed, clear_queue, reset_world, cancel, cancel_order, rewind), `actions.go` (`execute_action`), `cup_flow.go` (`run_cup_flow`) |
+| Lifecycle and command API | `module.go`, `config.go`, `api.go` (DoCommand dispatch, `Status`), `operator.go` (proceed, clear_queue, reset_world, cancel, cancel_order), `actions.go` (`execute_action`), `cup_flow.go` (`run_cup_flow`) |
 | Brew cycle | `prepare.go` (`prepareDrink` and its fault pause), `steps.go` (`Step`, `runSteps`/`executeStep`, step labels and `setStep`), `brew_steps.go`, `poses.go` (pose and frame names, startup pose validation), `order_intake.go`, `queue.go` |
 | Serving and drink variants | `serving.go`, `serving_slots.go`, `iced.go`, `milk.go`, `door.go` |
-| Motion planning | `motion.go`, `held_geometry.go`, `collisions.go`, `joints.go`, `glass_relative_poses.go` (pour poses resolved against the staged glass) |
+| Motion planning | `motion.go`, `flow.go` (during an order, the order goroutine plans moves and hands them, with gripper actions and waits, to an execution goroutine; it settles at stopping points), `held_geometry.go`, `collisions.go`, `joints.go`, `glass_relative_poses.go` (pour poses resolved against the staged glass) |
 | Vision-driven pickup | `cup_pickup.go`, `gripper_state.go`, `detection_snapshot.go` |
-| Peripheral integrations | `slack_notify.go`, `daily_summary.go`, `chore_wheel.go`, `sensor_usage.go`, `delivery_messaging.go`, `keepalive.go` (purge loop), `keepalive_config.go` (`KeepAlive` and its window) |
+| Peripheral integrations | `slack_notify.go`, `daily_summary.go`, `sensor_usage.go`, `delivery_messaging.go`, `keepalive.go` (purge loop), `keepalive_config.go` (`KeepAlive` and its window) |
 | Order model (`coffee/order/`, `package order`) | `order.go` (`Order`), `queue.go` (`Queue`), `request.go` (`prepare_order` decoding), `drinks.go` (drink catalog and `Menu`), `reading.go` (`Reading` for the order sensor) |
 | Speech (`coffee/speech/`, `package speech`) | `phrases.go` (spoken line tables and pickers), `speaker.go` (`Speaker`, `say_async` to the speech service), `fault_alarm.go` (`FaultAlarm`, the `fault_active` flag and failure line) |
-| Slack reports (`coffee/report/`, `package report`) | `notifier.go` (`Notifier`, the one Slack send path), `failure.go` (failed-order alert), `daily_summary.go` (order digest), `chore_wheel.go` (weekly rota and `ChoreWheelConfig`), `links.go` (app.viam.com deep-links) |
+| Slack reports (`coffee/report/`, `package report`) | `notifier.go` (`Notifier`, the one Slack send path), `failure.go` (failed-order alert), `daily_summary.go` (order digest), `links.go` (app.viam.com deep-links) |
 | Camera clips (`coffee/clips/`, `package clips`) | `saver.go` (`Saver`: per-order clip saves through the video-store multiplexer, pending-clip records, and the `cleanup_pending_clips` recovery sweep) |
 | Ice vision (`coffee/icevision/`, `package icevision`) | `detector.go` (`Detector` over the arm camera, `Params`), `level.go` (contrast-step surface measurement, `check_ice_level`), `brightness.go` (brightness shadow), `annotate.go` and `dispense_frame.go` (annotated ice frames saved under `save_motion_requests_dir`); the dwell loop that drives the ice pin is `coffee/ice_dwell.go`, which calls into it |
-| Spatial math (`coffee/geom/`, `package geom`) | `pickup.go` (`Candidate`, centroid merge/rank and geometry match-back, `PoseRelativeTo`, `CameraToWorldPose`, `ContainerBox`), `shelf.go` (`ShelfTileCenters`, `SlotIndex`), `surface.go` (`SurfaceBox`, `WorldAnchoredSurfaceBoxes`, `SurfaceTopZUnder`); pure functions with no service state, called from `cup_pickup.go`, `serving_slots.go`, `serving.go`, `held_geometry.go`, `milk.go` and `door.go` |
+| Spatial math (`coffee/geom/`, `package geom`) | `pickup.go` (`Candidate`, centroid merge/rank and the per-centroid container box (`ContainerCandidates`), `PoseRelativeTo`, `CameraToWorldPose`, `ContainerBox`), `shelf.go` (`ShelfTileCenters`, `SlotIndex`), `surface.go` (`SurfaceBox`, `WorldAnchoredSurfaceBoxes`, `SurfaceTopZUnder`); pure functions with no service state, called from `cup_pickup.go`, `serving_slots.go`, `serving.go`, `held_geometry.go`, `glass_relative_poses.go`, `milk.go` and `door.go` |
 
-`coffee/order`, `coffee/speech`, `coffee/report`, `coffee/clips`, `coffee/icevision`, and `coffee/geom` depend on nothing in `coffee`, so they must never import it. The other models are sibling packages: `ordersensor/`, `maintenancesensor/`, `customerdetector/`, `crm/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`. `crm/` (`viam:beanjamin:crm`) holds customer profiles keyed by email — today the loyalty ledger (`ledger.go`: points credited per completed drink, pooled toward configured rewards) and its DoCommands (`crm.go`); the coffee service only calls its `credit_points`, through `crm_name` (`creditLoyaltyPoint` in `coffee/queue.go`). There is no top-level Go package; `cmd/module/main.go` registers every model.
+`coffee/order`, `coffee/speech`, `coffee/report`, `coffee/clips`, `coffee/icevision`, and `coffee/geom` depend on nothing in `coffee`, so they must never import it. The other models are sibling packages: `ordersensor/`, `maintenancesensor/`, `customerdetector/`, `crm/`, `chorewheel/`, `dialcontrolmotion/`, `multiposesexecutionswitch/`. `crm/` (`viam:beanjamin:crm`) holds customer profiles keyed by email — today the loyalty ledger (`ledger.go`: points credited per completed drink, pooled toward configured rewards) and its DoCommands (`crm.go`); the coffee service only calls its `credit_points`, through `crm_name` (`creditLoyaltyPoint` in `coffee/queue.go`). `chorewheel/` (`viam:beanjamin:chore-wheel`) posts the weekly maintenance rota to Slack through `report.Notifier`; it is independent of the coffee service (`wheel.go` is the rotation and message, `chorewheel.go` the service). There is no top-level Go package; `cmd/module/main.go` registers every model.
 
 ## Common commands
 
@@ -72,7 +72,7 @@ Build the bundled web-app Viam module from repo root: `make web-app-module` (run
 4. On completion/failure, the order is moved to `recent` for `order.RecentDisplayDuration` (15s) so the UI can render "Ready!" without diffing polls.
 5. A single reading per attempt is pushed to the optional order-sensor sink (`ordersensor/`, discovered from deps through the `orderSensorSink` interface in `coffee/queue.go`), and an async clip save is requested on the optional `cam_storage_mux_name` video-store multiplexer.
 
-`cancel`, `clear_queue`, and `proceed` (`coffee/operator.go`) manipulate the same state. Only one routine runs at a time, gated by `running atomic.Bool`; a shared `cancelCtx` is captured under `mu` so cancellation can interrupt motion.
+`cancel`, `clear_queue`, and `proceed` (`coffee/operator.go`) manipulate the same state. Only one routine runs at a time: `s.lease` (`armLease` in `coffee/arm_lease.go`) keeps the holder's name, the pause and the shared `cancelCtx` under one `mu`. Troubleshooting commands take the arm with `claimManual`, which ignores the pause; the order queue (before it starts each order) and the keepalive purge use `claimAutomated`, which is refused while paused. A claim hands back `cancelCtx` in the same step so cancellation can interrupt motion; `release` gives the arm back.
 
 ### Motion layer
 

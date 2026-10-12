@@ -6,9 +6,9 @@ require (
 	github.com/golang/geo v0.0.0-20230421003525-6adc56603217
 	github.com/google/uuid v1.6.0
 	github.com/viamrobotics/visualization v1.45.2-0.20260923153413-0f4faf2c4e70
-	go.viam.com/api v0.1.587
-	go.viam.com/rdk v1.10.0
-	go.viam.com/utils v0.13.0
+	go.viam.com/api v0.1.590
+	go.viam.com/rdk v1.11.0
+	go.viam.com/utils v0.13.2
 	golang.org/x/image v0.41.0
 	gonum.org/v1/gonum v0.17.0
 	google.golang.org/protobuf v1.36.12
@@ -225,7 +225,7 @@ require (
 	google.golang.org/api v0.278.0 // indirect
 	google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260803160001-6ac0973c030d // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20261005182115-fad411399dd8 // indirect
 	google.golang.org/grpc v1.84.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

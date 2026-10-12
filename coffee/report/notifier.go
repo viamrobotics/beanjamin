@@ -1,6 +1,5 @@
 // Package report builds what the coffee service posts to Slack — the per-order
-// failure alert, the daily order digest, and the weekly chore wheel — along
-// with the app.viam.com deep-links those messages carry, and sends them through
+// failure alert and the daily order digest — along with the app.viam.com deep-links those messages carry, and sends them through
 // a Notifier wrapping the viam:notifications:slack service.
 package report
 
