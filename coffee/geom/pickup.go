@@ -7,6 +7,7 @@ package geom
 
 import (
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/golang/geo/r3"
@@ -101,17 +102,40 @@ func CameraToWorldPose(
 }
 
 // ContainerBox builds the held-item geometry from the configured container
-// size (cup_dimensions / glass_dimensions, as box extents): an axis-aligned box
-// (orientation OZ=1) of that size, centered on the grasp centroid — the point
-// the gripper is sent to. Modeling a known-size container around its grasp point
-// avoids a center skewed by a point cloud that only captured part of the
-// container. label is set on the box.
-func ContainerBox(centroid, dims r3.Vector, label string) (spatialmath.Geometry, error) {
-	box, err := spatialmath.NewBox(spatialmath.NewPoseFromPoint(centroid), dims, label)
+// size (cup_dimensions / glass_dimensions, as box extents): an upright box of
+// that size, centered on the grasp centroid — the point the gripper is sent to —
+// and turned yawRad about world Z. Modeling a known-size container around its
+// grasp point avoids a center skewed by a point cloud that only captured part of
+// the container. Passing the grab's GraspYaw lines the box up with the gripper
+// rather than the world axes, so the held box sits the same way in the jaws
+// whatever direction the grab comes from. label is set on the box.
+func ContainerBox(centroid, dims r3.Vector, yawRad float64, label string) (spatialmath.Geometry, error) {
+	pose := spatialmath.NewPose(centroid, &spatialmath.OrientationVector{OZ: 1, Theta: yawRad})
+	box, err := spatialmath.NewBox(pose, dims, label)
 	if err != nil {
 		return nil, fmt.Errorf("new %s bounding box: %w", label, err)
 	}
 	return box, nil
+}
+
+// graspHeadingMinHorizontal is the smallest horizontal component of the unit
+// tool axis GraspYaw reads a heading from. Closer to vertical than that (about
+// 6°), the projection's direction is mostly noise.
+const graspHeadingMinHorizontal = 0.1
+
+// GraspYaw returns the heading, in radians about world Z, that a grasp at the
+// given orientation approaches from: its tool +Z axis projected onto the
+// horizontal plane. A top-down grasp has no approach heading, so its tool +X
+// stands in.
+func GraspYaw(grasp spatialmath.Orientation) float64 {
+	rot := spatialmath.NewPoseFromOrientation(grasp)
+	for _, axis := range []r3.Vector{{Z: 1}, {X: 1}} {
+		dir := spatialmath.Compose(rot, spatialmath.NewPoseFromPoint(axis)).Point()
+		if math.Hypot(dir.X, dir.Y) >= graspHeadingMinHorizontal {
+			return math.Atan2(dir.Y, dir.X)
+		}
+	}
+	return 0
 }
 
 // Centroids extracts the world-frame centroids from a slice of candidates,
@@ -125,14 +149,14 @@ func Centroids(candidates []Candidate) []r3.Vector {
 }
 
 // ContainerCandidates pairs each centroid with a container box of the given
-// size centered on it (ContainerBox). The box must be built on the centroid the
-// gripper is sent to — not on any single detection behind a merged centroid —
-// so the held item lands at the same grip-point offset on every grab. label is
-// set on each box.
-func ContainerCandidates(centroids []r3.Vector, dims r3.Vector, label string) ([]Candidate, error) {
+// size centered on it and turned yawRad about world Z (ContainerBox). The box
+// must be built on the centroid the gripper is sent to — not on any single
+// detection behind a merged centroid — so the held item lands at the same
+// grip-point offset on every grab. label is set on each box.
+func ContainerCandidates(centroids []r3.Vector, dims r3.Vector, yawRad float64, label string) ([]Candidate, error) {
 	out := make([]Candidate, len(centroids))
 	for i, c := range centroids {
-		box, err := ContainerBox(c, dims, label)
+		box, err := ContainerBox(c, dims, yawRad, label)
 		if err != nil {
 			return nil, err
 		}

@@ -1,6 +1,7 @@
 package geom
 
 import (
+	"math"
 	"testing"
 
 	"github.com/golang/geo/r3"
@@ -205,7 +206,7 @@ func TestCentroidsOf(t *testing.T) {
 func TestContainerCandidates(t *testing.T) {
 	dims := r3.Vector{X: 70, Y: 70, Z: 60}
 	centroids := []r3.Vector{{X: 100, Y: 5, Z: 50}, {X: 0}}
-	got, err := ContainerCandidates(centroids, dims, "cup")
+	got, err := ContainerCandidates(centroids, dims, 0, "cup")
 	if err != nil {
 		t.Fatalf("ContainerCandidates: %v", err)
 	}
@@ -276,31 +277,75 @@ func TestCameraToWorldPose_MissingFrame(t *testing.T) {
 	}
 }
 
-// TestContainerBox verifies that ContainerBox builds an axis-aligned box of the
+// TestContainerBox verifies that ContainerBox builds an upright box of the
 // configured size centered on the grasp centroid — not on any
-// point-cloud-derived midpoint.
+// point-cloud-derived midpoint — turned the given yaw about world Z.
 func TestContainerBox(t *testing.T) {
 	centroid := r3.Vector{X: 110, Y: 20, Z: 40}
 	dims := r3.Vector{X: 70, Y: 70, Z: 140}
 
-	box, err := ContainerBox(centroid, dims, "glass")
-	if err != nil {
-		t.Fatalf("ContainerBox: %v", err)
+	for _, yawDeg := range []float64{0, -161.4} {
+		box, err := ContainerBox(centroid, dims, yawDeg*math.Pi/180, "glass")
+		if err != nil {
+			t.Fatalf("ContainerBox: %v", err)
+		}
+		want, err := spatialmath.NewBox(
+			spatialmath.NewPose(centroid, &spatialmath.OrientationVectorDegrees{OZ: 1, Theta: yawDeg}),
+			r3.Vector{X: 70, Y: 70, Z: 140},
+			"glass",
+		)
+		if err != nil {
+			t.Fatalf("new want box: %v", err)
+		}
+		if !spatialmath.GeometriesAlmostEqual(box, want) {
+			t.Errorf("yaw %v°: box mismatch:\n got %v\nwant %v", yawDeg, box, want)
+		}
 	}
-	if box == nil {
-		t.Fatal("expected a box, got nil")
-	}
+}
 
-	// Box is centered on the grasp centroid with override dims.
-	want, err := spatialmath.NewBox(
-		spatialmath.NewPose(centroid, &spatialmath.OrientationVectorDegrees{OZ: 1}),
-		r3.Vector{X: 70, Y: 70, Z: 140},
-		"glass",
-	)
-	if err != nil {
-		t.Fatalf("new want box: %v", err)
+// TestGraspYaw verifies the heading is read off the tool axis for a side grasp,
+// whatever the roll about that axis, and off the tool +X for a top-down one.
+func TestGraspYaw(t *testing.T) {
+	cases := []struct {
+		name    string
+		grasp   spatialmath.Orientation
+		wantDeg float64
+	}{
+		{"side grasp from -161.4°", &spatialmath.OrientationVectorDegrees{OX: -0.948, OY: -0.319, Theta: -180}, -161.4},
+		{"side grasp, rolled", &spatialmath.OrientationVectorDegrees{OX: -0.948, OY: -0.319, Theta: 30}, -161.4},
+		{"side grasp along -Y", &spatialmath.OrientationVectorDegrees{OY: -1, Theta: -180}, -90},
+		{"tilted grasp", &spatialmath.OrientationVectorDegrees{OX: 0.7, OY: 0.7, OZ: -0.2}, 45},
+		{"top-down grasp", &spatialmath.OrientationVectorDegrees{OZ: -1, Theta: 30}, 150},
 	}
-	if !spatialmath.GeometriesAlmostEqual(box, want) {
-		t.Errorf("box mismatch:\n got %v\nwant %v", box, want)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := GraspYaw(tc.grasp) * 180 / math.Pi
+			if math.Abs(got-tc.wantDeg) > 0.1 {
+				t.Fatalf("GraspYaw = %.2f°, want %.2f°", got, tc.wantDeg)
+			}
+		})
+	}
+}
+
+// TestContainerBoxFollowsGrasp verifies the point of the yaw: expressed in the
+// grasp frame, the box built at a grasp's GraspYaw has the same orientation
+// whichever heading the grasp approaches from.
+func TestContainerBoxFollowsGrasp(t *testing.T) {
+	dims := r3.Vector{X: 70, Y: 70, Z: 60}
+	var first spatialmath.Pose
+	for _, ox := range []r3.Vector{{X: -0.948, Y: -0.319}, {X: -0.707, Y: -0.707}, {Y: -1}} {
+		grasp := spatialmath.NewPoseFromOrientation(&spatialmath.OrientationVectorDegrees{OX: ox.X, OY: ox.Y, Theta: -180})
+		box, err := ContainerBox(r3.Vector{}, dims, GraspYaw(grasp.Orientation()), "cup")
+		if err != nil {
+			t.Fatalf("ContainerBox: %v", err)
+		}
+		local := spatialmath.PoseBetween(grasp, box.Pose())
+		if first == nil {
+			first = local
+			continue
+		}
+		if !spatialmath.OrientationAlmostEqual(local.Orientation(), first.Orientation()) {
+			t.Fatalf("grasp %v: box in grasp frame %v, want %v", ox, local.Orientation(), first.Orientation())
+		}
 	}
 }

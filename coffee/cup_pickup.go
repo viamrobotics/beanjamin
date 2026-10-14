@@ -212,13 +212,12 @@ func (s *beanjaminCoffee) observeVantage(ctx context.Context, t *pickupTarget) (
 		}
 		local := obj.Geometry.Pose().Point()
 		world := spatialmath.Compose(camToWorld, spatialmath.NewPoseFromPoint(local)).Point()
-		// Build the detection geometry as a world-frame, axis-aligned (orientation
-		// OZ=1) box of the configured container size, centered on the grasp
-		// centroid — a known-size container modeled around where it is actually
-		// grasped, sidestepping a point-cloud midpoint skewed by a partial view. The
-		// held-item tracker attaches this shape to the gripper after the grab, and it
-		// is drawn in the saved snapshot.
-		geomWorld, err := geom.ContainerBox(world, t.dims.boxDims(), t.label)
+		// Build the detection geometry as a world-frame upright box of the
+		// configured container size, centered on the grasp centroid and turned to
+		// the grab's heading (containerYaw) — a known-size container modeled around
+		// where it is actually grasped, sidestepping a point-cloud midpoint skewed by
+		// a partial view. It is drawn in the saved snapshot.
+		geomWorld, err := geom.ContainerBox(world, t.dims.boxDims(), containerYaw(t.grabRel), t.label)
 		if err != nil {
 			return nil, err
 		}
@@ -311,7 +310,7 @@ func (s *beanjaminCoffee) observeAtPose(ctx, cancelCtx context.Context, t *picku
 	centroids := geom.Centroids(detected)
 	merged := geom.MergeNearbyCentroids(centroids, observeDedupMm)
 	ranked := geom.RankCentroidsByProximity(merged, gripperPosition)
-	candidates, err := geom.ContainerCandidates(ranked, t.dims.boxDims(), t.label)
+	candidates, err := geom.ContainerCandidates(ranked, t.dims.boxDims(), containerYaw(t.grabRel), t.label)
 	if err != nil {
 		return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, pass, err)
 	}

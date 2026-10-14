@@ -138,7 +138,7 @@ func TestAttachRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("to gripper frame: %v", err)
 	}
-	if err := s.addHeldItemFrame(gripperLocal); err != nil {
+	if err := s.addHeldItemFrame(gripperLocal, 0); err != nil {
 		t.Fatalf("addHeldItemFrame: %v", err)
 	}
 
@@ -166,46 +166,60 @@ func geometryToWorldInverse(fs *referenceframe.FrameSystem, inputs referencefram
 // point and rotated onto the container's axes — world-aligned, +Z up, at the
 // grab — while the geometry stays exactly where it was. The rotation is what the
 // no-spill goal cloud measures tilt against and the placement is what the pour
-// poses command; neither may move the collision box.
+// poses command; neither may move the collision box. A box built turned to the
+// grab heading must leave the frame where an unturned one does.
 func TestHeldItemFrameIsContainerAligned(t *testing.T) {
-	// Claws well away from world-aligned: tool axis along world +X, plus a roll.
-	clawsPose := spatialmath.NewPose(
-		r3.Vector{X: 200, Y: -50, Z: 300},
-		&spatialmath.OrientationVectorDegrees{OX: 1, Theta: 30},
-	)
-	fs := clawsStaticFS(t, clawsPose)
-	s := heldGeomService(t, fs)
-	inputs := referenceframe.NewZeroInputs(fs)
+	for _, yawDeg := range []float64{0, -161.4} {
+		// Claws well away from world-aligned: tool axis along world +X, plus a roll.
+		clawsPose := spatialmath.NewPose(
+			r3.Vector{X: 200, Y: -50, Z: 300},
+			&spatialmath.OrientationVectorDegrees{OX: 1, Theta: 30},
+		)
+		fs := clawsStaticFS(t, clawsPose)
+		s := heldGeomService(t, fs)
+		inputs := referenceframe.NewZeroInputs(fs)
 
-	worldCenter := r3.Vector{X: 250, Y: 80, Z: 120}
-	gripperLocal, err := geometryToWorldInverse(fs, inputs, testBox(t, spatialmath.NewPoseFromPoint(worldCenter)))
-	if err != nil {
-		t.Fatalf("to gripper frame: %v", err)
-	}
-	if err := s.addHeldItemFrame(gripperLocal); err != nil {
-		t.Fatalf("addHeldItemFrame: %v", err)
-	}
+		yaw := yawDeg * math.Pi / 180
+		worldCenter := r3.Vector{X: 250, Y: 80, Z: 120}
+		worldBox := testBox(t, spatialmath.NewPose(worldCenter, &spatialmath.OrientationVector{OZ: 1, Theta: yaw}))
+		gripperLocal, err := geometryToWorldInverse(fs, inputs, worldBox)
+		if err != nil {
+			t.Fatalf("to gripper frame: %v", err)
+		}
+		if err := s.addHeldItemFrame(gripperLocal, yaw); err != nil {
+			t.Fatalf("addHeldItemFrame: %v", err)
+		}
 
-	tf, err := fs.Transform(inputs.ToLinearInputs(),
-		referenceframe.NewPoseInFrame(heldItemFrameName, spatialmath.NewZeroPose()), referenceframe.World)
-	if err != nil {
-		t.Fatalf("transform held-item to world: %v", err)
-	}
-	framePose := tf.(*referenceframe.PoseInFrame).Pose()
+		tf, err := fs.Transform(inputs.ToLinearInputs(),
+			referenceframe.NewPoseInFrame(heldItemFrameName, spatialmath.NewZeroPose()), referenceframe.World)
+		if err != nil {
+			t.Fatalf("transform held-item to world: %v", err)
+		}
+		framePose := tf.(*referenceframe.PoseInFrame).Pose()
 
-	// The frame reads back world-aligned even though the claws are not.
-	if !spatialmath.OrientationAlmostEqual(framePose.Orientation(), spatialmath.NewZeroOrientation()) {
-		t.Errorf("held-item world orientation = %v, want world-aligned",
-			framePose.Orientation().OrientationVectorDegrees())
+		// The frame reads back world-aligned even though the claws are not.
+		if !spatialmath.OrientationAlmostEqual(framePose.Orientation(), spatialmath.NewZeroOrientation()) {
+			t.Errorf("yaw %v°: held-item world orientation = %v, want world-aligned",
+				yawDeg, framePose.Orientation().OrientationVectorDegrees())
+		}
+		// Its origin is the grip point's, so a held-item pose places the same point a
+		// grip-point pose would.
+		gripPointWorld := spatialmath.Compose(clawsPose, spatialmath.NewPoseFromPoint(r3.Vector{Z: gripPointOffsetMm})).Point()
+		requireVecEqual(t, framePose.Point(), gripPointWorld, 1e-6)
+		// And the geometry is unmoved by the frame's pose: RDK places a frame's
+		// geometry at the frame's parent, so it stays where the gripper-local pose
+		// puts it, turned as it was built.
+		requireVecEqual(t, heldItemWorldCenter(t, fs, inputs), worldCenter, 1e-4)
+		worldGeoms, err := referenceframe.FrameSystemGeometries(fs, inputs)
+		if err != nil {
+			t.Fatalf("frame system geometries: %v", err)
+		}
+		held := worldGeoms[heldItemFrameName].Geometries()[0]
+		if !spatialmath.OrientationAlmostEqual(held.Pose().Orientation(), worldBox.Pose().Orientation()) {
+			t.Errorf("yaw %v°: held box world orientation = %v, want %v", yawDeg,
+				held.Pose().Orientation().OrientationVectorDegrees(), worldBox.Pose().Orientation().OrientationVectorDegrees())
+		}
 	}
-	// Its origin is the grip point's, so a held-item pose places the same point a
-	// grip-point pose would.
-	gripPointWorld := spatialmath.Compose(clawsPose, spatialmath.NewPoseFromPoint(r3.Vector{Z: gripPointOffsetMm})).Point()
-	requireVecEqual(t, framePose.Point(), gripPointWorld, 1e-6)
-	// And the geometry is unmoved by the frame's pose: RDK places a frame's
-	// geometry at the frame's parent, so it stays where the gripper-local pose
-	// puts it.
-	requireVecEqual(t, heldItemWorldCenter(t, fs, inputs), worldCenter, 1e-4)
 }
 
 // TestHeldItemTracksGripper verifies the attached geometry moves with the gripper
@@ -215,7 +229,7 @@ func TestHeldItemTracksGripper(t *testing.T) {
 	s := heldGeomService(t, fs)
 
 	// Geometry at the grip point (grip-point-local zero pose).
-	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
+	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose()), 0); err != nil {
 		t.Fatalf("addHeldItemFrame: %v", err)
 	}
 
@@ -232,7 +246,7 @@ func TestHeldItemTracksGripper(t *testing.T) {
 func TestDetachRemovesFrame(t *testing.T) {
 	fs := clawsStaticFS(t, spatialmath.NewZeroPose())
 	s := heldGeomService(t, fs)
-	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
+	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose()), 0); err != nil {
 		t.Fatalf("addHeldItemFrame: %v", err)
 	}
 	if !s.heldItemAttached {
@@ -341,7 +355,7 @@ func TestClearHeldGeometry(t *testing.T) {
 	s := heldGeomService(t, fs)
 	s.cacheHeldGeometry(pickupLabelCup, testBox(t, spatialmath.NewZeroPose()))
 	s.cacheHeldGeometry(pickupLabelGlass, testBox(t, spatialmath.NewZeroPose()))
-	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
+	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose()), 0); err != nil {
 		t.Fatalf("addHeldItemFrame: %v", err)
 	}
 
@@ -432,7 +446,7 @@ func TestHeldItemHalfHeightMm(t *testing.T) {
 		r3.Vector{X: 10, Y: 20, Z: 30},
 		&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: 37},
 	)
-	if err := s.addHeldItemFrame(testBox(t, rotated)); err != nil {
+	if err := s.addHeldItemFrame(testBox(t, rotated), 0); err != nil {
 		t.Fatalf("addHeldItemFrame: %v", err)
 	}
 	got, ok := s.heldItemHalfHeightMm()
@@ -496,7 +510,7 @@ func TestSwapFilterForGlassNeedsGlassConfig(t *testing.T) {
 // drops only the filter and leaves it — and the restore must not take it away.
 func TestSwapFilterForGlassKeepsAttachedItem(t *testing.T) {
 	s := heldGeomService(t, filterOnArmFS(t))
-	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
+	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose()), 0); err != nil {
 		t.Fatalf("addHeldItemFrame: %v", err)
 	}
 	s.cacheHeldGeometry(pickupLabelGlass, testBox(t, spatialmath.NewZeroPose()))
@@ -575,7 +589,7 @@ func TestSwapFilterForGlassKeepsItemAttachedByTheAction(t *testing.T) {
 		t.Fatalf("swapFilterForGlass: %v", err)
 	}
 	// Stand in for the action re-grabbing the real glass mid-call.
-	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
+	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose()), 0); err != nil {
 		t.Fatalf("addHeldItemFrame: %v", err)
 	}
 

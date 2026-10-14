@@ -44,7 +44,7 @@ func stagingService(t *testing.T, fs *referenceframe.FrameSystem) *beanjaminCoff
 		return nil, nil
 	}}
 	pickupGrasp := testBox(t, spatialmath.NewZeroPose())
-	if err := s.addHeldItemFrame(pickupGrasp); err != nil {
+	if err := s.addHeldItemFrame(pickupGrasp, 0); err != nil {
 		t.Fatalf("addHeldItemFrame: %v", err)
 	}
 	s.cacheHeldGeometry(pickupLabelGlass, pickupGrasp)

@@ -81,7 +81,7 @@ func (s *beanjaminCoffee) attachDetectedGeometry(ctx context.Context, label stri
 	}
 	gripperLocal := geos[0]
 
-	if err := s.addHeldItemFrame(gripperLocal); err != nil {
+	if err := s.addHeldItemFrame(gripperLocal, s.heldContainerYaw(label)); err != nil {
 		return err
 	}
 	s.cacheHeldGeometry(label, gripperLocal)
@@ -100,7 +100,7 @@ func (s *beanjaminCoffee) reattachGeometry(label string) error {
 		s.activeOrderLogger().Debugf("reattach %s geometry: nothing cached, skipping", label)
 		return nil
 	}
-	if err := s.addHeldItemFrame(gripperLocal); err != nil {
+	if err := s.addHeldItemFrame(gripperLocal, s.heldContainerYaw(label)); err != nil {
 		return err
 	}
 	s.activeOrderLogger().Infof("re-attached cached %s geometry to gripper", label)
@@ -170,7 +170,32 @@ func (s *beanjaminCoffee) configuredContainerBox(
 	// The grab poses are required by Validate wherever their pickup is configured,
 	// so they are non-nil on any machine that reaches the matching flow.
 	grabOffset := relativePoseToSpatial(grabRel).Point()
-	return geom.ContainerBox(gripPointWorld.Sub(grabOffset), dims.boxDims(), label)
+	return geom.ContainerBox(gripPointWorld.Sub(grabOffset), dims.boxDims(), containerYaw(grabRel), label)
+}
+
+// containerYaw returns the heading, in radians about world Z, that the box for
+// a container grabbed at grabRel is built at: the grab's approach heading
+// (geom.GraspYaw). geom.PoseRelativeTo composes grabRel onto an identity-oriented
+// anchor, so the grab's world orientation is grabRel's own wherever the
+// container stands. 0 when no grab pose is configured.
+func containerYaw(grabRel *RelativePose) float64 {
+	if grabRel == nil {
+		return 0
+	}
+	return geom.GraspYaw(relativePoseToSpatial(grabRel).Orientation())
+}
+
+// heldContainerYaw is containerYaw for the configured grab of the item label
+// names — the yaw its box was built at, which heldItemFramePose takes back off.
+func (s *beanjaminCoffee) heldContainerYaw(label string) float64 {
+	switch label {
+	case pickupLabelGlass:
+		return containerYaw(s.cfg.GlassGrabRelativePose)
+	case pickupLabelMilk:
+		return containerYaw(s.cfg.MilkGrabRelativePose)
+	default:
+		return containerYaw(s.cfg.CupGrabRelativePose)
+	}
 }
 
 // withGlassActions are the actions with_glass may be passed to: the steps run
@@ -255,12 +280,16 @@ func (s *beanjaminCoffee) swapFilterForGlass(ctx context.Context) (func(), error
 
 // heldItemFramePose returns the transform the held-item frame is attached at,
 // relative to the grip point, for a container geometry already expressed in
-// grip-point coordinates.
+// grip-point coordinates and built yawRad about world Z (heldContainerYaw).
 //
-// The frame adopts the geometry's own orientation. geom.ContainerBox builds the
-// container box world-axis-aligned with its height on Z, so this makes the
-// frame's +Z the container's vertical axis: upright in the world at the moment of
-// the grab, and tilting with the container afterwards as the wrist moves.
+// The frame adopts the geometry's orientation with that yaw taken back off.
+// geom.ContainerBox builds the container box upright with its height on Z, so
+// this makes the frame's +Z the container's vertical axis — upright in the world
+// at the moment of the grab, and tilting with the container afterwards as the
+// wrist moves — and its X/Y the world's at the grab. The yaw only turns the
+// collision box to sit square in the jaws; removing it keeps the frame, and so
+// every authored theta about the container axis, independent of the grab
+// heading.
 // carryHeldLevel depends on that — the no-spill orientation bound only bounds
 // the drink's tilt if the frame it is measured against is the container's own —
 // and so do the pour poses, which are authored as the container's orientation
@@ -276,16 +305,19 @@ func (s *beanjaminCoffee) swapFilterForGlass(ctx context.Context) (func(), error
 // referenceframe.FrameSystem.Transform, and FrameSystemGeometriesForFrames), so
 // this rotation cannot move the collision box; it only changes the pose the
 // frame system reports for — and the planner drives — the held-item frame.
-func heldItemFramePose(gripperLocal spatialmath.Geometry) spatialmath.Pose {
-	return spatialmath.NewPoseFromOrientation(gripperLocal.Pose().Orientation())
+func heldItemFramePose(gripperLocal spatialmath.Geometry, yawRad float64) spatialmath.Pose {
+	unyaw := spatialmath.NewPoseFromOrientation(&spatialmath.OrientationVector{OZ: 1, Theta: -yawRad})
+	return spatialmath.NewPoseFromOrientation(
+		spatialmath.Compose(spatialmath.NewPoseFromOrientation(gripperLocal.Pose().Orientation()), unyaw).Orientation(),
+	)
 }
 
 // addHeldItemFrame adds the held-item static frame under the grip point,
-// carrying gripperLocal (geometry already expressed in grip-point coordinates)
-// and rotated onto the container's axes (heldItemFramePose). Any existing
-// held-item frame is removed first so attach is idempotent. Sets
-// heldItemAttached on success.
-func (s *beanjaminCoffee) addHeldItemFrame(gripperLocal spatialmath.Geometry) error {
+// carrying gripperLocal (geometry already expressed in grip-point coordinates,
+// built yawRad about world Z) and rotated onto the container's axes
+// (heldItemFramePose). Any existing held-item frame is removed first so attach
+// is idempotent. Sets heldItemAttached on success.
+func (s *beanjaminCoffee) addHeldItemFrame(gripperLocal spatialmath.Geometry, yawRad float64) error {
 	parent := s.cachedFS.Frame(gripPoint)
 	if parent == nil {
 		return fmt.Errorf("grip-point frame %q not found in frame system", gripPoint)
@@ -293,7 +325,7 @@ func (s *beanjaminCoffee) addHeldItemFrame(gripperLocal spatialmath.Geometry) er
 	if existing := s.cachedFS.Frame(heldItemFrameName); existing != nil {
 		s.cachedFS.RemoveFrame(existing)
 	}
-	frame, err := referenceframe.NewStaticFrameWithGeometry(heldItemFrameName, heldItemFramePose(gripperLocal), gripperLocal)
+	frame, err := referenceframe.NewStaticFrameWithGeometry(heldItemFrameName, heldItemFramePose(gripperLocal, yawRad), gripperLocal)
 	if err != nil {
 		return fmt.Errorf("create held-item frame: %w", err)
 	}

@@ -85,11 +85,11 @@ func TestMilkActionsRegistered(t *testing.T) {
 // cached shape by label.
 func TestHeldGeometryCachePerLabel(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{}}
-	cup, err := geom.ContainerBox(r3.Vector{}, (&ContainerDimensions{DiameterMm: 80, HeightMm: 95}).boxDims(), pickupLabelCup)
+	cup, err := geom.ContainerBox(r3.Vector{}, (&ContainerDimensions{DiameterMm: 80, HeightMm: 95}).boxDims(), 0, pickupLabelCup)
 	if err != nil {
 		t.Fatal(err)
 	}
-	milk, err := geom.ContainerBox(r3.Vector{}, (&ContainerDimensions{DiameterMm: 90, HeightMm: 250}).boxDims(), pickupLabelMilk)
+	milk, err := geom.ContainerBox(r3.Vector{}, (&ContainerDimensions{DiameterMm: 90, HeightMm: 250}).boxDims(), 0, pickupLabelMilk)
 	if err != nil {
 		t.Fatal(err)
 	}
