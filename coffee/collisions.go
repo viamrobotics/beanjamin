@@ -69,11 +69,10 @@ var heldItemServingAreaCollisions = []AllowedCollision{
 	{Frame1: heldItemFrameName, Frame2: "shelf-top"},
 }
 
-// heldItemStagingCollisions allows the held glass to approach the table surfaces
+// heldItemStagingCollisions allows the held glass to approach the table surface
 // it legitimately gets close to while being set down in the staging area.
 var heldItemStagingCollisions = []AllowedCollision{
 	{Frame1: heldItemFrameName, Frame2: "table"},
-	{Frame1: heldItemFrameName, Frame2: "table-right"},
 }
 
 // doorOpenCollisions permits the gripper to contact the grasp frame (the fridge
