@@ -28,31 +28,54 @@ func TestClassifyGripper(t *testing.T) {
 
 func TestGrabAndVerifyHolding(t *testing.T) {
 	cases := []struct {
-		name     string
-		doResp   map[string]any
-		doErr    error
-		wantErr  bool
-		wantMiss bool // expect errors.Is(err, errGripMissed)
+		name string
+		// positions returned by successive reads; the last repeats once exhausted.
+		positions  []float64
+		badResp    bool
+		doErr      error
+		timeoutSec float64
+		wantErr    bool
+		wantMiss   bool // expect errors.Is(err, errGripMissed)
+		wantOpen   bool // expect the jaws reopened
 	}{
-		{name: "holding", doResp: map[string]any{"pos": 520.0}},
-		{name: "miss", doResp: map[string]any{"pos": 357.0}, wantErr: true, wantMiss: true},
-		{name: "read error not miss", doErr: errors.New("boom"), wantErr: true, wantMiss: false},
-		{name: "malformed resp", doResp: map[string]any{}, wantErr: true, wantMiss: false},
+		{name: "holding", positions: []float64{520}},
+		{name: "miss reopens", positions: []float64{357, 850}, wantErr: true, wantMiss: true, wantOpen: true},
+		// Order 66936cfa: the jaws snagged at 755 with the cup still between them.
+		{name: "snagged open reopens", positions: []float64{755, 850}, wantErr: true, wantMiss: true, wantOpen: true},
+		{name: "reopen fails not miss", positions: []float64{357}, timeoutSec: 0.001, wantErr: true, wantOpen: true},
+		{name: "read error not miss", doErr: errors.New("boom"), wantErr: true},
+		{name: "malformed resp", badResp: true, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			reads, opened := 0, false
 			g := inject.NewGripper("g")
 			g.GrabFunc = func(context.Context, map[string]any) (bool, error) { return true, nil }
+			g.OpenFunc = func(context.Context, map[string]any) error { opened = true; return nil }
 			g.DoFunc = func(context.Context, map[string]any) (map[string]any, error) {
-				return tc.doResp, tc.doErr
+				reads++
+				if tc.doErr != nil {
+					return nil, tc.doErr
+				}
+				if tc.badResp {
+					return map[string]any{}, nil
+				}
+				return map[string]any{"pos": tc.positions[min(reads-1, len(tc.positions)-1)]}, nil
 			}
-			s := &beanjaminCoffee{cfg: &Config{}, gripper: g, logger: logging.NewTestLogger(t)}
+			s := &beanjaminCoffee{
+				cfg:     &Config{GripperOpenTimeoutSec: tc.timeoutSec},
+				gripper: g,
+				logger:  logging.NewTestLogger(t),
+			}
 			err := s.grabAndVerifyHolding(context.Background())
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("grabAndVerifyHolding err = %v, wantErr = %v", err, tc.wantErr)
 			}
 			if got := errors.Is(err, errGripMissed); got != tc.wantMiss {
 				t.Errorf("errors.Is(err, errGripMissed) = %v, want %v (err=%v)", got, tc.wantMiss, err)
+			}
+			if opened != tc.wantOpen {
+				t.Errorf("Open called = %v, want %v", opened, tc.wantOpen)
 			}
 		})
 	}

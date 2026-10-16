@@ -95,9 +95,13 @@ func (s *beanjaminCoffee) gripperPos(ctx context.Context) (float64, error) {
 
 // grabAndVerifyHolding closes the jaws and confirms they landed on an object.
 // Returns errGripMissed (wrapped) when the settled position is not in the
-// holding band. A failed position read returns a plain error (NOT errGripMissed)
-// so callers never treat an unreadable gripper as a missed grab. Absorbs the
-// post-grab settle pause so the read happens at rest.
+// holding band, after reopening the jaws: a close that reads as missed may be a
+// jaw that snagged on the way in and is still around the item, and leaving it
+// closing lets it catch the item after the caller has written the grab off.
+// The open is verified, so on errGripMissed the jaws are known open. A failed
+// position read or a failed reopen returns a plain error (NOT errGripMissed) so
+// callers never treat an unreadable or stuck gripper as a missed grab. Absorbs
+// the post-grab settle pause so the read happens at rest.
 func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context) error {
 	if err := s.settle(); err != nil {
 		return err
@@ -111,7 +115,11 @@ func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context) error {
 		return err
 	}
 	if state := s.classifyGripper(pos); state != gripperHolding {
-		return fmt.Errorf("%w (pos=%.0f, state=%s)", errGripMissed, pos, state)
+		missErr := fmt.Errorf("%w (pos=%.0f, state=%s)", errGripMissed, pos, state)
+		if err := s.openAndVerifyOpen(ctx); err != nil {
+			return fmt.Errorf("%v; reopen: %w", missErr, err)
+		}
+		return missErr
 	}
 	return nil
 }

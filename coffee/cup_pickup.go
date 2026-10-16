@@ -419,20 +419,20 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 
 	// 2. Open gripper before descending.
 	if err := s.gripper.Open(ctx, nil); err != nil {
-		s.recoverToObserve(ctx, cancelCtx, t)
+		s.recoverToObserve(ctx, cancelCtx, t, true)
 		return centroid, fmt.Errorf("open gripper for grab: %w", err)
 	}
 	time.Sleep(gripperPause)
 
 	// 3. Linear descent to grab pose.
 	if err := s.executePlan(ctx, grabPlan, defaultApproachConstraint, nil); err != nil {
-		s.recoverToObserve(ctx, cancelCtx, t)
+		s.recoverToObserve(ctx, cancelCtx, t, true)
 		return centroid, fmt.Errorf("grab centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
 
 	// 4. Grab and verify the gripper is holding the item.
 	if err := s.grabAndVerifyHolding(ctx); err != nil {
-		s.recoverToObserve(ctx, cancelCtx, t)
+		s.recoverToObserve(ctx, cancelCtx, t, !errors.Is(err, errGripMissed))
 		return centroid, fmt.Errorf("grab %s: %w", t.label, err)
 	}
 
@@ -458,14 +458,19 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 // pose so the next candidate (or the next observation) starts from a known
 // state. Errors are logged, not returned — the caller is already returning an
 // error.
-func (s *beanjaminCoffee) recoverToObserve(ctx, cancelCtx context.Context, t *pickupTarget) {
+//
+// closeJaws closes the gripper before traversing back: a stray open gripper has
+// a larger collision silhouette than a closed one. Pass false after a grip miss:
+// the arm is still at the grab pose with the reopened jaws around the item, so
+// closing there catches it, and the next candidate's open drops it mid-air.
+func (s *beanjaminCoffee) recoverToObserve(ctx, cancelCtx context.Context, t *pickupTarget, closeJaws bool) {
 	logger := s.activeOrderLogger()
-	// Close the gripper to a safe configuration before traversing back. A
-	// stray open gripper has a larger collision silhouette than a closed one.
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		logger.Warnf("dynamic %s pickup: recover: close gripper: %v", t.label, err)
+	if closeJaws {
+		if _, err := s.gripper.Grab(ctx, nil); err != nil {
+			logger.Warnf("dynamic %s pickup: recover: close gripper: %v", t.label, err)
+		}
+		time.Sleep(gripperPause)
 	}
-	time.Sleep(gripperPause)
 
 	observeStep := Step{PoseName: t.observeHomePose, PoseSwitch: t.observeSw, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, observeStep); err != nil {
