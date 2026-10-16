@@ -1241,6 +1241,23 @@ Returns `{"contributed": 5, "account": {...}, "reward": {...}, "funded": false}`
 
 A single credit returns `{"credited": true, "account": {...}}`; a list returns `{"credited": 1, "skipped": 1, "results": [...]}`.
 
+**`list_accounts`** — Every customer that has ever been credited, by current balance (`points`) largest first, ties broken by email.
+
+```json
+{ "list_accounts": true }
+```
+
+Returns:
+
+```json
+{
+  "accounts": [
+    { "email": "bob@example.com", "points": 12, "earned": 52, "contributed": 40 },
+    { "email": "alice@example.com", "points": 7, "earned": 12, "contributed": 5 }
+  ]
+}
+```
+
 `Status()` returns `{"rewards": [...]}` in the same shape as `get_rewards`.
 
 > **Trust:** the CRM believes the email it is sent. viam-server verifies each caller but doesn't tell modules who the caller is, so the rewards page reads the viewer's email from their own Viam access token and sends that. Anyone who can issue DoCommands on the machine can credit or spend any email's points.

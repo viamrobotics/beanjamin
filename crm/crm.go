@@ -128,8 +128,10 @@ func (c *crm) DoCommand(ctx context.Context, cmd map[string]any) (map[string]any
 		res, err = c.contributePoints(cmd["contribute_points"])
 	case cmd["credit_points"] != nil:
 		res, err = c.creditPoints(cmd["credit_points"])
+	case cmd["list_accounts"] != nil:
+		res, err = c.listAccounts(cmd["list_accounts"])
 	default:
-		err = fmt.Errorf("unknown command, supported: get_rewards, contribute_points, credit_points")
+		err = fmt.Errorf("unknown command, supported: get_rewards, contribute_points, credit_points, list_accounts")
 	}
 	if err != nil {
 		c.logger.Warnw("DoCommand", "error", err)
@@ -273,6 +275,20 @@ func (c *crm) creditPoints(raw any) (map[string]any, error) {
 		"skipped":  float64(len(reqs) - creditedCount),
 		"results":  results,
 	}, nil
+}
+
+// listAccounts answers list_accounts: true, with every account by balance,
+// largest first.
+func (c *crm) listAccounts(raw any) (map[string]any, error) {
+	if v, ok := raw.(bool); !ok || !v {
+		return nil, fmt.Errorf("list_accounts must be true, got %v", raw)
+	}
+	accts := c.store.Accounts()
+	out := make([]any, len(accts))
+	for i, a := range accts {
+		out[i] = accountMap(a)
+	}
+	return map[string]any{"accounts": out}, nil
 }
 
 // notifyRewardFunded posts the unlocked reward to Slack, detached from the

@@ -271,6 +271,39 @@ func (s *Store) Account(email string) (Account, error) {
 	return s.account(email), nil
 }
 
+// Accounts returns every email that has ever been credited, by balance largest
+// first and then by email, so equal balances list the same way on every call.
+// Only a credit creates an account, since contributing needs points.
+func (s *Store) Accounts() []Account {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	byEmail := make(map[string]*Account, len(s.ledger.Credits))
+	for email, credits := range s.ledger.Credits {
+		a := &Account{Email: email}
+		for _, c := range credits {
+			a.Earned += c.Points
+		}
+		byEmail[email] = a
+	}
+	for _, c := range s.ledger.Contributions {
+		if a, ok := byEmail[c.Email]; ok {
+			a.Contributed += c.Points
+		}
+	}
+	out := make([]Account, 0, len(byEmail))
+	for _, a := range byEmail {
+		a.Points = a.Earned - a.Contributed
+		out = append(out, *a)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Points != out[j].Points {
+			return out[i].Points > out[j].Points
+		}
+		return out[i].Email < out[j].Email
+	})
+	return out
+}
+
 // Rewards returns every configured reward's status, in config order.
 func (s *Store) Rewards() []RewardStatus {
 	s.mu.Lock()

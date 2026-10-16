@@ -122,6 +122,45 @@ func TestCreditPointsSkipsCreditedOrdersAndValidatesFirst(t *testing.T) {
 	}
 }
 
+func TestListAccountsSortsByBalance(t *testing.T) {
+	c := newTestCRM(t, nil)
+	if res := doCmd(t, c, map[string]any{"list_accounts": true}); len(res["accounts"].([]any)) != 0 {
+		t.Errorf("empty ledger accounts = %v, want none", res["accounts"])
+	}
+
+	doCmd(t, c, map[string]any{"credit_points": []any{
+		map[string]any{"email": "ada@example.com", "points": 2.0},
+		map[string]any{"email": "bob@example.com", "points": 5.0},
+		map[string]any{"email": "cy@example.com", "points": 4.0},
+	}})
+	doCmd(t, c, map[string]any{"contribute_points": map[string]any{
+		"email": "bob@example.com", "reward_id": "grinder", "points": 3.0,
+	}})
+
+	accounts := doCmd(t, c, map[string]any{"list_accounts": true})["accounts"].([]any)
+	// Ada and Bob tie on balance, so email order breaks it.
+	want := []map[string]any{
+		{"email": "cy@example.com", "points": 4.0, "earned": 4.0, "contributed": 0.0},
+		{"email": "ada@example.com", "points": 2.0, "earned": 2.0, "contributed": 0.0},
+		{"email": "bob@example.com", "points": 2.0, "earned": 5.0, "contributed": 3.0},
+	}
+	if len(accounts) != len(want) {
+		t.Fatalf("accounts = %v, want %d", accounts, len(want))
+	}
+	for i, w := range want {
+		got := accounts[i].(map[string]any)
+		for k, v := range w {
+			if got[k] != v {
+				t.Errorf("accounts[%d].%s = %v, want %v", i, k, got[k], v)
+			}
+		}
+	}
+
+	if _, err := c.DoCommand(context.Background(), map[string]any{"list_accounts": false}); err == nil {
+		t.Error("list_accounts: false succeeded, want an error")
+	}
+}
+
 func TestArgumentValidation(t *testing.T) {
 	c := newTestCRM(t, nil)
 	for name, cmd := range map[string]map[string]any{
