@@ -74,6 +74,8 @@ type crm struct {
 	slack  *report.Notifier // nil when slack_notifier_name is unset
 	// rewardsURL is the ordering app's rewards page, linked from the recap.
 	rewardsURL string
+	// machineName heads the recap; "" when it can't be learned.
+	machineName func(context.Context) string
 }
 
 func newCRM(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -104,11 +106,12 @@ func newCRM(ctx context.Context, deps resource.Dependencies, rawConf resource.Co
 
 	logger.Infof("ledger at %s, %d reward(s) configured", path, len(conf.Rewards))
 	return &crm{
-		name:       rawConf.ResourceName(),
-		logger:     logger,
-		store:      store,
-		slack:      slack,
-		rewardsURL: report.RewardsPageURL(os.Getenv("VIAM_MACHINE_PART_ID")),
+		name:        rawConf.ResourceName(),
+		logger:      logger,
+		store:       store,
+		slack:       slack,
+		rewardsURL:  report.RewardsPageURL(os.Getenv("VIAM_MACHINE_PART_ID")),
+		machineName: newMachineNameLookup(os.Getenv("VIAM_MACHINE_ID"), logger),
 	}, nil
 }
 

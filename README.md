@@ -1258,7 +1258,7 @@ Returns:
 }
 ```
 
-**`send_rewards_recap`** — Post where the rewards stand to Slack: the five open rewards furthest along by share of their target, each with a progress bar, its percentage (rounded down) and its points (`45 / 200`), and a link to the rewards page. Funded rewards are left out, since they were announced when they unlocked. The link targets the part the CRM runs on (`VIAM_MACHINE_PART_ID`), falling back to the app's dashboard when that is unset. Fails when `slack_notifier_name` is unset or unavailable, or the send fails. Suited to a scheduled job.
+**`send_rewards_recap`** — Post where the rewards stand to Slack, under a "Rewards status: <machine name>" heading: the five open rewards furthest along by share of their target, each with a progress bar, its percentage (rounded down) and its points (`45 / 200`), and a link to the rewards page. Funded rewards are left out, since they were announced when they unlocked. The link targets the part the CRM runs on (`VIAM_MACHINE_PART_ID`), falling back to the app's dashboard when that is unset. The machine name is fetched once from app.viam.com with the API key Viam gives the module; when that fails the heading is just "Rewards status" and the recap is still sent. Fails when `slack_notifier_name` is unset or unavailable, or the send fails. Suited to a scheduled job.
 
 ```json
 { "send_rewards_recap": true }

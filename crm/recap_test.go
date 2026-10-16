@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go.viam.com/rdk/logging"
 )
 
 func TestRecapRewardsRanksOpenRewardsByShare(t *testing.T) {
@@ -41,6 +43,22 @@ func TestRecapRewardsRanksOpenRewardsByShare(t *testing.T) {
 	}
 }
 
+func TestRecapTitle(t *testing.T) {
+	if got := recapTitle("Cappuccina"); got != "Rewards status: Cappuccina" {
+		t.Errorf("recapTitle = %q", got)
+	}
+	if got := recapTitle(""); got != "Rewards status" {
+		t.Errorf("recapTitle without a name = %q, want the bare title", got)
+	}
+}
+
+func TestMachineNameLookupWithoutMachineID(t *testing.T) {
+	lookup := newMachineNameLookup("", logging.NewTestLogger(t))
+	if got := lookup(context.Background()); got != "" {
+		t.Errorf("lookup without a machine ID = %q, want \"\"", got)
+	}
+}
+
 func TestRecapRoundsDown(t *testing.T) {
 	r := RewardStatus{Reward: Reward{PointsRequired: 200}, Contributed: 199}
 	if got := percentFunded(r); got != 99 {
@@ -64,6 +82,7 @@ func TestSendRewardsRecapPostsTopRewardsWithLink(t *testing.T) {
 	}
 	c.store = store
 	c.rewardsURL = "https://example.com/?view=rewards&partId=p1"
+	c.machineName = func(context.Context) string { return "Cappuccina" }
 	mustCredit(t, store, "ada@example.com", 100)
 	// r0 gets 1 point, r1 2, ... r5 6; r6 is funded and must not appear.
 	for i := range 6 {
@@ -91,7 +110,7 @@ func TestSendRewardsRecapPostsTopRewardsWithLink(t *testing.T) {
 	for _, b := range msg["blocks"].([]any) {
 		fmt.Fprintf(&body, "%v\n", b)
 	}
-	for _, want := range []string{"*Reward 5*", "*60%* · 6 / 10 points", "*20%* · 2 / 10 points", c.rewardsURL} {
+	for _, want := range []string{"☕ Rewards status: Cappuccina", "*Reward 5*", "*60%* · 6 / 10 points", "*20%* · 2 / 10 points", c.rewardsURL} {
 		if !strings.Contains(body.String(), want) {
 			t.Errorf("recap blocks lack %q:\n%s", want, body.String())
 		}
@@ -101,7 +120,7 @@ func TestSendRewardsRecapPostsTopRewardsWithLink(t *testing.T) {
 			t.Errorf("recap blocks list %q, which is funded or outside the top %d", absent, recapTopN)
 		}
 	}
-	if text, _ := msg["text"].(string); !strings.HasPrefix(text, "Rewards progress: Reward 5 60%") {
+	if text, _ := msg["text"].(string); !strings.HasPrefix(text, "Rewards status: Cappuccina · Reward 5 60%") {
 		t.Errorf("recap text = %q", text)
 	}
 }

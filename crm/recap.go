@@ -24,9 +24,10 @@ func (c *crm) sendRewardsRecap(ctx context.Context, raw any) (map[string]any, er
 		return nil, fmt.Errorf("send_rewards_recap needs slack_notifier_name to be configured and available")
 	}
 	top := recapRewards(c.store.Rewards())
+	title := recapTitle(c.machineName(ctx))
 	ctx, cancel := context.WithTimeout(ctx, notifySlackTimeout)
 	defer cancel()
-	if _, err := c.slack.Send(ctx, rewardsRecapText(top), rewardsRecapBlocks(top, c.rewardsURL)); err != nil {
+	if _, err := c.slack.Send(ctx, rewardsRecapText(title, top), rewardsRecapBlocks(title, top, c.rewardsURL)); err != nil {
 		return nil, fmt.Errorf("sending rewards recap to Slack: %w", err)
 	}
 	c.logger.Infof("sent the rewards recap to Slack with %d reward(s)", len(top))
@@ -68,28 +69,37 @@ func progressBar(r RewardStatus) string {
 	return strings.Repeat("█", filled) + strings.Repeat("░", recapBarWidth-filled)
 }
 
+// recapTitle names the machine the rewards belong to, since several machines
+// can post to one channel. It drops the name when the lookup failed.
+func recapTitle(machineName string) string {
+	if machineName == "" {
+		return "Rewards status"
+	}
+	return "Rewards status: " + machineName
+}
+
 // rewardsRecapText is the plain-text fallback Slack shows in notifications.
-func rewardsRecapText(rs []RewardStatus) string {
+func rewardsRecapText(title string, rs []RewardStatus) string {
 	if len(rs) == 0 {
-		return "Rewards progress: no rewards are open right now"
+		return title + " · no rewards are open right now"
 	}
 	parts := make([]string, len(rs))
 	for i, r := range rs {
 		parts[i] = fmt.Sprintf("%s %d%%", r.Name, percentFunded(r))
 	}
-	return "Rewards progress: " + strings.Join(parts, ", ")
+	return title + " · " + strings.Join(parts, ", ")
 }
 
 // rewardsRecapBlocks is the Slack layout: a heading, one section per reward
 // with its bar, share and points, and a footer linking the rewards page.
-func rewardsRecapBlocks(rs []RewardStatus, rewardsURL string) []any {
+func rewardsRecapBlocks(title string, rs []RewardStatus, rewardsURL string) []any {
 	section := func(text string) map[string]any {
 		return map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": text}}
 	}
 	blocks := []any{
 		map[string]any{
 			"type": "header",
-			"text": map[string]any{"type": "plain_text", "text": "☕ Where the rewards stand", "emoji": true},
+			"text": map[string]any{"type": "plain_text", "text": "☕ " + title, "emoji": true},
 		},
 	}
 	if len(rs) == 0 {
