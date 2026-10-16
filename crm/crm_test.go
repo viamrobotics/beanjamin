@@ -26,7 +26,7 @@ func newTestCRM(t *testing.T, sent chan map[string]any) *crm {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	c := &crm{logger: logging.NewTestLogger(t), store: store, machineName: func(context.Context) string { return "" }}
+	c := &crm{logger: logging.NewTestLogger(t), store: store, recapHeader: defaultRewardsRecapHeader}
 	if sent != nil {
 		slack := inject.NewGenericService("slack")
 		slack.DoFunc = func(_ context.Context, cmd map[string]any) (map[string]any, error) {

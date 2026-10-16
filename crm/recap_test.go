@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"go.viam.com/rdk/logging"
 )
 
 func TestRecapRewardsRanksOpenRewardsByShare(t *testing.T) {
@@ -43,19 +41,15 @@ func TestRecapRewardsRanksOpenRewardsByShare(t *testing.T) {
 	}
 }
 
-func TestRecapTitle(t *testing.T) {
-	if got := recapTitle("Cappuccina"); got != "Rewards status: Cappuccina" {
-		t.Errorf("recapTitle = %q", got)
-	}
-	if got := recapTitle(""); got != "Rewards status" {
-		t.Errorf("recapTitle without a name = %q, want the bare title", got)
-	}
-}
-
-func TestMachineNameLookupWithoutMachineID(t *testing.T) {
-	lookup := newMachineNameLookup("", logging.NewTestLogger(t))
-	if got := lookup(context.Background()); got != "" {
-		t.Errorf("lookup without a machine ID = %q, want \"\"", got)
+func TestRewardsRecapHeaderDefaults(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                           defaultRewardsRecapHeader,
+		"   ":                        defaultRewardsRecapHeader,
+		"Rewards status: Cappuccina": "Rewards status: Cappuccina",
+	} {
+		if got := (&Config{RewardsRecapHeader: in}).rewardsRecapHeader(); got != want {
+			t.Errorf("rewardsRecapHeader(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -82,7 +76,7 @@ func TestSendRewardsRecapPostsTopRewardsWithLink(t *testing.T) {
 	}
 	c.store = store
 	c.rewardsURL = "https://example.com/?view=rewards&partId=p1"
-	c.machineName = func(context.Context) string { return "Cappuccina" }
+	c.recapHeader = "Rewards status: Cappuccina"
 	mustCredit(t, store, "ada@example.com", 100)
 	// r0 gets 1 point, r1 2, ... r5 6; r6 is funded and must not appear.
 	for i := range 6 {

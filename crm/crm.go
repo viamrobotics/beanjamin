@@ -43,6 +43,19 @@ type Config struct {
 	// SlackNotifierName is an optional viam:notifications:slack service that
 	// announces each reward as it becomes fully funded.
 	SlackNotifierName string `json:"slack_notifier_name,omitempty"`
+	// RewardsRecapHeader heads the send_rewards_recap message, so machines
+	// posting to one channel can be told apart. Defaults to "Rewards status".
+	RewardsRecapHeader string `json:"rewards_recap_header,omitempty"`
+}
+
+// defaultRewardsRecapHeader heads the recap when rewards_recap_header is unset.
+const defaultRewardsRecapHeader = "Rewards status"
+
+func (cfg *Config) rewardsRecapHeader() string {
+	if h := strings.TrimSpace(cfg.RewardsRecapHeader); h != "" {
+		return h
+	}
+	return defaultRewardsRecapHeader
 }
 
 // Validate checks data_dir and the rewards, and returns the Slack notifier as
@@ -74,8 +87,8 @@ type crm struct {
 	slack  *report.Notifier // nil when slack_notifier_name is unset
 	// rewardsURL is the ordering app's rewards page, linked from the recap.
 	rewardsURL string
-	// machineName heads the recap; "" when it can't be learned.
-	machineName func(context.Context) string
+	// recapHeader heads the rewards recap.
+	recapHeader string
 }
 
 func newCRM(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -111,7 +124,7 @@ func newCRM(ctx context.Context, deps resource.Dependencies, rawConf resource.Co
 		store:       store,
 		slack:       slack,
 		rewardsURL:  report.RewardsPageURL(os.Getenv("VIAM_MACHINE_PART_ID")),
-		machineName: newMachineNameLookup(os.Getenv("VIAM_MACHINE_ID"), logger),
+		recapHeader: conf.rewardsRecapHeader(),
 	}, nil
 }
 

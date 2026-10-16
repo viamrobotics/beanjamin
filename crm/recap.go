@@ -24,10 +24,10 @@ func (c *crm) sendRewardsRecap(ctx context.Context, raw any) (map[string]any, er
 		return nil, fmt.Errorf("send_rewards_recap needs slack_notifier_name to be configured and available")
 	}
 	top := recapRewards(c.store.Rewards())
-	title := recapTitle(c.machineName(ctx))
 	ctx, cancel := context.WithTimeout(ctx, notifySlackTimeout)
 	defer cancel()
-	if _, err := c.slack.Send(ctx, rewardsRecapText(title, top), rewardsRecapBlocks(title, top, c.rewardsURL)); err != nil {
+	text, blocks := rewardsRecapText(c.recapHeader, top), rewardsRecapBlocks(c.recapHeader, top, c.rewardsURL)
+	if _, err := c.slack.Send(ctx, text, blocks); err != nil {
 		return nil, fmt.Errorf("sending rewards recap to Slack: %w", err)
 	}
 	c.logger.Infof("sent the rewards recap to Slack with %d reward(s)", len(top))
@@ -67,15 +67,6 @@ func percentFunded(r RewardStatus) int {
 func progressBar(r RewardStatus) string {
 	filled := min(r.Contributed*recapBarWidth/r.PointsRequired, recapBarWidth)
 	return strings.Repeat("█", filled) + strings.Repeat("░", recapBarWidth-filled)
-}
-
-// recapTitle names the machine the rewards belong to, since several machines
-// can post to one channel. It drops the name when the lookup failed.
-func recapTitle(machineName string) string {
-	if machineName == "" {
-		return "Rewards status"
-	}
-	return "Rewards status: " + machineName
 }
 
 // rewardsRecapText is the plain-text fallback Slack shows in notifications.

@@ -1162,6 +1162,7 @@ Emails are matched case-insensitively (stored lowercased), so the address typed 
 {
   "data_dir": "<string>",
   "slack_notifier_name": "<string>",
+  "rewards_recap_header": "<string>",
   "rewards": [
     {
       "id": "<string>",
@@ -1178,6 +1179,7 @@ Emails are matched case-insensitively (stored lowercased), so the address typed 
 | `data_dir`            | string | Yes      | Directory holding the ledger, `<data_dir>/loyalty.json`. It is the only record of everyone's points, so pick a path that survives module upgrades and back it up. Created if missing. |
 | `rewards`             | list   | No       | Rewards customers can fund. `id` keys the recorded contributions, so keep it stable — renaming it orphans what was put in. `name` and `points_required` (> 0) are required; `description` is optional. Raising a funded reward's `points_required` above what it holds reopens it. |
 | `slack_notifier_name` | string | No       | A `viam:notifications:slack` service that announces each reward as it becomes fully funded, listing every contributor, and receives `send_rewards_recap`. If it is configured but unavailable the CRM still runs, without announcements. |
+| `rewards_recap_header` | string | No | Heading of the `send_rewards_recap` message, e.g. `"Rewards status: Cappuccina"` to tell machines apart in a shared channel. Defaults to `"Rewards status"`. |
 ### Example Configuration
 
 ```json
@@ -1258,7 +1260,7 @@ Returns:
 }
 ```
 
-**`send_rewards_recap`** — Post where the rewards stand to Slack, under a "Rewards status: <machine name>" heading: the five open rewards furthest along by share of their target, each with a progress bar, its percentage (rounded down) and its points (`45 / 200`), and a link to the rewards page. Funded rewards are left out, since they were announced when they unlocked. The link targets the part the CRM runs on (`VIAM_MACHINE_PART_ID`), falling back to the app's dashboard when that is unset. The machine name is fetched once from app.viam.com with the API key Viam gives the module; when that fails the heading is just "Rewards status" and the recap is still sent. Fails when `slack_notifier_name` is unset or unavailable, or the send fails. Suited to a scheduled job.
+**`send_rewards_recap`** — Post where the rewards stand to Slack, under the `rewards_recap_header` heading: the five open rewards furthest along by share of their target, each with a progress bar, its percentage (rounded down) and its points (`45 / 200`), and a link to the rewards page. Funded rewards are left out, since they were announced when they unlocked. The link targets the part the CRM runs on (`VIAM_MACHINE_PART_ID`), falling back to the app's dashboard when that is unset. Fails when `slack_notifier_name` is unset or unavailable, or the send fails. Suited to a scheduled job.
 
 ```json
 { "send_rewards_recap": true }
