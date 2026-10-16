@@ -1177,7 +1177,7 @@ Emails are matched case-insensitively (stored lowercased), so the address typed 
 | --------------------- | ------ | -------- | ----------- |
 | `data_dir`            | string | Yes      | Directory holding the ledger, `<data_dir>/loyalty.json`. It is the only record of everyone's points, so pick a path that survives module upgrades and back it up. Created if missing. |
 | `rewards`             | list   | No       | Rewards customers can fund. `id` keys the recorded contributions, so keep it stable — renaming it orphans what was put in. `name` and `points_required` (> 0) are required; `description` is optional. Raising a funded reward's `points_required` above what it holds reopens it. |
-| `slack_notifier_name` | string | No       | A `viam:notifications:slack` service that announces each reward as it becomes fully funded, listing every contributor. If it is configured but unavailable the CRM still runs, without announcements. |
+| `slack_notifier_name` | string | No       | A `viam:notifications:slack` service that announces each reward as it becomes fully funded, listing every contributor, and receives `send_rewards_recap`. If it is configured but unavailable the CRM still runs, without announcements. |
 ### Example Configuration
 
 ```json
@@ -1257,6 +1257,14 @@ Returns:
   ]
 }
 ```
+
+**`send_rewards_recap`** — Post where the rewards stand to Slack: the five open rewards furthest along by share of their target, each with a progress bar, its percentage (rounded down) and its points (`45 / 200`), and a link to the rewards page. Funded rewards are left out, since they were announced when they unlocked. The link targets the part the CRM runs on (`VIAM_MACHINE_PART_ID`), falling back to the app's dashboard when that is unset. Fails when `slack_notifier_name` is unset or unavailable, or the send fails. Suited to a scheduled job.
+
+```json
+{ "send_rewards_recap": true }
+```
+
+Returns `{"sent": true, "rewards": [...]}`, the rewards posted in the same shape as `get_rewards`.
 
 `Status()` returns `{"rewards": [...]}` in the same shape as `get_rewards`.
 

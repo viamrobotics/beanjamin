@@ -30,3 +30,14 @@ func TestBuildClipDataURL(t *testing.T) {
 		t.Errorf("ClipDataURL without org = %q, want %q", got, want)
 	}
 }
+
+func TestRewardsPageURL(t *testing.T) {
+	want := beanjaminAppURL + "?view=rewards&partId=part-1"
+	if got := RewardsPageURL("part-1"); got != want {
+		t.Errorf("RewardsPageURL = %q, want %q", got, want)
+	}
+	// Without a part the page can't dial the CRM, so the dashboard is the link.
+	if got := RewardsPageURL(""); got != beanjaminAppURL {
+		t.Errorf("RewardsPageURL without a part = %q, want %q", got, beanjaminAppURL)
+	}
+}

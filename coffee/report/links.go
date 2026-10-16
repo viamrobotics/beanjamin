@@ -1,6 +1,20 @@
 package report
 
-import "fmt"
+import (
+	"fmt"
+	"net/url"
+)
+
+// RewardsPageURL links the ordering app's loyalty page for the machine part
+// that hosts the CRM, from the VIAM_MACHINE_PART_ID env var Viam injects. The
+// page dials that part to reach the CRM. Without a part ID it links the app's
+// dashboard instead, which lists every machine's rewards page.
+func RewardsPageURL(partID string) string {
+	if partID == "" {
+		return beanjaminAppURL
+	}
+	return beanjaminAppURL + "?view=rewards&partId=" + url.QueryEscape(partID)
+}
 
 // MachineLogsURL constructs an app.viam.com deep-link to this machine's
 // logs from the VIAM_MACHINE_ID and VIAM_PRIMARY_ORG_ID env vars Viam injects
