@@ -304,7 +304,7 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	}
 	if err := s.moveToRawPose(ctx,
 		&poseData{pose: graspWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
-		defaultApproachConstraint, collisions, nil); err != nil {
+		defaultApproachConstraint, collisions, s.slowMoveOptions()); err != nil {
 		return fmt.Errorf("move to grasp (ball center): %w", err)
 	}
 	if s.gripper != nil {
@@ -422,6 +422,8 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	// geom.PoseRelativeTo applies approachRel's translation in world axes, so a
 	// standoff left at the start angle would back out into the swung panel.
 	retractWorld := geom.PoseRelativeTo(ballEnd.Point(), yawAboutWorldZ(approachRel, yawRatio*(toDeg-fromDeg)))
+	// The jaws are open and off the handle, so the retract runs at the arm's
+	// default speed.
 	if err := s.moveToRawPose(ctx,
 		&poseData{pose: retractWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
 		defaultApproachConstraint, collisions, nil); err != nil {

@@ -111,9 +111,9 @@ func (s *beanjaminCoffee) purgeSteps() []Step {
 	return []Step{
 		{PoseName: filterPosePurgeApproach, PoseSwitch: s.filterSw},
 		{PoseName: filterPosePurgePress, PoseSwitch: s.filterSw, Pause: hold,
-			LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterCoffeeButtonCollisions},
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterCoffeeButtonCollisions, MoveOptions: s.slowMoveOptions()},
 		{PoseName: filterPosePurgeApproach, PoseSwitch: s.filterSw,
-			LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterCoffeeButtonCollisions},
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterCoffeeButtonCollisions, MoveOptions: s.slowMoveOptions()},
 		{PoseName: filterPoseHome, PoseSwitch: s.filterSw},
 	}
 }

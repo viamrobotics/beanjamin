@@ -203,7 +203,8 @@ func (s *beanjaminCoffee) graspBrewedCup(ctx, cancelCtx context.Context) error {
 	if s.gripper == nil {
 		return fmt.Errorf("grasp_brewed_cup: no gripper configured")
 	}
-	grabStep := Step{PoseName: clawPoseCupReadyForCoffee, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	grabStep := Step{PoseName: clawPoseCupReadyForCoffee, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause,
+		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
 		return fmt.Errorf("grasp_brewed_cup: %w", err)
 	}
@@ -226,7 +227,8 @@ func (s *beanjaminCoffee) graspBrewedCup(ctx, cancelCtx context.Context) error {
 			s.activeOrderLogger().Warnf("grasp_brewed_cup: model cup from cup_dimensions failed, continuing untracked: %v", err)
 		}
 	}
-	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions)}
+	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions),
+		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("grasp_brewed_cup: %w", err)
 	}
@@ -258,7 +260,8 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
 	// Descend onto the glass; it stays a world obstacle, but allow the jaws to
-	// contact it for this step (the rest of the arm still routes around it).
+	// contact it for this step (the rest of the arm still routes around it). The
+	// gripper is empty on the way down, so the arm's default speed.
 	grabStep := Step{PoseName: clawPoseStaging, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.stagedGlassGrabCollisions()}
 	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
 		return fmt.Errorf("grab_staged_glass: %w", err)
@@ -270,7 +273,8 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 	if err := s.regrabStagedGlass(ctx); err != nil {
 		s.activeOrderLogger().Warnf("grab_staged_glass: reattach glass geometry failed, continuing untracked: %v", err)
 	}
-	retreatStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	retreatStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause,
+		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
@@ -296,7 +300,8 @@ func (s *beanjaminCoffee) moveToIceDispense(ctx, cancelCtx context.Context) erro
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("move_to_ice_dispense: %w", err)
 	}
-	dispenseStep := Step{PoseName: clawPoseIceMachineDispense, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	dispenseStep := Step{PoseName: clawPoseIceMachineDispense, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause,
+		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, dispenseStep); err != nil {
 		return fmt.Errorf("move_to_ice_dispense: %w", err)
 	}
@@ -320,7 +325,8 @@ func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 	}
 	s.incrementSensorReading(ctx, s.usageSensor, "ice machine", "ice_dispenses", 1)
 
-	retreatStep := Step{PoseName: clawPoseIceMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	retreatStep := Step{PoseName: clawPoseIceMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause,
+		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("dispense_ice: %w", err)
 	}
@@ -411,11 +417,13 @@ func (s *beanjaminCoffee) checkIceLevel(ctx, _ context.Context) error {
 func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 	// The glass is full of ice here — carry it level to staging so nothing bounces
 	// out on the traverse from the ice machine (NoSpill).
-	approachStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, Pause: shortPause, NoSpill: true}
+	approachStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, Pause: shortPause, NoSpill: true,
+		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
-	placeStep := Step{PoseName: clawPoseStaging, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemStagingCollisions)}
+	placeStep := Step{PoseName: clawPoseStaging, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemStagingCollisions),
+		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
@@ -442,8 +450,9 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 // dwells so the cup drains, then returns it upright before moving away.
 func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 	// The cup is full of espresso here — carry it level to the pour position so it
-	// doesn't slosh before the pour tilt (NoSpill).
-	approachStep := Step{PoseName: clawPosePourApproach, PoseSwitch: s.clawsSw, Pause: shortPause, NoSpill: true}
+	// doesn't slosh before the pour tilt (NoSpill), and slow.
+	approachStep := Step{PoseName: clawPosePourApproach, PoseSwitch: s.clawsSw, Pause: shortPause, NoSpill: true,
+		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
@@ -455,21 +464,19 @@ func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 	// glass stays a hard obstacle here — the cup must clear it, never drive in.
 	// pourConstraint keeps the planner from detouring the cup off the glass; a
 	// tilt it can't finish is executed as far as it planned, pouring less
-	// rather than spilling. Pivots default to the slow-movement velocity;
-	// override it so the pour isn't dragged out (tune via
-	// pour_vel_degs_per_sec).
+	// rather than spilling. It runs at the pour speed rather than the slow one
+	// so the pour isn't dragged out (tune via pour_vel_degs_per_sec).
 	pourStep := Step{PoseName: clawPosePour, PoseSwitch: s.clawsSw, PivotFromPose: clawPosePourApproach, PivotDegreesPerStep: 5,
 		LinearConstraint: pourConstraint, AcceptPartialPlan: true, MoveOptions: s.pourMoveOptions(), Pause: pourPause}
 	if err := s.executeStep(ctx, cancelCtx, pourStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
 	// Return upright along the same pivot so any residual drip stays over the
-	// glass, at the default (slow) pivot speed: a fast return flicks the dregs
-	// left in the cup over the rim. Constrained like the tilt, but it must
-	// complete: the cup is carried away next, and a still-tilted one drips the
-	// whole way.
+	// glass, at the slow speed: a fast return flicks the dregs left in the cup
+	// over the rim. Constrained like the tilt, but it must complete: the cup is
+	// carried away next, and a still-tilted one drips the whole way.
 	uprightStep := Step{PoseName: clawPosePourApproach, PoseSwitch: s.clawsSw, PivotFromPose: clawPosePour, PivotDegreesPerStep: 5,
-		LinearConstraint: pourConstraint, Pause: shortPause}
+		LinearConstraint: pourConstraint, Pause: shortPause, MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
@@ -487,8 +494,8 @@ const defaultPourVelDegsPerSec = 60.0
 
 // pourMoveOptions returns the per-step MoveOptions applied to the pour tilt,
 // using the configured pour velocity or the default. We want the speed and acceleration to be higher
-// so it tilts faster and reduces spills. The return upright is left at the
-// slow pivot default, since a fast return spills what is left in the container.
+// so it tilts faster and reduces spills. The return upright runs at the slow
+// speed, since a fast return spills what is left in the container.
 func (s *beanjaminCoffee) pourMoveOptions() *StepMoveOptions {
 	return &StepMoveOptions{
 		MaxVelDegsPerSec:  orDefault(s.cfg.PourVelDegsPerSec, defaultPourVelDegsPerSec),

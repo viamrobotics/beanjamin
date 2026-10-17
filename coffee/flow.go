@@ -238,7 +238,7 @@ func (s *beanjaminCoffee) handOffStep(ctx context.Context, f *flow, step Step) e
 		name:      step.PoseName,
 		positions: positions,
 		start:     from,
-		speed:     s.moveOptionsFor(step.LinearConstraint, step.MoveOptions),
+		speed:     buildMoveOptions(step.MoveOptions),
 		sleep:     step.Pause,
 	})
 }

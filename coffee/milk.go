@@ -148,9 +148,9 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 	if err := s.requireMilk("pour_milk"); err != nil {
 		return err
 	}
-	// The bottle is full and open here, so carry it level (NoSpill), which also
-	// defaults the move to the slow tier.
-	approachStep := Step{PoseName: clawPoseMilkPourApproach, PoseSwitch: s.clawsSw, Pause: shortPause, NoSpill: true}
+	// The bottle is full and open here, so carry it level (NoSpill) and slow.
+	approachStep := Step{PoseName: clawPoseMilkPourApproach, PoseSwitch: s.clawsSw, Pause: shortPause, NoSpill: true,
+		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}
@@ -163,11 +163,11 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 	}
 	// Return upright along the same pivot (lowering the bottle as it rights,
 	// mirroring the pour) so any residual drip stays over the glass, at the
-	// default (slow) pivot speed so the milk left in the bottle doesn't slosh
-	// out. The return is constrained the same way but must complete: carrying
-	// a still-tilted bottle away would pour milk along the whole carry.
+	// slow speed so the milk left in the bottle doesn't slosh out. The return is
+	// constrained the same way but must complete: carrying a still-tilted bottle
+	// away would pour milk along the whole carry.
 	uprightStep := Step{PoseName: clawPoseMilkPourApproach, PoseSwitch: s.clawsSw, PivotFromPose: clawPoseMilkPour, PivotDegreesPerStep: 5,
-		LinearConstraint: pourConstraint, Pause: shortPause}
+		LinearConstraint: pourConstraint, Pause: shortPause, MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}
@@ -217,7 +217,7 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 		centroid.X, centroid.Y, centroid.Z)
 
 	// The bottle still holds milk, so carry it level back to the fridge.
-	if err := s.carryHeldLevel(ctx, approachPD, nil, nil); err != nil {
+	if err := s.carryHeldLevel(ctx, approachPD, nil, s.slowMoveOptions()); err != nil {
 		return fmt.Errorf("return_milk: approach the shelf: %w", err)
 	}
 
@@ -225,7 +225,7 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 	// keeps the free traverse clear of the shelves. The shield is the "fridge"
 	// frame itself, so this also lets the bottle reach the shelf it stands on.
 	descentCollisions := s.pickupAreaShieldCollisions(milkAreaShieldFrameName)
-	if err := s.moveToRawPose(ctx, placePD, defaultApproachConstraint, descentCollisions, nil); err != nil {
+	if err := s.moveToRawPose(ctx, placePD, defaultApproachConstraint, descentCollisions, s.slowMoveOptions()); err != nil {
 		return fmt.Errorf("return_milk: descend onto the shelf: %w", err)
 	}
 
@@ -239,6 +239,7 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 
 	// The gripper starts inside the interior shield, so it stays allowed for the
 	// straight-up retreat (the held-item pair drops out now that nothing is held).
+	// The gripper is empty, so the arm's default speed.
 	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, s.pickupAreaShieldCollisions(milkAreaShieldFrameName), nil); err != nil {
 		return fmt.Errorf("return_milk: retreat after releasing the bottle: %v", err)
 	}

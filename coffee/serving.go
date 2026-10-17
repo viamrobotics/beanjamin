@@ -51,7 +51,8 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	if err := s.executeStep(ctx, cancelCtx, cupPlacementApproach); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
-	readyStep := Step{PoseName: clawPoseCupReadyForCoffee, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions)}
+	readyStep := Step{PoseName: clawPoseCupReadyForCoffee, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions),
+		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, readyStep); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
@@ -66,7 +67,7 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	}
 	s.detachHeldGeometry()
 
-	// Move away from the cup.
+	// Move away from the cup. The gripper is empty, so the arm's default speed.
 	exitStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
 	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
@@ -201,7 +202,7 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, tileW
 	// moved and the cup is still held — the caller can try the next slot.
 	carry := func() error { return s.moveToRawPose(ctx, approachPD, nil, nil, nil) }
 	if contents == heldFilled {
-		carry = func() error { return s.carryHeldLevel(ctx, approachPD, nil, nil) }
+		carry = func() error { return s.carryHeldLevel(ctx, approachPD, nil, s.slowMoveOptions()) }
 	}
 	if err := carry(); err != nil {
 		return fmt.Errorf("approach slot (x=%.1f, y=%.1f): %w", tileWorld.X, tileWorld.Y, err)
@@ -219,7 +220,7 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, tileW
 
 	// 2. Linear descent to the drop pose. A planning failure leaves the arm at
 	// the approach pose still holding the cup — caller can try the next slot.
-	if err := s.moveToRawPose(ctx, dropPD, defaultApproachConstraint, descentCollisions, nil); err != nil {
+	if err := s.moveToRawPose(ctx, dropPD, defaultApproachConstraint, descentCollisions, s.slowMoveOptions()); err != nil {
 		return fmt.Errorf("descend into slot (x=%.1f, y=%.1f): %w", tileWorld.X, tileWorld.Y, err)
 	}
 
@@ -236,7 +237,8 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, tileW
 	// 4. Linear retreat back to the approach pose. The cup is released, but the
 	// gripper/claws start inside the serving-area-shield, so the shield must stay
 	// allowed for the straight-up retreat to plan out of the slot (the held-item
-	// pair drops out now that nothing is attached).
+	// pair drops out now that nothing is attached). Nothing is held, so the arm's
+	// default speed.
 	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, s.servingAreaShieldCollisions(), nil); err != nil {
 		return fmt.Errorf("retreat after releasing cup (slot x=%.1f, y=%.1f): %v", tileWorld.X, tileWorld.Y, err)
 	}

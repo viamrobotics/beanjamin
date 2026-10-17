@@ -219,14 +219,15 @@ const (
 	defaultSlowMovementAccDegsPerSec2 = 25.0
 )
 
-// Arm moves fall into three speeds. Most run at the arm's own DEFAULT speed
-// (no override) — an ordinary free traverse with an empty gripper, or a tamped
-// puck. SLOW (slowMoveOptions, below) is for the careful moves: a
-// constrained/contact step, a pivot or circular motion, and the spill- or
-// scatter-prone carries — the no-spill cup/glass carry, the milk bottle, and
-// loose grounds on the way to the tamper. POUR (pourMoveOptions) is the fast
-// tilt of a filled container over the cup/glass. An explicit Step.MoveOptions
-// overrides the default.
+// Arm moves fall into three speeds, and a move runs at the one it names: nil
+// MoveOptions is the arm's own DEFAULT speed, whatever the move's shape. SLOW
+// (slowMoveOptions, below) is for the careful moves — contact (pressing a
+// button, seating the portafilter, tamping, cleaning), the spill- or
+// scatter-prone carries (a filled cup or glass, the milk bottle, loose grounds),
+// and the pivots and circles that do either. POUR (pourMoveOptions) is the fast
+// tilt of a filled container over the cup/glass. A linear constraint only keeps
+// the path straight and does not slow the move, so a straight move with neither
+// contact nor a load, such as a retreat with an empty gripper, stays at default.
 //
 // slowMoveOptions is the config-facing StepMoveOptions (degrees) for the slow
 // tier, attached to a Step or converted with buildMoveOptions at an execution
@@ -669,7 +670,8 @@ func buildConstraints(lc *StepLinearConstraint, allowedCollisions []AllowedColli
 	return constraints
 }
 
-// buildMoveOptions converts step-level move options into arm.MoveOptions.
+// buildMoveOptions converts step-level move options into arm.MoveOptions; nil
+// leaves the arm at its default speed.
 func buildMoveOptions(opts *StepMoveOptions) *arm.MoveOptions {
 	if opts == nil {
 		return nil
@@ -770,7 +772,7 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	if err != nil {
 		return err
 	}
-	return s.executePlan(ctx, plan, lc, moveOpts)
+	return s.executePlan(ctx, plan, moveOpts)
 }
 
 // planToRawPose plans a motion to pd starting from startInputs, without touching
@@ -825,22 +827,12 @@ func (s *beanjaminCoffee) planToRawPose(
 }
 
 // executePlan sends a planned trajectory to the arm.
-func (s *beanjaminCoffee) executePlan(ctx context.Context, plan motionplan.Plan, lc *StepLinearConstraint, moveOpts *StepMoveOptions) error {
+func (s *beanjaminCoffee) executePlan(ctx context.Context, plan motionplan.Plan, moveOpts *StepMoveOptions) error {
 	positions, err := s.armInputs(plan, "move")
 	if err != nil {
 		return err
 	}
-	return s.arm.MoveThroughJointPositions(ctx, positions, s.moveOptionsFor(lc, moveOpts), nil)
-}
-
-// moveOptionsFor is the speed for a move: a constrained move with no explicit
-// speed defaults to the slow tier; a free traverse keeps the arm's default (nil).
-func (s *beanjaminCoffee) moveOptionsFor(lc *StepLinearConstraint, moveOpts *StepMoveOptions) *arm.MoveOptions {
-	opts := buildMoveOptions(moveOpts)
-	if opts == nil && lc != nil {
-		opts = buildMoveOptions(s.slowMoveOptions())
-	}
-	return opts
+	return s.arm.MoveThroughJointPositions(ctx, positions, buildMoveOptions(moveOpts), nil)
 }
 
 // planEndArmInputs returns the arm's joint configuration at the end of a plan's
@@ -988,11 +980,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 	if err != nil {
 		return err
 	}
-	opts := buildMoveOptions(step.MoveOptions)
-	if opts == nil {
-		opts = buildMoveOptions(s.slowMoveOptions())
-	}
-	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
+	return s.arm.MoveThroughJointPositions(ctx, positions, buildMoveOptions(step.MoveOptions), nil)
 }
 
 // computeCircularPoses generates waypoints evenly spaced around a circle in
@@ -1062,11 +1050,7 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 		default:
 		}
 		logger.Debugf("circular revolution %d", rev+1)
-		circOpts := buildMoveOptions(step.MoveOptions)
-		if circOpts == nil {
-			circOpts = buildMoveOptions(s.slowMoveOptions())
-		}
-		if err := s.arm.MoveThroughJointPositions(ctx, positions, circOpts, nil); err != nil {
+		if err := s.arm.MoveThroughJointPositions(ctx, positions, buildMoveOptions(step.MoveOptions), nil); err != nil {
 			return fmt.Errorf("execute circular revolution %d: %w", rev+1, err)
 		}
 	}
@@ -1197,12 +1181,7 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, al
 	if err != nil {
 		return err
 	}
-	// The level carry moves a filled container, so default to the slow tier.
-	opts := buildMoveOptions(moveOpts)
-	if opts == nil {
-		opts = buildMoveOptions(s.slowMoveOptions())
-	}
-	return s.arm.MoveThroughJointPositions(ctx, positions, opts, nil)
+	return s.arm.MoveThroughJointPositions(ctx, positions, buildMoveOptions(moveOpts), nil)
 }
 
 // minPivotThetaRads is the smallest authored rotation an overshoot direction

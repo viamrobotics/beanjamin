@@ -35,6 +35,7 @@ type AllowedCollision struct {
 }
 
 // StepMoveOptions caps the arm's joint velocity and acceleration for a step.
+// A step without one runs at the arm's own default speed.
 type StepMoveOptions struct {
 	MaxVelDegsPerSec  float64
 	MaxAccDegsPerSec2 float64
