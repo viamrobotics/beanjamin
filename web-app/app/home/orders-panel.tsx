@@ -14,7 +14,7 @@ import {
   countVideosForOrders,
 } from "./data";
 import { PlanPanel } from "./plan-panel";
-import { drinkLabel } from "../order/drinks";
+import { drinkLabel, orderLabel } from "../order/drinks";
 
 // Display order, which is not sort order: the identity columns (when, which
 // order, which machine) lead, then the drink, then how it went.
@@ -356,7 +356,7 @@ function OrderTable({
                   </td>
                   <td className="px-2 py-1.5">{o.customerName || "—"}</td>
                   <td className="px-2 py-1.5">
-                    {drinkLabel(o.drink) || "—"}
+                    {orderLabel(o.drink, o.milk) || "—"}
                     {o.decaf && (
                       <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-neutral-100 text-neutral-600 text-[10px] font-semibold tracking-wide">
                         DECAF

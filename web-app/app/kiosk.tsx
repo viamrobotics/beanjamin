@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
-import { drinkLabel } from "./order/drinks";
+import { drinkLabel, hasMilkChoice, orderLabel } from "./order/drinks";
 import { ChooseDrink } from "./order/choose-drink";
 import { EnterName } from "./order/enter-name";
 import dynamic from "next/dynamic";
@@ -79,6 +79,12 @@ export function Kiosk() {
   // Defaults to pickup everywhere; delivery requires an email (enforced here
   // and again by the backend).
   const [fulfillment, setFulfillment] = useState<Fulfillment>("pickup");
+  // The machine's milk_options (default first), read off its queue status.
+  const [milkOptions, setMilkOptions] = useState<string[]>([]);
+  // The customer's pick; "" until they choose, which means the default. A pick
+  // the machine no longer offers falls back to the default too.
+  const [milk, setMilk] = useState("");
+  const chosenMilk = milkOptions.includes(milk) ? milk : (milkOptions[0] ?? "");
   const [misspelled, setMisspelled] = useState("");
   const [loading, setLoading] = useState(false);
   const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
@@ -138,6 +144,12 @@ export function Kiosk() {
       try {
         const q = await getQueue(viamConn);
         if (cancelled) return;
+        // Keep the same array while the options are unchanged, so the 2s poll
+        // doesn't re-render the drink screen.
+        const options = q.milk_options ?? [];
+        setMilkOptions((prev) =>
+          prev.join() === options.join() ? prev : options,
+        );
         if (q.orders.length > 0) {
           setTrackerMode((m) => (m === "hidden" ? "auto" : m));
         }
@@ -216,6 +228,8 @@ export function Kiosk() {
         customerEmail: email.trim(),
         pronunciation: undefined,
         fulfillment,
+        ...(hasMilkChoice(selectedDrink!) &&
+          chosenMilk && { milk: chosenMilk }),
       });
       setStep("confirmation");
       setTrackerMode("auto");
@@ -273,6 +287,7 @@ export function Kiosk() {
     setEmail(prefillEmail);
     setSelectedDrink(null);
     setFulfillment("pickup");
+    setMilk("");
     setWelcomeBack(null);
     setAppError(null);
   }, [prefillName, prefillEmail]);
@@ -331,7 +346,7 @@ export function Kiosk() {
         <OrderConfirmation
           misspelled={misspelled}
           actualName={name}
-          drinkLabel={drinkLabel(selectedDrink ?? "")}
+          drinkLabel={orderLabel(selectedDrink ?? "", chosenMilk)}
           onDismiss={handleConfirmationDismiss}
           showBack={!kioskMode}
         />
@@ -366,9 +381,12 @@ export function Kiosk() {
         <ChooseDrink
           selectedDrink={selectedDrink}
           fulfillment={fulfillment}
+          milk={chosenMilk}
+          milkOptions={milkOptions}
           connected={connected}
           onSelect={setSelectedDrink}
           onFulfillmentChange={setFulfillment}
+          onMilkChange={setMilk}
           onBack={() => setStep("welcome")}
           onNext={handleDrinkNext}
         />
@@ -449,6 +467,7 @@ export function Kiosk() {
             // welcome clears it.
             setSelectedDrink(null);
             setFulfillment("pickup");
+            setMilk("");
             setStep("drink");
           }}
           disabled={!connected}
