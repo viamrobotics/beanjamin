@@ -138,6 +138,27 @@ func GraspYaw(grasp spatialmath.Orientation) float64 {
 	return 0
 }
 
+// HeadingAligned returns container — an orientation expressed in gripper
+// coordinates whose +Z is the container's vertical axis — turned about that axis
+// so its +X points along the tool's approach heading: the tool +Z axis projected
+// onto the plane square to the container axis, or tool +X for a grasp along the
+// container axis, as GraspYaw reads it. A gripper pointing along the container
+// frame's +X then reads theta 0, whatever the box was built turned to.
+func HeadingAligned(container spatialmath.Orientation) spatialmath.Orientation {
+	rot := spatialmath.NewPoseFromOrientation(container)
+	up := spatialmath.Compose(rot, spatialmath.NewPoseFromPoint(r3.Vector{Z: 1})).Point()
+	x := spatialmath.Compose(rot, spatialmath.NewPoseFromPoint(r3.Vector{X: 1})).Point()
+	for _, axis := range []r3.Vector{{Z: 1}, {X: 1}} {
+		heading := axis.Sub(up.Mul(axis.Dot(up)))
+		if heading.Norm() >= graspHeadingMinHorizontal {
+			turn := math.Atan2(x.Cross(heading).Dot(up), x.Dot(heading))
+			spin := spatialmath.NewPoseFromOrientation(&spatialmath.OrientationVector{OZ: 1, Theta: turn})
+			return spatialmath.Compose(rot, spin).Orientation()
+		}
+	}
+	return container
+}
+
 // Centroids extracts the world-frame centroids from a slice of candidates,
 // preserving order. Used to feed the centroid-only merge/rank helpers.
 func Centroids(candidates []Candidate) []r3.Vector {

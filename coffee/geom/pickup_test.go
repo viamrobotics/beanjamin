@@ -327,6 +327,33 @@ func TestGraspYaw(t *testing.T) {
 	}
 }
 
+// TestHeadingAligned verifies an upright container, expressed in the grasp's
+// coordinates, is turned to read the grasp's own heading (GraspYaw) in the world
+// — whatever yaw the container was built at, and for a top-down grasp too.
+func TestHeadingAligned(t *testing.T) {
+	grasps := []spatialmath.Orientation{
+		&spatialmath.OrientationVectorDegrees{OX: 1, Theta: 30},
+		&spatialmath.OrientationVectorDegrees{OY: 1, Theta: -180},
+		&spatialmath.OrientationVectorDegrees{OX: -0.948, OY: -0.319, Theta: -180},
+		&spatialmath.OrientationVectorDegrees{OX: 0.7, OY: 0.7, OZ: -0.2},
+		&spatialmath.OrientationVectorDegrees{OZ: -1, Theta: 30},
+	}
+	for _, o := range grasps {
+		for _, builtDeg := range []float64{0, -161.4, 37} {
+			grasp := spatialmath.NewPoseFromOrientation(o)
+			container := spatialmath.NewPoseFromOrientation(&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: builtDeg})
+			local := spatialmath.PoseBetween(grasp, container).Orientation()
+
+			world := spatialmath.Compose(grasp, spatialmath.NewPoseFromOrientation(HeadingAligned(local))).Orientation()
+			want := &spatialmath.OrientationVector{OZ: 1, Theta: GraspYaw(o)}
+			if !spatialmath.OrientationAlmostEqualEps(world, want, 1e-6) {
+				t.Errorf("grasp %v, built at %v°: world %v, want %v",
+					o, builtDeg, world.OrientationVectorDegrees(), want.Degrees())
+			}
+		}
+	}
+}
+
 // TestContainerBoxFollowsGrasp verifies the point of the yaw: expressed in the
 // grasp frame, the box built at a grasp's GraspYaw has the same orientation
 // whichever heading the grasp approaches from.
