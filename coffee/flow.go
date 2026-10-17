@@ -30,6 +30,10 @@ const (
 	noGripperAction gripperAction = iota
 	openGripperAction
 	closeGripperAction
+	// The verified actions also check the jaws' position before the next move
+	// runs, failing the order if they didn't get there (gripper_state.go).
+	openAndVerifyGripperAction
+	grabAndVerifyGripperAction
 )
 
 // move is one unit of work for the execution thread. Its parts run in field
@@ -44,6 +48,10 @@ type move struct {
 
 	gripper gripperAction
 	sleep   time.Duration
+	// sleepUntil, when set, replaces sleep with a wait until the time it returns,
+	// read as the move runs: for a wait timed from an earlier move's execution
+	// rather than from when it was planned.
+	sleepUntil func() time.Time
 }
 
 // flow is one order's plan-ahead state, owned by the planning thread.
@@ -103,7 +111,9 @@ func (s *beanjaminCoffee) settle() error {
 func (s *beanjaminCoffee) handOff(ctx context.Context, m move) error {
 	f := s.activeFlow()
 	if f == nil {
-		s.activeOrderLogger().Warnf("handOff: no active order flow, running %q directly", m.name)
+		if s.flow == nil {
+			s.activeOrderLogger().Warnf("handOff: no active order flow, running %q directly", m.name)
+		}
 		return s.runMove(ctx, m)
 	}
 	if f.err != nil || f.failed.Load() {
@@ -186,11 +196,23 @@ func (s *beanjaminCoffee) runMove(ctx context.Context, m move) error {
 		if _, err := s.gripper.Grab(ctx, nil); err != nil {
 			return fmt.Errorf("close gripper: %w", err)
 		}
+	case openAndVerifyGripperAction:
+		if err := s.runOpenAndVerify(ctx); err != nil {
+			return fmt.Errorf("open gripper: %w", err)
+		}
+	case grabAndVerifyGripperAction:
+		if err := s.runGrabAndVerify(ctx); err != nil {
+			return fmt.Errorf("grab gripper: %w", err)
+		}
 	case noGripperAction:
 	}
-	if m.sleep > 0 {
+	sleep := m.sleep
+	if m.sleepUntil != nil {
+		sleep = time.Until(m.sleepUntil())
+	}
+	if sleep > 0 {
 		select {
-		case <-time.After(m.sleep):
+		case <-time.After(sleep):
 		case <-ctx.Done():
 			return fmt.Errorf("cancelled during pause after %q: %w", m.name, ctx.Err())
 		}

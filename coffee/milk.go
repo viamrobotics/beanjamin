@@ -224,6 +224,11 @@ func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context, milk s
 	if err := s.grabAndVerifyHolding(ctx); err != nil {
 		return fmt.Errorf("fetch_milk: grab the %s milk: %w", milk, err)
 	}
+	// The grab check runs with the queued moves; wait for it so heldMilk is only
+	// ever set on a confirmed grab.
+	if err := s.settle(); err != nil {
+		return fmt.Errorf("fetch_milk: grab the %s milk: %w", milk, err)
+	}
 	s.heldMilk = milk
 	// Model the bottle from milk_bottle_dimensions, standing on the surface under
 	// it, so the retreat and the carry to the glass route around it. Without the
@@ -320,6 +325,11 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 	// the shelf. On failure the bottle is still recorded as held and still
 	// modeled in the gripper, which is what the operator will find.
 	if err := s.openAndVerifyOpen(ctx); err != nil {
+		return fmt.Errorf("return_milk: release the bottle: %w", err)
+	}
+	// The open check runs with the queued moves; wait for it before clearing the
+	// held state below.
+	if err := s.settle(); err != nil {
 		return fmt.Errorf("return_milk: release the bottle: %w", err)
 	}
 	// The bottle is standing on the shelf; it no longer travels with the gripper.
