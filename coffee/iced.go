@@ -129,6 +129,7 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 	// Recorded when the arm actually presses, not when the planner gets here.
 	var brewStarted atomic.Int64
 	s.handOffEffect(func() { brewStarted.Store(time.Now().UnixNano()) })
+	brewTime := s.drinkBrewTime(drink)
 
 	// Fill the pour time with prep: an iced drink stages its glass, anything else
 	// lines the gripper up over the cup so only the grasp is left afterward.
@@ -139,31 +140,36 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 		return s.approachBrewedCup(ctx, cancelCtx)
 	}()
 
-	// Wait out the rest of the pour even when the prep failed, so the machine is
-	// quiescent before an operator gets near it. Settle first, since the wait is
-	// timed from the actual press; skip it only if the press never ran.
-	settleErr := s.settle()
-	var waitErr error
-	if started := brewStarted.Load(); started != 0 {
-		if prepErr == nil {
-			prepErr = settleErr
+	if prepErr == nil {
+		// Queue the rest of the pour behind the prep, timed from the actual press,
+		// so the planner goes on to plan the post-brew moves while the machine pours.
+		brewCtx, done := mergedCancelContext(ctx, cancelCtx) // cancel stops the wait
+		defer done()
+		if err := s.handOff(brewCtx, move{name: "brew", sleepUntil: func() time.Time {
+			return time.Unix(0, brewStarted.Load()).Add(brewTime)
+		}}); err != nil {
+			return fmt.Errorf("brew_and_prep: %w", err)
 		}
-		remaining := s.drinkBrewTime(drink) - time.Since(time.Unix(0, started))
-		s.activeOrderLogger().Infof("waiting out the remaining %s of the %s brew (prep error: %v)", remaining, drink, prepErr)
-		waitErr = waitOutBrew(ctx, cancelCtx, remaining)
-	} else if settleErr != nil {
-		return fmt.Errorf("brew_and_prep: %w", settleErr)
-	}
-	if prepErr != nil {
-		return fmt.Errorf("brew_and_prep: %w", prepErr)
-	}
-	if waitErr != nil {
-		return fmt.Errorf("brew_and_prep: %w", waitErr)
+		// Water has run, so the keep-alive clock restarts (keepalive.go).
+		s.handOffEffect(s.recordMachineActivity)
+		return nil
 	}
 
-	// Water has run, so the keep-alive clock restarts (keepalive.go).
-	s.recordMachineActivity()
-	return nil
+	// Wait out the rest of the pour even when the prep failed to plan, so the
+	// machine is quiescent before an operator gets near it. Settle first, since
+	// the wait is timed from the actual press; skip it if the press never ran.
+	settleErr := s.settle()
+	started := brewStarted.Load()
+	if started == 0 {
+		if settleErr != nil {
+			return fmt.Errorf("brew_and_prep: %w", settleErr)
+		}
+		return fmt.Errorf("brew_and_prep: %w", prepErr)
+	}
+	remaining := brewTime - time.Since(time.Unix(0, started))
+	s.activeOrderLogger().Infof("waiting out the remaining %s of the %s brew (prep error: %v)", remaining, drink, prepErr)
+	_ = waitOutBrew(ctx, cancelCtx, remaining) //nolint:errcheck // a cancelled wait only cuts it short; prepErr is the failure
+	return fmt.Errorf("brew_and_prep: %w", prepErr)
 }
 
 // serveIcedCoffee is the iced serving path without milk — the iced_coffee drink
@@ -208,20 +214,20 @@ func (s *beanjaminCoffee) graspBrewedCup(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
 		return fmt.Errorf("grasp_brewed_cup: %w", err)
 	}
-	if err := s.grabAndVerifyHolding(ctx); err != nil {
+	if err := s.startGrab(ctx); err != nil {
 		return fmt.Errorf("grasp_brewed_cup: grab gripper: %w", err)
 	}
 	// The cup was tracked at pickup and released under the machine; restore its
-	// geometry now that it's back in the gripper so the retreat routes around it.
-	// grabAndVerifyHolding only returns nil on a confirmed grab, so this never
-	// reattaches onto empty jaws.
+	// geometry so the retreat routes around it. It goes on before the grab is
+	// verified so the retreat can be planned while the jaws close, and comes off
+	// again if the grab missed.
 	if err := s.reattachGeometry(pickupLabelCup); err != nil {
 		s.activeOrderLogger().Warnf("grasp_brewed_cup: reattach cup geometry failed, continuing untracked: %v", err)
 	}
 	// Nothing was cached to reattach (e.g. a manually-stepped serving that never ran
 	// the vision cup pickup) — model the cup from cup_dimensions so the pour and the
 	// shelf placement still carry it as a tracked held-item instead of an untracked
-	// grip-point move.
+	// grip-point move. This reads the arm, so it waits for the descent and grab.
 	if !s.heldItemAttached {
 		if err := s.attachConfiguredCupGeometry(ctx); err != nil {
 			s.activeOrderLogger().Warnf("grasp_brewed_cup: model cup from cup_dimensions failed, continuing untracked: %v", err)
@@ -229,7 +235,15 @@ func (s *beanjaminCoffee) graspBrewedCup(ctx, cancelCtx context.Context) error {
 	}
 	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions),
 		MoveOptions: s.slowMoveOptions()}
-	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
+	commit, planErr := s.planAhead(ctx, cancelCtx, retreatStep)
+	if err := s.verifyHolding(ctx); err != nil {
+		s.detachHeldGeometry()
+		return fmt.Errorf("grasp_brewed_cup: grab gripper: %w", err)
+	}
+	if planErr != nil {
+		return fmt.Errorf("grasp_brewed_cup: %w", planErr)
+	}
+	if err := commit(); err != nil {
 		return fmt.Errorf("grasp_brewed_cup: %w", err)
 	}
 	return nil

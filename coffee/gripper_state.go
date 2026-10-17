@@ -103,13 +103,25 @@ func (s *beanjaminCoffee) gripperPos(ctx context.Context) (float64, error) {
 // callers never treat an unreadable or stuck gripper as a missed grab. Absorbs
 // the post-grab settle pause so the read happens at rest.
 func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context) error {
+	if err := s.startGrab(ctx); err != nil {
+		return err
+	}
+	return s.verifyHolding(ctx)
+}
+
+// startGrab hands off closing the jaws, with the post-grab settle pause, so the
+// caller can plan the next move while they close. verifyHolding finishes the
+// check.
+func (s *beanjaminCoffee) startGrab(ctx context.Context) error {
+	return s.handOff(ctx, move{name: "grab", gripper: closeGripperAction, sleep: gripperPause})
+}
+
+// verifyHolding is grabAndVerifyHolding after startGrab: it waits for the close
+// to finish, then confirms the jaws landed on an object.
+func (s *beanjaminCoffee) verifyHolding(ctx context.Context) error {
 	if err := s.settle(); err != nil {
 		return err
 	}
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
-		return fmt.Errorf("grab: %w", err)
-	}
-	time.Sleep(gripperPause)
 	pos, err := s.gripperPos(ctx)
 	if err != nil {
 		return err
@@ -137,11 +149,23 @@ func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context) error {
 // rather than releasing it. Polling costs nothing when the jaws are quick and
 // fails loudly instead of silently when they are not.
 func (s *beanjaminCoffee) openAndVerifyOpen(ctx context.Context) error {
-	if err := s.settle(); err != nil {
+	if err := s.startOpen(ctx); err != nil {
 		return err
 	}
-	if err := s.gripper.Open(ctx, nil); err != nil {
-		return fmt.Errorf("open: %w", err)
+	return s.verifyOpen(ctx)
+}
+
+// startOpen hands off opening the jaws, so the caller can plan the next move
+// while they travel. verifyOpen finishes the check.
+func (s *beanjaminCoffee) startOpen(ctx context.Context) error {
+	return s.handOff(ctx, move{name: "open", gripper: openGripperAction})
+}
+
+// verifyOpen is openAndVerifyOpen after startOpen: it waits for the open to be
+// sent, then polls until the jaws read open.
+func (s *beanjaminCoffee) verifyOpen(ctx context.Context) error {
+	if err := s.settle(); err != nil {
+		return err
 	}
 	deadline := time.Now().Add(s.gripperOpenTimeout())
 	for {
