@@ -44,6 +44,10 @@ type move struct {
 
 	gripper gripperAction
 	sleep   time.Duration
+	// sleepUntil, when set, replaces sleep with a wait until the time it returns,
+	// read as the move runs: for a wait timed from an earlier move's execution
+	// rather than from when it was planned.
+	sleepUntil func() time.Time
 }
 
 // flow is one order's plan-ahead state, owned by the planning thread.
@@ -188,9 +192,13 @@ func (s *beanjaminCoffee) runMove(ctx context.Context, m move) error {
 		}
 	case noGripperAction:
 	}
-	if m.sleep > 0 {
+	sleep := m.sleep
+	if m.sleepUntil != nil {
+		sleep = time.Until(m.sleepUntil())
+	}
+	if sleep > 0 {
 		select {
-		case <-time.After(m.sleep):
+		case <-time.After(sleep):
 		case <-ctx.Done():
 			return fmt.Errorf("cancelled during pause after %q: %w", m.name, ctx.Err())
 		}
@@ -218,29 +226,63 @@ func (s *beanjaminCoffee) runTrajectory(ctx context.Context, m move) error {
 // handOffStep turns a direct-move step into a move, planned from where the last
 // handed-off move ends, and hands it off.
 func (s *beanjaminCoffee) handOffStep(ctx context.Context, f *flow, step Step) error {
+	m, err := s.planStepMove(ctx, f, step)
+	if err != nil {
+		return err
+	}
+	return s.handOffPlanned(ctx, f, m)
+}
+
+// planAhead plans a direct-move step now and returns commit, which hands it off.
+// It lets a caller plan before a stopping point, such as a gripper check, so the
+// planning overlaps whatever is still running and the move is ready once the
+// check passes. The step must start where the last handed-off move ends, and
+// nothing that moves the arm may be handed off before commit. Without an active
+// flow, commit just runs the step.
+func (s *beanjaminCoffee) planAhead(ctx, cancelCtx context.Context, step Step) (commit func() error, err error) {
+	f := s.activeFlow()
+	if f == nil || !isDirectMove(step) {
+		return func() error { return s.executeStep(ctx, cancelCtx, step) }, nil
+	}
+	m, err := s.planStepMove(ctx, f, step)
+	if err != nil {
+		return nil, err
+	}
+	return func() error { return s.handOffPlanned(ctx, f, m) }, nil
+}
+
+// planStepMove plans a direct-move step from where the last handed-off move
+// ends, without handing it off.
+func (s *beanjaminCoffee) planStepMove(ctx context.Context, f *flow, step Step) (move, error) {
 	from := f.from
 	if from == nil {
 		now, err := s.arm.CurrentInputs(ctx)
 		if err != nil {
-			return fmt.Errorf("get current inputs: %w", err)
+			return move{}, fmt.Errorf("get current inputs: %w", err)
 		}
 		from = now
 	}
 	positions, planErr := s.planStep(ctx, step, from)
 	if planErr != nil {
 		if err := s.settle(); err != nil {
-			return err // an earlier failure caused this one
+			return move{}, err // an earlier failure caused this one
 		}
-		return fmt.Errorf("move to %q failed: %w", step.PoseName, planErr)
+		return move{}, fmt.Errorf("move to %q failed: %w", step.PoseName, planErr)
 	}
-	f.from = positions[len(positions)-1]
-	return s.handOff(ctx, move{
+	return move{
 		name:      step.PoseName,
 		positions: positions,
 		start:     from,
 		speed:     buildMoveOptions(step.MoveOptions),
 		sleep:     step.Pause,
-	})
+	}, nil
+}
+
+// handOffPlanned hands off a move from planStepMove, recording where it ends so
+// the next move plans from there.
+func (s *beanjaminCoffee) handOffPlanned(ctx context.Context, f *flow, m move) error {
+	f.from = m.positions[len(m.positions)-1]
+	return s.handOff(ctx, m)
 }
 
 // planStep plans a direct-move step from the arm joints from and returns its

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -143,6 +144,61 @@ func TestRunMoveOrder(t *testing.T) {
 	}
 	if !slices.Equal(order, []string{"bookkeep", "gripper"}) {
 		t.Errorf("ran %v, want bookkeep then gripper", order)
+	}
+}
+
+// A wait timed from an earlier move (the brew from its button press) reads its
+// deadline when it runs, not when it was handed off.
+func TestSleepUntilIsReadWhenTheMoveRuns(t *testing.T) {
+	s, _ := flowCoffee(t)
+	ctx := context.Background()
+	release := make(chan struct{})
+	var deadline atomic.Int64
+	const wait = 50 * time.Millisecond
+
+	_ = s.handOff(ctx, blocking(release))
+	_ = s.handOff(ctx, move{bookkeep: func() { deadline.Store(time.Now().Add(wait).UnixNano()) }})
+	_ = s.handOff(ctx, move{name: "brew", sleepUntil: func() time.Time { return time.Unix(0, deadline.Load()) }})
+
+	// Long enough that a wait timed from the hand-off would already be over.
+	time.Sleep(2 * wait)
+	close(release)
+	start := time.Now()
+	if err := s.settle(); err != nil {
+		t.Fatal(err)
+	}
+	if got := time.Since(start); got < wait*8/10 {
+		t.Errorf("settled after %s, want about %s timed from the earlier move", got, wait)
+	}
+}
+
+// startOpen queues behind the arm's moves, so a caller can plan in between and
+// verifyOpen sees the jaws open only once the moves before them are done.
+func TestStartOpenWaitsItsTurn(t *testing.T) {
+	s, _ := flowCoffee(t)
+	var opened atomic.Bool
+	g := inject.NewGripper("g")
+	g.OpenFunc = func(context.Context, map[string]any) error { opened.Store(true); return nil }
+	g.DoFunc = func(context.Context, map[string]any) (map[string]any, error) {
+		return map[string]any{"pos": 850.0}, nil
+	}
+	s.gripper = g
+	release := make(chan struct{})
+	ctx := context.Background()
+
+	_ = s.handOff(ctx, blocking(release))
+	if err := s.startOpen(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if opened.Load() {
+		t.Fatal("jaws opened before the queued move finished")
+	}
+	close(release)
+	if err := s.verifyOpen(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !opened.Load() {
+		t.Error("verifyOpen returned before the jaws were opened")
 	}
 }
 

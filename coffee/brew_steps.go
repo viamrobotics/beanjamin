@@ -135,12 +135,21 @@ func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) erro
 // if the jaws never get there. Callers own the portafilterInMachine flag, whose
 // ordering around this call differs by direction.
 func (s *beanjaminCoffee) moveGripperToPoseWithVerify(ctx, cancelCtx context.Context, poseName string) error {
-	if err := s.openAndVerifyOpen(ctx); err != nil {
+	if err := s.startOpen(ctx); err != nil {
 		return fmt.Errorf("open gripper: %w", err)
 	}
+	// Plan while the jaws travel: they don't change the planning geometry, so the
+	// move is ready the moment they read open.
 	step := Step{PoseName: poseName, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: filterGrabCollisions,
 		MoveOptions: s.slowMoveOptions()}
-	if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+	commit, err := s.planAhead(ctx, cancelCtx, step)
+	if err != nil {
+		return err
+	}
+	if err := s.verifyOpen(ctx); err != nil {
+		return fmt.Errorf("open gripper: %w", err)
+	}
+	if err := commit(); err != nil {
 		return err
 	}
 	if err := s.closeGripper(ctx); err != nil {
