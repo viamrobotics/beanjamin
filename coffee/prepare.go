@@ -159,6 +159,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 	// as the pickup_position.
 	o.PickupPosition = servedSlot
 	if o.Fulfillment == order.FulfillmentDelivery {
+		s.delivery.markReady(o, s.deliveryHeartbeatTimeout())
 		if err := s.readyForDelivery(ctx, o); err != nil {
 			logger.Warnf("failed to announce ready-for-delivery: %v", err)
 		}

@@ -102,8 +102,11 @@ func proceedResponse(status string, resumed bool, doorClearedDegs float64) map[s
 // serving area; they self-prune after order.RecentDisplayDuration.
 func (s *beanjaminCoffee) clearQueue() (map[string]any, error) {
 	removed, currentID := s.queue.ClearPending()
-	s.logger.Infof("cleared %d pending orders from queue (in-flight order kept: %v)", removed, currentID != "")
-	resp := map[string]any{"status": "cleared", "removed": removed, "kept_current": currentID != ""}
+	for _, o := range removed {
+		s.delivery.failIfMaking(o.ID, "canceled")
+	}
+	s.logger.Infof("cleared %d pending orders from queue (in-flight order kept: %v)", len(removed), currentID != "")
+	resp := map[string]any{"status": "cleared", "removed": len(removed), "kept_current": currentID != ""}
 	if currentID != "" {
 		resp["kept_current_order_id"] = currentID
 	}
@@ -144,6 +147,7 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 	}
 
 	removed := s.queue.Clear()
+	s.delivery.failActive("reset")
 
 	// reset_world is an operator's "everything is fine, start over" button.
 	// Clear the portafilter state flags so the next fault's log doesn't report
@@ -271,6 +275,8 @@ func (s *beanjaminCoffee) cancelOrder(ctx context.Context, v any) (map[string]an
 	if err != nil {
 		return nil, fmt.Errorf("cancel_order %s: %w", id, err)
 	}
+
+	s.delivery.failIfMaking(order.ID, "canceled")
 
 	remaining := s.queue.Len()
 	s.logger.Infof("cancel_order: dropped queued order %s (%s for %s) — %d order(s) still queued",

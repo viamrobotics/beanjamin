@@ -74,7 +74,7 @@ type beanjaminCoffee struct {
 	iceBoard         board.Board      // optional; drives the ice-machine GPIO pin; nil if ice_board_name unset
 	slackNotifier    *report.Notifier // optional; viam:notifications:slack; nil if slack_notifier_name unset
 	customerDetector generic.Service  // optional; viam:beanjamin:customer-detector; nil if customer_detector_name unset
-	deliveryHandler  generic.Service  // optional; peer-machine service reached via a remote; nil if delivery_handler_name unset
+	delivery         *deliveryCart    // cart heartbeat, docked order, and handover state
 	crm              generic.Service  // optional; viam:beanjamin:crm; nil if crm_name unset or not yet up
 	machineLogsURL   string           // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
 	dataLocationID   string           // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
@@ -318,11 +318,6 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	if err != nil {
 		return nil, err
 	}
-	deliveryHandler, err := optionalGenericDep(deps, logger, "delivery_handler_name", conf.DeliveryHandlerName, " — peer messaging enabled")
-	if err != nil {
-		return nil, err
-	}
-
 	// Unlike the other optional services, a CRM that won't come up must not stop
 	// drinks being made; it is an optional dependency, so this service is rebuilt
 	// with it once it resolves.
@@ -401,7 +396,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		iceBoard:         iceBoard,
 		slackNotifier:    report.NewNotifier(slackNotifier),
 		customerDetector: customerDetector,
-		deliveryHandler:  deliveryHandler,
+		delivery:         newDeliveryCart(),
 		crm:              crmSvc,
 		machineLogsURL:   report.MachineLogsURL(os.Getenv("VIAM_MACHINE_ID"), os.Getenv("VIAM_PRIMARY_ORG_ID")),
 		dataLocationID:   os.Getenv("VIAM_LOCATION_ID"),

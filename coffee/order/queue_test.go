@@ -329,8 +329,8 @@ func TestQueue_ClearPending_SparesCurrentAndRecent(t *testing.T) {
 	q.Start()    // current on the arm
 
 	removed, currentID := q.ClearPending()
-	if removed != 2 || currentID != current.ID {
-		t.Errorf("ClearPending = (%d, %q), want (2, %q)", removed, currentID, current.ID)
+	if len(removed) != 2 || currentID != current.ID {
+		t.Errorf("ClearPending = (%d, %q), want (2, %q)", len(removed), currentID, current.ID)
 	}
 	if got := q.Len(); got != 1 {
 		t.Fatalf("Len after ClearPending = %d, want 1 (the order on the arm)", got)
@@ -379,8 +379,8 @@ func TestQueue_ClearPending_IdleQueue(t *testing.T) {
 	q.Enqueue(NewOrder("espresso", "Bob", "", ""))
 
 	removed, currentID := q.ClearPending()
-	if removed != 2 || currentID != "" {
-		t.Errorf("ClearPending on an idle queue = (%d, %q), want (2, \"\")", removed, currentID)
+	if len(removed) != 2 || currentID != "" {
+		t.Errorf("ClearPending on an idle queue = (%d, %q), want (2, \"\")", len(removed), currentID)
 	}
 	if got := q.Len(); got != 0 {
 		t.Errorf("Len after ClearPending = %d, want 0", got)

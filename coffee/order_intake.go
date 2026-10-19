@@ -57,6 +57,13 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		s.logger.Warnf("rejected order: %v", err)
 		return nil, err
 	}
+	if fulfillment == order.FulfillmentDelivery {
+		if ok, reason := s.deliveryRefusal(); !ok {
+			err := fmt.Errorf("delivery orders are not being accepted: %s", reason)
+			s.logger.Warnf("rejected order: %v", err)
+			return nil, err
+		}
+	}
 
 	displayName := req.ModifiedCustomerName
 	if displayName == "" {
@@ -86,6 +93,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		o.ModifiedCustomerName = req.ModifiedCustomerName
 		o.CustomerEmail = req.CustomerEmail
 		o.Fulfillment = fulfillment
+		s.delivery.track(o)
 		if count > 1 {
 			o.BatchIndex = i + 1
 			o.BatchSize = count

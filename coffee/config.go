@@ -140,13 +140,12 @@ type Config struct {
 	// completed drink whose order carries a customer_email. Unset disables it.
 	CRMName string `json:"crm_name,omitempty"`
 
-	// DeliveryHandlerName names a generic service on a peer machine (via a
-	// remote, e.g. "delivery-bot:mission-control") that this service can send
-	// one-way notifications to with the send_delivery_message DoCommand. The
-	// payload is forwarded verbatim as the peer service's DoCommand, so it
-	// must be a command that service already understands. Unset disables
-	// outbound messaging.
-	DeliveryHandlerName string `json:"delivery_handler_name,omitempty"`
+	// DeliveryHeartbeatTimeoutSec is how long the latest delivery-cart
+	// heartbeat stays valid. A delivery prepare_order is refused when no
+	// heartbeat has arrived within this window, or the latest heartbeat's
+	// state is anything other than "running". Pickup orders are unaffected.
+	// Defaults to 60 seconds.
+	DeliveryHeartbeatTimeoutSec float64 `json:"delivery_heartbeat_timeout_sec,omitempty"`
 
 	// Conversational, when true, makes the coffee service speak its own
 	// status-narrating lines through speech_service_name — initial
@@ -436,6 +435,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.ButtonPressHoldSec < 0 {
 		return nil, nil, fmt.Errorf("%s: button_press_hold_sec must be >= 0", path)
 	}
+	if cfg.DeliveryHeartbeatTimeoutSec < 0 {
+		return nil, nil, fmt.Errorf("%s: delivery_heartbeat_timeout_sec must be >= 0", path)
+	}
 	// The picked-up cup is always tracked as a held item, and its geometry is
 	// modeled from these dimensions, so they must be configured.
 	if err := cfg.CupDimensions.validate(path, "cup_dimensions"); err != nil {
@@ -456,7 +458,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		{cfg.SlackNotifierName, generic.Named},
 		{cfg.CustomerDetectorName, generic.Named},
 		{cfg.CRMName, generic.Named},
-		{cfg.DeliveryHandlerName, generic.Named},
 	} {
 		if dep.name != "" {
 			optDeps = append(optDeps, dep.named(dep.name).String())

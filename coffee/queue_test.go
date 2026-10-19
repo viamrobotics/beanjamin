@@ -54,10 +54,11 @@ func newTestCoffee(t *testing.T, cfg *Config) (*beanjaminCoffee, *fakeSpeech) {
 	}
 	sp := &fakeSpeech{}
 	return &beanjaminCoffee{
-		logger:  logging.NewTestLogger(t),
-		cfg:     cfg,
-		queue:   order.NewQueue(),
-		speaker: speech.NewSpeaker(sp, cfg.Conversational),
+		logger:   logging.NewTestLogger(t),
+		cfg:      cfg,
+		queue:    order.NewQueue(),
+		speaker:  speech.NewSpeaker(sp, cfg.Conversational),
+		delivery: newDeliveryCart(),
 	}, sp
 }
 
@@ -143,6 +144,11 @@ func TestEnqueueOrder_Fulfillment(t *testing.T) {
 			if tc.v != nil {
 				payload["fulfillment"] = tc.v
 			}
+			if tc.want == order.FulfillmentDelivery {
+				if _, err := c.deliveryMachineHeartbeat(map[string]any{"state": "running"}); err != nil {
+					t.Fatalf("heartbeat: %v", err)
+				}
+			}
 			if _, err := c.enqueueOrder(context.Background(), payload); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -171,6 +177,9 @@ func TestEnqueueOrder_DeliveryRequiresEmail(t *testing.T) {
 		t.Errorf("queue should stay empty after rejection, got len=%d", c.queue.Len())
 	}
 
+	if _, err := c.deliveryMachineHeartbeat(map[string]any{"state": "running"}); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
 	resp, err := c.enqueueOrder(context.Background(), map[string]any{
 		"drink":          "espresso",
 		"customer_name":  "Alice",

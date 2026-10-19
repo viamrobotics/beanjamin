@@ -230,18 +230,18 @@ func (q *Queue) Clear() int {
 	return n
 }
 
-// ClearPending drops the backlog. It reports how many orders were removed and
-// the ID of the order left running ("" when idle), both read under one lock so
-// a caller can describe what it spared without racing the brew finishing.
+// ClearPending drops the backlog and returns those orders plus the ID of the
+// order left running ("" when idle), both read under one lock so a caller can
+// describe what it spared without racing the brew finishing.
 //
 // The order on the arm and the recent buffer are structurally out of reach,
 // which is the point: clear_queue means "make no more drinks", and the drink
 // already being made has to survive it — staying visible in List, still taking
 // SetCurrentStep updates, and still completing into recent as a "Ready!" card.
-func (q *Queue) ClearPending() (removed int, currentID string) {
+func (q *Queue) ClearPending() (removed []Order, currentID string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	removed = len(q.pending)
+	removed = append([]Order(nil), q.pending...)
 	q.pending = nil
 	if q.current != nil {
 		currentID = q.current.ID

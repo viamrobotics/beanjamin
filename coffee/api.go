@@ -68,6 +68,7 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		"current_step":    step,
 		"can_serve_decaf": s.cfg.CanServeDecaf,
 		"fault_active":    s.faultAlarm.Active(),
+		"accept_delivery": s.deliveryAccepting(),
 	}
 	s.logger.Debugw("Status", "response", resp)
 	return resp, nil
@@ -174,8 +175,17 @@ var coffeeCommands = []commandDef{
 	{key: "reset_world", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.resetWorld(ctx)
 	}},
-	{key: "send_delivery_message", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
-		return s.sendDeliveryMessage(ctx, cmd["send_delivery_message"])
+	{key: "delivery_machine_heartbeat", run: func(s *beanjaminCoffee, _ context.Context, cmd map[string]any) (map[string]any, error) {
+		return s.deliveryMachineHeartbeat(cmd["delivery_machine_heartbeat"])
+	}},
+	{key: "delivery_pending", run: func(s *beanjaminCoffee, _ context.Context, _ map[string]any) (map[string]any, error) {
+		return s.deliveryPending()
+	}},
+	{key: "delivery_machine_ready", run: func(s *beanjaminCoffee, _ context.Context, _ map[string]any) (map[string]any, error) {
+		return s.deliveryMachineReady()
+	}},
+	{key: "delivery_handover_status", run: func(s *beanjaminCoffee, _ context.Context, cmd map[string]any) (map[string]any, error) {
+		return s.deliveryHandoverStatus(cmd["delivery_handover_status"])
 	}},
 	// Normally fired by a cron entry in the machine config's "jobs" block
 	// (see README); safe to invoke by hand to test the digest off-schedule.
@@ -214,7 +224,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]any) (ma
 		}
 	}
 
-	err := fmt.Errorf("unknown command, supported commands: cancel, cancel_order, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action, send_delivery_message, send_daily_summary")
+	err := fmt.Errorf("unknown command, supported commands: cancel, cancel_order, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action, delivery_machine_heartbeat, delivery_pending, delivery_machine_ready, delivery_handover_status, send_daily_summary")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }

@@ -206,6 +206,9 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx, cancelCtx context.Context, ord
 
 	if err := s.prepareDrink(ctx, cancelCtx, order); err != nil {
 		logger.Errorf("order for %s failed: %v", order.CustomerName, err)
+		// A drink already in the serving slot stays ready for the cart; only
+		// an order that never got that far is a failed handover.
+		s.delivery.failIfMaking(order.ID, err.Error())
 		return err
 	}
 
