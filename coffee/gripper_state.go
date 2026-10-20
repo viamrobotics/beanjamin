@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -82,6 +83,9 @@ func (s *beanjaminCoffee) classifyGripper(pos float64) gripperState {
 // Position is only exposed via DoCommand{"get": true}; the standard Gripper API
 // (Grab/Open) does not surface it.
 func (s *beanjaminCoffee) gripperPos(ctx context.Context) (float64, error) {
+	if s.gripper == nil {
+		return 0, errors.New("gripper_pos: no gripper")
+	}
 	resp, err := s.gripper.DoCommand(ctx, map[string]any{"get": true})
 	if err != nil {
 		return 0, fmt.Errorf("gripper_pos: %w", err)
@@ -100,8 +104,8 @@ func (s *beanjaminCoffee) gripperPos(ctx context.Context) (float64, error) {
 // closing lets it catch the item after the caller has written the grab off.
 // The open is verified, so on errGripMissed the jaws are known open. A failed
 // position read or a failed reopen returns a plain error (NOT errGripMissed) so
-// callers never treat an unreadable or stuck gripper as a missed grab. Absorbs
-// the post-grab settle pause so the read happens at rest.
+// callers never treat an unreadable or stuck gripper as a missed grab. Waits
+// for the jaws to settle so the read happens at rest.
 //
 // During an order the grab and its check are handed off like a move, so the
 // planner goes on planning while the jaws close. A miss then fails the order at
@@ -113,10 +117,9 @@ func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context) error {
 
 // runGrabAndVerify is grabAndVerifyHolding as the execution thread runs it.
 func (s *beanjaminCoffee) runGrabAndVerify(ctx context.Context) error {
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+	if err := s.actuateGripper(ctx, closeGripperAction); err != nil {
 		return fmt.Errorf("grab: %w", err)
 	}
-	time.Sleep(gripperPause)
 	pos, err := s.gripperPos(ctx)
 	if err != nil {
 		return err
@@ -155,25 +158,16 @@ func (s *beanjaminCoffee) runOpenAndVerify(ctx context.Context) error {
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		return fmt.Errorf("open: %w", err)
 	}
-	deadline := time.Now().Add(s.gripperOpenTimeout())
-	for {
-		select {
-		case <-time.After(gripperPause):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		pos, err := s.gripperPos(ctx)
-		if err != nil {
-			return err
-		}
-		if s.classifyGripper(pos) == gripperOpen {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%w within %s (pos=%.0f, state=%s)",
-				errGripperNotOpen, s.gripperOpenTimeout(), pos, s.classifyGripper(pos))
-		}
+	// An open settles on the band alone, so the pre-command position is unused.
+	pos, settled, err := s.waitGripperSettled(ctx, openGripperAction, 0, s.gripperOpenTimeout())
+	if err != nil {
+		return err
 	}
+	if !settled {
+		return fmt.Errorf("%w within %s (pos=%.0f, state=%s)",
+			errGripperNotOpen, s.gripperOpenTimeout(), pos, s.classifyGripper(pos))
+	}
+	return nil
 }
 
 // normalizeGripperAtStart ensures the gripper is closed before a brew cycle
@@ -194,10 +188,9 @@ func (s *beanjaminCoffee) normalizeGripperAtStart(ctx context.Context) error {
 		return nil
 	}
 	s.activeOrderLogger().Infof("gripper not closed at cycle start (pos=%.0f); closing", pos)
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+	if err := s.actuateGripper(ctx, closeGripperAction); err != nil {
 		return fmt.Errorf("normalize gripper: close: %w", err)
 	}
-	time.Sleep(gripperPause)
 	if pos, err = s.gripperPos(ctx); err != nil {
 		return err
 	}
@@ -207,12 +200,149 @@ func (s *beanjaminCoffee) normalizeGripperAtStart(ctx context.Context) error {
 	return nil
 }
 
-// openGripper opens the jaws and waits gripperPause.
+// openGripper hands off opening the jaws and waiting for them to settle.
 func (s *beanjaminCoffee) openGripper(ctx context.Context) error {
-	return s.handOff(ctx, move{name: "open gripper", gripper: openGripperAction, sleep: gripperPause})
+	return s.handOff(ctx, move{name: "open gripper", gripper: openGripperAction, settleGripper: true})
 }
 
-// closeGripper closes the jaws and waits gripperPause.
+// closeGripper hands off closing the jaws and waiting for them to settle.
 func (s *beanjaminCoffee) closeGripper(ctx context.Context) error {
-	return s.handOff(ctx, move{name: "close gripper", gripper: closeGripperAction, sleep: gripperPause})
+	return s.handOff(ctx, move{name: "close gripper", gripper: closeGripperAction, settleGripper: true})
+}
+
+const (
+	// gripperPollInterval is how often a settle wait reads the jaw position. The
+	// jaws close in about 0.35 s and open in about 0.75 s, so a 50 ms poll
+	// overshoots the moment they stop by a small fraction of the travel, while a
+	// "get" round trip costs only a few milliseconds.
+	gripperPollInterval = 50 * time.Millisecond
+	// gripperSettleTolerance is the jaw-position change (0–850 scale) between two
+	// consecutive reads that still counts as stopped. Moving jaws cover tens of
+	// units per poll; jaws clamped on an item can still creep a few units.
+	gripperSettleTolerance = 5.0
+)
+
+// sendGripper commands the jaws without waiting for them to move.
+func (s *beanjaminCoffee) sendGripper(ctx context.Context, action gripperAction) error {
+	switch action {
+	case openGripperAction:
+		return s.gripper.Open(ctx, nil)
+	case closeGripperAction:
+		_, err := s.gripper.Grab(ctx, nil)
+		return err
+	case noGripperAction:
+	}
+	return nil
+}
+
+// actuateGripper commands the jaws and returns once they have settled, for
+// callers that do not check where the jaws ended up. The wait is capped at
+// gripperPause; one that runs out logs a warning and returns nil, since these
+// callers have no failure path for slow jaws. When the position cannot be read
+// (no readable gripper, as in fake mode) it waits out gripperPause instead.
+// Only a failed command or a cancelled ctx returns an error.
+func (s *beanjaminCoffee) actuateGripper(ctx context.Context, action gripperAction) error {
+	return s.actuateGripperWithin(ctx, action, gripperPause)
+}
+
+// actuateGripperWithin is actuateGripper with the settle wait capped at limit
+// instead of gripperPause, for a caller that must not move on before the jaws
+// get there.
+func (s *beanjaminCoffee) actuateGripperWithin(ctx context.Context, action gripperAction, limit time.Duration) error {
+	logger := s.activeOrderLogger()
+	before, beforeErr := s.gripperPos(ctx)
+	if err := s.sendGripper(ctx, action); err != nil {
+		return err
+	}
+	sent := time.Now()
+	fixedPause := func() error {
+		select {
+		case <-time.After(time.Until(sent.Add(gripperPause))):
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if beforeErr != nil {
+		logger.Debugf("gripper settle: cannot read the jaws, waiting %s: %v", gripperPause, beforeErr)
+		return fixedPause()
+	}
+	pos, settled, err := s.waitGripperSettled(ctx, action, before, limit)
+	switch {
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case err != nil:
+		logger.Debugf("gripper settle: lost the jaw position, waiting out %s: %v", gripperPause, err)
+		return fixedPause()
+	case !settled:
+		logger.Warnf("gripper settle: jaws not settled %s after %s (pos=%.0f, from %.0f); continuing",
+			limit, gripperActionName(action), pos, before)
+	}
+	return nil
+}
+
+// waitGripperSettled polls the jaw position every gripperPollInterval until
+// the jaws have settled after action or timeout has passed, and returns the
+// last position read and whether they settled. before is the position read
+// just before the command was sent. Settled means:
+//   - after an open, the jaws read in the open band;
+//   - after a close, two consecutive reads agree within gripperSettleTolerance,
+//     and the jaws have either moved away from before or are out of the open
+//     band.
+//
+// The second close condition rejects reads taken before the jaws start moving:
+// those agree with each other too, at the open position the close started
+// from. A close that starts in the closed or holding band has nowhere to go, so
+// a stable read there is accepted as is. The open band needs no such guard,
+// since a stale read is outside it whenever there is travel left to do. A
+// failed read returns its error.
+func (s *beanjaminCoffee) waitGripperSettled(ctx context.Context, action gripperAction, before float64,
+	timeout time.Duration,
+) (pos float64, settled bool, err error) {
+	deadline := time.Now().Add(timeout)
+	prev, havePrev := 0.0, false
+	for {
+		select {
+		case <-time.After(gripperPollInterval):
+		case <-ctx.Done():
+			return pos, false, ctx.Err()
+		}
+		pos, err = s.gripperPos(ctx)
+		if err != nil {
+			return pos, false, err
+		}
+		if s.jawsSettled(action, before, prev, havePrev, pos) {
+			return pos, true, nil
+		}
+		prev, havePrev = pos, true
+		if !time.Now().Before(deadline) {
+			return pos, false, nil
+		}
+	}
+}
+
+// jawsSettled is waitGripperSettled's per-read test; see its doc for the rule.
+func (s *beanjaminCoffee) jawsSettled(action gripperAction, before, prev float64, havePrev bool, pos float64) bool {
+	switch action {
+	case openGripperAction:
+		return s.classifyGripper(pos) == gripperOpen
+	case closeGripperAction:
+		if !havePrev || math.Abs(pos-prev) > gripperSettleTolerance {
+			return false
+		}
+		return math.Abs(pos-before) > gripperSettleTolerance || s.classifyGripper(pos) != gripperOpen
+	case noGripperAction:
+	}
+	return true
+}
+
+func gripperActionName(action gripperAction) string {
+	switch action {
+	case openGripperAction:
+		return "open"
+	case closeGripperAction:
+		return "close"
+	case noGripperAction:
+	}
+	return "no"
 }

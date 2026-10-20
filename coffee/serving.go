@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/referenceframe"
@@ -172,7 +171,7 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context,
 //
 // The raw-pose moves, the level carry and the gripper calls here do not see
 // cancelCtx on their own, so it is merged into ctx up front: an operator cancel
-// landing during planning, gripper actuation or a gripperPause stops the rest of
+// landing during planning, gripper actuation or its settle wait stops the rest of
 // the descent, release and retreat instead of only the trajectory in flight.
 func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, tileWorld r3.Vector, shelfTopZ float64,
 	contents heldContents,
@@ -227,10 +226,9 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, tileW
 	// 3. Release the cup. Past this point the cup is committed to this slot;
 	// the steps below strip any errMotionPlanning chain (%v) so the caller does
 	// not retry another slot with an empty gripper.
-	if err := s.gripper.Open(ctx, nil); err != nil {
+	if err := s.actuateGripper(ctx, openGripperAction); err != nil {
 		return fmt.Errorf("open gripper to release cup: %w", err)
 	}
-	time.Sleep(gripperPause)
 	// Cup is released onto the shelf; it no longer travels with the gripper.
 	s.detachHeldGeometry()
 
@@ -244,9 +242,8 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, tileW
 	}
 
 	// 5. Close the gripper for the next move.
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+	if err := s.actuateGripper(ctx, closeGripperAction); err != nil {
 		return fmt.Errorf("close gripper after release: %w", err)
 	}
-	time.Sleep(gripperPause)
 	return nil
 }

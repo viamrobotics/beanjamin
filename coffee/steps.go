@@ -19,7 +19,9 @@ const (
 	// portafilter before the lock pivot reads its pose, liquid before a pour. A
 	// move followed only by another move starts from rest anyway and gains
 	// nothing from one, and every pause holds up the moves queued behind it.
-	shortPause   = 100 * time.Millisecond
+	shortPause = 100 * time.Millisecond
+	// gripperPause caps the wait for the jaws to settle after a plain open or
+	// close, and is the whole wait when their position can't be read.
 	gripperPause = 500 * time.Millisecond
 	pourPause    = 3 * time.Second
 )

@@ -47,7 +47,10 @@ type move struct {
 	speed     *arm.MoveOptions
 
 	gripper gripperAction
-	sleep   time.Duration
+	// settleGripper waits for the jaws to settle after the gripper action (see
+	// actuateGripper).
+	settleGripper bool
+	sleep         time.Duration
 	// sleepUntil, when set, replaces sleep with a wait until the time it returns,
 	// read as the move runs: for a wait timed from an earlier move's execution
 	// rather than from when it was planned.
@@ -177,7 +180,8 @@ func (s *beanjaminCoffee) runMoveRecovered(ctx context.Context, m move) (err err
 	return s.runMove(ctx, m)
 }
 
-// runMove executes a move: bookkeeping, trajectory, gripper, then sleep.
+// runMove executes a move: bookkeeping, trajectory, gripper (and its settle),
+// then sleep.
 func (s *beanjaminCoffee) runMove(ctx context.Context, m move) error {
 	if m.bookkeep != nil {
 		m.bookkeep()
@@ -188,13 +192,13 @@ func (s *beanjaminCoffee) runMove(ctx context.Context, m move) error {
 		}
 	}
 	switch m.gripper {
-	case openGripperAction:
-		if err := s.gripper.Open(ctx, nil); err != nil {
-			return fmt.Errorf("open gripper: %w", err)
+	case openGripperAction, closeGripperAction:
+		send := s.sendGripper
+		if m.settleGripper {
+			send = s.actuateGripper
 		}
-	case closeGripperAction:
-		if _, err := s.gripper.Grab(ctx, nil); err != nil {
-			return fmt.Errorf("close gripper: %w", err)
+		if err := send(ctx, m.gripper); err != nil {
+			return fmt.Errorf("%s gripper: %w", gripperActionName(m.gripper), err)
 		}
 	case openAndVerifyGripperAction:
 		if err := s.runOpenAndVerify(ctx); err != nil {
