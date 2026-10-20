@@ -22,10 +22,12 @@ func flowCoffee(t *testing.T) (*beanjaminCoffee, func() error) {
 	return s, end
 }
 
-// failingGripper is a gripper whose Open fails with err.
+// failingGripper is a gripper whose Open fails with err and whose position
+// can't be read.
 func failingGripper(err error) *inject.Gripper {
 	g := inject.NewGripper("g")
 	g.OpenFunc = func(context.Context, map[string]any) error { return err }
+	g.DoFunc = func(context.Context, map[string]any) (map[string]any, error) { return nil, err }
 	return g
 }
 

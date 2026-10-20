@@ -92,7 +92,7 @@ func TestTryDropCupInSlotHonorsCancelCtx(t *testing.T) {
 				defer cancel()
 				rig := newDropTestRig(t, func(ctx context.Context) {
 					// The operator cancels mid-approach; the move's context must
-					// follow, as it would during planning or a gripperPause.
+					// follow, as it would during planning or a gripper settle.
 					cancel()
 					select {
 					case <-ctx.Done():
