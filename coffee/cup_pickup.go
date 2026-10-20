@@ -118,6 +118,7 @@ type pickupTarget struct {
 	unreachableSpeak string               // spoken when items were seen but none could be grabbed, before a retry wait
 	graspZFromGeom   bool                 // grab at the geometry centroid's Z (keep detected X/Y); for the tall glass whose detected Z can sit high on the rim
 	shieldFrame      string               // clean-area shield obstacle opened up on the grasp descent/retreat (pickupAreaShieldCollisions); "" disables
+	retreatSpeed     *StepMoveOptions     // speed of the retreat with the item in hand; nil is the arm default
 }
 
 // cupPickupTarget describes dynamic cup pickup.
@@ -135,6 +136,7 @@ func (s *beanjaminCoffee) cupPickupTarget() *pickupTarget {
 		noItemSpeak:      "I don't see a cup yet — please place one on the shelf. Trying again in 15 seconds.",
 		unreachableSpeak: "I can see a cup but I'm having trouble grabbing it — could you nudge it a little? Trying again in 15 seconds.",
 		shieldFrame:      cleanCupAreaShieldFrameName,
+		retreatSpeed:     nil, // the cup is empty, so the arm's default speed
 	}
 }
 
@@ -157,6 +159,7 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 		unreachableSpeak: "I can see a glass but I'm having trouble grabbing it — could you nudge it a little? Trying again in 15 seconds.",
 		graspZFromGeom:   true,
 		shieldFrame:      cleanGlassAreaShieldFrameName,
+		retreatSpeed:     s.slowMoveOptions(),
 	}
 }
 
@@ -448,7 +451,7 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	// can't drop the item safely by recovering to observe. Strip the
 	// errMotionPlanning chain (%v, not %w) so the caller does not treat this
 	// as a try-another-candidate planning failure.
-	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, s.pickupAreaShieldCollisions(t.shieldFrame), s.slowMoveOptions()); err != nil {
+	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, s.pickupAreaShieldCollisions(t.shieldFrame), t.retreatSpeed); err != nil {
 		return centroid, fmt.Errorf("retreat with %s grabbed (centroid x=%.1f, y=%.1f, z=%.1f): %v", t.label, centroid.X, centroid.Y, centroid.Z, err)
 	}
 	return centroid, nil

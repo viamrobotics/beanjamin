@@ -56,6 +56,7 @@ func (s *beanjaminCoffee) milkPickupTarget() *pickupTarget {
 		// the neck, while the box center is a stable mid-body grasp point.
 		graspZFromGeom: true,
 		shieldFrame:    milkAreaShieldFrameName,
+		retreatSpeed:   s.slowMoveOptions(), // the bottle is full
 	}
 }
 
