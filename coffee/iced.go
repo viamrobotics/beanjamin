@@ -186,7 +186,7 @@ func (s *beanjaminCoffee) approachBrewedCup(ctx, cancelCtx context.Context) erro
 	if s.gripper == nil {
 		return fmt.Errorf("approach_brewed_cup: no gripper configured")
 	}
-	approachStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
+	approachStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("approach_brewed_cup: %w", err)
 	}
@@ -227,7 +227,7 @@ func (s *beanjaminCoffee) graspBrewedCup(ctx, cancelCtx context.Context) error {
 			s.activeOrderLogger().Warnf("grasp_brewed_cup: model cup from cup_dimensions failed, continuing untracked: %v", err)
 		}
 	}
-	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions),
+	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions),
 		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("grasp_brewed_cup: %w", err)
@@ -252,7 +252,7 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 	if s.gripper == nil {
 		return fmt.Errorf("grab_staged_glass: no gripper configured")
 	}
-	approachStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
+	approachStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
@@ -273,7 +273,7 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 	if err := s.regrabStagedGlass(ctx); err != nil {
 		s.activeOrderLogger().Warnf("grab_staged_glass: reattach glass geometry failed, continuing untracked: %v", err)
 	}
-	retreatStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause,
+	retreatStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
 		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("grab_staged_glass: %w", err)
@@ -296,11 +296,11 @@ func (s *beanjaminCoffee) fetchGlass(ctx, cancelCtx context.Context) error {
 // the chute. Split out of dispenseIce so the pose can be reached without opening
 // the pin: ice-level instrumentation has to own the pin to time against it.
 func (s *beanjaminCoffee) moveToIceDispense(ctx, cancelCtx context.Context) error {
-	approachStep := Step{PoseName: clawPoseIceMachineApproach, PoseSwitch: s.clawsSw, Pause: shortPause}
+	approachStep := Step{PoseName: clawPoseIceMachineApproach, PoseSwitch: s.clawsSw}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("move_to_ice_dispense: %w", err)
 	}
-	dispenseStep := Step{PoseName: clawPoseIceMachineDispense, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause,
+	dispenseStep := Step{PoseName: clawPoseIceMachineDispense, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
 		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, dispenseStep); err != nil {
 		return fmt.Errorf("move_to_ice_dispense: %w", err)
@@ -325,7 +325,7 @@ func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 	}
 	s.incrementSensorReading(ctx, s.usageSensor, "ice machine", "ice_dispenses", 1)
 
-	retreatStep := Step{PoseName: clawPoseIceMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause,
+	retreatStep := Step{PoseName: clawPoseIceMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
 		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("dispense_ice: %w", err)
@@ -435,7 +435,7 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 	if err := s.stageGlassAsObstacle(ctx); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
-	exitStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause}
+	exitStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint}
 	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}

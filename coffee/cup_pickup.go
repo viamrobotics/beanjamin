@@ -472,7 +472,7 @@ func (s *beanjaminCoffee) recoverToObserve(ctx, cancelCtx context.Context, t *pi
 		time.Sleep(gripperPause)
 	}
 
-	observeStep := Step{PoseName: t.observeHomePose, PoseSwitch: t.observeSw, Pause: shortPause}
+	observeStep := Step{PoseName: t.observeHomePose, PoseSwitch: t.observeSw}
 	if err := s.executeStep(ctx, cancelCtx, observeStep); err != nil {
 		logger.Warnf("dynamic %s pickup: recover to %q: %v", t.label, t.observeHomePose, err)
 	}
@@ -503,7 +503,7 @@ func (s *beanjaminCoffee) pickGlassDynamic(ctx, cancelCtx context.Context) error
 // swallowed so a flaky peripheral does not abort the retry.
 func (s *beanjaminCoffee) announceAndWaitForRetry(ctx, cancelCtx context.Context, t *pickupTarget, prompt string) error {
 	logger := s.activeOrderLogger()
-	recoverStep := Step{PoseName: t.observeHomePose, PoseSwitch: t.observeSw, Pause: shortPause}
+	recoverStep := Step{PoseName: t.observeHomePose, PoseSwitch: t.observeSw}
 	if mvErr := s.executeStep(ctx, cancelCtx, recoverStep); mvErr != nil {
 		logger.Warnf("dynamic %s pickup: return to %q before retry wait: %v", t.label, t.observeHomePose, mvErr)
 	}

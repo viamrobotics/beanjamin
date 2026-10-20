@@ -14,6 +14,11 @@ import (
 )
 
 const (
+	// shortPause lets the arm settle where something depends on it standing
+	// still: a camera frame, the jaws closing on or releasing a container, the
+	// portafilter before the lock pivot reads its pose, liquid before a pour. A
+	// move followed only by another move starts from rest anyway and gains
+	// nothing from one, and every pause holds up the moves queued behind it.
 	shortPause   = 100 * time.Millisecond
 	gripperPause = 500 * time.Millisecond
 	pourPause    = 3 * time.Second
