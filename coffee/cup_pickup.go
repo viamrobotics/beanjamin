@@ -421,11 +421,10 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	}
 
 	// 2. Open gripper before descending.
-	if err := s.gripper.Open(ctx, nil); err != nil {
+	if err := s.actuateGripper(ctx, openGripperAction); err != nil {
 		s.recoverToObserve(ctx, cancelCtx, t, true)
 		return centroid, fmt.Errorf("open gripper for grab: %w", err)
 	}
-	time.Sleep(gripperPause)
 
 	// 3. Linear descent to grab pose.
 	if err := s.executePlan(ctx, grabPlan, s.slowMoveOptions()); err != nil {
@@ -469,10 +468,9 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 func (s *beanjaminCoffee) recoverToObserve(ctx, cancelCtx context.Context, t *pickupTarget, closeJaws bool) {
 	logger := s.activeOrderLogger()
 	if closeJaws {
-		if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		if err := s.actuateGripper(ctx, closeGripperAction); err != nil {
 			logger.Warnf("dynamic %s pickup: recover: close gripper: %v", t.label, err)
 		}
-		time.Sleep(gripperPause)
 	}
 
 	observeStep := Step{PoseName: t.observeHomePose, PoseSwitch: t.observeSw}

@@ -230,10 +230,9 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 		return fmt.Errorf("return_milk: descend onto the shelf: %w", err)
 	}
 
-	if err := s.gripper.Open(ctx, nil); err != nil {
+	if err := s.actuateGripper(ctx, openGripperAction); err != nil {
 		return fmt.Errorf("return_milk: open gripper: %w", err)
 	}
-	time.Sleep(gripperPause)
 	// The bottle is standing on the shelf; it no longer travels with the gripper.
 	s.detachHeldGeometry()
 	s.milkGraspCentroid = nil
@@ -244,10 +243,9 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, s.pickupAreaShieldCollisions(milkAreaShieldFrameName), nil); err != nil {
 		return fmt.Errorf("return_milk: retreat after releasing the bottle: %v", err)
 	}
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+	if err := s.actuateGripper(ctx, closeGripperAction); err != nil {
 		return fmt.Errorf("return_milk: close gripper after release: %w", err)
 	}
-	time.Sleep(gripperPause)
 	return nil
 }
 
