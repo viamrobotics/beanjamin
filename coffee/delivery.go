@@ -45,8 +45,12 @@ type deliveryOrder struct {
 	// handoffStarted is set by delivery_machine_ready for this order. The
 	// handoff does not begin for an order the cart has not named this way.
 	handoffStarted bool
-	err            string
-	updated        time.Time
+	// toCart is set while the drink is ready and about to be placed in the cart
+	// itself. The order reports ready so the cart extends its tray, but the
+	// handoff completes on placement (markHandedOver), never by settleLocked.
+	toCart  bool
+	err     string
+	updated time.Time
 }
 
 func (o *deliveryOrder) active() bool {
@@ -225,15 +229,17 @@ func (d *deliveryCart) markReady(o order.Order, timeout time.Duration) {
 	}
 	rec.order.PickupPosition = o.PickupPosition
 	rec.served = true
+	rec.toCart = false
 	rec.status = deliveryReady
 	rec.err = ""
 	rec.updated = d.clock()
 	d.settleLocked(rec, timeout)
 }
 
-// failIfMaking marks an order failed only while it is still being made, so a
-// fault after the drink is in the slot leaves it ready for the cart.
-func (d *deliveryCart) failIfMaking(id, reason string) {
+// markReadyForCart reports the order ready before its drink is set down, so the
+// docked cart extends its tray for the slot search and placement. Only an order
+// still being made moves.
+func (d *deliveryCart) markReadyForCart(id string) {
 	if d == nil {
 		return
 	}
@@ -241,6 +247,62 @@ func (d *deliveryCart) failIfMaking(id, reason string) {
 	defer d.mu.Unlock()
 	rec := d.orders[id]
 	if rec == nil || rec.status != deliveryMaking {
+		return
+	}
+	rec.toCart = true
+	rec.status = deliveryReady
+	rec.err = ""
+	rec.updated = d.clock()
+}
+
+// dockedFor reports whether the cart has docked for this order
+// (delivery_machine_ready named it) and is still on a fresh running heartbeat,
+// so the drink can go straight into the cart.
+func (d *deliveryCart) dockedFor(id string, timeout time.Duration) bool {
+	if d == nil {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	rec := d.orders[id]
+	if rec == nil || !rec.active() || !rec.handoffStarted {
+		return false
+	}
+	ok, _ := d.acceptingLocked(timeout)
+	return ok
+}
+
+// markHandedOver records that the drink was placed in the cart itself, in the
+// slot marked by tag cartSlot. That is the handoff, so the order is terminal.
+func (d *deliveryCart) markHandedOver(id string, cartSlot int) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	rec := d.orders[id]
+	if rec == nil || !rec.active() {
+		return
+	}
+	rec.order.PickupPosition = cartSlot
+	rec.served = true
+	rec.toCart = false
+	rec.status = deliveryHandedOver
+	rec.err = ""
+	rec.updated = d.clock()
+}
+
+// failIfMaking marks an order failed only while its drink is not set down yet
+// (still being made, or reported ready for the cart but not placed), so a fault
+// after the drink is in the slot leaves it ready for the cart.
+func (d *deliveryCart) failIfMaking(id, reason string) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	rec := d.orders[id]
+	if rec == nil || (rec.status != deliveryMaking && !rec.toCart) {
 		return
 	}
 	d.failLocked(rec, reason)
@@ -392,7 +454,7 @@ func (d *deliveryCart) handover(id string, timeout time.Duration) (map[string]an
 // over. Any other heartbeat marks it retrying. A drink that is not in the
 // slot yet stays making; markReady attempts it once the slot is known.
 func (d *deliveryCart) settleLocked(rec *deliveryOrder, timeout time.Duration) {
-	if !rec.handoffStarted {
+	if !rec.handoffStarted || rec.toCart {
 		return
 	}
 	if rec.status != deliveryReady && rec.status != deliveryRetrying {

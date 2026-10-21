@@ -90,6 +90,15 @@ func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) (i
 	return s.placeHeldInServingArea(ctx, cancelCtx, heldFilled)
 }
 
+// grabAndShelve grabs the filled drink and drops it in the next reachable
+// serving-area slot.
+func (s *beanjaminCoffee) grabAndShelve(ctx, cancelCtx context.Context, grab grabDrink) (int, error) {
+	if err := grab(ctx, cancelCtx); err != nil {
+		return -1, err
+	}
+	return s.placeHeldInServingArea(ctx, cancelCtx, heldFilled)
+}
+
 // heldContents says whether the container being placed still holds liquid. It
 // decides only how the traverse to the shelf is planned — a filled container
 // routes through the no-spill level carry, an empty one free-plans straight to

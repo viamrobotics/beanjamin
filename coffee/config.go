@@ -147,6 +147,33 @@ type Config struct {
 	// Defaults to 60 seconds.
 	DeliveryHeartbeatTimeoutSec float64 `json:"delivery_heartbeat_timeout_sec,omitempty"`
 
+	// Direct-to-cart placement. With both names set, a delivery order's drink
+	// goes into a slot of the docked cart instead of the serving shelf: the arm
+	// visits each pose on the observe switch until the slots detector sees an
+	// AprilTag, then lowers the drink into the hole beside the closest one. The
+	// drink falls back to the shelf when the cart has not docked within
+	// delivery_cart_wait_sec, no tag is seen, or the slot cannot be planned.
+	DeliveryCartObservePoseSwitcherName string `json:"delivery_cart_observe_pose_switcher_name,omitempty"`
+	DeliverySlotsVisionServiceName      string `json:"delivery_slots_vision_service_name,omitempty"`
+	// DeliverySlotTagOffsetMm is the hole's distance from its tag along the
+	// tag's own +Y axis; negative points the other way. Defaults to 75.
+	DeliverySlotTagOffsetMm float64 `json:"delivery_slot_tag_offset_mm,omitempty"`
+	// DeliverySlotApproachRelativePose and DeliverySlotReleaseRelativePose are
+	// the gripper offsets composed onto the slot point, the way the serving pair
+	// is composed onto a shelf slot: the drink is carried to the approach pose,
+	// lowered in a straight line to the release pose, and released. Their
+	// orientation is the gripper's over the slot. Both are required with
+	// direct-to-cart placement.
+	DeliverySlotApproachRelativePose *RelativePose `json:"delivery_slot_approach_relative_pose,omitempty"`
+	DeliverySlotReleaseRelativePose  *RelativePose `json:"delivery_slot_release_relative_pose,omitempty"`
+	// DeliveryCartWaitSec is how long a ready drink waits for the cart to dock
+	// before going to the shelf. Defaults to 30.
+	DeliveryCartWaitSec float64 `json:"delivery_cart_wait_sec,omitempty"`
+	// DeliverySlotSearchSec is how long the observe poses are retried for a tag
+	// once the order is reported ready, while the cart extends its tray.
+	// Defaults to 20.
+	DeliverySlotSearchSec float64 `json:"delivery_slot_search_sec,omitempty"`
+
 	// Conversational, when true, makes the coffee service speak its own
 	// status-narrating lines through speech_service_name — initial
 	// greetings, almost-ready prompts, order confirmations, rejection
@@ -438,6 +465,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.DeliveryHeartbeatTimeoutSec < 0 {
 		return nil, nil, fmt.Errorf("%s: delivery_heartbeat_timeout_sec must be >= 0", path)
 	}
+	if err := validateDeliverySlots(cfg, path); err != nil {
+		return nil, nil, err
+	}
 	// The picked-up cup is always tracked as a held item, and its geometry is
 	// modeled from these dimensions, so they must be configured.
 	if err := cfg.CupDimensions.validate(path, "cup_dimensions"); err != nil {
@@ -468,6 +498,13 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		camera.Named(cfg.SrcCameraName).String(),
 		cfg.CameraObservePoseSwitcherName,
 	)
+
+	if cfg.DeliverySlotsVisionServiceName != "" {
+		reqDeps = append(reqDeps,
+			vision.Named(cfg.DeliverySlotsVisionServiceName).String(),
+			cfg.DeliveryCartObservePoseSwitcherName,
+		)
+	}
 
 	// Not gated on can_serve_iced: pulse_ice_pin is an execute_action on every
 	// machine, so ice_vision_enabled is reachable — and a band that scans nothing
@@ -545,4 +582,40 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 
 	return reqDeps, optDeps, nil
+}
+
+// validateDeliverySlots checks the direct-to-cart placement settings: the
+// switch and detector come as a pair, and once set, the approach and release
+// poses are required with the release below the approach.
+func validateDeliverySlots(cfg *Config, path string) error {
+	if (cfg.DeliveryCartObservePoseSwitcherName == "") != (cfg.DeliverySlotsVisionServiceName == "") {
+		return fmt.Errorf("%s: delivery_cart_observe_pose_switcher_name and delivery_slots_vision_service_name must be set together", path)
+	}
+	for _, f := range []struct {
+		name string
+		v    float64
+	}{
+		{"delivery_cart_wait_sec", cfg.DeliveryCartWaitSec},
+		{"delivery_slot_search_sec", cfg.DeliverySlotSearchSec},
+	} {
+		if f.v < 0 {
+			return fmt.Errorf("%s: %s must be >= 0", path, f.name)
+		}
+	}
+	if cfg.DeliverySlotsVisionServiceName == "" {
+		return nil
+	}
+	if err := requireFields(path,
+		"delivery_slot_approach_relative_pose", cfg.DeliverySlotApproachRelativePose,
+		"delivery_slot_release_relative_pose", cfg.DeliverySlotReleaseRelativePose,
+	); err != nil {
+		return err
+	}
+	// Both offsets are in world axes from the slot, so the descent goes down
+	// only if the release sits lower.
+	if cfg.DeliverySlotReleaseRelativePose.Z >= cfg.DeliverySlotApproachRelativePose.Z {
+		return fmt.Errorf("%s: delivery_slot_release_relative_pose.z (%.0f) must be below delivery_slot_approach_relative_pose.z (%.0f)",
+			path, cfg.DeliverySlotReleaseRelativePose.Z, cfg.DeliverySlotApproachRelativePose.Z)
+	}
+	return nil
 }

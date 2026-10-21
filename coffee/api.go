@@ -187,6 +187,12 @@ var coffeeCommands = []commandDef{
 	{key: "delivery_handover_status", run: func(s *beanjaminCoffee, _ context.Context, cmd map[string]any) (map[string]any, error) {
 		return s.deliveryHandoverStatus(cmd["delivery_handover_status"])
 	}},
+	{key: "detect_delivery_slot", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
+		return s.detectDeliverySlotCommand(ctx)
+	}},
+	{key: "place_in_delivery_cart", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
+		return s.placeInDeliveryCartCommand(ctx)
+	}},
 	// Normally fired by a cron entry in the machine config's "jobs" block
 	// (see README); safe to invoke by hand to test the digest off-schedule.
 	{key: "send_daily_summary", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
@@ -224,7 +230,7 @@ func (s *beanjaminCoffee) DoCommand(ctx context.Context, cmd map[string]any) (ma
 		}
 	}
 
-	err := fmt.Errorf("unknown command, supported commands: cancel, cancel_order, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action, delivery_machine_heartbeat, delivery_pending, delivery_machine_ready, delivery_handover_status, send_daily_summary")
+	err := fmt.Errorf("unknown command, supported commands: cancel, cancel_order, prepare_order, execute_action, get_queue, proceed, clear_queue, cleanup_pending_clips, reset_world, run_cup_flow, action, delivery_machine_heartbeat, delivery_pending, delivery_machine_ready, delivery_handover_status, detect_delivery_slot, place_in_delivery_cart, send_daily_summary")
 	s.logger.Warnw("DoCommand", "error", err)
 	return nil, err
 }

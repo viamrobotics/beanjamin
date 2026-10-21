@@ -75,10 +75,14 @@ type beanjaminCoffee struct {
 	slackNotifier    *report.Notifier // optional; viam:notifications:slack; nil if slack_notifier_name unset
 	customerDetector generic.Service  // optional; viam:beanjamin:customer-detector; nil if customer_detector_name unset
 	delivery         *deliveryCart    // cart heartbeat, docked order, and handover state
-	crm              generic.Service  // optional; viam:beanjamin:crm; nil if crm_name unset or not yet up
-	machineLogsURL   string           // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
-	dataLocationID   string           // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
-	primaryOrgID     string           // VIAM_PRIMARY_ORG_ID env; scopes app.viam.com deep-links to the owning org; "" when unavailable
+	// deliverySlotsVision and deliveryCartObserveSw are nil unless direct-to-cart
+	// placement is configured (delivery_slots_vision_service_name).
+	deliverySlotsVision   vision.Service
+	deliveryCartObserveSw toggleswitch.Switch
+	crm                   generic.Service // optional; viam:beanjamin:crm; nil if crm_name unset or not yet up
+	machineLogsURL        string          // app.viam.com logs deep-link from VIAM_MACHINE_ID/VIAM_PRIMARY_ORG_ID env; "" when unavailable (e.g. local/test machine)
+	dataLocationID        string          // VIAM_LOCATION_ID env; used to build per-order clip data-page links; "" when unavailable
+	primaryOrgID          string          // VIAM_PRIMARY_ORG_ID env; scopes app.viam.com deep-links to the owning org; "" when unavailable
 	// lease holds running, paused and the shared cancelCtx (arm_lease.go).
 	lease       armLease
 	currentStep atomic.Value // string: current step label for the active order (debug)
@@ -293,6 +297,15 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		}
 	}
 
+	var deliverySlotsVision vision.Service
+	var deliveryCartObserveSw toggleswitch.Switch
+	if conf.DeliverySlotsVisionServiceName != "" {
+		if deliverySlotsVision, deliveryCartObserveSw, err = visionPickup(deps, logger, "delivery cart slots",
+			conf.DeliverySlotsVisionServiceName, conf.DeliveryCartObservePoseSwitcherName, conf.SrcCameraName); err != nil {
+			return nil, err
+		}
+	}
+
 	// Speech is the one optional dependency a missing resource does not fail on:
 	// the service stays usable without a voice.
 	var speechRes resource.Resource
@@ -415,6 +428,9 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		glassObserveSw:   glassObserveSw,
 		milkVision:       milkVision,
 		milkObserveSw:    milkObserveSw,
+
+		deliverySlotsVision:   deliverySlotsVision,
+		deliveryCartObserveSw: deliveryCartObserveSw,
 	}
 
 	// Fail fast if the enabled configuration references poses that are missing

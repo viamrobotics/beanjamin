@@ -109,6 +109,23 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 	armFreeDuringPour := s.cfg.HasSeparateBrewButtons
 	cupApproached := false
 
+	// A delivery drink headed for the cart needs its slot found while the
+	// gripper is still empty, since the observe poses tilt the camera down at
+	// the cart. A hot drink does it during the pour instead of lining up over the
+	// cup; everything else does it just before the drink is grabbed.
+	toCart := o.Fulfillment == order.FulfillmentDelivery && s.deliverySlotsVision != nil
+	var cartSlot deliverySlot
+	cartSlotFound, cartLocated := false, false
+	locateCart := func(ctx, cancelCtx context.Context) (err error) {
+		cartSlot, cartSlotFound, err = s.locateCartSlot(ctx, cancelCtx, o.ID)
+		cartLocated = true
+		return err
+	}
+	hotPrep := s.approachBrewedCup
+	if toCart {
+		hotPrep = locateCart
+	}
+
 	brewProgress := fmt.Sprintf("step 6/9: brewing %s", drink)
 	brewPhase := func(ctx, cancelCtx context.Context) error { return s.brew(ctx, cancelCtx, drink) }
 	if armFreeDuringPour {
@@ -116,11 +133,10 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 			brewProgress += " while prepping the iced glass"
 		}
 		brewPhase = func(ctx, cancelCtx context.Context) error {
-			if err := s.brewAndPrep(ctx, cancelCtx, drink); err != nil {
+			if err := s.brewAndPrep(ctx, cancelCtx, drink, hotPrep); err != nil {
 				return err
 			}
-			// brewAndPrep lines the gripper up over the cup for every non-iced drink.
-			cupApproached = !order.IsIced(drink)
+			cupApproached = !order.IsIced(drink) && !toCart
 			return nil
 		}
 	}
@@ -134,21 +150,45 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 	s.incrementSensorReading(ctx, s.usageSensor, "drip tray", "drip_tray_brews", 1)
 
 	var servedSlot int
+	inCart := false
+	// placeDrink grabs the filled drink and sets it down: in the docked cart for
+	// a delivery order when cart placement is configured, else on the shelf.
+	placeDrink := func(ctx, cancelCtx context.Context, grab grabDrink) (int, error) {
+		if toCart && !cartLocated {
+			if err := locateCart(ctx, cancelCtx); err != nil {
+				return -1, err
+			}
+		}
+		if err := grab(ctx, cancelCtx); err != nil {
+			return -1, err
+		}
+		if cartSlotFound {
+			placed, err := s.placeHeldInCart(ctx, cancelCtx, cartSlot)
+			if placed {
+				// Recorded before err is looked at: a fault after the release must
+				// not fail a drink that is already in the cart.
+				inCart = true
+				s.delivery.markHandedOver(o.ID, cartSlot.tagID)
+				return cartSlot.tagID, err
+			}
+			if err != nil {
+				return -1, err
+			}
+		}
+		return s.placeHeldInServingArea(ctx, cancelCtx, heldFilled)
+	}
 	serve := func(ctx, cancelCtx context.Context) (err error) {
 		switch {
 		case order.IsIced(drink) && armFreeDuringPour:
 			// Glass already iced and staged during the brew; finish the rest.
-			servedSlot, err = s.finishIced(ctx, cancelCtx, order.IsMilk(drink))
+			servedSlot, err = s.finishIced(ctx, cancelCtx, order.IsMilk(drink), placeDrink)
 		case order.IsIced(drink):
-			servedSlot, err = s.serveIced(ctx, cancelCtx, order.IsMilk(drink))
+			servedSlot, err = s.serveIced(ctx, cancelCtx, order.IsMilk(drink), placeDrink)
 		case cupApproached:
-			// Hot drink, gripper already poised over the cup: grasp it and shelf it.
-			if err = s.graspBrewedCup(ctx, cancelCtx); err != nil {
-				return err
-			}
-			servedSlot, err = s.placeHeldInServingArea(ctx, cancelCtx, heldFilled)
+			// Hot drink, gripper already poised over the cup: grasp it and serve it.
+			servedSlot, err = placeDrink(ctx, cancelCtx, s.graspBrewedCup)
 		default:
-			servedSlot, err = s.placeFullCupOnShelf(ctx, cancelCtx)
+			servedSlot, err = placeDrink(ctx, cancelCtx, s.grabBrewedCupFromMachine)
 		}
 		return err
 	}
@@ -156,10 +196,12 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 		return err
 	}
 	// Record where the drink physically landed so a delivery order can report it
-	// as the pickup_position.
+	// as the pickup_position: a shelf slot, or the cart slot's tag id.
 	o.PickupPosition = servedSlot
 	if o.Fulfillment == order.FulfillmentDelivery {
-		s.delivery.markReady(o, s.deliveryHeartbeatTimeout())
+		if !inCart {
+			s.delivery.markReady(o, s.deliveryHeartbeatTimeout())
+		}
 		if err := s.readyForDelivery(ctx, o); err != nil {
 			logger.Warnf("failed to announce ready-for-delivery: %v", err)
 		}
