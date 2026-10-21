@@ -58,7 +58,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		return nil, err
 	}
 	if fulfillment == order.FulfillmentDelivery {
-		if ok, reason := s.deliveryRefusal(); !ok {
+		if ok, reason := s.deliveryAvailability(); !ok {
 			err := fmt.Errorf("delivery orders are not being accepted: %s", reason)
 			s.logger.Warnf("rejected order: %v", err)
 			return nil, err

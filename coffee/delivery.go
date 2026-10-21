@@ -96,13 +96,13 @@ func (s *beanjaminCoffee) deliveryHeartbeatTimeout() time.Duration {
 // deliveryAccepting reports whether a new delivery order may be enqueued.
 // Pickup orders do not consult it. No heartbeat yet refuses delivery.
 func (s *beanjaminCoffee) deliveryAccepting() bool {
-	ok, _ := s.deliveryRefusal()
+	ok, _ := s.deliveryAvailability()
 	return ok
 }
 
-// deliveryRefusal reports whether delivery orders may be enqueued and, when
+// deliveryAvailability reports whether delivery orders may be enqueued and, when
 // they may not, the reason a prepare_order rejection should carry.
-func (s *beanjaminCoffee) deliveryRefusal() (bool, string) {
+func (s *beanjaminCoffee) deliveryAvailability() (bool, string) {
 	if s.delivery == nil {
 		return false, "no delivery-cart heartbeat received"
 	}
