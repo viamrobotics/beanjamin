@@ -47,6 +47,8 @@ export interface OrderRecord {
   cancelled: boolean;
   failedStep: string;
   decaf: boolean;
+  // The iced latte's milk; empty for other drinks and older readings.
+  milk: string;
   errorMessage: string;
 }
 
@@ -78,6 +80,7 @@ interface RawOrderRow {
       operator_cancelled?: boolean;
       failed_step?: string;
       decaf?: boolean;
+      milk?: string;
       error_message?: string;
     };
   };
@@ -129,6 +132,7 @@ function parseOrderResults(rows: RawOrderRow[]): OrderRecord[] {
       cancelled: x.operator_cancelled ?? false,
       failedStep: x.failed_step ?? "",
       decaf: x.decaf ?? false,
+      milk: x.milk ?? "",
       errorMessage: x.error_message ?? "",
     };
   });
