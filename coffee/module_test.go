@@ -14,18 +14,19 @@ import (
 // single field to exercise that branch alone.
 func validBaseConfig() *Config {
 	return &Config{
-		PoseSwitcherName:              "filter-switch",
-		ClawsPoseSwitcherName:         "claws-switch",
-		ArmName:                       "arm",
-		GripperName:                   "gripper",
-		CupVisionServiceName:          "vis",
-		SrcCameraName:                 "cam",
-		CameraObservePoseSwitcherName: "observe-switch",
-		CupApproachRelativePose:       &RelativePose{},
-		CupGrabRelativePose:           &RelativePose{},
-		ServingApproachRelativePose:   &RelativePose{},
-		ServingGrabRelativePose:       &RelativePose{},
-		CupDimensions:                 &ContainerDimensions{DiameterMm: 80, HeightMm: 95},
+		PoseSwitcherName:                  "filter-switch",
+		ClawsPoseSwitcherName:             "claws-switch",
+		ArmName:                           "arm",
+		GripperName:                       "gripper",
+		CupVisionServiceName:              "vis",
+		SrcCameraName:                     "cam",
+		CameraObservePoseSwitcherName:     "observe-switch",
+		CupApproachRelativePose:           &RelativePose{},
+		CupGrabRelativePose:               &RelativePose{},
+		ServingApproachRelativePose:       &RelativePose{},
+		ServingGrabRelativePose:           &RelativePose{},
+		CoffeeLockedFinalGripRelativePose: &RelativePose{OZ: 1},
+		CupDimensions:                     &ContainerDimensions{DiameterMm: 80, HeightMm: 95},
 	}
 }
 
@@ -133,6 +134,15 @@ func TestValidate_RequiresServingGrabRelativePose(t *testing.T) {
 	_, _, err := cfg.Validate("")
 	if err == nil || !strings.Contains(err.Error(), "serving_grab_relative_pose") {
 		t.Fatalf("expected serving_grab_relative_pose required error, got %v", err)
+	}
+}
+
+func TestValidate_RequiresCoffeeLockedFinalGripRelativePose(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.CoffeeLockedFinalGripRelativePose = nil
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "coffee_locked_final_grip_relative_pose") {
+		t.Fatalf("expected coffee_locked_final_grip_relative_pose required error, got %v", err)
 	}
 }
 

@@ -60,9 +60,15 @@ type Config struct {
 	// still reaches the authored angle after the claws slip on its handle under
 	// bayonet load, then unwinds back onto it (Step.PivotExtraDegrees).
 	// Defaults to 0 — tune it on the machine.
-	LockOvershootDegs     float64 `json:"lock_overshoot_degs,omitempty"`
-	SaveMotionRequestsDir string  `json:"save_motion_requests_dir,omitempty"`
-	OrderSensorName       string  `json:"order_sensor_name,omitempty"`
+	LockOvershootDegs float64 `json:"lock_overshoot_degs,omitempty"`
+	// CoffeeLockedFinalGripRelativePose is the grip point's pose relative to the
+	// portafilter-handle frame when grab_filter closes on the locked filter. The
+	// claws' coffee_locked_final is derived from it and the filter switch's
+	// coffee_locked_final, so re-teaching the lock moves the re-grab with it
+	// (handle_relative_pose.go). Required.
+	CoffeeLockedFinalGripRelativePose *RelativePose `json:"coffee_locked_final_grip_relative_pose,omitempty"`
+	SaveMotionRequestsDir             string        `json:"save_motion_requests_dir,omitempty"`
+	OrderSensorName                   string        `json:"order_sensor_name,omitempty"`
 
 	// Optional usage sensor updated during the brew lifecycle via a best-effort
 	// read-modify-write: all counters are read with Readings, the changed one is
@@ -453,6 +459,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		"cup_grab_relative_pose", cfg.CupGrabRelativePose,
 		"serving_approach_relative_pose", cfg.ServingApproachRelativePose,
 		"serving_grab_relative_pose", cfg.ServingGrabRelativePose,
+		"coffee_locked_final_grip_relative_pose", cfg.CoffeeLockedFinalGripRelativePose,
 	); err != nil {
 		return nil, nil, err
 	}

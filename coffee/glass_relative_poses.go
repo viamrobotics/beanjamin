@@ -48,10 +48,14 @@ func (s *beanjaminCoffee) glassRelativePose(poseName string) *RelativePose {
 }
 
 // resolvePose returns the goal for a named pose: a pour pose is resolved
-// against the staged glass, anything else is read from its switch. Every motion
-// kind resolves its poses here so the pours work for direct moves, no-spill
-// carries and pivots alike.
+// against the staged glass, the filter re-grab against the locked portafilter
+// handle (handle_relative_pose.go), anything else is read from its switch.
+// Every motion kind resolves its poses here so the pours work for direct moves,
+// no-spill carries and pivots alike.
 func (s *beanjaminCoffee) resolvePose(ctx context.Context, sw toggleswitch.Switch, poseName string) (*poseData, error) {
+	if s.isHandleRelativePose(sw, poseName) {
+		return s.handleRelativeGripPoseData(ctx)
+	}
 	if field, ok := glassRelativePoseField[poseName]; ok && sw != nil && sw == s.clawsSw {
 		rel := s.glassRelativePose(poseName)
 		// Validate requires the pair wherever its pour can run; this only trips
