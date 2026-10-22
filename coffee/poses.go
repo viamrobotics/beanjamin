@@ -38,10 +38,12 @@ const (
 	filterPosePurgePress    = "purge_press"
 
 	//claw pose switches
-	clawPoseCoffeeButtonApproach    = "coffee_button_approach"
-	clawPoseCoffeeButtonOn          = "coffee_button_on"
-	clawPoseCoffeeButtonOff         = "coffee_button_off"
-	clawPoseFilterReleased          = "filter_released"
+	clawPoseCoffeeButtonApproach = "coffee_button_approach"
+	clawPoseCoffeeButtonOn       = "coffee_button_on"
+	clawPoseCoffeeButtonOff      = "coffee_button_off"
+	clawPoseFilterReleased       = "filter_released"
+	// Not on the claws switch: resolved against the locked portafilter handle
+	// (handle_relative_pose.go).
 	clawPoseCoffeeLockedFinal       = "coffee_locked_final"
 	clawPoseCupReadyForCoffee       = "cup_ready_for_coffee"
 	clawPoseCupUnderMachineApproach = "cup_under_machine_approach"
@@ -127,8 +129,6 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		{s.filterSw, filterPoseCoffeeLockedFinal},
 		// step 4: release filter
 		{s.clawsSw, clawPoseFilterReleased},
-		// step 7: grab filter
-		{s.clawsSw, clawPoseCoffeeLockedFinal},
 		// step 9: home
 		{s.filterSw, filterPoseHome},
 		// cleaning (post-brew)
@@ -240,6 +240,12 @@ func (s *beanjaminCoffee) validateConfiguredPoses(ctx context.Context) error {
 		if pd.pose.Point() == (r3.Vector{}) {
 			return fmt.Errorf("pose validation: required pose %q on %q switch resolves to a zero position — is it configured?", rp.poseName, rp.sw.Name().ShortName())
 		}
+	}
+	// The filter re-grab is derived rather than read off a switch; resolving it
+	// here fails at startup, not at the first grab, when the handle frame is
+	// missing.
+	if _, err := s.handleRelativeGripPoseData(ctx); err != nil {
+		return fmt.Errorf("pose validation: %w", err)
 	}
 	s.logger.Infof("pose validation: %d configured pose(s) resolved and non-zero", len(poses))
 	return nil
