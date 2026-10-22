@@ -8,6 +8,7 @@ package chorewheel
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -32,17 +33,33 @@ func init() {
 // Config is the attribute set of the viam:beanjamin:chore-wheel service.
 type Config struct {
 	// People is the order of the wheel, so keep it stable and append newcomers
-	// at the end.
+	// at the end. An entry is a display name or a Slack mention, <@U…>.
 	People []string `json:"people"`
 	Chores []string `json:"chores"`
+	// PeoplePerWeek is how many people share all the chores each week.
+	PeoplePerWeek int `json:"people_per_week,omitempty"`
 	// SlackNotifierName is the viam:notifications:slack service the wheel is
 	// posted through.
 	SlackNotifierName string `json:"slack_notifier_name"`
 }
 
+const defaultPeoplePerWeek = 1
+
+func (cfg *Config) peoplePerWeek() int {
+	if cfg.PeoplePerWeek > 0 {
+		return cfg.PeoplePerWeek
+	}
+	return defaultPeoplePerWeek
+}
+
+// slackMention is the only angle-bracket form allowed in people. Slack renders
+// <@U…> as a ping; anything else in brackets (a display name, a lowercase ID)
+// would post as literal text and ping nobody, so it is caught here instead.
+var slackMention = regexp.MustCompile(`^<@[UW][A-Z0-9]+>$`)
+
 // Validate rejects lists the rotation cannot use. One person has nothing to
-// rotate, and a repeated name would give someone two slots and double their
-// share. More chores than people is fine; the list just wraps around.
+// rotate, a crew as big as the roster never rotates, and a repeated name would
+// give someone two seats and double their share.
 func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.SlackNotifierName == "" {
 		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "slack_notifier_name")
@@ -52,6 +69,19 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 	if len(cfg.Chores) == 0 {
 		return nil, nil, fmt.Errorf("%s: chores needs at least 1 chore", path)
+	}
+	if cfg.PeoplePerWeek < 0 {
+		return nil, nil, fmt.Errorf("%s: people_per_week must be positive", path)
+	}
+	if cfg.peoplePerWeek() >= len(cfg.People) {
+		return nil, nil, fmt.Errorf("%s: people_per_week (%d) must be less than the %d people, or the wheel never turns",
+			path, cfg.peoplePerWeek(), len(cfg.People))
+	}
+	for _, p := range cfg.People {
+		p = strings.TrimSpace(p)
+		if strings.HasPrefix(p, "<") && !slackMention.MatchString(p) {
+			return nil, nil, fmt.Errorf("%s: people entry %q is not a Slack mention; use <@USERID>, e.g. <@U01ABCDEF>", path, p)
+		}
 	}
 	for field, list := range map[string][]string{"people": cfg.People, "chores": cfg.Chores} {
 		seen := map[string]bool{}
@@ -77,11 +107,12 @@ type choreWheel struct {
 	resource.AlwaysRebuild
 	resource.TriviallyCloseable
 
-	name   resource.Name
-	logger logging.Logger
-	people []string
-	chores []string
-	slack  *report.Notifier
+	name    resource.Name
+	logger  logging.Logger
+	people  []string
+	chores  []string
+	perWeek int
+	slack   *report.Notifier
 }
 
 func newChoreWheel(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -94,11 +125,12 @@ func newChoreWheel(ctx context.Context, deps resource.Dependencies, rawConf reso
 		return nil, fmt.Errorf("slack_notifier_name %q: %w", conf.SlackNotifierName, err)
 	}
 	return &choreWheel{
-		name:   rawConf.ResourceName(),
-		logger: logger,
-		people: conf.People,
-		chores: conf.Chores,
-		slack:  report.NewNotifier(svc),
+		name:    rawConf.ResourceName(),
+		logger:  logger,
+		people:  trimAll(conf.People),
+		chores:  conf.Chores,
+		perWeek: conf.peoplePerWeek(),
+		slack:   report.NewNotifier(svc),
 	}, nil
 }
 
@@ -109,13 +141,17 @@ func (c *choreWheel) Name() resource.Name {
 // Status reports this week's assignment without posting it.
 func (c *choreWheel) Status(context.Context) (map[string]any, error) {
 	week := weekNumber(time.Now())
-	out := map[string]any{"week": float64(week)}
-	for _, a := range assignChores(c.people, c.chores, week) {
-		for _, chore := range a.Chores {
-			out[chore] = a.Person
-		}
+	return assignment(week, pickCrew(c.people, c.perWeek, week), c.chores), nil
+}
+
+// trimAll strips surrounding whitespace, which Validate already ignores, so a
+// stray space can't turn "<@U01ABCDEF> " into text Slack won't resolve.
+func trimAll(list []string) []string {
+	out := make([]string, len(list))
+	for i, v := range list {
+		out[i] = strings.TrimSpace(v)
 	}
-	return out, nil
+	return out
 }
 
 func (c *choreWheel) DoCommand(ctx context.Context, cmd map[string]any) (map[string]any, error) {
@@ -143,5 +179,5 @@ func (c *choreWheel) sendWeeklyChores(ctx context.Context, v any) (map[string]an
 	defer cancel()
 
 	c.logger.Infof("posting week %d assignments", weekNumber(now))
-	return post(ctx, c.slack, c.people, c.chores, now)
+	return post(ctx, c.slack, c.people, c.chores, c.perWeek, now)
 }

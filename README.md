@@ -9,7 +9,7 @@ The `viam:beanjamin` module provides these models for arm-based automation workf
 5. **`viam:beanjamin:dial-control-motion`** - A generic service that translates Stream Deck dial inputs into relative arm motions.
 6. **`viam:beanjamin:customer-detector`** - A generic service that identifies return customers via facial recognition using the [`viam:vision:face-identification`](https://github.com/viam-modules/viam-face-identification) vision service.
 7. **`viam:beanjamin:crm`** - A generic service holding customer profiles keyed by email: a loyalty point per completed drink, and shared rewards customers pool those points toward.
-8. **`viam:beanjamin:chore-wheel`** - A generic service that posts the weekly maintenance rota to Slack, rotating a roster of people through a list of chores.
+8. **`viam:beanjamin:chore-wheel`** - A generic service that posts the weekly maintenance rota to Slack, rotating a crew of people (optionally Slack @-mentions) through the roster each week to share the full chore list.
 
 ---
 
@@ -1327,7 +1327,7 @@ Returns `{"sent": true, "rewards": [...]}`, the rewards posted in the same shape
 
 **API:** `rdk:service:generic`
 
-The machine has upkeep that isn't the arm's job — the ice maker, the table, the claws — and this service posts to Slack who has which of it this week. It is the paper chore wheel: names on an inner disc, chores on an outer ring, turned one notch every Monday.
+The machine has upkeep that isn't the arm's job — the ice maker, the table, the claws — and this service posts to Slack whose turn it is this week. Each Monday it picks the next `people_per_week` people off the roster, and that crew shares every chore for the week.
 
 ### Configuration
 
@@ -1335,22 +1335,25 @@ The machine has upkeep that isn't the arm's job — the ice maker, the table, th
 {
   "slack_notifier_name": "<string>",
   "people": ["<string>"],
-  "chores": ["<string>"]
+  "chores": ["<string>"],
+  "people_per_week": <int>
 }
 ```
 
 | Name                  | Type   | Required | Description |
 | --------------------- | ------ | -------- | ----------- |
 | `slack_notifier_name` | string | Yes      | A [`viam:notifications:slack`](https://github.com/viam-modules/notifications) generic service the wheel is posted through. |
-| `people`              | list   | Yes      | The roster, in wheel order — at least 2 distinct names. Append newcomers at the end (see "The roster order is the wheel" below). |
-| `chores`              | list   | Yes      | The chores to hand out each week — at least 1, no duplicates. Any count works. |
+| `people`              | list   | Yes      | The roster, in wheel order — at least 2 distinct entries. Each entry is a plain name or a Slack user mention (see "Pinging people in Slack" below). Append newcomers at the end (see "The roster order is the wheel" below). |
+| `chores`              | list   | Yes      | The chores the week's crew shares — at least 1, no duplicates. |
+| `people_per_week`     | int    | No       | How many people are on duty each week. Default `1`. Must be less than the number of `people`, or the same crew would be on duty forever. |
 
 ### Example Configuration
 
 ```json
 {
   "slack_notifier_name": "slack",
-  "people": ["Vijay", "Nicolas P", "Julie", "Daniel", "Cheuk", "Ale"],
+  "people": ["<@U01ABCDEF12>", "<@U02BCDEFG34>", "Julie", "Daniel", "Cheuk", "Ale"],
+  "people_per_week": 2,
   "chores": [
     "Cleaning the ice maker",
     "Cleaning the table",
@@ -1361,22 +1364,36 @@ The machine has upkeep that isn't the arm's job — the ice maker, the table, th
 }
 ```
 
-The message reads:
+The message reads (the two mentions render as pings to those Slack users):
 
 ```
 🎡 Chore wheel — week of Sep 21
 
-• Cleaning the ice maker — Nicolas P
-• Cleaning the table — Julie
-• Tightening the claws — Daniel
-• Cleaning the cleaner brushes — Cheuk
-• Cleaning the milk bottle — Ale
-• free week — Vijay
+On duty: @Vijay, @Nicolas P
+
+• Cleaning the ice maker
+• Cleaning the table
+• Tightening the claws
+• Cleaning the cleaner brushes
+• Cleaning the milk bottle
 ```
+
+### Pinging people in Slack
+
+A `people` entry written as a Slack user mention, `<@USERID>`, renders as a real @-mention that notifies that person; any other entry is posted as plain text and pings nobody. The format is exactly:
+
+```
+<@U01ABCDEF12>
+```
+
+- `<@`, then the member ID, then `>` — no spaces, no display name. The ID is uppercase letters and digits starting with `U` (or `W` on Enterprise Grid).
+- Find the ID in Slack: open the person's profile, click **⋮** (More), then **Copy member ID**.
+- Writing `@Nicolas` or `<@nicolas>` does **not** work: Slack only resolves member IDs in messages sent through its API. Config validation rejects any entry that starts with `<` but isn't a well-formed `<@ID>`, so a mistyped mention fails at config time instead of posting as text.
+- Plain names and mentions can be mixed in one roster. The mention appears verbatim in `Status()` and the command result, e.g. `"people": ["<@U01ABCDEF12>", "Julie"]`.
 
 ### DoCommand
 
-**`send_weekly_chores`** - Post this week's chore assignments to Slack. Normally fired every Monday by viam-server's job manager (see "Scheduling" below).
+**`send_weekly_chores`** - Post this week's crew and chores to Slack. Normally fired every Monday by viam-server's job manager (see "Scheduling" below).
 
 ```json
 {"send_weekly_chores": true}
@@ -1388,17 +1405,17 @@ Pass an object with a date to read the wheel for a different week — how you pr
 {"send_weekly_chores": {"date": "2026-10-05"}}
 ```
 
-Returns `{"sent": true, "week": N, "<chore>": "<person>", ...}`.
+Returns `{"sent": true, "week": N, "people": ["<person>", ...], "chores": ["<chore>", ...]}`.
 
-`Status()` returns this week's assignment, `{"week": N, "<chore>": "<person>", ...}`, without posting it.
+`Status()` returns this week's assignment, `{"week": N, "people": [...], "chores": [...]}`, without posting it.
 
 ### How the wheel turns
 
-**Any number of chores works.** Fewer chores than people leaves free weeks — six people and five chores means one person is off each week. More chores than people sends the wheel round again, so some people draw two that week. Either way every chore is assigned every week.
+**Each week takes the next people in line.** With `n` people and a crew of `k`, week `w` is on duty for roster positions `w·k`, `w·k + 1`, … `w·k + k − 1`, wrapping past the end of the list. Each crew starts where the last one stopped, so over `n` weeks the wheel goes round the roster exactly `k` times and everyone serves the same number of weeks — `k` out of every `n`. Nobody is on duty two weeks running unless the crew is more than half the roster.
 
-**The rotation is a function of the calendar, not of state.** Person *i* draws slot `(i − week) mod n` and every *n*-th slot after it, where the slots are the chores padded with free weeks to a whole number of turns, and `week` counts Mondays since a fixed epoch. So over one cycle — one week per person — everyone does every chore exactly once and takes the same number of free weeks, and there is nothing to persist: a module restart, a redeploy, or running the command twice in one morning all read the same wheel. The cost is that the order is predictable to anyone who works it out; the benefit is that nobody can draw the ice maker three weeks running.
+**The rotation is a function of the calendar, not of state.** `week` counts Mondays since a fixed epoch, so there is nothing to persist: a module restart, a redeploy, or running the command twice in one morning all read the same wheel. The cost is that the order is predictable to anyone who works it out; the benefit is that nobody can be on duty three weeks running.
 
-**The roster order is the wheel.** `people` is the order around the disc and the order in the message. Reordering it, or inserting someone in the middle, reshuffles who has what this week — append new people at the end. Removing someone shortens the cycle and likewise reshuffles.
+**The roster order is the wheel.** `people` is the order around the disc and the order the crew is listed in. Reordering it, inserting someone in the middle, removing someone, or changing `people_per_week` reshuffles who is on duty this week — append new people at the end.
 
 ### Scheduling
 

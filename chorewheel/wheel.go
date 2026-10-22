@@ -1,8 +1,8 @@
 package chorewheel
 
-// The rotation and the Slack message it posts. Who gets what is worked out from
-// the date, so nothing is stored. Restarting the module or running the command
-// twice gives the same answer.
+// The rotation and the Slack message it posts. Who is on duty is worked out
+// from the date, so nothing is stored. Restarting the module or running the
+// command twice gives the same answer.
 
 import (
 	"context"
@@ -25,76 +25,42 @@ func weekNumber(now time.Time) int {
 	return int(local.Sub(epoch).Hours() / (24 * 7))
 }
 
-// choreAssignment is one person and the chores they got. Chores is empty if they
-// have a free week.
-type choreAssignment struct {
-	Person string
-	Chores []string
-}
-
-// assignChores works out who does what in the given week.
+// pickCrew returns the perWeek people on duty in the given week.
 //
-// The chores go into a list of slots. If there are fewer chores than people, the
-// leftover slots are free weeks. If there are more, the list wraps around again
-// so some people get two.
-//
-// Person i takes slot (i - week) mod n, and every n-th slot after that. The
-// whole list shifts by one each week, so over n weeks everyone does every chore
-// once.
+// The crew is the next perWeek people in roster order, wrapping around the end
+// of the list: week w takes positions w*perWeek, w*perWeek+1, ... mod n. Each
+// week starts where the last one stopped, so the crews tile the roster lap
+// after lap and everyone is picked equally often. Nobody is picked two weeks
+// running unless perWeek is more than half the roster.
 //
 // The order of people is the order of the wheel, so keep it stable in config.
-func assignChores(people, chores []string, week int) []choreAssignment {
+func pickCrew(people []string, perWeek, week int) []string {
 	n := len(people)
-	turns := (len(chores) + n - 1) / n
-	if turns < 1 {
-		turns = 1
+	// Go's % can return a negative number, so add n to bring it back in range.
+	start := ((week*perWeek)%n + n) % n
+	crew := make([]string, perWeek)
+	for i := range crew {
+		crew[i] = people[(start+i)%n]
 	}
-	slots := make([]string, turns*n)
-	copy(slots, chores)
-
-	out := make([]choreAssignment, n)
-	for i, who := range people {
-		// Go's % can return a negative number, so add n to bring it back in range.
-		start := ((i-week)%n + n) % n
-		var drawn []string
-		for t := 0; t < turns; t++ {
-			if c := slots[start+t*n]; c != "" {
-				drawn = append(drawn, c)
-			}
-		}
-		out[i] = choreAssignment{Person: who, Chores: drawn}
-	}
-	return out
+	return crew
 }
 
 // messageText is the plain-text version Slack shows in notifications. It
-// lists everything, so you can read your chore off a lock screen.
-func messageText(assignments []choreAssignment, weekOf time.Time) string {
-	var parts []string
-	for _, a := range assignments {
-		for _, c := range a.Chores {
-			parts = append(parts, fmt.Sprintf("%s: %s", c, a.Person))
-		}
-	}
-	return fmt.Sprintf("Chore wheel, week of %s — %s",
-		weekOf.Format("Jan 2"), strings.Join(parts, "; "))
+// lists everything, so you can read your duty off a lock screen. Slack
+// resolves <@U…> mentions in this field too, so the crew is pinged by it.
+func messageText(crew, chores []string, weekOf time.Time) string {
+	return fmt.Sprintf("Chore wheel, week of %s — %s: %s",
+		weekOf.Format("Jan 2"), strings.Join(crew, ", "), strings.Join(chores, "; "))
 }
 
-// messageBlocks builds the Slack message: a heading, then one line per chore,
-// with anyone on a free week grouped on the last line.
-func messageBlocks(assignments []choreAssignment, weekOf time.Time) []any {
-	var lines, free []string
-	for _, a := range assignments {
-		if len(a.Chores) == 0 {
-			free = append(free, a.Person)
-			continue
-		}
-		for _, c := range a.Chores {
-			lines = append(lines, fmt.Sprintf("• *%s* — %s", c, a.Person))
-		}
-	}
-	if len(free) > 0 {
-		lines = append(lines, fmt.Sprintf("• _free week_ — %s", strings.Join(free, ", ")))
+// messageBlocks builds the Slack message: a heading, the crew, then one line
+// per chore. The crew stays out of the header because header blocks are
+// plain_text and would print a mention in its raw <@U…> form; the mrkdwn
+// section renders it as a ping.
+func messageBlocks(crew, chores []string, weekOf time.Time) []any {
+	lines := []string{fmt.Sprintf("*On duty:* %s", strings.Join(crew, ", ")), ""}
+	for _, c := range chores {
+		lines = append(lines, fmt.Sprintf("• %s", c))
 	}
 
 	return []any{
@@ -113,27 +79,38 @@ func messageBlocks(assignments []choreAssignment, weekOf time.Time) []any {
 	}
 }
 
-// post works out the assignment for the week containing now and sends
-// it to Slack. The message is dated by that week's Monday, so running it on a
-// Tuesday still shows the same date.
-func post(ctx context.Context, n *report.Notifier, people, chores []string, now time.Time) (map[string]any, error) {
+// assignment is the result shape shared by Status and send_weekly_chores. The
+// lists are []any because the structpb-backed DoCommand wire format rejects
+// []string.
+func assignment(week int, crew, chores []string) map[string]any {
+	people := make([]any, len(crew))
+	for i, p := range crew {
+		people[i] = p
+	}
+	todo := make([]any, len(chores))
+	for i, c := range chores {
+		todo[i] = c
+	}
+	return map[string]any{"week": float64(week), "people": people, "chores": todo}
+}
+
+// post works out the crew for the week containing now and sends it to Slack.
+// The message is dated by that week's Monday, so running it on a Tuesday still
+// shows the same date.
+func post(ctx context.Context, n *report.Notifier, people, chores []string, perWeek int, now time.Time) (map[string]any, error) {
 	week := weekNumber(now)
-	assignments := assignChores(people, chores, week)
+	crew := pickCrew(people, perWeek, week)
 
 	// Step back to Monday. Weekday() counts Sunday as 0, so Sunday goes back 6.
 	back := (int(now.Weekday()) + 6) % 7
 	weekOf := now.AddDate(0, 0, -back)
 
-	if _, err := n.Send(ctx, messageText(assignments, weekOf), messageBlocks(assignments, weekOf)); err != nil {
+	if _, err := n.Send(ctx, messageText(crew, chores, weekOf), messageBlocks(crew, chores, weekOf)); err != nil {
 		return nil, fmt.Errorf("sending chore wheel to slack: %w", err)
 	}
 
-	result := map[string]any{"sent": true, "week": float64(week)}
-	for _, a := range assignments {
-		for _, c := range a.Chores {
-			result[c] = a.Person
-		}
-	}
+	result := assignment(week, crew, chores)
+	result["sent"] = true
 	return result, nil
 }
 

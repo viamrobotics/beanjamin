@@ -3,7 +3,7 @@ package chorewheel
 import (
 	"context"
 	"errors"
-	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,131 +22,86 @@ func (f *fakeSlack) DoCommand(_ context.Context, cmd map[string]any) (map[string
 }
 
 var (
-	testPeople = []string{"Vijay", "Nicolas P", "Julie", "Daniel", "Cheuk", "Ale"}
+	testPeople = []string{"Vijay", "<@U01NICOLAS>", "Julie", "Daniel", "Cheuk", "Ale"}
 	testChores = []string{"Cleaning the ice maker", "Cleaning the table", "Tightening the claws"}
 )
 
-// Over a full cycle everyone should do every chore exactly once. This is the
-// main thing the design promises, so check it for a few different list sizes.
-func TestAssignChoresIsFairOverACycle(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		chores []string
-	}{
-		{"fewer chores than people", testChores},
-		{"one chore per person", testPeople},
-		{"more chores than people", append(append([]string{}, testChores...),
-			"Descaling", "Restocking cups", "Emptying the grounds", "Wiping the wand")},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			n := len(testPeople)
-			seen := map[string]map[string]int{}
-			free := map[string]int{}
-			for _, p := range testPeople {
-				seen[p] = map[string]int{}
-			}
-
-			for week := 0; week < n; week++ {
-				for _, a := range assignChores(testPeople, tc.chores, week) {
-					if len(a.Chores) == 0 {
-						free[a.Person]++
-					}
-					for _, c := range a.Chores {
-						seen[a.Person][c]++
-					}
-				}
-			}
-
-			for _, p := range testPeople {
-				for _, c := range tc.chores {
-					if seen[p][c] != 1 {
-						t.Errorf("%s did %q %d times in a cycle, want exactly 1", p, c, seen[p][c])
-					}
-				}
-			}
-			// Free weeks should be shared out evenly too.
-			want := free[testPeople[0]]
-			for _, p := range testPeople {
-				if free[p] != want {
-					t.Errorf("%s had %d free weeks, %s had %d — should be equal",
-						p, free[p], testPeople[0], want)
-				}
-			}
-		})
-	}
-}
-
-// Every chore should go to exactly one person each week.
-func TestAssignChoresCoversEveryChoreOnce(t *testing.T) {
-	for week := -3; week < 20; week++ {
-		holders := map[string]string{}
-		for _, a := range assignChores(testPeople, testChores, week) {
-			for _, c := range a.Chores {
-				if prev, dup := holders[c]; dup {
-					t.Errorf("week %d: %q assigned to both %s and %s", week, c, prev, a.Person)
-				}
-				holders[c] = a.Person
+// Over a full cycle everyone should be on duty the same number of times. This
+// is the main thing the design promises, so check it for every crew size,
+// including ones that don't divide the roster.
+func TestPickCrewIsFairOverACycle(t *testing.T) {
+	n := len(testPeople)
+	for perWeek := 1; perWeek < n; perWeek++ {
+		count := map[string]int{}
+		// n weeks of perWeek seats is exactly perWeek laps of the roster.
+		for week := 0; week < n; week++ {
+			for _, p := range pickCrew(testPeople, perWeek, week) {
+				count[p]++
 			}
 		}
-		if len(holders) != len(testChores) {
-			t.Errorf("week %d: %d chores assigned, want %d", week, len(holders), len(testChores))
+		for _, p := range testPeople {
+			if count[p] != perWeek {
+				t.Errorf("perWeek=%d: %s was on duty %d times in %d weeks, want %d",
+					perWeek, p, count[p], n, perWeek)
+			}
 		}
 	}
 }
 
-// With more chores than people, someone does two that week instead of a chore
-// being skipped.
-func TestAssignChoresMoreChoresThanPeople(t *testing.T) {
-	people := []string{"A", "B", "C"}
-	chores := []string{"v", "w", "x", "y", "z"}
+// A crew never names the same person twice.
+func TestPickCrewHasDistinctPeople(t *testing.T) {
+	for perWeek := 1; perWeek < len(testPeople); perWeek++ {
+		for week := -10; week < 20; week++ {
+			crew := pickCrew(testPeople, perWeek, week)
+			if len(crew) != perWeek {
+				t.Fatalf("perWeek=%d week %d: crew of %d", perWeek, week, len(crew))
+			}
+			seen := map[string]bool{}
+			for _, p := range crew {
+				if seen[p] {
+					t.Errorf("perWeek=%d week %d: %s twice in %v", perWeek, week, p, crew)
+				}
+				seen[p] = true
+			}
+		}
+	}
+}
 
-	got := assignChores(people, chores, 0)
-	holders := map[string]string{}
-	doubled := 0
-	for _, a := range got {
-		if len(a.Chores) > 1 {
-			doubled++
+// Each week picks up where the last stopped, so with a crew of at most half the
+// roster nobody serves two weeks running.
+func TestPickCrewNoBackToBack(t *testing.T) {
+	for perWeek := 1; perWeek <= len(testPeople)/2; perWeek++ {
+		for week := -5; week < 20; week++ {
+			this := pickCrew(testPeople, perWeek, week)
+			for _, p := range pickCrew(testPeople, perWeek, week+1) {
+				if slices.Contains(this, p) {
+					t.Errorf("perWeek=%d: %s on duty in weeks %d and %d", perWeek, p, week, week+1)
+				}
+			}
 		}
-		for _, c := range a.Chores {
-			holders[c] = a.Person
-		}
-	}
-	if len(holders) != len(chores) {
-		t.Errorf("assigned %d of %d chores: %v", len(holders), len(chores), got)
-	}
-	if doubled != 2 {
-		t.Errorf("%d people drew two chores, want 2 (5 chores, 3 people)", doubled)
 	}
 }
 
 // The same week always gives the same answer, and the next week gives a
 // different one. A wheel that never turns is the bug to catch.
-func TestAssignChoresIsDeterministicAndAdvances(t *testing.T) {
-	flat := func(as []choreAssignment) string {
-		var b strings.Builder
-		for _, a := range as {
-			fmt.Fprintf(&b, "%s=%s;", a.Person, strings.Join(a.Chores, ","))
-		}
-		return b.String()
+func TestPickCrewIsDeterministicAndAdvances(t *testing.T) {
+	a := pickCrew(testPeople, 2, 7)
+	if b := pickCrew(testPeople, 2, 7); !slices.Equal(a, b) {
+		t.Fatalf("week 7 read twice disagrees: %v vs %v", a, b)
 	}
-	if a, b := flat(assignChores(testPeople, testChores, 7)), flat(assignChores(testPeople, testChores, 7)); a != b {
-		t.Fatalf("week 7 read twice disagrees:\n%s\n%s", a, b)
-	}
-	if a, c := flat(assignChores(testPeople, testChores, 7)), flat(assignChores(testPeople, testChores, 8)); a == c {
-		t.Error("week 7 and week 8 produced the same assignment; the wheel did not turn")
+	if c := pickCrew(testPeople, 2, 8); slices.Equal(a, c) {
+		t.Error("week 7 and week 8 produced the same crew; the wheel did not turn")
 	}
 }
 
 // A date before the epoch gives a negative week. It should wrap around instead
 // of going out of range.
-func TestAssignChoresHandlesNegativeWeek(t *testing.T) {
-	got := assignChores(testPeople, testChores, -1)
-	if len(got) != len(testPeople) {
-		t.Fatalf("got %d assignments, want %d", len(got), len(testPeople))
-	}
-	// -1 mod 6 is 5, so person 0 gets slot 1, person 1 slot 2, etc.
-	if len(got[0].Chores) != 1 || got[0].Chores[0] != testChores[1] {
-		t.Errorf("week -1: %s got %v, want %q", got[0].Person, got[0].Chores, testChores[1])
+func TestPickCrewHandlesNegativeWeek(t *testing.T) {
+	// -1*2 mod 6 is 4, so the crew is people 4 and 5.
+	got := pickCrew(testPeople, 2, -1)
+	want := []string{"Cheuk", "Ale"}
+	if !slices.Equal(got, want) {
+		t.Errorf("week -1: crew %v, want %v", got, want)
 	}
 }
 
@@ -186,7 +141,7 @@ func TestPostRendersAndReports(t *testing.T) {
 
 	// A Tuesday: the message must still be dated by its Monday.
 	tuesday := time.Date(2026, time.September, 22, 14, 0, 0, 0, ny)
-	res, err := post(context.Background(), report.NewNotifier(slack), testPeople, testChores, tuesday)
+	res, err := post(context.Background(), report.NewNotifier(slack), testPeople, testChores, 2, tuesday)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,14 +152,15 @@ func TestPostRendersAndReports(t *testing.T) {
 	if msg["command"] != "send" {
 		t.Errorf("command = %v, want send", msg["command"])
 	}
+	crew := pickCrew(testPeople, 2, weekNumber(tuesday))
 
 	text, _ := msg["text"].(string)
 	if !strings.Contains(text, "week of Sep 21") {
 		t.Errorf("fallback text %q should be dated by Monday Sep 21", text)
 	}
-	for _, c := range testChores {
-		if !strings.Contains(text, c) {
-			t.Errorf("fallback text missing chore %q: %q", c, text)
+	for _, s := range append(append([]string{}, testChores...), crew...) {
+		if !strings.Contains(text, s) {
+			t.Errorf("fallback text missing %q: %q", s, text)
 		}
 	}
 
@@ -213,11 +169,11 @@ func TestPostRendersAndReports(t *testing.T) {
 		t.Fatalf("got %d blocks, want header and section", len(blocks))
 	}
 	section := blocks[1].(map[string]any)["text"].(map[string]any)["text"].(string)
-	if !strings.Contains(section, "_free week_") {
-		t.Errorf("section should group the three free weeks: %q", section)
+	if want := "*On duty:* " + strings.Join(crew, ", "); !strings.Contains(section, want) {
+		t.Errorf("section should name the crew as %q: %q", want, section)
 	}
-	if got := strings.Count(section, "•"); got != len(testChores)+1 {
-		t.Errorf("section has %d lines, want %d chores + 1 free line", got, len(testChores)+1)
+	if got := strings.Count(section, "•"); got != len(testChores) {
+		t.Errorf("section has %d chore lines, want %d", got, len(testChores))
 	}
 
 	// The result repeats the assignment, so you can see what was posted without
@@ -225,32 +181,45 @@ func TestPostRendersAndReports(t *testing.T) {
 	if res["sent"] != true {
 		t.Errorf("result.sent = %v, want true", res["sent"])
 	}
-	for _, c := range testChores {
-		if _, ok := res[c].(string); !ok {
-			t.Errorf("result missing assignment for %q: %v", c, res)
-		}
+	if got, _ := res["people"].([]any); len(got) != 2 || got[0] != crew[0] || got[1] != crew[1] {
+		t.Errorf("result.people = %v, want %v", res["people"], crew)
+	}
+	if got, _ := res["chores"].([]any); len(got) != len(testChores) {
+		t.Errorf("result.chores = %v, want %v", res["chores"], testChores)
 	}
 }
 
-// With one chore each, nobody is free, so the free-week line should not appear.
-func TestPostNoFreeWeeks(t *testing.T) {
-	people := []string{"A", "B", "C"}
-	chores := []string{"x", "y", "z"}
+// A Slack mention must reach the message untouched: only the mrkdwn section
+// and the fallback text render <@U…> as a ping, so it must appear there
+// verbatim and never in the plain_text header.
+func TestPostKeepsSlackMentionsVerbatim(t *testing.T) {
+	mention := "<@U01NICOLAS>"
+	// Week 1 with one person a week puts people[1], the mention, on duty.
+	monday := epoch.AddDate(0, 0, 7)
 	slack := &fakeSlack{}
-	if _, err := post(context.Background(), report.NewNotifier(slack),
-		people, chores, time.Now()); err != nil {
+	if _, err := post(context.Background(), report.NewNotifier(slack), testPeople, testChores, 1, monday); err != nil {
 		t.Fatal(err)
 	}
-	section := slack.sent[0]["blocks"].([]any)[1].(map[string]any)["text"].(map[string]any)["text"].(string)
-	if strings.Contains(section, "free week") {
-		t.Errorf("no free weeks expected, got %q", section)
+	msg := slack.sent[0]
+	blocks := msg["blocks"].([]any)
+	header := blocks[0].(map[string]any)["text"].(map[string]any)["text"].(string)
+	section := blocks[1].(map[string]any)["text"].(map[string]any)["text"].(string)
+
+	if !strings.Contains(section, "*On duty:* "+mention+"\n") {
+		t.Errorf("section should carry the raw mention outside any formatting: %q", section)
+	}
+	if !strings.Contains(msg["text"].(string), mention) {
+		t.Errorf("fallback text should carry the raw mention: %q", msg["text"])
+	}
+	if strings.Contains(header, "<@") {
+		t.Errorf("plain_text header can't render mentions, got %q", header)
 	}
 }
 
 func TestPostPropagatesSendError(t *testing.T) {
 	slack := &fakeSlack{err: errors.New("channel_not_found")}
 	_, err := post(context.Background(), report.NewNotifier(slack),
-		testPeople, testChores, time.Now())
+		testPeople, testChores, 1, time.Now())
 	if err == nil || !strings.Contains(err.Error(), "channel_not_found") {
 		t.Errorf("err = %v, want the slack error wrapped", err)
 	}
@@ -283,14 +252,21 @@ func TestConfigValidate(t *testing.T) {
 		cfg  Config
 		bad  bool
 	}{
-		{"ok with free weeks", Config{SlackNotifierName: "slack", People: testPeople, Chores: testChores}, false},
-		{"ok fully assigned", Config{SlackNotifierName: "slack", People: []string{"A", "B"}, Chores: []string{"x", "y"}}, false},
+		{"ok default crew", Config{SlackNotifierName: "slack", People: testPeople, Chores: testChores}, false},
+		{"ok crew of 3", Config{SlackNotifierName: "slack", People: testPeople, Chores: testChores, PeoplePerWeek: 3}, false},
+		{"ok two people", Config{SlackNotifierName: "slack", People: []string{"A", "B"}, Chores: []string{"x"}}, false},
+		{"crew as big as roster", Config{SlackNotifierName: "slack", People: []string{"A", "B"}, Chores: []string{"x"}, PeoplePerWeek: 2}, true},
+		{"negative crew", Config{SlackNotifierName: "slack", People: []string{"A", "B"}, Chores: []string{"x"}, PeoplePerWeek: -1}, true},
 		{"one person", Config{SlackNotifierName: "slack", People: []string{"A"}, Chores: []string{"x"}}, true},
 		{"no chores", Config{SlackNotifierName: "slack", People: []string{"A", "B"}}, true},
-		{"more chores than people", Config{SlackNotifierName: "slack", People: []string{"A", "B"}, Chores: []string{"x", "y", "z"}}, false},
 		{"duplicate person", Config{SlackNotifierName: "slack", People: []string{"A", "A"}, Chores: []string{"x"}}, true},
+		{"duplicate mention", Config{SlackNotifierName: "slack", People: []string{"<@U1>", "<@U1> "}, Chores: []string{"x"}}, true},
 		{"blank chore", Config{SlackNotifierName: "slack", People: []string{"A", "B"}, Chores: []string{" "}}, true},
 		{"no slack notifier", Config{People: []string{"A", "B"}, Chores: []string{"x"}}, true},
+		{"workspace mention", Config{SlackNotifierName: "slack", People: []string{"<@U01ABC>", "<@W02XYZ>"}, Chores: []string{"x"}}, false},
+		{"mention by display name", Config{SlackNotifierName: "slack", People: []string{"<@nicolas>", "B"}, Chores: []string{"x"}}, true},
+		{"mention missing @", Config{SlackNotifierName: "slack", People: []string{"<U01ABC>", "B"}, Chores: []string{"x"}}, true},
+		{"unclosed mention", Config{SlackNotifierName: "slack", People: []string{"<@U01ABC", "B"}, Chores: []string{"x"}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, err := tc.cfg.Validate("test")
