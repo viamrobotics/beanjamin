@@ -443,7 +443,7 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	return nil
 }
 
-// doorSweepConstraint keeps each hop of the door sweep within 5mm/5° of the
+// doorSweepConstraint keeps each hop of the door sweep within 9mm/9° of the
 // straight line between consecutive waypoints. Being under armplanning's
 // 10mm/10° threshold is what matters: it stops the planner from falling back to
 // cBiRTT between waypoints, whose free-form detours break the gripper's
@@ -452,8 +452,8 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 // hop's chord sags off it by r·(1−cos(step/2)): about 2mm for a 500mm handle
 // radius at the default 10° step, comfortably inside the tolerance.
 var doorSweepConstraint = &StepLinearConstraint{
-	LineToleranceMm:          5,
-	OrientationToleranceDegs: 5,
+	LineToleranceMm:          9,
+	OrientationToleranceDegs: 9,
 }
 
 // defaultDoorOpenAngleDegs is the fridge-door swing angle when unset.
