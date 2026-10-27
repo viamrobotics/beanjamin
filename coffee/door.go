@@ -348,9 +348,9 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 		if err != nil {
 			return err
 		}
-		// The plan is unconstrained, so these waypoints are the only thing telling
-		// the planner how to point the tool along the arc. Sign: see
-		// defaultDoorGraspYawRatio.
+		// The linear constraint only bounds the path between waypoints, so these
+		// goals are what tell the planner how to point the tool along the arc.
+		// Sign: see defaultDoorGraspYawRatio.
 		goalPose := spatialmath.NewPose(ballNow.Point(),
 			yawAboutWorldZ(spatialmath.NewPoseFromOrientation(graspOrient),
 				yawRatio*(theta-fromDeg)).Orientation())
@@ -362,7 +362,7 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 			FrameSystem: fs,
 			Goals:       []*armplanning.PlanState{goal},
 			StartState:  armplanning.NewPlanState(nil, planInputs),
-			Constraints: buildConstraints(nil, collisions),
+			Constraints: buildConstraints(doorSweepConstraint, collisions),
 		}
 		plan, err := s.planMotion(ctx, req, action)
 		if err != nil {
@@ -441,6 +441,19 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 		time.Sleep(gripperPause)
 	}
 	return nil
+}
+
+// doorSweepConstraint keeps each hop of the door sweep within 5mm/5° of the
+// straight line between consecutive waypoints. Being under armplanning's
+// 10mm/10° threshold is what matters: it stops the planner from falling back to
+// cBiRTT between waypoints, whose free-form detours break the gripper's
+// continuity with the handle it is holding — the door cannot follow, and the
+// arm wrenches the handle or the hinge. The handle really travels an arc, so a
+// hop's chord sags off it by r·(1−cos(step/2)): about 2mm for a 500mm handle
+// radius at the default 10° step, comfortably inside the tolerance.
+var doorSweepConstraint = &StepLinearConstraint{
+	LineToleranceMm:          5,
+	OrientationToleranceDegs: 5,
 }
 
 // defaultDoorOpenAngleDegs is the fridge-door swing angle when unset.

@@ -92,3 +92,12 @@ func TestPourConstraintDisablesCBiRRT(t *testing.T) {
 		t.Errorf("pourConstraint.LineToleranceMm = %v, want 5", pourConstraint.LineToleranceMm)
 	}
 }
+
+// TestDoorSweepConstraintDisablesCBiRRT pins doorSweepConstraint below the
+// 10mm/10° cBiRTT threshold: a free-form detour mid-sweep pulls the gripper off
+// the arc the held handle can follow.
+func TestDoorSweepConstraintDisablesCBiRRT(t *testing.T) {
+	if tightest := min(doorSweepConstraint.LineToleranceMm, doorSweepConstraint.OrientationToleranceDegs); tightest >= 10 {
+		t.Errorf("doorSweepConstraint tightest tolerance = %v, want < 10 so cBiRTT stays disabled", tightest)
+	}
+}
