@@ -26,6 +26,7 @@ func validBaseConfig() *Config {
 		ServingApproachRelativePose:       &RelativePose{},
 		ServingGrabRelativePose:           &RelativePose{},
 		CoffeeLockedFinalGripRelativePose: &RelativePose{OZ: 1},
+		FilterReleasedGripRelativePose:    &RelativePose{OZ: 1},
 		CupDimensions:                     &ContainerDimensions{DiameterMm: 80, HeightMm: 95},
 	}
 }
@@ -134,6 +135,15 @@ func TestValidate_RequiresServingGrabRelativePose(t *testing.T) {
 	_, _, err := cfg.Validate("")
 	if err == nil || !strings.Contains(err.Error(), "serving_grab_relative_pose") {
 		t.Fatalf("expected serving_grab_relative_pose required error, got %v", err)
+	}
+}
+
+func TestValidate_RequiresFilterReleasedGripRelativePose(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.FilterReleasedGripRelativePose = nil
+	_, _, err := cfg.Validate("")
+	if err == nil || !strings.Contains(err.Error(), "filter_released_grip_relative_pose") {
+		t.Fatalf("expected filter_released_grip_relative_pose required error, got %v", err)
 	}
 }
 
