@@ -5,6 +5,13 @@ export const ORG_ID = "e76d1b3b-0468-4efd-bb7f-fb1d2b352fcb";
 export const LOCATION_ID = "oeq47g5p1m";
 export const RESOURCE_NAME = "order-events";
 
+// The fleet is every machine in LOCATION_ID that imports the eureka-grinder
+// fragment. The location also holds non-barista machines, and no fragment is
+// shared by exactly the baristas, so this is a stand-in until there is a
+// dedicated marker. Only direct imports count: a machine that gets the
+// grinder through another fragment is not listed.
+const FLEET_FRAGMENT_ID = "c072e00a-0810-415c-87f8-e186fbf97ce0";
+
 export interface Machine {
   id: string;
   name: string;
@@ -172,7 +179,7 @@ export function panelEmptyMsg(p: Panel): string {
 export async function listMachines(client: VIAM.ViamClient): Promise<Machine[]> {
   const summaries = await client.appClient.listMachineSummaries(
     ORG_ID,
-    ["e6103e56-ad3a-42c6-ae5b-7cc9c310331d"],
+    [FLEET_FRAGMENT_ID],
     [LOCATION_ID]
   );
   const machines: Machine[] = [];
