@@ -512,6 +512,20 @@ export async function identifyCustomer(
   });
 }
 
+/** The customer's most-frequent drink, or null when they have no history. */
+export async function getUsualDrink(
+  conn: ViamConnection,
+  email: string,
+): Promise<string | null> {
+  if (isDevMode() || !email) return null;
+  const res = await doCommand<{ has_usual?: boolean; drink?: string }>(
+    conn,
+    CUSTOMER_DETECTOR_SERVICE_NAME,
+    { get_usual: email },
+  );
+  return res.has_usual && res.drink ? res.drink : null;
+}
+
 export async function getCustomerDetectorInfo(
   conn: ViamConnection,
 ): Promise<{ camera_name: string }> {

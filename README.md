@@ -1157,7 +1157,7 @@ Returns:
 {"recorded": true, "email": "alice@example.com", "drink": "espresso"}
 ```
 
-**`get_usual`** — Return a customer's usual drink, derived from their recorded order history. Returns `{"has_usual": false}` when the customer is unknown or has no history.
+**`get_usual`** — Return a customer's usual drink, derived from their recorded order history. Returns `{"has_usual": false}` when the customer is unknown or has no history. The kiosk calls it for the customer it recognises on the welcome screen and offers the drink as a "Your usual" button that skips the drink grid.
 
 ```json
 {"get_usual": "alice@example.com"}
