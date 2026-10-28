@@ -132,10 +132,9 @@ type beanjaminCoffee struct {
 	glassObserveSw toggleswitch.Switch
 	milkVision     vision.Service // optional; nil unless CanServeIcedLatte
 	milkObserveSw  toggleswitch.Switch
-	// servingAreaSlotCounter is the round-robin counter for serving-area placement.
-	// It increments once per placeFullCupOnShelf and selects the shelf slot
-	// modulo the number of tiles. Process-local; resets to 0 on rebuild.
-	servingAreaSlotCounter atomic.Uint64
+	// servingSlot is the round-robin counter for serving-area placement
+	// (serving_slots.go), persisted across rebuilds.
+	servingSlot *servingSlotStore
 
 	// Held-item geometry tracking (held_geometry.go).
 	// heldCupGeom / heldGlassGeom / heldMilkGeom cache the gripper-local geometry
@@ -410,6 +409,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		slackNotifier:    report.NewNotifier(slackNotifier),
 		customerDetector: customerDetector,
 		delivery:         newDeliveryCart(),
+		servingSlot:      newServingSlotStore(logger),
 		crm:              crmSvc,
 		machineLogsURL:   report.MachineLogsURL(os.Getenv("VIAM_MACHINE_ID"), os.Getenv("VIAM_PRIMARY_ORG_ID")),
 		dataLocationID:   os.Getenv("VIAM_LOCATION_ID"),

@@ -113,7 +113,7 @@ const (
 
 // placeHeldInServingArea drops the item currently held by the gripper into the
 // serving area: it walks the serving-area slots in round-robin order starting
-// from servingAreaSlotCounter and drops the item in the first slot it can reach
+// from servingSlot and drops the item in the first slot it can reach
 // (tryDropCupInSlot), skipping any whose approach or descent cannot be planned.
 // On success it returns the 0-based slot the item was placed in and advances the
 // counter to the slot after it, so the next placement starts there. The caller
@@ -131,7 +131,7 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context,
 	}
 
 	n := len(slots)
-	start := s.servingAreaSlotCounter.Load()
+	start := s.servingSlot.get()
 	var lastErr error
 	for off := 0; off < n; off++ {
 		idx := geom.SlotIndex(start+uint64(off), n)
@@ -139,7 +139,7 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context,
 		err := s.tryDropCupInSlot(ctx, cancelCtx, slots[idx], shelfTopZ, contents)
 		if err == nil {
 			// Next placement starts at the slot after the one just used.
-			s.servingAreaSlotCounter.Store(start + uint64(off) + 1)
+			s.servingSlot.set(logger, start+uint64(off)+1)
 			logger.Infof("place_in_serving_area: placed item in slot %d/%d", idx+1, n)
 			return idx, nil
 		}

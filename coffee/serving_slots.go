@@ -11,16 +11,23 @@ package coffee
 // shelfDropZOffsetMm above the serving area top surface.
 //
 // Slot selection is a simple sequential round-robin (no vision): each
-// placement takes the next slot via an in-memory counter (servingAreaSlotCounter)
-// modulo the number of tiles, on the assumption that by the time the counter
-// wraps around the earliest-placed cup has been picked up. The counter is
-// process-local and resets to slot 0 on module restart/reconfigure.
+// placement takes the next slot via a counter (servingSlotStore) modulo the
+// number of tiles, on the assumption that by the time the counter wraps around
+// the earliest-placed cup has been picked up. The counter is mirrored to
+// VIAM_MODULE_DATA so a restart/reconfigure resumes after the last-used slot
+// instead of dropping the next cup on top of one still on the shelf.
 
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/golang/geo/r3"
+	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
 
@@ -49,7 +56,75 @@ const (
 	// role as the detected cup centroid at pickup: it is composed with
 	// CupGrabRelativePose to derive the world-frame grip-point pose for the drop.
 	shelfDropZOffsetMm = 30.0
+
+	servingSlotFile = "serving-area-slot"
 )
+
+// servingSlotStore holds the round-robin serving-area counter. Mirrored to
+// VIAM_MODULE_DATA because the service is AlwaysRebuild: without persisting,
+// every reconfigure would restart at slot 0, which likely still holds a cup.
+// The raw counter is stored rather than a slot index so it stays meaningful if
+// the serving area is resized (the slot is always counter modulo slot count).
+type servingSlotStore struct {
+	mu   sync.Mutex
+	next uint64
+	// path is "" when VIAM_MODULE_DATA is unset (tests, a local run): in-memory only.
+	path string
+}
+
+// newServingSlotStore loads any persisted counter. Every read failure degrades
+// to slot 0 — the pre-persistence behavior — rather than failing construction.
+func newServingSlotStore(logger logging.Logger) *servingSlotStore {
+	st := &servingSlotStore{}
+
+	dir := os.Getenv("VIAM_MODULE_DATA")
+	if dir == "" {
+		logger.Warnf("serving area: VIAM_MODULE_DATA is unset — the slot counter will be kept in " +
+			"memory only and restart at slot 1 after a reconfigure")
+		return st
+	}
+	st.path = filepath.Join(dir, servingSlotFile)
+
+	raw, err := os.ReadFile(st.path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logger.Warnf("serving area: reading %s: %v — starting at slot 1", st.path, err)
+		}
+		return st
+	}
+	n, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
+	if err != nil {
+		logger.Warnf("serving area: %s holds %q, which is not a slot counter: %v — starting at slot 1",
+			st.path, string(raw), err)
+		return st
+	}
+
+	st.next = n
+	logger.Infof("serving area: resuming slot counter at %d (loaded from %s)", n, st.path)
+	return st
+}
+
+func (st *servingSlotStore) get() uint64 {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.next
+}
+
+// set persists best-effort: a write failure leaves the in-memory value correct,
+// costing only a restart at a stale slot.
+func (st *servingSlotStore) set(logger logging.Logger, next uint64) {
+	st.mu.Lock()
+	st.next = next
+	path := st.path
+	st.mu.Unlock()
+
+	if path == "" {
+		return
+	}
+	if err := os.WriteFile(path, []byte(strconv.FormatUint(next, 10)), 0o644); err != nil {
+		logger.Warnf("serving area: persisting slot counter to %s: %v", path, err)
+	}
+}
 
 // shelfTopGeometry returns the world-frame center pose and box dimensions of
 // the served-drinks serving-area obstacle. Looks for a Box geometry under
@@ -126,7 +201,7 @@ func (s *beanjaminCoffee) shelfTopGeometry(ctx context.Context) (spatialmath.Pos
 // layout (as many slots as the serving area length allows at
 // shelfTileSpacingMm) ordered along the serving area's long axis, plus the
 // world-frame Z of the serving area top surface. The caller picks a slot in
-// round-robin order via servingAreaSlotCounter and skips any it cannot reach.
+// round-robin order via servingSlot and skips any it cannot reach.
 //
 // Returns an error only when the serving-area geometry is missing or too small
 // to hold a single slot.
