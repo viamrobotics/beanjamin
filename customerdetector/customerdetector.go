@@ -33,6 +33,10 @@ var Model = resource.NewModel("viam", "beanjamin", "customer-detector")
 // knownFacesDir is the subdirectory under DataDir where face images are stored.
 const knownFacesDir = "known_faces"
 
+// unknownFaceLabel is what the face-identification vision service labels a
+// face it detected but could not match to anyone enrolled.
+const unknownFaceLabel = "unknown"
+
 // pendingFacesDir holds captures from a registration that hasn't been
 // confirmed yet. It sits outside known_faces (the face-identification
 // picture_directory), so a staged face is never embedded: a customer who
@@ -448,7 +452,7 @@ func (cd *customerDetector) identifyCustomer(ctx context.Context) (map[string]an
 	var bestConf float64
 	var bestArea int
 	for _, d := range detections {
-		if d.Score() < cd.threshold {
+		if d.Score() < cd.threshold || d.Label() == unknownFaceLabel {
 			continue
 		}
 		bb := d.BoundingBox()

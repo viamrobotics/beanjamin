@@ -39,6 +39,15 @@ type TrackerMode = "hidden" | "auto" | "manual";
 // Width of the order tracker panel in both auto and manual modes.
 const TRACKER_PANEL_WIDTH = "w-[min(560px,45vw)]";
 
+// How often the welcome screen re-checks who is at the camera, and how long
+// nobody may be recognised before the greeting clears (`?identifyIntervalMs=`
+// and `?clearAfterSec=` override the defaults). Requiring a run of misses
+// keeps a turned head from flickering "Welcome back" away. Each check grabs a
+// camera frame and runs the face model, so the interval has a floor.
+const DEFAULT_IDENTIFY_INTERVAL_MS = 1000;
+const MIN_IDENTIFY_INTERVAL_MS = 250;
+const DEFAULT_CLEAR_AFTER_SEC = 2;
+
 const LOST_CONNECTION_MSG =
   "Lost connection to the machine. Please wait for it to reconnect and try again.";
 
@@ -50,6 +59,18 @@ export function Kiosk() {
   // starts from the same values.
   const prefillName = searchParams.get("name") ?? "";
   const prefillEmail = searchParams.get("email") ?? "";
+  const clearAfterParam = Number(searchParams.get("clearAfterSec"));
+  const clearAfterSec =
+    clearAfterParam > 0 ? clearAfterParam : DEFAULT_CLEAR_AFTER_SEC;
+  const intervalParam = Number(searchParams.get("identifyIntervalMs"));
+  const identifyIntervalMs =
+    intervalParam > 0
+      ? Math.max(intervalParam, MIN_IDENTIFY_INTERVAL_MS)
+      : DEFAULT_IDENTIFY_INTERVAL_MS;
+  const missesToClear = Math.max(
+    1,
+    Math.ceil((clearAfterSec * 1000) / identifyIntervalMs),
+  );
 
   // iOS Safari doesn't shrink the layout viewport (dvh/vh) when the on-screen
   // keyboard opens — only the visual viewport. Mirror visualViewport.height into
@@ -154,30 +175,57 @@ export function Kiosk() {
     };
   }, [connected, viamConn]);
 
-  // Customer identification is per-visit, not per-app. Run whenever we're on
-  // the welcome screen with a live connection so each new customer who walks
-  // up to the kiosk gets the camera-based "welcome back" treatment.
+  // Customer identification is per-visit, not per-app. While we're on the
+  // welcome screen with a live connection, keep checking the camera: a
+  // recognised customer gets the "welcome back" treatment, and once they have
+  // walked away (a run of misses) it is cleared along with the prefilled
+  // name and email, so the next person isn't greeted as, or ordering as, them.
   useEffect(() => {
     if (step !== "welcome" || !connected || !viamConn) return;
     let cancelled = false;
+    let greeted: string | null = null;
+    let misses = 0;
     (async () => {
-      try {
-        console.log("[app] attempting to identify customer...");
-        const id = await identifyCustomer(viamConn);
-        console.log("[app] identify result:", id);
-        if (cancelled || !id.identified || !id.name) return;
-        setName(id.name);
-        setEmail(id.email ?? "");
-        setWelcomeBack(id.name);
-        console.log("[app] welcome back:", id.name);
-      } catch (err) {
-        console.log("[app] identify skipped:", err);
+      while (!cancelled) {
+        try {
+          const id = await identifyCustomer(viamConn);
+          if (cancelled) return;
+          if (id.identified && id.name) {
+            misses = 0;
+            if (greeted !== id.name) {
+              greeted = id.name;
+              setName(id.name);
+              setEmail(id.email ?? "");
+              setWelcomeBack(id.name);
+              console.log("[app] welcome back:", id.name);
+            }
+          } else if (greeted && ++misses >= missesToClear) {
+            console.log("[app] customer left, clearing greeting");
+            greeted = null;
+            misses = 0;
+            setName(prefillName);
+            setEmail(prefillEmail);
+            setWelcomeBack(null);
+          }
+        } catch (err) {
+          // A failed check says nothing about who is there; keep the state.
+          console.log("[app] identify skipped:", err);
+        }
+        await new Promise((resolve) => setTimeout(resolve, identifyIntervalMs));
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [step, connected, viamConn]);
+  }, [
+    step,
+    connected,
+    viamConn,
+    prefillName,
+    prefillEmail,
+    identifyIntervalMs,
+    missesToClear,
+  ]);
 
   function handleDrinkNext() {
     if (!selectedDrink) return;
