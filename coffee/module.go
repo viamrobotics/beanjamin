@@ -273,6 +273,10 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, fmt.Errorf("src_camera_name %q not found in frame system — add the camera to the frame system fragment", conf.SrcCameraName)
 	}
 
+	if err := checkGrinderShields(cachedFS, conf.beanNames()); err != nil {
+		return nil, err
+	}
+
 	// Cup pickup is always vision-driven; the glass and milk pipelines mirror it
 	// behind their feature flags.
 	cupVision, cameraObserveSw, err := visionPickup(deps, logger, "cup",

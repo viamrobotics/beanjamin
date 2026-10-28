@@ -10,6 +10,7 @@ import (
 
 	"github.com/golang/geo/r3"
 	toggleswitch "go.viam.com/rdk/components/switch"
+	"go.viam.com/rdk/referenceframe"
 
 	"beanjamin/coffee/order"
 )
@@ -272,4 +273,19 @@ func grinderShieldFrame(beans string) string {
 		return "grinder-button-shield"
 	}
 	return strings.ReplaceAll(beans, "_", "-") + "-grinder-button-shield"
+}
+
+// checkGrinderShields fails when an extra grinder's button shield is missing
+// from the frame system. Grinding is allowed to touch the shield by name, so a
+// misnamed one (usually a fragment prefix that doesn't match the beans name)
+// would otherwise only surface mid-order, as a grind that can't reach the
+// button.
+func checkGrinderShields(fs *referenceframe.FrameSystem, beans []string) error {
+	for _, b := range beans {
+		if name := grinderShieldFrame(b); fs.Frame(name) == nil {
+			return fmt.Errorf("bean_options %q: grinder button shield %q not found in the frame system — "+
+				"apply the grinder fragment with prefix %q", b, name, strings.TrimSuffix(name, "-grinder-button-shield"))
+		}
+	}
+	return nil
 }

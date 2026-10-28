@@ -1,7 +1,11 @@
 package coffee
 
 import (
+	"strings"
 	"testing"
+
+	"go.viam.com/rdk/referenceframe"
+	"go.viam.com/rdk/spatialmath"
 
 	"beanjamin/coffee/order"
 )
@@ -87,5 +91,30 @@ func TestGrindActionsFollowBeanOptions(t *testing.T) {
 		if _, ok := beans[name]; !ok {
 			t.Errorf("%s missing with bean_options set", name)
 		}
+	}
+}
+
+// An extra grinder's shield must be in the frame system under the name the
+// grind allows a collision with, or the service refuses to start.
+func TestCheckGrinderShields(t *testing.T) {
+	fs := referenceframe.NewEmptyFrameSystem("test")
+	for _, name := range []string{"grinder-button-shield", "decaf-grinder-button-shield", "lightroast-grinder-button-shield"} {
+		f, err := referenceframe.NewStaticFrame(name, spatialmath.NewZeroPose())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fs.AddFrame(f, fs.World()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := checkGrinderShields(fs, []string{"decaf"}); err != nil {
+		t.Errorf("decaf shield present, got %v", err)
+	}
+	err := checkGrinderShields(fs, []string{"decaf", "light_roast"})
+	if err == nil || !strings.Contains(err.Error(), "light-roast-grinder-button-shield") || !strings.Contains(err.Error(), `prefix "light-roast"`) {
+		t.Errorf("want an error naming the missing light-roast shield and its prefix, got %v", err)
+	}
+	if err := checkGrinderShields(fs, nil); err != nil {
+		t.Errorf("no extra grinders, got %v", err)
 	}
 }
