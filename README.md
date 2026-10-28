@@ -217,6 +217,7 @@ When `keepalive` is configured, the **filter** pose switcher must additionally c
   "slow_movement_vel_degs_per_sec": 25,
   "portafilter_shake_sec": 2.5,
   "lock_overshoot_degs": 3,
+  "filter_released_grip_relative_pose": { "x": 0, "y": 0, "z": -30, "o_x": 0, "o_y": 0, "o_z": 1, "theta": 0 },
   "coffee_locked_final_grip_relative_pose": { "x": 0, "y": 0, "z": 0, "o_x": 0, "o_y": 0, "o_z": 1, "theta": 0 },
   "save_motion_requests_dir": "/tmp/motion-requests",
   "order_sensor_name": "order-events",
@@ -283,6 +284,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `slow_movement_acc_degs_per_sec2` | float | No | Max joint acceleration (degrees/sec²) for the slow tier. Gentle acceleration matters more than top speed for both precision and sloshing, so this defaults to a value below the arm's own (default: 25). Lower it further to ease into and out of contact and carries. |
 | `portafilter_shake_sec`    | float  | No       | Duration in seconds of each circular shake during `unlock_portafilter`, to dislodge a stuck puck. The arm shakes twice, once at `coffee_shake` and once at `coffee_shake_left`, returning to `coffee_in` in between so both shakes run the same move out of the group head. A puck stuck on either side of the basket then gets worked from both. When set, requires both poses in the filter pose switcher; author them to lean opposite ways and keep the tilted filter clear of the group head. Defaults to 0, which skips the shakes and the travel to those poses: the arm withdraws straight from `coffee_in` to `coffee_approach`. |
 | `lock_overshoot_degs`      | float  | No       | Extra rotation applied to the `coffee_locked_final` lock pivot, unwound back onto the authored angle within the same planned trajectory. The claws slip on the portafilter handle once the bayonet is under load, so the arm has to over-rotate for the filter to seat; the unwind re-zeroes the grip, since a seated filter out-holds the claws and the handle slides back through them. Defaults to 0 (no overshoot) — tune it on the machine. |
+| `filter_released_grip_relative_pose` | object | **Yes** | Where `release_filter` backs the open claws off the locked portafilter, and where `grab_filter` lines up before closing back in: the `grip-point` pose relative to the `portafilter-handle` frame, in the same form and axes as `coffee_locked_final_grip_relative_pose`. Derived from the filter switch's `coffee_locked_final` the same way, so the claws switch carries no `filter_released`. |
 | `coffee_locked_final_grip_relative_pose` | object | **Yes** | Where `grab_filter` closes the claws on the locked portafilter, as the `grip-point` pose relative to the `portafilter-handle` frame (`x`/`y`/`z` in mm and `o_x`/`o_y`/`o_z`/`theta` in degrees, all in the handle's own axes). The re-grab pose is derived from it and the filter switch's `coffee_locked_final`, so re-teaching the lock pose moves the re-grab with it; the claws switch carries no `coffee_locked_final`. Requires a `portafilter-handle` frame under the `filter` frame. |
 | `save_motion_requests_dir` | string | No       | Directory to save debugging payloads. Each plan writes a single request+response JSON (RDK's `WriteRequestAndResponseToFile`; readable back with `ReadRequestAndResponseFromFile`, and the response is absent when planning failed), nested under `tag=<order-id>/tag=step_<step>/tag=motion_<move\|pivot\|circular\|carry>/tag=planning_<success\|failure>/`. When this directory is a Viam data-synced capture dir, the data manager reads those `tag=` segments and tags each uploaded file, so plans are searchable on the data page by order, step, motion type, and planning outcome — and a failed order's Slack notification deep-links to that order's plan requests (which the reader can narrow to `planning_failure` or a specific step). Also writes a `visualization_snapshot_<timestamp>_<cup\|glass>.pb.gz` snapshot on each cup/glass observation: the whole frame system resolved at the joint configuration the arm held when the photo was taken, plus every detection's point cloud (as captured, anchored at the camera's world pose) and the world-frame bounding box the grasp was derived from. Drag the file onto a [visualization](https://github.com/viamrobotics/visualization) viewer to replay the observation — the `visualization_snapshot` prefix is what its drag-and-drop loader keys off. |
 | `order_sensor_name`        | string | No       | Name of a `viam:beanjamin:order-sensor` sensor to notify when each order attempt completes (must appear in **depends_on**). |
@@ -775,7 +777,6 @@ Which poses the service can reach, and which frame each moves. The frame is the 
 
 | Pose | Used for | Required when |
 | ---- | -------- | ------------- |
-| `filter_released` | hand the portafilter off | always |
 | `coffee_button_approach`, `coffee_button_on`, `coffee_button_off` | hold the toggle down through the brew | `has_separate_brew_buttons: false` |
 | `espresso_button_approach`/`_press`, `lungo_button_approach`/`_press` | poke the per-shot buttons | `has_separate_brew_buttons: true` |
 | `cup_under_machine_approach`, `cup_ready_for_coffee` | place and retrieve the cup | always |
@@ -797,7 +798,7 @@ has a switch pose: both are resolved against the staged glass (see
 
 Both observe switches sweep **every** pose they carry, so additional vantages alongside these are used even though only these are required.
 
-The portafilter re-grab has no claws-switch pose: it is derived from the filter's `coffee_locked_final` through `coffee_locked_final_grip_relative_pose`.
+The portafilter handoff has no claws-switch poses: `filter_released` and `coffee_locked_final` are derived from the filter's `coffee_locked_final` through `filter_released_grip_relative_pose` and `coffee_locked_final_grip_relative_pose`.
 
 ---
 

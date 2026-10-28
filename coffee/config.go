@@ -67,8 +67,14 @@ type Config struct {
 	// coffee_locked_final, so re-teaching the lock moves the re-grab with it
 	// (handle_relative_pose.go). Required.
 	CoffeeLockedFinalGripRelativePose *RelativePose `json:"coffee_locked_final_grip_relative_pose,omitempty"`
-	SaveMotionRequestsDir             string        `json:"save_motion_requests_dir,omitempty"`
-	OrderSensorName                   string        `json:"order_sensor_name,omitempty"`
+	// FilterReleasedGripRelativePose is the grip point's pose relative to the
+	// portafilter-handle frame where release_filter backs the open claws off the
+	// locked filter, and where grab_filter lines up before closing back in. The
+	// claws' filter_released is derived from it the way coffee_locked_final is.
+	// Required.
+	FilterReleasedGripRelativePose *RelativePose `json:"filter_released_grip_relative_pose,omitempty"`
+	SaveMotionRequestsDir          string        `json:"save_motion_requests_dir,omitempty"`
+	OrderSensorName                string        `json:"order_sensor_name,omitempty"`
 
 	// Optional usage sensor updated during the brew lifecycle via a best-effort
 	// read-modify-write: all counters are read with Readings, the changed one is
@@ -460,6 +466,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		"serving_approach_relative_pose", cfg.ServingApproachRelativePose,
 		"serving_grab_relative_pose", cfg.ServingGrabRelativePose,
 		"coffee_locked_final_grip_relative_pose", cfg.CoffeeLockedFinalGripRelativePose,
+		"filter_released_grip_relative_pose", cfg.FilterReleasedGripRelativePose,
 	); err != nil {
 		return nil, nil, err
 	}

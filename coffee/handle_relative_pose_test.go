@@ -38,29 +38,40 @@ func TestResolvePoseHandleRelativeGrip(t *testing.T) {
 	})
 	s := &beanjaminCoffee{
 		cfg: &Config{
+			FilterReleasedGripRelativePose:    &RelativePose{X: 10, Z: -40, OZ: 1},
 			CoffeeLockedFinalGripRelativePose: &RelativePose{X: 10, Z: -5, OZ: 1},
 		},
 		filterSw: filterSw,
-		// The claws switch has no DoFunc: the re-grab must never read it.
+		// The claws switch has no DoFunc: the handoff must never read it.
 		clawsSw:  inject.NewSwitch("claws"),
 		cachedFS: filterOnArmFS(t),
 		logger:   logging.NewTestLogger(t),
 	}
 
-	pd, err := s.resolvePose(context.Background(), s.clawsSw, clawPoseCoffeeLockedFinal)
-	if err != nil {
-		t.Fatalf("resolvePose: %v", err)
-	}
-	if pd.componentName != gripPoint || pd.refFrame != referenceframe.World {
-		t.Errorf("goal frames = (%q in %q), want (%q in %q)", pd.componentName, pd.refFrame, gripPoint, referenceframe.World)
-	}
-	// The offset is in the handle's axes, so its +X runs along world +Y.
-	if want := (r3.Vector{X: 500, Y: 90, Z: 295}); pd.pose.Point().Sub(want).Norm() > vecTolMm {
-		t.Errorf("grip point = %v, want %v", pd.pose.Point(), want)
-	}
-	wantOrient := spatialmath.NewPoseFromOrientation(&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: 90}).Orientation()
-	if !spatialmath.OrientationAlmostEqual(pd.pose.Orientation(), wantOrient) {
-		t.Errorf("grip orientation = %v, want %v", pd.pose.Orientation().OrientationVectorDegrees(), wantOrient.OrientationVectorDegrees())
+	// The offsets are in the handle's axes, so their +X runs along world +Y.
+	for _, tc := range []struct {
+		poseName string
+		want     r3.Vector
+	}{
+		{clawPoseFilterReleased, r3.Vector{X: 500, Y: 90, Z: 260}},
+		{clawPoseCoffeeLockedFinal, r3.Vector{X: 500, Y: 90, Z: 295}},
+	} {
+		t.Run(tc.poseName, func(t *testing.T) {
+			pd, err := s.resolvePose(context.Background(), s.clawsSw, tc.poseName)
+			if err != nil {
+				t.Fatalf("resolvePose: %v", err)
+			}
+			if pd.componentName != gripPoint || pd.refFrame != referenceframe.World {
+				t.Errorf("goal frames = (%q in %q), want (%q in %q)", pd.componentName, pd.refFrame, gripPoint, referenceframe.World)
+			}
+			if pd.pose.Point().Sub(tc.want).Norm() > vecTolMm {
+				t.Errorf("grip point = %v, want %v", pd.pose.Point(), tc.want)
+			}
+			wantOrient := spatialmath.NewPoseFromOrientation(&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: 90}).Orientation()
+			if !spatialmath.OrientationAlmostEqual(pd.pose.Orientation(), wantOrient) {
+				t.Errorf("grip orientation = %v, want %v", pd.pose.Orientation().OrientationVectorDegrees(), wantOrient.OrientationVectorDegrees())
+			}
+		})
 	}
 }
 
