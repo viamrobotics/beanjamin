@@ -6,8 +6,10 @@ import (
 	"strings"
 )
 
-// SpeakableDrink converts a drink id like "decaf_lungo" into a form Google TTS
-// reads naturally ("decaf lungo") rather than pronouncing the underscore.
+// SpeakableDrink converts a drink id like "iced_latte" into a form Google TTS
+// reads naturally ("iced latte") rather than pronouncing the underscore.
+// Callers with an order pass its Label ("decaf iced latte"), which already
+// reads naturally and comes through unchanged.
 func SpeakableDrink(drink string) string {
 	return strings.ReplaceAll(drink, "_", " ")
 }
@@ -184,6 +186,12 @@ func DrinkReady(drink, customerName string, batchIndex, batchSize int) string {
 		return fmt.Sprintf(drinkReadyNamed[rand.Intn(len(drinkReadyNamed))], drink, customerName)
 	}
 	return fmt.Sprintf(drinkReadyAnonymous[rand.Intn(len(drinkReadyAnonymous))], drink)
+}
+
+// UnsupportedBeans is the line spoken when an order asks for beans the machine
+// has no grinder for.
+func UnsupportedBeans(beans string) string {
+	return fmt.Sprintf("Sorry, I don't have %s beans at the moment.", SpeakableDrink(beans))
 }
 
 // UnsupportedDrink picks the line spoken when an order asks for a drink the

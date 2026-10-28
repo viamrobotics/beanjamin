@@ -50,7 +50,7 @@ func (f *fakeSpeech) calls() []string {
 func newTestCoffee(t *testing.T, cfg *Config) (*beanjaminCoffee, *fakeSpeech) {
 	t.Helper()
 	if cfg == nil {
-		cfg = &Config{CanServeDecaf: true}
+		cfg = &Config{BeanOptions: []BeanOption{{Name: "decaf"}}}
 	}
 	sp := &fakeSpeech{}
 	return &beanjaminCoffee{
@@ -253,7 +253,7 @@ func TestEnqueueOrder_RejectsBadCount(t *testing.T) {
 }
 
 func TestEnqueueOrder_RejectsAboveCap(t *testing.T) {
-	c, _ := newTestCoffee(t, &Config{CanServeDecaf: true, MaxBatchSize: 5})
+	c, _ := newTestCoffee(t, &Config{BeanOptions: []BeanOption{{Name: "decaf"}}, MaxBatchSize: 5})
 	if _, err := c.enqueueOrder(context.Background(), map[string]any{
 		"drink": "espresso",
 		"count": float64(5),
@@ -264,7 +264,7 @@ func TestEnqueueOrder_RejectsAboveCap(t *testing.T) {
 		t.Errorf("queue length after at-cap batch = %d, want 5", c.queue.Len())
 	}
 
-	c2, _ := newTestCoffee(t, &Config{CanServeDecaf: true, MaxBatchSize: 5})
+	c2, _ := newTestCoffee(t, &Config{BeanOptions: []BeanOption{{Name: "decaf"}}, MaxBatchSize: 5})
 	if _, err := c2.enqueueOrder(context.Background(), map[string]any{
 		"drink": "espresso",
 		"count": float64(6),
@@ -277,7 +277,7 @@ func TestEnqueueOrder_RejectsAboveCap(t *testing.T) {
 }
 
 func TestEnqueueOrder_BatchSuppressesPerOrderAnnouncement(t *testing.T) {
-	c, sp := newTestCoffee(t, &Config{CanServeDecaf: true, Conversational: true})
+	c, sp := newTestCoffee(t, &Config{BeanOptions: []BeanOption{{Name: "decaf"}}, Conversational: true})
 	// Pre-populate the queue so the single-order path would normally fire
 	// speech.OrderReceived (pos > 1). The batch path should fire exactly one
 	// speech.OrderReceivedBatch line instead.
@@ -301,15 +301,87 @@ func TestEnqueueOrder_BatchSuppressesPerOrderAnnouncement(t *testing.T) {
 }
 
 func TestEnqueueOrder_RejectsBatchOfUnsupportedDrink(t *testing.T) {
-	c, _ := newTestCoffee(t, &Config{CanServeDecaf: false})
+	c, _ := newTestCoffee(t, &Config{})
 	if _, err := c.enqueueOrder(context.Background(), map[string]any{
-		"drink": "decaf",
+		"drink": "mocha",
 		"count": float64(3),
 	}); err == nil {
-		t.Fatal("expected rejection for decaf when can_serve_decaf=false")
+		t.Fatal("expected rejection for an unknown drink")
 	}
 	if c.queue.Len() != 0 {
 		t.Errorf("queue should stay empty after pre-loop rejection, got len=%d", c.queue.Len())
+	}
+}
+
+// Decaf is chosen through beans now; the old drink ids are unknown drinks.
+func TestEnqueueOrder_RejectsRetiredDecafDrinks(t *testing.T) {
+	c, _ := newTestCoffee(t, &Config{BeanOptions: []BeanOption{{Name: "decaf"}}})
+	for _, drink := range []string{"decaf", "decaf_lungo"} {
+		if _, err := c.enqueueOrder(context.Background(), map[string]any{"drink": drink}); err == nil {
+			t.Errorf("drink %q should be rejected", drink)
+		}
+	}
+	if c.queue.Len() != 0 {
+		t.Errorf("queue should stay empty, got len=%d", c.queue.Len())
+	}
+}
+
+// The beans an order names are validated against bean_options and land on
+// every order of the batch; naming none gets the regular beans.
+func TestEnqueueOrder_Beans(t *testing.T) {
+	c, _ := newTestCoffee(t, &Config{
+		CanServeIced: true,
+		BeanOptions:  []BeanOption{{Name: "decaf"}, {Name: "light_roast"}},
+	})
+	if _, err := c.enqueueOrder(context.Background(), map[string]any{"drink": "espresso"}); err != nil {
+		t.Fatalf("plain espresso: %v", err)
+	}
+	// Any drink takes any configured beans, iced ones included.
+	if _, err := c.enqueueOrder(context.Background(), map[string]any{
+		"drink": "iced_coffee", "beans": "light_roast", "count": float64(2),
+	}); err != nil {
+		t.Fatalf("light roast iced coffee: %v", err)
+	}
+	if _, err := c.enqueueOrder(context.Background(), map[string]any{"drink": "lungo", "beans": "decaf"}); err != nil {
+		t.Fatalf("decaf lungo: %v", err)
+	}
+	var got []string
+	for _, o := range c.queue.List() {
+		got = append(got, o.Drink+"/"+o.Beans)
+	}
+	want := []string{"espresso/regular", "iced_coffee/light_roast", "iced_coffee/light_roast", "lungo/decaf"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("queued = %v, want %v", got, want)
+	}
+
+	for _, bad := range []any{"dark_roast", float64(1)} {
+		if _, err := c.enqueueOrder(context.Background(), map[string]any{"drink": "espresso", "beans": bad}); err == nil {
+			t.Errorf("beans %#v should be rejected", bad)
+		}
+	}
+	if c.queue.Len() != len(want) {
+		t.Errorf("rejected orders must not be queued, len=%d", c.queue.Len())
+	}
+
+	plain, _ := newTestCoffee(t, &Config{})
+	if _, err := plain.enqueueOrder(context.Background(), map[string]any{"drink": "espresso", "beans": "decaf"}); err == nil {
+		t.Error("decaf should be rejected on a machine with no bean_options")
+	}
+}
+
+// Speech names the beans of a non-regular order.
+func TestEnqueueOrder_SpeaksBeans(t *testing.T) {
+	c, sp := newTestCoffee(t, &Config{Conversational: true, BeanOptions: []BeanOption{{Name: "light_roast"}}})
+	c.queue.Enqueue(order.NewOrder("lungo", "Bob", "", "")) // so the order-received line fires
+	if _, err := c.enqueueOrder(context.Background(), map[string]any{"drink": "lungo", "beans": "light_roast"}); err != nil {
+		t.Fatal(err)
+	}
+	calls := sp.calls()
+	if len(calls) != 1 || !strings.Contains(calls[0], "light roast lungo") {
+		t.Errorf("speech = %v, want a line naming the light roast lungo", calls)
+	}
+	if g := c.queue.List()[1].Greeting; !strings.Contains(g, "light roast lungo") {
+		t.Errorf("greeting = %q, want it to name the light roast lungo", g)
 	}
 }
 

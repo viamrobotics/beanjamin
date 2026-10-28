@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/testutils/inject"
@@ -284,5 +285,33 @@ func TestFinishRegistrationWithoutVisionLeavesFacesStaged(t *testing.T) {
 	}
 	if len(cd.customers) != 0 {
 		t.Fatal("a failed finish saved a customer record")
+	}
+}
+
+// A usual is a drink and its beans together, and history recorded before beans
+// were their own field counts an old "decaf" as a decaf espresso.
+func TestUsualDrinkCountsBeans(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	at := func(h int) time.Time { return t0.Add(time.Duration(h) * time.Hour) }
+	usual, count := usualDrink([]orderHistoryEntry{
+		{Drink: "lungo", Beans: "regular", At: at(0)},
+		{Drink: "lungo", Beans: "regular", At: at(1)},
+		{Drink: "decaf", At: at(2)}, // legacy decaf espresso
+		{Drink: "espresso", Beans: "decaf", At: at(3)},
+		{Drink: "espresso", Beans: "decaf", At: at(4)},
+	})
+	if usual != (drinkChoice{"espresso", "decaf"}) || count != 3 {
+		t.Errorf("usual = %+v x%d, want decaf espresso x3", usual, count)
+	}
+
+	// Same drink, different beans: separate usuals, not one pooled lungo.
+	usual, count = usualDrink([]orderHistoryEntry{
+		{Drink: "lungo", Beans: "light_roast", At: at(0)},
+		{Drink: "lungo", Beans: "regular", At: at(1)},
+		{Drink: "espresso", At: at(2)}, // legacy regular espresso
+		{Drink: "espresso", Beans: "regular", At: at(3)},
+	})
+	if usual != (drinkChoice{"espresso", "regular"}) || count != 2 {
+		t.Errorf("usual = %+v x%d, want regular espresso x2", usual, count)
 	}
 }

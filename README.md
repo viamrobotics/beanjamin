@@ -238,13 +238,12 @@ When `keepalive` is configured, the **filter** pose switcher must additionally c
 }
 ```
 
-Add a **`viam:beanjamin:order-sensor`** component to the machine, put it in the coffee service **depends_on**, and set `order_sensor_name` to that component’s name. When an order attempt finishes, one reading is queued with `start_time`, `end_time`, `order_ok`, `duration_ms`, and — for observability — `failed_step`, `operator_cancelled`, `trace_id`, the `decaf` path flag, and `error_message` (if applicable).
+Add a **`viam:beanjamin:order-sensor`** component to the machine, put it in the coffee service **depends_on**, and set `order_sensor_name` to that component’s name. When an order attempt finishes, one reading is queued with `start_time`, `end_time`, `order_ok`, `duration_ms`, and — for observability — `failed_step`, `operator_cancelled`, `trace_id`, the `beans` the drink was ground from, and `error_message` (if applicable).
 
 **Usage sensor.** The optional `usage_sensor_name` field points at a single sensor resource that holds several counters, one per key, updated through the brew lifecycle. Setting the field automatically registers the sensor as a dependency of the coffee service, so no manual `depends_on` entry is required. The sensor must support both the `Readings` API and a `DoCommand({"set": {<key>: <value>}})` that overwrites the named counter (and preserves the others). The coffee service updates each counter with a best-effort read-modify-write: it reads the current value via `Readings`, computes the new value, and writes it back via `DoCommand`. The keys are:
 
-- `regular_grinds` — +1 after each regular (non-decaf) grind
-- `decaf_grinds` — +1 after each decaf grind
-- `usage` — +1 after a regular brew (espresso/decaf), +1.5 after a lungo brew (lungo/decaf_lungo, and the iced drinks, which pour a lungo)
+- `<beans>_grinds` — +1 after each grind from that beans' grinder: `regular_grinds`, plus one per `bean_options` entry (`decaf_grinds`, `light_roast_grinds`, …)
+- `usage` — +1 after an espresso brew, +1.5 after a lungo brew (lungo, and the iced drinks, which pour a lungo)
 - `cleanings` — +1 after each cleaning cycle
 - `ice_dispenses` — +1 after each ice dispense (iced coffee only)
 - `ice_dispense_timeouts` — +1 when a watched ice dispense hits either ceiling — `ice_dispense_max_sec` from the pin opening, or `ice_after_first_seen_max_sec` from the first sighting — without the surface passing the stop row (`ice_vision_enabled` only). The glass is served as it is, so a climbing counter is how an empty hopper — or a stop row that no longer matches how the glass is being gripped — shows up. The log line names which ceiling fired, and the saved frame is tagged `ice_timeout` or `ice_surface_cap`.
@@ -261,7 +260,7 @@ Configure a [`viam:video:storage`](https://github.com/viam-modules/video-store) 
 
 The save request includes a `tags` entry with the order UUID — this is what links clips to orders for cloud data filtering — and a minimal JSON `metadata` blob containing only `order_id` and `order_status` (`ok` or `failed`), which the video-store appends to the clip filename. Clips are saved after every attempt, including failed brews or panics. Failure detail (the error and the step it failed at) is not stored in the clip metadata; it is recorded separately on the order sensor.
 
-**Slack notifications.** The optional `slack_notifier_name` field points at a [`viam:notifications:slack`](https://github.com/viam-modules/notifications) generic service. Setting the field automatically registers it as a dependency of the coffee service, so no manual `depends_on` entry is required. When set, the coffee service sends a best-effort Slack message on every **non-successful** order attempt — both genuine faults and operator cancels — via `DoCommand({"command": "send", "blocks": [...], "text": ...})`. The message is laid out with [Slack Block Kit](https://api.slack.com/block-kit) and mirrors the per-attempt fields the order sensor records, so it's a self-contained record: a header that distinguishes a fault (`:x: Order failed`) from an operator cancel (`:warning: Order cancelled by operator`), a fields section with the drink, customer, the step it failed (or was cancelled) at, the duration, and the `decaf` flag, the error in a code block (faults only), and a context footer with the order ID, trace ID, start time, and — when the module is cloud-connected — clickable `app.viam.com` deep-links to this machine's logs (built from the `VIAM_MACHINE_ID` / `VIAM_PRIMARY_ORG_ID` environment variables Viam injects) and, when `cam_storage_mux_name` is configured, to the order's video clip (a data page filtered by the order-ID tag, scoped to `VIAM_LOCATION_ID`). All links are omitted on a local or test machine where those environment variables are unset. Because the clip uploads asynchronously *after* the notification is sent, the clip link may show no results for the first ~15–60s. The flat `text` value is sent alongside as the notification/accessibility fallback Slack uses when blocks can't render. Sends run off the queue goroutine (so a slow Slack call never stalls the next order) and are bounded by a 10-second timeout; a send failure logs a warning and never affects brewing. The Slack channel/credentials (bot token or webhook URL) are configured on the notifier service itself. When `slack_notifier_name` is unset, no notifications are sent.
+**Slack notifications.** The optional `slack_notifier_name` field points at a [`viam:notifications:slack`](https://github.com/viam-modules/notifications) generic service. Setting the field automatically registers it as a dependency of the coffee service, so no manual `depends_on` entry is required. When set, the coffee service sends a best-effort Slack message on every **non-successful** order attempt — both genuine faults and operator cancels — via `DoCommand({"command": "send", "blocks": [...], "text": ...})`. The message is laid out with [Slack Block Kit](https://api.slack.com/block-kit) and mirrors the per-attempt fields the order sensor records, so it's a self-contained record: a header that distinguishes a fault (`:x: Order failed`) from an operator cancel (`:warning: Order cancelled by operator`), a fields section with the drink, customer, the beans, the step it failed (or was cancelled) at, and the duration, the error in a code block (faults only), and a context footer with the order ID, trace ID, start time, and — when the module is cloud-connected — clickable `app.viam.com` deep-links to this machine's logs (built from the `VIAM_MACHINE_ID` / `VIAM_PRIMARY_ORG_ID` environment variables Viam injects) and, when `cam_storage_mux_name` is configured, to the order's video clip (a data page filtered by the order-ID tag, scoped to `VIAM_LOCATION_ID`). All links are omitted on a local or test machine where those environment variables are unset. Because the clip uploads asynchronously *after* the notification is sent, the clip link may show no results for the first ~15–60s. The flat `text` value is sent alongside as the notification/accessibility fallback Slack uses when blocks can't render. Sends run off the queue goroutine (so a slow Slack call never stalls the next order) and are bounded by a 10-second timeout; a send failure logs a warning and never affects brewing. The Slack channel/credentials (bot token or webhook URL) are configured on the notifier service itself. When `slack_notifier_name` is unset, no notifications are sent.
 
 **Top-level fields:**
 
@@ -276,7 +275,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `brew_time_sec`            | float  | No       | Espresso brew duration in seconds (default: 8). Under a toggle this is the hold time and therefore the dose; with `has_separate_brew_buttons` the machine controls the dose and this must be at least as long as its actual pour, or the arm reaches for the cup mid-stream. |
 | `lungo_brew_time_sec`      | float  | No       | Same, for a lungo — also used by `iced_coffee` and `iced_latte`, which pour a lungo (default: 15). |
 | `button_press_hold_sec`    | float  | No       | How long the claw dwells on a brew button so the momentary switch registers, in seconds (must be >= 0; unset means no dwell). Raise if presses are intermittent. Ignored unless `has_separate_brew_buttons` is set. |
-| `grind_time_sec`           | float  | No       | Bean grinding duration in seconds, applied to both regular and decaf grinders (default: 7.5).                 |
+| `grind_time_sec`           | float  | No       | Bean grinding duration in seconds, applied to every grinder (default: 7.5).                                     |
 | `gripper_hold_min_pos`     | float  | No       | Gripper jaw position (0–850) below which the gripper is considered closed/empty. Positions in `[min, max]` mean an object (cup or glass) is held; used to verify grabs and self-heal an open gripper at brew-cycle start (default: 430).                 |
 | `gripper_hold_max_pos`     | float  | No       | Gripper jaw position (0–850) above which the gripper is considered open (default: 685).                       |
 | `gripper_open_timeout_sec` | float  | No       | How long the portafilter handoff waits for the jaws to actually read open before giving up (default: 3). `release_filter` and `grab_filter` both open the jaws and then travel along the filter handle at claw clearance, so moving while the jaws are still closing drags the filter against the bayonet on the way out or strikes the handle on the way in. Rather than sleeping a fixed interval, both poll the real jaw position every 500ms until it clears `gripper_hold_max_pos` and fail with a "gripper did not open" error at this timeout. Raise it on a build whose jaws travel slowly — clamp force and jaw range both lengthen the open stroke. |
@@ -288,7 +287,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `coffee_locked_final_grip_relative_pose` | object | **Yes** | Where `grab_filter` closes the claws on the locked portafilter, as the `grip-point` pose relative to the `portafilter-handle` frame (`x`/`y`/`z` in mm and `o_x`/`o_y`/`o_z`/`theta` in degrees, all in the handle's own axes). The re-grab pose is derived from it and the filter switch's `coffee_locked_final`, so re-teaching the lock pose moves the re-grab with it; the claws switch carries no `coffee_locked_final`. Requires a `portafilter-handle` frame under the `filter` frame. |
 | `save_motion_requests_dir` | string | No       | Directory to save debugging payloads. Each plan writes a single request+response JSON (RDK's `WriteRequestAndResponseToFile`; readable back with `ReadRequestAndResponseFromFile`, and the response is absent when planning failed), nested under `tag=<order-id>/tag=step_<step>/tag=motion_<move\|pivot\|circular\|carry>/tag=planning_<success\|failure>/`. When this directory is a Viam data-synced capture dir, the data manager reads those `tag=` segments and tags each uploaded file, so plans are searchable on the data page by order, step, motion type, and planning outcome — and a failed order's Slack notification deep-links to that order's plan requests (which the reader can narrow to `planning_failure` or a specific step). Also writes a `visualization_snapshot_<timestamp>_<cup\|glass>.pb.gz` snapshot on each cup/glass observation: the whole frame system resolved at the joint configuration the arm held when the photo was taken, plus every detection's point cloud (as captured, anchored at the camera's world pose) and the world-frame bounding box the grasp was derived from. Drag the file onto a [visualization](https://github.com/viamrobotics/visualization) viewer to replay the observation — the `visualization_snapshot` prefix is what its drag-and-drop loader keys off. |
 | `order_sensor_name`        | string | No       | Name of a `viam:beanjamin:order-sensor` sensor to notify when each order attempt completes (must appear in **depends_on**). |
-| `usage_sensor_name`        | string | No       | Name of a single sensor whose per-key counters are updated through the brew lifecycle: `regular_grinds`, `decaf_grinds`, `usage`, `cleanings`, `ice_dispenses`, `ice_dispense_timeouts`, `ice_shadow_disagreements`, `drip_tray_brews`, `espresso_cups_used`, `latte_glasses_used`, and `successful_consecutive_orders`. See "Usage sensor" below. |
+| `usage_sensor_name`        | string | No       | Name of a single sensor whose per-key counters are updated through the brew lifecycle: `<beans>_grinds` (one per grinder, e.g. `regular_grinds`, `decaf_grinds`), `usage`, `cleanings`, `ice_dispenses`, `ice_dispense_timeouts`, `ice_shadow_disagreements`, `drip_tray_brews`, `espresso_cups_used`, `latte_glasses_used`, and `successful_consecutive_orders`. See "Usage sensor" below. |
 | `cam_storage_mux_name` | string | No   | Name of a [`viam:multiplexer:resource-multiplexer`](https://github.com/viam-modules/multiplexer) generic service whose dependencies are `viam:video:storage` stores; when set, saves a clip per order attempt (synchronous `save`) to all configured stores. |
 | `data_dir`                 | string | No       | Directory for persistent module data. When set alongside `cam_storage_mux_name`, a pending-clip record is written under `<data_dir>/pending-clips` when each order starts and removed only once that order's clip has been saved successfully — a save that fails (or never runs because the process died first) leaves the record in place. Use with a Viam scheduled job calling `cleanup_pending_clips` to recover clips for any order whose save was interrupted or failed. |
 | `slack_notifier_name`      | string | No       | Name of a [`viam:notifications:slack`](https://github.com/viam-modules/notifications) generic service. When set, the coffee service sends a best-effort Slack message on every non-successful order attempt (faults and operator cancels). See "Slack notifications" above. |
@@ -318,7 +317,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `door_approach_relative_pose` | object | For `open_door` | A `RelativePose` (`x`,`y`,`z`,`o_x`,`o_y`,`o_z`,`theta`) offset composed onto the grasp frame's center (world axes) to produce the pre-grasp standoff — the door analog of `cup_approach_relative_pose`, but resolved against the live grasp frame instead of a detected cup. Its orientation is the base grasp orientation, which `door_grasp_yaw_ratio` then yaws through the swing. Required to run `open_door`. |
 | `door_grasp_yaw_ratio`     | float  | No       | How far the gripper yaws about world Z as the door swings: the grasp orientation (and the approach/retract standoff) is turned by `ratio x theta` — a pure function of the door angle, so `open_door` and `close_door` are exact inverses and `door_approach_relative_pose` is authored for the **shut** door. `-1` (default) counter-rotates, keeping the wrist on the near side of the ball as the handle swings away; `0` holds the orientation fixed in world; `1` keeps the tool square to the panel. The sign is a reachability choice — the handle is a sphere, so the grasp does not constrain wrist roll. Replanning a failed 75° sweep offline put `1` out of IK solutions by θ=47° and `0` out by θ=75°. `0` and negatives are honored, so unset is distinct from zero. |
 | `keepalive`                | object | No       | Enables the keep-alive purge loop, which holds the machine's 1 CUP button periodically so the machine never falls out of brew temperature. Requires `has_separate_brew_buttons`. Omit to disable. Fields: `auto_start` and `end` (`"HH:MM"` local, the half-open window `[auto_start, end)`; `auto_start` must mirror the time programmed into the machine's own Auto Start setting), `timezone` (IANA name, required — an empty value is rejected rather than silently meaning UTC), `days` (lowercase three-letter names, default Mon–Fri), `after_min` (idle minutes before a purge is due, default 40), `check_interval_min` (tick period, default 5), `hold_sec` (button dwell, default 1 — this sets how much water reaches the drip tray). `after_min + 2*check_interval_min` must be under 55, since the machine sleeps after roughly 60 idle minutes. See "Keeping the machine at brew temperature" below. |
-| `can_serve_decaf`          | bool   | No       | Enables the `decaf` and `decaf_lungo` drinks, which grind from the decaf grinder instead of the regular one. Orders for those drinks are rejected when this is `false`. Default `false`. |
+| `bean_options`             | list   | No       | The beans this machine grinds besides the regular ones, one entry per extra grinder: `[{"name": "decaf"}, {"name": "light_roast"}]`. Names are lowercase letters, digits and underscores, and must not be `regular`. Each grinder needs `<name>_grinder_approach` / `<name>_grinder_activate` poses on the filter switch and a `<name>-grinder-button-shield` obstacle (underscores in the name become hyphens). `prepare_order` picks one through `beans`, for any drink. Replaces `can_serve_decaf`, which is now rejected. |
 | `can_serve_iced`           | bool   | No       | Enables the `iced_coffee` drink. When `true`, the machine brews a lungo (`lungo_brew_time_sec`, and the lungo button under `has_separate_brew_buttons`); after brewing, the arm vision-detects a glass off the top shelf, dispenses ice into it via `ice_board_name`/`ice_pin_name`, sets the glass in a staging area, then pours the espresso over the ice. Both finished items — the empty espresso cup and the iced glass — are then placed in the serving area at the next round-robin slots (two slots are consumed per order). The glass is always vision-detected, so iced coffee requires `ice_board_name`, `ice_pin_name`, the `glass_*` vision fields below, and the iced claws poses below. A `serving-area` (or `serving-area_origin`) Box geometry must exist in the framesystem; this is checked at runtime, not at config time. Default `false`. |
 | `ice_board_name`           | string | When `can_serve_iced` is enabled | Name of a `rdk:component:board` whose GPIO pin triggers the ice machine. |
 | `ice_pin_name`             | string | When `can_serve_iced` is enabled | Board pin held HIGH to dispense ice. Required — there is no default pin. |
@@ -412,12 +411,13 @@ When `can_serve_iced_latte` is enabled, the dedicated milk-observe switch must h
 
 ### DoCommand
 
-**`prepare_order`** - Prepare a drink order with optional speech greetings. Supports `"espresso"` and `"lungo"`; `"decaf"`/`"decaf_lungo"` when `can_serve_decaf` is set, `"iced_coffee"` when `can_serve_iced` is set, and `"iced_latte"` when `can_serve_iced_latte` is set.
+**`prepare_order`** - Prepare a drink order with optional speech greetings. Supports `"espresso"` and `"lungo"`, `"iced_coffee"` when `can_serve_iced` is set, and `"iced_latte"` when `can_serve_iced_latte` is set. `beans` picks the grinder: `"regular"` (the default when omitted) or a `bean_options` name such as `"decaf"`; any drink can take any of the machine's beans. Unknown beans are rejected before anything is queued. Decaf used to be its own drink; the `"decaf"` and `"decaf_lungo"` ids are no longer accepted — send `"espresso"` or `"lungo"` with `"beans": "decaf"`.
 
 ```json
 {
   "prepare_order": {
     "drink": "espresso",
+    "beans": "decaf",
     "customer_name": "Alice",
     "modified_customer_name": "Alise",
     "customer_email": "alice@example.com",
@@ -435,7 +435,7 @@ Only `drink` is required. If `initial_greeting` is omitted, a random greeting is
 
 **`execute_action`** - Run a single coffee-making action by name, for manual step-by-step operation. An unknown name returns the full list of available actions in the error. Available actions:
 
-- Brew cycle: `grind_coffee`, `grind_decaf`, `tamp_ground`, `lock_portafilter`, `unlock_portafilter`, `release_filter`, `grab_filter`, `brew_coffee`, plus the button actions for the configured machine (`turn_coffee_button_on` / `turn_coffee_button_off`, or `press_espresso_button` / `press_lungo_button` / `brew_lungo` under `has_separate_brew_buttons`), `set_cup_for_coffee`, `give_full_cup_to_customer` (place the finished cup in the serving area), `clean_portafilter`, `place_held` (place the currently held vessel in the serving area), `keepalive_purge` (one group-head purge on demand — available on the `has_separate_brew_buttons` machine whether or not `keepalive` is configured, so the `purge_*` poses can be verified before the loop is switched on).
+- Brew cycle: `grind_coffee` (regular beans), `grind_<beans>` for each `bean_options` entry (e.g. `grind_decaf`), `tamp_ground`, `lock_portafilter`, `unlock_portafilter`, `release_filter`, `grab_filter`, `brew_coffee`, plus the button actions for the configured machine (`turn_coffee_button_on` / `turn_coffee_button_off`, or `press_espresso_button` / `press_lungo_button` / `brew_lungo` under `has_separate_brew_buttons`), `set_cup_for_coffee`, `give_full_cup_to_customer` (place the finished cup in the serving area), `clean_portafilter`, `place_held` (place the currently held vessel in the serving area), `keepalive_purge` (one group-head purge on demand — available on the `has_separate_brew_buttons` machine whether or not `keepalive` is configured, so the `purge_*` poses can be verified before the loop is switched on).
 - Iced coffee (require `can_serve_iced`): `fetch_glass`, `pulse_ice_pin`, `move_to_ice_dispense` (hold the glass under the chute without opening the pin), `dispense_ice`, `stage_glass`, `grab_brewed_cup`, `pour_espresso`, `grab_staged_glass`, `serve_iced_coffee` (the full iced sequence end-to-end), `check_ice_level` (measure the glass in the current camera frame and log it; no arm motion, no pin).
 - Iced latte (require `can_serve_iced_latte`): `fetch_milk` (vision-grab the bottle from the **already open** fridge), `pour_milk` (pour the held bottle into the staged glass), `return_milk` (set the bottle back down where `fetch_milk` picked it up), `add_milk` (the whole fridge trip: open door → fetch → pour → return → close door), `serve_iced_latte` (the full iced-plus-milk sequence end-to-end). `fetch_milk`, `pour_milk` and `return_milk` are meant for stepping the sequence one move at a time while calibrating; each assumes the state the one before it leaves behind, and `return_milk` fails if no `fetch_milk` recorded a pickup position.
 - Fridge door (requires `door_approach_relative_pose`): `open_door` (grip the handle and swing the door open — see below).
@@ -508,18 +508,21 @@ Returns:
 {
   "count": 2,
   "orders": [
-    {"id": "3f8c1e2a-…", "drink": "espresso", "customer_name": "Alice", "fulfillment": "pickup",
+    {"id": "3f8c1e2a-…", "drink": "espresso", "beans": "regular", "customer_name": "Alice", "fulfillment": "pickup",
      "enqueued_at": "2026-09-17T09:12:03Z", "raw_step": "Brewing", "step_history": [],
      "completed_at": "", "cancellable": false},
-    {"id": "9b21d740-…", "drink": "lungo", "customer_name": "Bob", "fulfillment": "pickup",
+    {"id": "9b21d740-…", "drink": "lungo", "beans": "decaf", "customer_name": "Bob", "fulfillment": "pickup",
      "enqueued_at": "2026-09-17T09:12:40Z", "raw_step": "", "step_history": [],
      "completed_at": "", "cancellable": true}
   ],
   "is_paused": false,
   "is_busy": true,
-  "arm_holder": "order queue"
+  "arm_holder": "order queue",
+  "bean_options": ["regular", "decaf"]
 }
 ```
+
+`bean_options` lists the beans an order may name, `regular` first, so a client can offer the choice.
 
 `arm_holder` names what currently holds the arm — `order queue`, `keepalive purge`, `reset_world`, `execute_action open_door` and so on — and is empty when the arm is free. A command refused because the arm is busy names the holder in its error too.
 
@@ -594,7 +597,7 @@ Two troubleshooting commands run this by hand, outside an order. Neither waits f
 ```
 
 ```json
-{"available": true, "order_id": "…", "status": "making", "drink": "espresso", "customer_name": "Alice", "customer_email": "alice@example.com", "cup_type": "cup", "order_timestamp": "2026-10-19T15:04:05Z"}
+{"available": true, "order_id": "…", "status": "making", "drink": "espresso", "beans": "regular", "customer_name": "Alice", "customer_email": "alice@example.com", "cup_type": "cup", "order_timestamp": "2026-10-19T15:04:05Z"}
 ```
 
 **`delivery_machine_ready`** - The cart has docked itself and is ready for the handoff. This call is what starts the handoff, for the oldest active delivery order. A drink already in the slot is attempted immediately. A drink still being made stays open and is attempted when it reaches the slot, without another call. The response is the same shape as `delivery_pending`, with `status` already advanced (`handed_over` or `retrying`) when the attempt ran. `{"available": false}` means nothing is waiting, and no handoff is started — a later order waits for another `delivery_machine_ready`.
@@ -708,7 +711,7 @@ Cancelled by operator     1
 ───────────────────────────
 Total                     8
 
-:trophy: Alice — 3  ·  :sleeping: 1 decaf  ·  :fire: 12 in a row
+:trophy: Alice — 3  ·  :beans: 2 light roast  ·  :sleeping: 1 decaf  ·  :fire: 12 in a row
 
 :coffee: *Drinks*
 • espresso — 4 (avg 2m12s)
@@ -720,7 +723,7 @@ Total                     8
 :clock3: Sun 5:30 PM – Mon 5:30 PM EDT · order a coffee
 ```
 
-`:trophy:` names whoever ordered most. **Walk-ups who skip the name screen are left out of it entirely** — pooled under one "anonymous" label they would win most days and say nothing, so the leaderboard counts only named customers and consequently does not sum to the order total. Everyone tied at the top is named rather than one of them picked arbitrarily, since a two-order tie is the normal case on a quiet day. Every attempt counts toward a customer's tally whether or not the machine managed it: they asked for a drink, and the failure is the machine's record rather than theirs.
+`:trophy:` names whoever ordered most. **Walk-ups who skip the name screen are left out of it entirely** — pooled under one "anonymous" label they would win most days and say nothing, so the leaderboard counts only named customers and consequently does not sum to the order total. Everyone tied at the top is named rather than one of them picked arbitrarily, since a two-order tie is the normal case on a quiet day. Every attempt counts toward a customer's tally whether or not the machine managed it: they asked for a drink, and the failure is the machine's record rather than theirs. Each non-regular beans gets its own count after it, busiest first — `:sleeping:` for decaf, `:beans:` for the rest — and is left out on a day nobody ordered it.
 
 The headline line carries the three numbers worth having in a notification preview, each with an emoji the sections below reuse for the same idea — `:clock3:` for time, `:coffee:` for drinks, `:x:` for faults. The outcome counts are a fixed-width table in a code fence: Slack has no table block that renders reliably across clients, and a code fence is the only place it honours column alignment. Emoji do not render inside one, which is why they sit on the line above rather than in the rows. Every digest links the [ordering app](https://beanjamin_viam.viamapplications.com/) in its footer.
 
@@ -765,7 +768,7 @@ Which poses the service can reach, and which frame each moves. The frame is the 
 | Pose | Used for | Required when |
 | ---- | -------- | ------------- |
 | `grinder_approach`, `grinder_activate` | grind | always |
-| `decaf_grinder_approach`, `decaf_grinder_activate` | decaf grind | `can_serve_decaf` |
+| `<beans>_grinder_approach`, `<beans>_grinder_activate` | grind from that beans' grinder (e.g. `decaf_grinder_approach`) | each `bean_options` entry |
 | `tamper_approach`, `tamper_activate` | tamp | always |
 | `coffee_approach`, `coffee_in`, `coffee_locked_final` | lock the portafilter | always |
 | `coffee_shake`, `coffee_shake_left` | dislodge a stuck puck while unlocking (the two lean opposite ways) | `portafilter_shake_sec > 0` |
@@ -976,7 +979,7 @@ After each order attempt completes (success, failure, or panic), the **next** `R
   "error_message": "",
   "failed_step": "",
   "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
-  "decaf": false,
+  "beans": "regular",
   "start_time": "2026-04-01T12:00:00.000000000Z",
   "end_time": "2026-04-01T12:02:05.000000000Z",
   "duration_ms": 125000
@@ -992,7 +995,7 @@ The remaining fields exist to support observability (per-step error rates and fa
 - **`failed_step`** — the step label the order errored at (e.g. `"Brewing"`, `"Grinding"`), matching the `setStep` labels surfaced through `get_queue`. Empty on success. Count readings by `failed_step` to see where orders die.
 - **`operator_cancelled`** — `true` when the failure was an operator `cancel` (a `context.Canceled` interruption), not a genuine fault. **Exclude these from step error-rate metrics** so intentional cancellations don't inflate failure counts. `failed_step` is still populated (it marks where the cancel interrupted).
 - **`trace_id`** — the OpenTelemetry trace ID for the order. Use it to jump from a failed reading to the order's full distributed trace (every motion plan and step span). Empty if no trace context was present.
-- **`decaf`** — whether the order took the decaf grinder branch, so you can tell why a given step ran (or didn't) without cross-referencing the coffee service config. Derived from the drink.
+- **`beans`** — the beans the drink was ground from (`regular` or a `bean_options` name), so you can tell which grinder ran without cross-referencing the coffee service config. Readings recorded before this field existed carry a `decaf` boolean instead, and decaf drinks among them have the drink `"decaf"` or `"decaf_lungo"`; the daily digest reads both forms.
 
 A per-step error rate is then `count(failed_step == X AND NOT operator_cancelled) / count(all orders)`.
 
@@ -1148,16 +1151,18 @@ Returns:
 **`record_order`** — Append a completed drink to a customer's order history (the data behind "the usual"). The coffee service calls this automatically after a successful brew when `customer_detector_name` is configured and the order carried a `customer_email`; you can also call it directly. An unknown email is a no-op (not an error), so it's safe to call for anonymous walk-ups.
 
 ```json
-{"record_order": {"email": "alice@example.com", "drink": "espresso"}}
+{"record_order": {"email": "alice@example.com", "drink": "espresso", "beans": "decaf"}}
 ```
+
+`beans` is optional and defaults to `"regular"`.
 
 Returns:
 
 ```json
-{"recorded": true, "email": "alice@example.com", "drink": "espresso"}
+{"recorded": true, "email": "alice@example.com", "drink": "espresso", "beans": "decaf"}
 ```
 
-**`get_usual`** — Return a customer's usual drink, derived from their recorded order history. Returns `{"has_usual": false}` when the customer is unknown or has no history. The kiosk calls it for the customer it recognises on the welcome screen and offers the drink as a "Your usual" button that skips the drink grid.
+**`get_usual`** — Return a customer's usual drink and beans, derived from their recorded order history: the most frequent drink-and-beans pair, so a decaf espresso and an espresso count separately. History recorded before beans were tracked is read with decaf as the beans (an old `"decaf"` counts as a decaf espresso) and anything else as regular. Returns `{"has_usual": false}` when the customer is unknown or has no history. The kiosk calls it for the customer it recognises on the welcome screen and offers the drink as a "Your usual" button that skips the drink grid.
 
 ```json
 {"get_usual": "alice@example.com"}
@@ -1166,7 +1171,7 @@ Returns:
 Returns:
 
 ```json
-{"has_usual": true, "drink": "espresso", "count": 7}
+{"has_usual": true, "drink": "espresso", "beans": "decaf", "count": 7}
 ```
 
 **`get_info`** — Return static service info. Currently `{"camera_name": <short name>}` for the camera the detector is wired to.
@@ -1188,6 +1193,7 @@ When a registered customer is recognized:
   "email": "alice@example.com",
   "confidence": 0.87,
   "usual_drink": "espresso",
+  "usual_beans": "decaf",
   "usual_count": 7
 }
 ```

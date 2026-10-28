@@ -159,7 +159,6 @@ func (s *beanjaminCoffee) safeExecuteOrder(cancelCtx context.Context, o order.Or
 			// meaningful alongside a failure, hence the execErr guard.
 			OperatorCancelled: execErr != nil && cancelCtx.Err() != nil,
 			TraceID:           traceIDFromContext(ctx),
-			Decaf:             order.IsDecaf(o.Drink),
 			StartedAt:         startedAt,
 			EndedAt:           time.Now(),
 		})
@@ -264,6 +263,7 @@ func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order order.Or
 		"record_order": map[string]any{
 			"email": order.CustomerEmail,
 			"drink": order.Drink,
+			"beans": order.Beans,
 		},
 	}); err != nil {
 		s.activeOrderLogger().Warnf("failed to record order history for %q: %v", order.CustomerEmail, err)

@@ -10,7 +10,8 @@ import (
 )
 
 // The usage sensor tracks physical consumables and service health by mirroring
-// several counters — one per key (regular_grinds, decaf_grinds, usage,
+// several counters — one per key (<beans>_grinds for each grinder, e.g.
+// regular_grinds and decaf_grinds; usage,
 // cleanings, ice_dispenses, ice_dispense_timeouts,
 // ice_shadow_disagreements, drip_tray_brews, espresso_cups_used,
 // latte_glasses_used, successful_consecutive_orders) — into a single external
@@ -113,8 +114,14 @@ func numericReading(v any) (float64, bool) {
 	}
 }
 
+// grindCounter is the usage-sensor key counting grinds from beans' grinder:
+// regular_grinds, decaf_grinds, light_roast_grinds, ...
+func grindCounter(beans string) string {
+	return beans + "_grinds"
+}
+
 // waterDelta returns the water-usage increment for a brew: 1.5 for lungo sizes
-// (lungo/decaf_lungo and the iced drinks), 1 otherwise (espresso/decaf).
+// (lungo and the iced drinks), 1 otherwise (espresso).
 func waterDelta(drink string) float64 {
 	if order.IsLungo(drink) {
 		return 1.5

@@ -19,6 +19,8 @@ import (
 	generic "go.viam.com/rdk/services/generic"
 	"go.viam.com/rdk/services/vision"
 	"go.viam.com/rdk/spatialmath"
+
+	"beanjamin/coffee/order"
 )
 
 // Config is the attribute set of the viam:beanjamin:coffee service. Field
@@ -83,7 +85,14 @@ type Config struct {
 
 	CamStorageMuxName string `json:"cam_storage_mux_name,omitempty"`
 	DataDir           string `json:"data_dir,omitempty"`
-	CanServeDecaf     bool   `json:"can_serve_decaf,omitempty"`
+	// BeanOptions lists the beans the machine grinds besides the regular ones,
+	// one per extra grinder (e.g. decaf, light_roast). An order picks one
+	// through prepare_order's "beans"; omitted, it gets the regular beans.
+	BeanOptions []BeanOption `json:"bean_options,omitempty"`
+	// CanServeDecaf is the retired decaf switch, kept only so Validate can
+	// point a stale config at bean_options rather than silently stop serving
+	// decaf.
+	CanServeDecaf bool `json:"can_serve_decaf,omitempty"`
 
 	CanServeIced         bool    `json:"can_serve_iced,omitempty"`
 	IceDispenseBoardName string  `json:"ice_board_name,omitempty"`
@@ -417,6 +426,44 @@ func validateMilkOptions(path string, milks []MilkOption) error {
 
 var milkIDPattern = regexp.MustCompile(`^[a-z0-9_]+$`)
 
+// BeanOption is one grinder's beans besides the regular ones (an entry in
+// bean_options).
+type BeanOption struct {
+	// Name identifies the beans, e.g. "decaf" or "light_roast". The grinder's
+	// poses on the filter switch are named after it — <name>_grinder_approach
+	// and <name>_grinder_activate — and so is its button shield frame, with
+	// hyphens for underscores: <name>-grinder-button-shield.
+	Name string `json:"name"`
+}
+
+// validateBeanOptions checks bean_options: every name a usable id, none twice,
+// and none the regular beans, which every machine grinds without being listed.
+func validateBeanOptions(path string, beans []BeanOption) error {
+	seen := make(map[string]bool, len(beans))
+	for _, b := range beans {
+		if !milkIDPattern.MatchString(b.Name) {
+			return fmt.Errorf("%s: bean_options name %q must be lowercase letters, digits and underscores", path, b.Name)
+		}
+		if b.Name == order.BeansRegular {
+			return fmt.Errorf("%s: bean_options must not list %q: the regular beans are always served", path, b.Name)
+		}
+		if seen[b.Name] {
+			return fmt.Errorf("%s: bean_options lists %q twice", path, b.Name)
+		}
+		seen[b.Name] = true
+	}
+	return nil
+}
+
+// beanNames returns the bean_options names, in config order.
+func (cfg *Config) beanNames() []string {
+	names := make([]string, len(cfg.BeanOptions))
+	for i, b := range cfg.BeanOptions {
+		names[i] = b.Name
+	}
+	return names
+}
+
 // validatePourPair checks a required staged-glass-relative pour pair
 // (<name>_approach_relative_pose / <name>_relative_pose): both must be present.
 // They may sit at different offsets — the tilt between them translates as it
@@ -592,6 +639,13 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 
 	if err := validateKeepAlive(cfg, path); err != nil {
+		return nil, nil, err
+	}
+
+	if cfg.CanServeDecaf {
+		return nil, nil, fmt.Errorf(`%s: can_serve_decaf was replaced by bean_options; use "bean_options": [{"name": "decaf"}]`, path)
+	}
+	if err := validateBeanOptions(path, cfg.BeanOptions); err != nil {
 		return nil, nil, err
 	}
 

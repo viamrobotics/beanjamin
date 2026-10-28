@@ -19,7 +19,6 @@ import (
 func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.Context) error {
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
 		"grind_coffee":         s.grindCoffee,
-		"grind_decaf":          s.grindDecaf,
 		"tamp_ground":          s.tampGround,
 		"lock_portafilter":     s.lockPortaFilter,
 		"unlock_portafilter":   s.unlockPortaFilter,
@@ -61,6 +60,13 @@ func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.C
 		},
 		"open_door":  s.openDoor,  // grip the fridge handle and swing it open
 		"close_door": s.closeDoor, // grip the open door's handle and swing it shut
+	}
+
+	// One grind action per extra grinder, named after its beans (grind_decaf).
+	for _, beans := range s.cfg.beanNames() {
+		actions[grindActionName(beans)] = func(ctx, cancelCtx context.Context) error {
+			return s.grindBeans(ctx, cancelCtx, beans)
+		}
 	}
 
 	// Measurement only — no arm motion, no pin. Reading the rim and surface rows

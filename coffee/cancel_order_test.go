@@ -10,7 +10,7 @@ import (
 )
 
 func TestCancelOrder_DropsQueuedOrderAndAnnounces(t *testing.T) {
-	c, speech := newTestCoffee(t, &Config{CanServeDecaf: true, Conversational: true})
+	c, speech := newTestCoffee(t, &Config{BeanOptions: []BeanOption{{Name: "decaf"}}, Conversational: true})
 	alice := order.NewOrder("espresso", "Alice", "", "")
 	bob := order.NewOrder("lungo", "Bob", "", "")
 	c.queue.Enqueue(alice)
@@ -45,7 +45,7 @@ func TestCancelOrder_DropsQueuedOrderAndAnnounces(t *testing.T) {
 // Spoken text uses the name the customer was shown, like every other line
 // the machine says about an order.
 func TestCancelOrder_SpeaksDisplayName(t *testing.T) {
-	c, speech := newTestCoffee(t, &Config{CanServeDecaf: true, Conversational: true})
+	c, speech := newTestCoffee(t, &Config{BeanOptions: []BeanOption{{Name: "decaf"}}, Conversational: true})
 	o := order.NewOrder("lungo", "Realname", "", "")
 	o.ModifiedCustomerName = "Shownname"
 	c.queue.Enqueue(o)

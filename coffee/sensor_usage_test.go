@@ -274,9 +274,7 @@ func TestWaterDelta(t *testing.T) {
 		want  float64
 	}{
 		{"espresso", 1},
-		{"decaf", 1},
 		{"lungo", 1.5},
-		{"decaf_lungo", 1.5},
 		{"iced_coffee", 1.5},
 		{"iced_latte", 1.5},
 		{"unknown", 1},

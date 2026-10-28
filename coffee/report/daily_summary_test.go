@@ -11,7 +11,7 @@ import (
 func TestSummarizeOrders(t *testing.T) {
 	rows := []OrderRow{
 		{Drink: "espresso", OrderOK: true, DurationMs: 120000},
-		{Drink: "espresso", OrderOK: true, Decaf: true, DurationMs: 140000},
+		{Drink: "espresso", OrderOK: true, Beans: "decaf", DurationMs: 140000},
 		{Drink: "iced_latte", OrderOK: true, DurationMs: 220000},
 		// A genuine fault, and an operator cancel that must not be counted as one.
 		{Drink: "espresso", FailedStep: "Locking portafilter", DurationMs: 30000},
@@ -28,7 +28,8 @@ func TestSummarizeOrders(t *testing.T) {
 		{"succeeded", sum.succeeded, 3},
 		{"faulted", sum.faulted, 1},
 		{"cancelled", sum.cancelled, 1},
-		{"decaf", sum.decaf, 1},
+		{"beans[decaf]", sum.beans["decaf"], 1},
+		{"len(beans)", len(sum.beans), 1},
 		// espresso was ordered 3 times but only 2 of them succeeded.
 		{"drinks[espresso].ordered", sum.drinks["espresso"].ordered, 3},
 		{"drinks[espresso].succeeded", sum.drinks["espresso"].succeeded, 2},
@@ -153,7 +154,7 @@ func TestDailySummaryStagesMatchOrderRow(t *testing.T) {
 	if !ok {
 		t.Fatalf("stage is not a $project: %#v", stages[0])
 	}
-	fields := []string{"drink", "customer_name", "order_ok", "operator_cancelled", "failed_step", "decaf", "duration_ms"}
+	fields := []string{"drink", "customer_name", "order_ok", "operator_cancelled", "failed_step", "beans", "decaf", "duration_ms"}
 	for _, field := range fields {
 		want := "$data.readings." + field
 		if got := project[field]; got != want {
@@ -196,7 +197,7 @@ func TestDailySummaryBlocks(t *testing.T) {
 	windowStart := now.Add(-DailySummaryWindow)
 
 	sum := SummarizeOrders([]OrderRow{
-		{Drink: "espresso", OrderOK: true, Decaf: true, DurationMs: 120000},
+		{Drink: "espresso", OrderOK: true, Beans: "decaf", DurationMs: 120000},
 		{Drink: "lungo", FailedStep: "Grinding"},
 	})
 	blocks := dailySummaryBlocks(sum, 12, true, windowStart, now)
@@ -242,7 +243,7 @@ func TestDailySummaryBlocks(t *testing.T) {
 func TestDigestRendering(t *testing.T) {
 	sum := SummarizeOrders([]OrderRow{
 		{Drink: "espresso", OrderOK: true, DurationMs: 120000},
-		{Drink: "espresso", OrderOK: true, Decaf: true, DurationMs: 140000},
+		{Drink: "espresso", OrderOK: true, Beans: "decaf", DurationMs: 140000},
 		{Drink: "iced_latte", OrderOK: true, DurationMs: 220000},
 		{Drink: "espresso", FailedStep: "Locking portafilter"},
 		{Drink: "lungo", OperatorCancelled: true},
@@ -266,6 +267,38 @@ func TestDigestRendering(t *testing.T) {
 	}
 
 	if got, want := asideStats(sum, 12, true), ":sleeping: 1 decaf  ·  :fire: 12 in a row"; got != want {
+		t.Errorf("asideStats() = %q, want %q", got, want)
+	}
+}
+
+// Readings from before beans were their own field carry decaf as a drink id
+// and a decaf flag. They must still count as decaf, under the drink they were.
+func TestSummarizeOrdersLegacyDecaf(t *testing.T) {
+	sum := SummarizeOrders([]OrderRow{
+		{Drink: "decaf", Decaf: true, OrderOK: true},
+		{Drink: "decaf_lungo", Decaf: true, OrderOK: true},
+		{Drink: "espresso", OrderOK: true},
+	})
+	if sum.beans["decaf"] != 2 {
+		t.Errorf("beans[decaf] = %d, want 2", sum.beans["decaf"])
+	}
+	if sum.drinks["espresso"].ordered != 2 || sum.drinks["lungo"].ordered != 1 {
+		t.Errorf("legacy decaf drinks should fold into espresso and lungo, got %v", sum.drinks)
+	}
+	if _, ok := sum.drinks["decaf"]; ok {
+		t.Error(`"decaf" should no longer appear as a drink`)
+	}
+}
+
+// Every non-regular bean gets its own count in the aside, busiest first.
+func TestAsideStatsBeans(t *testing.T) {
+	sum := SummarizeOrders([]OrderRow{
+		{Drink: "espresso", Beans: "decaf"},
+		{Drink: "lungo", Beans: "light_roast"},
+		{Drink: "iced_latte", Beans: "light_roast"},
+		{Drink: "espresso", Beans: "regular"},
+	})
+	if got, want := asideStats(sum, 0, false), ":beans: 2 light roast  ·  :sleeping: 1 decaf"; got != want {
 		t.Errorf("asideStats() = %q, want %q", got, want)
 	}
 }

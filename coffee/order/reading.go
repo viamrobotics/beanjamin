@@ -14,9 +14,6 @@ type Reading struct {
 	// Filter these out of step error-rate metrics.
 	OperatorCancelled bool
 	TraceID           string // OTel trace ID; links the reading to the order's full trace
-	// Decaf records whether the order took the decaf grinder branch, to explain
-	// why a given step ran (or didn't) without cross-referencing config.
-	Decaf     bool
-	StartedAt time.Time
-	EndedAt   time.Time
+	StartedAt         time.Time
+	EndedAt           time.Time
 }

@@ -25,6 +25,8 @@ import (
 	"go.viam.com/rdk/resource"
 	generic "go.viam.com/rdk/services/generic"
 	"go.viam.com/rdk/services/vision"
+
+	"beanjamin/coffee/order"
 )
 
 // Model is the full model triplet for this service.
@@ -80,7 +82,10 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 
 // orderHistoryEntry is one completed drink.
 type orderHistoryEntry struct {
-	Drink string    `json:"drink"`
+	Drink string `json:"drink"`
+	// Beans is absent on entries recorded before beans were their own field,
+	// when decaf was a drink id; order.LegacyDrink reads those.
+	Beans string    `json:"beans,omitempty"`
 	At    time.Time `json:"at"`
 }
 
@@ -224,7 +229,8 @@ func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]any) (
 	if rec, ok := cmd["record_order"].(map[string]any); ok {
 		email, _ := rec["email"].(string)
 		drink, _ := rec["drink"].(string)
-		return cd.recordOrder(email, drink)
+		beans, _ := rec["beans"].(string)
+		return cd.recordOrder(email, drink, beans)
 	}
 	if email, ok := cmd["get_usual"].(string); ok {
 		return cd.getUsual(email)
@@ -553,8 +559,9 @@ func (cd *customerDetector) removeCustomer(ctx context.Context, email string) (m
 	}, nil
 }
 
-// recordOrder appends a drink to a customer's history; unknown email is a no-op.
-func (cd *customerDetector) recordOrder(email, drink string) (map[string]any, error) {
+// recordOrder appends a drink and its beans to a customer's history; unknown
+// email is a no-op. Empty beans means the regular beans.
+func (cd *customerDetector) recordOrder(email, drink, beans string) (map[string]any, error) {
 	if email == "" || drink == "" {
 		return nil, fmt.Errorf("record_order requires both email and drink")
 	}
@@ -566,7 +573,10 @@ func (cd *customerDetector) recordOrder(email, drink string) (map[string]any, er
 		cd.logger.Debugf("record_order: no customer for %q — nothing to remember", email)
 		return map[string]any{"recorded": false, "reason": "unknown customer"}, nil
 	}
-	rec.Orders = append(rec.Orders, orderHistoryEntry{Drink: drink, At: time.Now()})
+	if beans == "" {
+		beans = order.BeansRegular
+	}
+	rec.Orders = append(rec.Orders, orderHistoryEntry{Drink: drink, Beans: beans, At: time.Now()})
 	if len(rec.Orders) > maxOrderHistory {
 		rec.Orders = append([]orderHistoryEntry(nil), rec.Orders[len(rec.Orders)-maxOrderHistory:]...)
 	}
@@ -576,8 +586,8 @@ func (cd *customerDetector) recordOrder(email, drink string) (map[string]any, er
 	if err := cd.saveCustomers(); err != nil {
 		return nil, fmt.Errorf("failed to persist order history: %w", err)
 	}
-	cd.logger.Infof("recorded %q for %q (%d in history)", drink, email, count)
-	return map[string]any{"recorded": true, "email": email, "drink": drink}, nil
+	cd.logger.Infof("recorded %q for %q (%d in history)", order.DrinkLabel(drink, beans), email, count)
+	return map[string]any{"recorded": true, "email": email, "drink": drink, "beans": beans}, nil
 }
 
 // getUsual returns the customer's usual drink, or {has_usual:false} if none.
@@ -593,34 +603,43 @@ func (cd *customerDetector) getUsual(email string) (map[string]any, error) {
 	if !exists || len(rec.Orders) == 0 {
 		return map[string]any{"has_usual": false}, nil
 	}
-	drink, count := usualDrink(rec.Orders)
-	if drink == "" {
+	usual, count := usualDrink(rec.Orders)
+	if usual.drink == "" {
 		return map[string]any{"has_usual": false}, nil
 	}
 	return map[string]any{
 		"has_usual": true,
-		"drink":     drink,
+		"drink":     usual.drink,
+		"beans":     usual.beans,
 		"count":     count,
 	}, nil
 }
 
-// usualDrink picks the most-frequent drink, breaking ties toward the most recent.
-func usualDrink(orders []orderHistoryEntry) (drink string, count int) {
-	// Tally each drink's count and its most-recent timestamp.
-	counts := make(map[string]int)
-	lastAt := make(map[string]time.Time)
+// drinkChoice is a drink together with the beans it was made from: the unit a
+// usual is counted in, so a decaf lungo and a lungo are different usuals.
+type drinkChoice struct{ drink, beans string }
+
+// usualDrink picks the most-frequent drink and beans, breaking ties toward the
+// most recent. Entries from before beans were recorded are read through
+// order.LegacyDrink, so an old "decaf" counts as a decaf espresso.
+func usualDrink(orders []orderHistoryEntry) (usual drinkChoice, count int) {
+	// Tally each choice's count and its most-recent timestamp.
+	counts := make(map[drinkChoice]int)
+	lastAt := make(map[drinkChoice]time.Time)
 	for _, o := range orders {
-		counts[o.Drink]++
-		if o.At.After(lastAt[o.Drink]) {
-			lastAt[o.Drink] = o.At
+		drink, beans := order.LegacyDrink(o.Drink, o.Beans, false)
+		c := drinkChoice{drink, beans}
+		counts[c]++
+		if o.At.After(lastAt[c]) {
+			lastAt[c] = o.At
 		}
 	}
-	for d, c := range counts {
-		if c > count || (c == count && lastAt[d].After(lastAt[drink])) {
-			drink, count = d, c
+	for c, n := range counts {
+		if n > count || (n == count && lastAt[c].After(lastAt[usual])) {
+			usual, count = c, n
 		}
 	}
-	return drink, count
+	return usual, count
 }
 
 // maxEmailLen is the RFC 5321 limit on a forward path.
@@ -730,6 +749,7 @@ func (cd *customerDetector) Status(ctx context.Context) (map[string]any, error) 
 		if usual, err := cd.getUsual(email); err == nil {
 			if has, _ := usual["has_usual"].(bool); has {
 				status["usual_drink"] = usual["drink"]
+				status["usual_beans"] = usual["beans"]
 				status["usual_count"] = usual["count"]
 			}
 		}

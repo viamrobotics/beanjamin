@@ -13,19 +13,25 @@ import (
 )
 
 func (s *beanjaminCoffee) grindCoffee(ctx, cancelCtx context.Context) error {
-	return s.grind(ctx, cancelCtx, filterPoseGrinderApproach, filterPoseGrinderActivate, grinderButtonCollisions, "grind_coffee")
+	return s.grindBeans(ctx, cancelCtx, order.BeansRegular)
 }
 
-func (s *beanjaminCoffee) grindDecaf(ctx, cancelCtx context.Context) error {
-	return s.grind(ctx, cancelCtx, filterPoseDecafGrinderApproach, filterPoseDecafGrinderActivate, decafGrinderButtonCollisions, "grind_decaf")
+// grindActionName is the execute_action that grinds beans on its own:
+// grind_coffee for the regular beans, grind_<beans> for the others.
+func grindActionName(beans string) string {
+	if beans == order.BeansRegular {
+		return "grind_coffee"
+	}
+	return "grind_" + beans
 }
 
-// grind approaches a grinder chute, circles under it to distribute grounds
-// evenly while the grinder dispenses, then returns to the approach pose. The
-// approach and activate poses select which grinder (regular vs decaf); label
-// identifies the phase in wrapped errors.
-func (s *beanjaminCoffee) grind(ctx, cancelCtx context.Context, approachPose, activatePose string, buttonCollisions []AllowedCollision, label string) error {
-	for _, step := range s.grindSteps(approachPose, activatePose, buttonCollisions) {
+// grindBeans approaches the grinder for beans (grinderPoses), circles under its
+// chute to distribute grounds evenly while it dispenses, then returns to the
+// approach pose.
+func (s *beanjaminCoffee) grindBeans(ctx, cancelCtx context.Context, beans string) error {
+	approachPose, activatePose := grinderPoses(beans)
+	label := grindActionName(beans)
+	for _, step := range s.grindSteps(approachPose, activatePose, grinderButtonCollisions(beans)) {
 		// Mark grounds only as we reach the activate pose: the approach move
 		// keeps the filter clean, and the grinder dispenses once it's under the
 		// chute. From here onward the filter needs cleaning before it goes home.

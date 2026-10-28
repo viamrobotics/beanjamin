@@ -15,6 +15,7 @@ import (
 // float64 because that is how structpb carries every number.
 type Request struct {
 	Drink                string   `json:"drink"`
+	Beans                string   `json:"beans"`
 	CustomerName         string   `json:"customer_name"`
 	ModifiedCustomerName string   `json:"modified_customer_name"`
 	CustomerEmail        string   `json:"customer_email"`

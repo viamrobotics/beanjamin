@@ -6,17 +6,18 @@ package coffee
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/golang/geo/r3"
 	toggleswitch "go.viam.com/rdk/components/switch"
+
+	"beanjamin/coffee/order"
 )
 
 const (
 	//filter pose switches
 	filterPoseGrinderApproach            = "grinder_approach"
 	filterPoseGrinderActivate            = "grinder_activate"
-	filterPoseDecafGrinderApproach       = "decaf_grinder_approach"
-	filterPoseDecafGrinderActivate       = "decaf_grinder_activate"
 	filterPoseTamperApproach             = "tamper_approach"
 	filterPoseTamperActivate             = "tamper_activate"
 	filterPoseCoffeeApproach             = "coffee_approach"
@@ -113,7 +114,7 @@ type requiredPose struct {
 // configuration can drive the arm to. The core brew cycle (grind → tamp →
 // lock → release → brew → grab → unlock → home) always runs, so its poses are
 // always required. Cleaning poses are likewise always included: every order
-// cleans the portafilter after brewing. Optional features (decaf, iced coffee) contribute their
+// cleans the portafilter after brewing. Optional features (extra grinders, iced coffee) contribute their
 // poses only when their config flag is set.
 func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 	poses := []requiredPose{
@@ -165,10 +166,12 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		)
 	}
 
-	if s.cfg.CanServeDecaf {
+	// Each extra grinder's poses, named after its beans.
+	for _, beans := range s.cfg.beanNames() {
+		approach, activate := grinderPoses(beans)
 		poses = append(poses,
-			requiredPose{s.filterSw, filterPoseDecafGrinderApproach},
-			requiredPose{s.filterSw, filterPoseDecafGrinderActivate},
+			requiredPose{s.filterSw, approach},
+			requiredPose{s.filterSw, activate},
 		)
 	}
 
@@ -249,4 +252,24 @@ func (s *beanjaminCoffee) validateConfiguredPoses(ctx context.Context) error {
 	}
 	s.logger.Infof("pose validation: %d configured pose(s) resolved and non-zero", len(poses))
 	return nil
+}
+
+// grinderPoses names the filter-switch poses at the grinder for beans: the
+// regular grinder's grinder_approach / grinder_activate, and for every other
+// beans <beans>_grinder_approach / <beans>_grinder_activate.
+func grinderPoses(beans string) (approach, activate string) {
+	if beans == "" || beans == order.BeansRegular {
+		return filterPoseGrinderApproach, filterPoseGrinderActivate
+	}
+	return beans + "_" + filterPoseGrinderApproach, beans + "_" + filterPoseGrinderActivate
+}
+
+// grinderShieldFrame names the obstacle guarding the button of beans'
+// grinder: grinder-button-shield for the regular grinder, else
+// <beans>-grinder-button-shield with the underscores in beans as hyphens.
+func grinderShieldFrame(beans string) string {
+	if beans == "" || beans == order.BeansRegular {
+		return "grinder-button-shield"
+	}
+	return strings.ReplaceAll(beans, "_", "-") + "-grinder-button-shield"
 }

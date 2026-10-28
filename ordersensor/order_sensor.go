@@ -115,7 +115,7 @@ func (s *orderSensor) PushOrderReading(r order.Reading) {
 		"error_message":          errMsg,
 		"failed_step":            failedStep,
 		"trace_id":               r.TraceID,
-		"decaf":                  r.Decaf,
+		"beans":                  r.Order.Beans,
 		"start_time":             r.StartedAt.UTC().Format(time.RFC3339Nano),
 		"end_time":               r.EndedAt.UTC().Format(time.RFC3339Nano),
 		"duration_ms":            float64(r.EndedAt.Sub(r.StartedAt).Milliseconds()),

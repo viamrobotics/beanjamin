@@ -11,9 +11,7 @@ func TestDrinkBrewTime(t *testing.T) {
 	def := &beanjaminCoffee{cfg: &Config{}}
 	defaults := map[string]time.Duration{
 		"espresso":    defaultEspressoBrewTime,
-		"decaf":       defaultEspressoBrewTime,
 		"lungo":       defaultLungoBrewTime,
-		"decaf_lungo": defaultLungoBrewTime,
 		"iced_coffee": defaultLungoBrewTime,
 		"iced_latte":  defaultLungoBrewTime,
 	}
@@ -27,8 +25,8 @@ func TestDrinkBrewTime(t *testing.T) {
 	if got := set.drinkBrewTime("espresso"); got != 10*time.Second {
 		t.Errorf("configured espresso brew = %v, want 10s", got)
 	}
-	if got := set.drinkBrewTime("decaf_lungo"); got != 20*time.Second {
-		t.Errorf("configured decaf_lungo brew = %v, want 20s", got)
+	if got := set.drinkBrewTime("lungo"); got != 20*time.Second {
+		t.Errorf("configured lungo brew = %v, want 20s", got)
 	}
 }
 

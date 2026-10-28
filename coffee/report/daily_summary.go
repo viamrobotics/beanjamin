@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"go.viam.com/rdk/logging"
+
+	"beanjamin/coffee/order"
 )
 
 // DailySummaryWindow is how far back each digest reaches. A rolling window
@@ -28,13 +30,16 @@ const DailySummaryWindow = 24 * time.Hour
 // field can't leave the query and the decode disagreeing — which would show up
 // as a day of zeroed-out counters rather than as an error.
 type OrderRow struct {
-	Drink             string  `json:"drink"`
-	CustomerName      string  `json:"customer_name"`
-	OrderOK           bool    `json:"order_ok"`
-	OperatorCancelled bool    `json:"operator_cancelled"`
-	FailedStep        string  `json:"failed_step"`
-	Decaf             bool    `json:"decaf"`
-	DurationMs        float64 `json:"duration_ms"`
+	Drink             string `json:"drink"`
+	CustomerName      string `json:"customer_name"`
+	OrderOK           bool   `json:"order_ok"`
+	OperatorCancelled bool   `json:"operator_cancelled"`
+	FailedStep        string `json:"failed_step"`
+	Beans             string `json:"beans"`
+	// Decaf is the flag readings carried before beans were their own field;
+	// read only to place those older readings (order.LegacyDrink).
+	Decaf      bool    `json:"decaf"`
+	DurationMs float64 `json:"duration_ms"`
 }
 
 // DailySummaryStages projects the OrderRow fields flat, one $project entry per
@@ -94,11 +99,12 @@ func (d drinkStats) avgBrew() (time.Duration, bool) {
 
 // DaySummary is one window's orders reduced to what the digest prints.
 type DaySummary struct {
-	attempted   int
-	succeeded   int
-	faulted     int
-	cancelled   int
-	decaf       int
+	attempted int
+	succeeded int
+	faulted   int
+	cancelled int
+	// beans counts orders per non-regular beans ("decaf", "light_roast").
+	beans       map[string]int
 	drinks      map[string]drinkStats
 	failedSteps map[string]int
 	// customers counts orders per named customer. Walk-ups who skip the name
@@ -128,20 +134,21 @@ func (d DaySummary) successRate() float64 {
 // rows so the whole aggregation is testable without a cloud connection.
 func SummarizeOrders(rows []OrderRow) DaySummary {
 	sum := DaySummary{
+		beans:       map[string]int{},
 		drinks:      map[string]drinkStats{},
 		failedSteps: map[string]int{},
 		customers:   map[string]int{},
 	}
 	for _, row := range rows {
 		sum.attempted++
-		drink := row.Drink
+		drink, beans := order.LegacyDrink(row.Drink, row.Beans, row.Decaf)
 		if drink == "" {
 			drink = "unknown"
 		}
 		stats := sum.drinks[drink]
 		stats.ordered++
-		if row.Decaf {
-			sum.decaf++
+		if beans != order.BeansRegular {
+			sum.beans[beans]++
 		}
 		// Every attempt counts toward a customer's tally, succeeded or not: they
 		// asked for a drink, and whether the machine managed it is the machine's
@@ -260,16 +267,21 @@ func headlineStats(sum DaySummary) string {
 		sum.brewTotal.Round(time.Second), sum.succeeded, sum.attempted, sum.attempted, orders)
 }
 
-// asideStats is the decaf count and the current streak, on one line when either
-// applies. Both are omitted rather than zeroed — a "0 in a row" reads as a
-// streak that just broke, and "0 decaf" is noise on a day nobody ordered one.
+// asideStats is the top customers, the count of each non-regular beans and the
+// current streak, on one line when any applies. Each is omitted rather than
+// zeroed — a "0 in a row" reads as a streak that just broke, and "0 decaf" is
+// noise on a day nobody ordered one.
 func asideStats(sum DaySummary, streak int, hasStreak bool) string {
 	var parts []string
 	if regulars := topCustomers(sum.customers); regulars != "" {
 		parts = append(parts, ":trophy: "+regulars)
 	}
-	if sum.decaf > 0 {
-		parts = append(parts, fmt.Sprintf(":sleeping: %d decaf", sum.decaf))
+	for _, beans := range rankedKeys(sum.beans, func(n int) int { return n }) {
+		emoji := ":beans:"
+		if beans == "decaf" {
+			emoji = ":sleeping:"
+		}
+		parts = append(parts, fmt.Sprintf("%s %d %s", emoji, sum.beans[beans], strings.ReplaceAll(beans, "_", " ")))
 	}
 	if hasStreak {
 		parts = append(parts, fmt.Sprintf(":fire: %d in a row", streak))

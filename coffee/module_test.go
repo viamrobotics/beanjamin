@@ -75,6 +75,41 @@ func TestValidate_BaseConfig_Valid(t *testing.T) {
 	}
 }
 
+func TestValidate_BeanOptions(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.BeanOptions = []BeanOption{{Name: "decaf"}, {Name: "light_roast"}}
+	if _, _, err := cfg.Validate(""); err != nil {
+		t.Fatalf("decaf + light_roast should be valid, got %v", err)
+	}
+	for name, tc := range map[string]struct {
+		beans   []BeanOption
+		wantErr string
+	}{
+		"bad name":   {[]BeanOption{{Name: "Light Roast"}}, "lowercase"},
+		"empty name": {[]BeanOption{{Name: ""}}, "lowercase"},
+		"duplicate":  {[]BeanOption{{Name: "decaf"}, {Name: "decaf"}}, "twice"},
+		"regular":    {[]BeanOption{{Name: "regular"}}, "always served"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := validBaseConfig()
+			cfg.BeanOptions = tc.beans
+			if _, _, err := cfg.Validate(""); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// A config still carrying the retired can_serve_decaf is pointed at its
+// replacement instead of silently losing decaf.
+func TestValidate_RejectsCanServeDecaf(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.CanServeDecaf = true
+	if _, _, err := cfg.Validate(""); err == nil || !strings.Contains(err.Error(), "bean_options") {
+		t.Fatalf("want an error pointing at bean_options, got %v", err)
+	}
+}
+
 func TestValidate_RequiresCupVisionServiceName(t *testing.T) {
 	cfg := validBaseConfig()
 	cfg.CupVisionServiceName = ""

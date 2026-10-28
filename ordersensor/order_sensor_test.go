@@ -77,13 +77,12 @@ func TestOrderSensor_Readings_Failure(t *testing.T) {
 	s := newTestOrderSensor(t)
 	start := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
 	end := start.Add(time.Millisecond)
-	o := order.Order{ID: "o2", Drink: "decaf", CustomerName: "Bob"}
+	o := order.Order{ID: "o2", Drink: "lungo", Beans: "decaf", CustomerName: "Bob"}
 	s.PushOrderReading(order.Reading{
 		Order:      o,
 		ExecErr:    errors.New("grinder jam"),
 		FailedStep: "Grinding",
 		TraceID:    "abc123",
-		Decaf:      true,
 		StartedAt:  start,
 		EndedAt:    end,
 	})
@@ -104,8 +103,11 @@ func TestOrderSensor_Readings_Failure(t *testing.T) {
 	if r["trace_id"] != "abc123" {
 		t.Fatalf("trace_id: want %q got %q", "abc123", r["trace_id"])
 	}
-	if d, _ := r["decaf"].(bool); !d {
-		t.Fatalf("decaf: want true got %#v", r["decaf"])
+	if r["beans"] != "decaf" {
+		t.Fatalf("beans: want %q got %#v", "decaf", r["beans"])
+	}
+	if _, ok := r["decaf"]; ok {
+		t.Fatal("readings should no longer carry the decaf flag")
 	}
 	if r["failed_step"] != "Grinding" {
 		t.Fatalf("failed_step: want %q got %q", "Grinding", r["failed_step"])

@@ -39,7 +39,7 @@ func TestSetStepReflectedInStatus(t *testing.T) {
 }
 
 func TestStatusReportsQueueAndFlags(t *testing.T) {
-	s := newStatusService(t, &Config{CanServeDecaf: true})
+	s := newStatusService(t, &Config{BeanOptions: []BeanOption{{Name: "decaf"}}})
 	s.queue.Enqueue(order.Order{ID: "o1", Drink: "espresso", CustomerName: "Ada", RawStep: "Grinding"})
 	s.queue.Enqueue(order.Order{ID: "o2", Drink: "lungo", CustomerName: "Grace"})
 
@@ -52,8 +52,8 @@ func TestStatusReportsQueueAndFlags(t *testing.T) {
 	if got, ok := st["count"].(float64); !ok || got != 2 {
 		t.Errorf("count = %v (%T), want float64(2)", st["count"], st["count"])
 	}
-	if st["can_serve_decaf"] != true {
-		t.Errorf("can_serve_decaf = %v, want true", st["can_serve_decaf"])
+	if got, ok := st["bean_options"].([]any); !ok || len(got) != 2 || got[0] != "regular" || got[1] != "decaf" {
+		t.Errorf("bean_options = %#v, want [regular decaf]", st["bean_options"])
 	}
 	if st["is_paused"] != false || st["is_busy"] != false {
 		t.Errorf("is_paused/is_busy = %v/%v, want false/false", st["is_paused"], st["is_busy"])

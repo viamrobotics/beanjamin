@@ -13,7 +13,7 @@ import (
 // distinct wording so readers can tell a deliberate stop from a real fault at a
 // glance.
 func FailureText(r order.Reading) string {
-	drink := escapeSlackMrkdwn(r.Order.Drink)
+	drink := escapeSlackMrkdwn(r.Order.Label())
 	customer := slackCustomer(r)
 	step := slackStep(r)
 	if r.OperatorCancelled {
@@ -26,7 +26,7 @@ func FailureText(r order.Reading) string {
 
 // FailureBlocks builds a Slack Block Kit layout for a failed or cancelled
 // order. It mirrors the per-attempt fields the order sensor records (drink,
-// customer, failed step, decaf,
+// customer, beans, failed step,
 // duration, start time, and trace ID) so the message is a self-contained
 // record without a round-trip to the order-events sensor: a header that
 // distinguishes a fault from an operator cancel, a fields section with the
@@ -56,10 +56,10 @@ func FailureBlocks(r order.Reading, machineLogsURL, clipDataURL, planRequestURL 
 			"type": "section",
 			"fields": []any{
 				slackField("*Drink:*", escapeSlackMrkdwn(r.Order.Drink)),
+				slackField("*Beans:*", escapeSlackMrkdwn(r.Order.Beans)),
 				slackField("*Customer:*", slackCustomer(r)),
 				slackField(stepLabel, slackStep(r)),
 				slackField("*Duration:*", duration.String()),
-				slackField("*Decaf:*", slackBool(r.Decaf)),
 			},
 		},
 	}
@@ -120,13 +120,6 @@ var slackMrkdwnEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&g
 // package builds itself (links, dates) must stay raw.
 func escapeSlackMrkdwn(s string) string {
 	return slackMrkdwnEscaper.Replace(s)
-}
-
-func slackBool(b bool) string {
-	if b {
-		return "yes"
-	}
-	return "no"
 }
 
 // slackCustomer is the name typed at the kiosk, escaped for mrkdwn.

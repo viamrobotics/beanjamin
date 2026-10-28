@@ -397,6 +397,7 @@ func (rec *deliveryOrder) snapshot() map[string]any {
 		"order_id":        rec.order.ID,
 		"status":          rec.status,
 		"drink":           rec.order.Drink,
+		"beans":           rec.order.Beans,
 		"customer_name":   rec.order.CustomerName,
 		"customer_email":  rec.order.CustomerEmail,
 		"cup_type":        deliveryCupType(rec.order.Drink),

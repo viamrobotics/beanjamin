@@ -12,14 +12,10 @@ var coffeeBrewingCollisions = []AllowedCollision{
 }
 
 // Each grinder's button sits behind a shield that keeps unrelated moves from
-// pressing it. Grinding is the one phase that has to reach through, and only
-// the filter touches the button.
-var grinderButtonCollisions = []AllowedCollision{
-	{Frame1: componentFilter, Frame2: "grinder-button-shield"},
-}
-
-var decafGrinderButtonCollisions = []AllowedCollision{
-	{Frame1: componentFilter, Frame2: "decaf-grinder-button-shield"},
+// pressing it (grinderShieldFrame). Grinding is the one phase that has to
+// reach through, and only the filter touches the button.
+func grinderButtonCollisions(beans string) []AllowedCollision {
+	return []AllowedCollision{{Frame1: componentFilter, Frame2: grinderShieldFrame(beans)}}
 }
 
 var filterGrabCollisions = []AllowedCollision{

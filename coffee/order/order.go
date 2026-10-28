@@ -32,6 +32,10 @@ type StepEntry struct {
 type Order struct {
 	ID    string `json:"id"`
 	Drink string `json:"drink"`
+	// Beans names the beans, and with them the grinder, the drink is made
+	// from: BeansRegular or one of the machine's bean_options. Set at enqueue
+	// time; immutable afterward.
+	Beans string `json:"beans"`
 	// CustomerName is the name the customer gave; per-customer aggregation
 	// groups on it.
 	CustomerName string `json:"customer_name"`
@@ -77,12 +81,19 @@ func (o Order) DisplayName() string {
 	return o.CustomerName
 }
 
+// Label names the order's drink and beans for speech and Slack (DrinkLabel).
+func (o Order) Label() string {
+	return DrinkLabel(o.Drink, o.Beans)
+}
+
 // NewOrder creates an Order with a generated UUID and current timestamp.
-// Fulfillment defaults to pickup; callers override it before enqueueing.
+// Beans default to BeansRegular and fulfillment to pickup; callers override
+// them before enqueueing.
 func NewOrder(drink, customerName, greeting, completion string) Order {
 	return Order{
 		ID:           uuid.New().String(),
 		Drink:        drink,
+		Beans:        BeansRegular,
 		CustomerName: customerName,
 		Greeting:     greeting,
 		Completion:   completion,

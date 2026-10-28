@@ -74,17 +74,19 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 		return fn(phaseCtx, cancelCtx)
 	}
 
-	if order.IsDecaf(drink) {
-		if err := runPhase(stepGrinding, "grinding_decaf", "step 1/9: grinding decaf coffee", s.grindDecaf); err != nil {
-			return err
-		}
-		s.incrementSensorReading(ctx, s.usageSensor, "decaf grinder", "decaf_grinds", 1)
-	} else {
-		if err := runPhase(stepGrinding, "grinding", "step 1/9: grinding coffee", s.grindCoffee); err != nil {
-			return err
-		}
-		s.incrementSensorReading(ctx, s.usageSensor, "grinder", "regular_grinds", 1)
+	beans := o.Beans
+	if beans == "" {
+		beans = order.BeansRegular
 	}
+	grind := func(ctx, cancelCtx context.Context) error { return s.grindBeans(ctx, cancelCtx, beans) }
+	grindSpan := "grinding"
+	if beans != order.BeansRegular {
+		grindSpan += "_" + beans
+	}
+	if err := runPhase(stepGrinding, grindSpan, "step 1/9: grinding "+order.DrinkLabel("coffee", beans), grind); err != nil {
+		return err
+	}
+	s.incrementSensorReading(ctx, s.usageSensor, order.DrinkLabel("grinder", beans), grindCounter(beans), 1)
 
 	if err := runPhase(stepTamping, "tamping", "step 2/9: tamping ground", s.tampGround); err != nil {
 		return err
@@ -205,7 +207,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 		if err := s.readyForDelivery(ctx, o); err != nil {
 			logger.Warnf("failed to announce ready-for-delivery: %v", err)
 		}
-	} else if err := s.speaker.SayAlways(ctx, speech.DrinkReady(drink, customerName, batchIndex, batchSize)); err != nil {
+	} else if err := s.speaker.SayAlways(ctx, speech.DrinkReady(o.Label(), customerName, batchIndex, batchSize)); err != nil {
 		logger.Warnf("failed to say drink-ready: %v", err)
 	}
 

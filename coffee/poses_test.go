@@ -12,7 +12,7 @@ func hasPose(poses []requiredPose, name string) bool {
 }
 
 // TestRequiredPosesConditional characterizes the config-driven pose contract:
-// the base brew poses are always required, while the decaf-grinder and
+// the base brew poses are always required, while the extra-grinder and
 // iced/glass poses appear only when their feature flag is enabled.
 func TestRequiredPosesConditional(t *testing.T) {
 	base := (&beanjaminCoffee{cfg: &Config{}}).requiredPoses()
@@ -30,16 +30,21 @@ func TestRequiredPosesConditional(t *testing.T) {
 	if hasPose(base, clawPoseEspressoButtonPress) {
 		t.Error("base config should not require the separate-button poses")
 	}
-	if hasPose(base, filterPoseDecafGrinderApproach) {
+	if hasPose(base, "decaf_grinder_approach") {
 		t.Error("base config should not require decaf grinder poses")
 	}
 	if hasPose(base, glassPoseObserve) {
 		t.Error("base config should not require iced/glass poses")
 	}
 
-	decaf := (&beanjaminCoffee{cfg: &Config{CanServeDecaf: true}}).requiredPoses()
-	if !hasPose(decaf, filterPoseDecafGrinderApproach) || !hasPose(decaf, filterPoseDecafGrinderActivate) {
-		t.Error("can_serve_decaf should require the decaf grinder poses")
+	beans := (&beanjaminCoffee{cfg: &Config{BeanOptions: []BeanOption{{Name: "decaf"}, {Name: "light_roast"}}}}).requiredPoses()
+	for _, name := range []string{
+		"decaf_grinder_approach", "decaf_grinder_activate",
+		"light_roast_grinder_approach", "light_roast_grinder_activate",
+	} {
+		if !hasPose(beans, name) {
+			t.Errorf("bean_options should require %q", name)
+		}
 	}
 
 	// The two machine styles are mutually exclusive: enabling the separate

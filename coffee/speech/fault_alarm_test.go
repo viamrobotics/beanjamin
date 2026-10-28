@@ -87,8 +87,8 @@ func TestReactToOrderFailure_SpeaksSnarkOnGenuineFault(t *testing.T) {
 }
 
 func TestOrderFailed(t *testing.T) {
-	named := OrderFailed("decaf_lungo", "Sam")
-	if !strings.Contains(named, "decaf lungo") {
+	named := OrderFailed("iced_latte", "Sam")
+	if !strings.Contains(named, "iced latte") {
 		t.Errorf("named line %q does not mention the speakable drink", named)
 	}
 	if !strings.Contains(named, "Sam") {

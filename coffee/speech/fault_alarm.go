@@ -55,7 +55,7 @@ func (a *FaultAlarm) ReactToOrderFailure(r order.Reading) {
 	if !a.speaker.Configured() {
 		return
 	}
-	line := OrderFailed(r.Order.Drink, r.Order.DisplayName())
+	line := OrderFailed(r.Order.Label(), r.Order.DisplayName())
 	logger := a.logger.WithFields("order_id", r.Order.ID)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

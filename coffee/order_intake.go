@@ -12,7 +12,7 @@ import (
 // menu is the set of optional drinks this machine's config lets it serve.
 func (s *beanjaminCoffee) menu() order.Menu {
 	return order.Menu{
-		Decaf:     s.cfg.CanServeDecaf,
+		Beans:     s.cfg.beanNames(),
 		Iced:      s.cfg.CanServeIced,
 		IcedLatte: s.cfg.CanServeIcedLatte,
 	}
@@ -33,7 +33,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 	}
 	drink := req.Drink
 	customerName := strings.TrimSpace(req.CustomerName)
-	s.logger.Infof("order request: drink=%q customer=%q", drink, customerName)
+	s.logger.Infof("order request: drink=%q beans=%q customer=%q", drink, req.Beans, customerName)
 
 	if ok, reason := s.menu().Supports(drink); !ok {
 		s.logger.Infof("rejected order for drink %q from %s (%s)", drink, customerName, reason)
@@ -43,6 +43,16 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		}
 		return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
 	}
+
+	beans, err := s.menu().ResolveBeans(req.Beans)
+	if err != nil {
+		s.logger.Infof("rejected order for %q beans from %s", req.Beans, customerName)
+		if sayErr := s.speaker.Say(ctx, speech.UnsupportedBeans(req.Beans)); sayErr != nil {
+			s.logger.Warnf("failed to say rejection: %v", sayErr)
+		}
+		return nil, err
+	}
+	label := order.DrinkLabel(drink, beans)
 
 	fulfillment, err := order.ParseFulfillment(req.Fulfillment)
 	if err != nil {
@@ -87,9 +97,10 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		// noise. (executeQueuedOrder skips the speech when Greeting is "".)
 		greeting := req.InitialGreeting
 		if greeting == "" && count == 1 {
-			greeting = speech.Greeting(drink, displayName)
+			greeting = speech.Greeting(label, displayName)
 		}
 		o := order.NewOrder(drink, customerName, greeting, req.CompletionStatement)
+		o.Beans = beans
 		o.ModifiedCustomerName = req.ModifiedCustomerName
 		o.CustomerEmail = req.CustomerEmail
 		o.Fulfillment = fulfillment
@@ -113,11 +124,11 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 	// and covers it.
 	switch {
 	case count == 1 && firstPos > 1:
-		if err := s.speaker.Say(ctx, speech.OrderReceived(drink, displayName)); err != nil {
+		if err := s.speaker.Say(ctx, speech.OrderReceived(label, displayName)); err != nil {
 			s.logger.Warnf("failed to announce order %s: %v", ids[0], err)
 		}
 	case count > 1:
-		if err := s.speaker.Say(ctx, speech.OrderReceivedBatch(drink, displayName, count)); err != nil {
+		if err := s.speaker.Say(ctx, speech.OrderReceivedBatch(label, displayName, count)); err != nil {
 			s.logger.Warnf("failed to announce batch: %v", err)
 		}
 	}
