@@ -178,6 +178,9 @@ func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf
 	if err != nil {
 		return nil, err
 	}
+	if conf.CanServeDecaf {
+		logger.Warnf(`can_serve_decaf is deprecated and is read as "bean_options": [{"name": "decaf"}]; move it to bean_options`)
+	}
 	return NewCoffee(ctx, deps, rawConf.ResourceName(), conf, logger)
 }
 

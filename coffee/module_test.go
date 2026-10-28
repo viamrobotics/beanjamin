@@ -1,6 +1,7 @@
 package coffee
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -100,13 +101,33 @@ func TestValidate_BeanOptions(t *testing.T) {
 	}
 }
 
-// A config still carrying the retired can_serve_decaf is pointed at its
-// replacement instead of silently losing decaf.
-func TestValidate_RejectsCanServeDecaf(t *testing.T) {
+// The deprecated can_serve_decaf still validates and stands for a decaf entry
+// in bean_options, so the fleet fragment can move over after the module ships.
+func TestCanServeDecafReadsAsDecafBeans(t *testing.T) {
 	cfg := validBaseConfig()
 	cfg.CanServeDecaf = true
-	if _, _, err := cfg.Validate(""); err == nil || !strings.Contains(err.Error(), "bean_options") {
-		t.Fatalf("want an error pointing at bean_options, got %v", err)
+	if _, _, err := cfg.Validate(""); err != nil {
+		t.Fatalf("can_serve_decaf should still validate, got %v", err)
+	}
+	if got := cfg.beanNames(); !slices.Equal(got, []string{"decaf"}) {
+		t.Errorf("beanNames = %v, want [decaf]", got)
+	}
+	// Alongside bean_options it adds decaf once, after the listed beans.
+	cfg.BeanOptions = []BeanOption{{Name: "light_roast"}}
+	if got := cfg.beanNames(); !slices.Equal(got, []string{"light_roast", "decaf"}) {
+		t.Errorf("beanNames = %v, want [light_roast decaf]", got)
+	}
+	cfg.BeanOptions = []BeanOption{{Name: "decaf"}}
+	if got := cfg.beanNames(); !slices.Equal(got, []string{"decaf"}) {
+		t.Errorf("beanNames = %v, want decaf once", got)
+	}
+	// And the machine serves decaf orders and requires the decaf grinder poses.
+	s := &beanjaminCoffee{cfg: &Config{CanServeDecaf: true}}
+	if _, err := s.menu().ResolveBeans("decaf"); err != nil {
+		t.Errorf("decaf should be orderable under can_serve_decaf: %v", err)
+	}
+	if !hasPose(s.requiredPoses(), "decaf_grinder_approach") {
+		t.Error("can_serve_decaf should still require the decaf grinder poses")
 	}
 }
 

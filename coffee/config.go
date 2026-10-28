@@ -7,6 +7,7 @@ package coffee
 import (
 	"fmt"
 	"regexp"
+	"slices"
 
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/components/arm"
@@ -89,9 +90,9 @@ type Config struct {
 	// one per extra grinder (e.g. decaf, light_roast). An order picks one
 	// through prepare_order's "beans"; omitted, it gets the regular beans.
 	BeanOptions []BeanOption `json:"bean_options,omitempty"`
-	// CanServeDecaf is the retired decaf switch, kept only so Validate can
-	// point a stale config at bean_options rather than silently stop serving
-	// decaf.
+	// CanServeDecaf is the deprecated decaf switch, honored while the fleet
+	// fragment moves to bean_options: true means the same as listing decaf
+	// there (beanNames). Remove once no config sets it.
 	CanServeDecaf bool `json:"can_serve_decaf,omitempty"`
 
 	CanServeIced         bool    `json:"can_serve_iced,omitempty"`
@@ -455,14 +456,21 @@ func validateBeanOptions(path string, beans []BeanOption) error {
 	return nil
 }
 
-// beanNames returns the bean_options names, in config order.
+// beanNames returns the bean_options names, in config order, plus decaf when
+// only the deprecated can_serve_decaf asks for it.
 func (cfg *Config) beanNames() []string {
-	names := make([]string, len(cfg.BeanOptions))
-	for i, b := range cfg.BeanOptions {
-		names[i] = b.Name
+	names := make([]string, 0, len(cfg.BeanOptions)+1)
+	for _, b := range cfg.BeanOptions {
+		names = append(names, b.Name)
+	}
+	if cfg.CanServeDecaf && !slices.Contains(names, beansDecaf) {
+		names = append(names, beansDecaf)
 	}
 	return names
 }
+
+// beansDecaf is the bean_options name the deprecated can_serve_decaf stands for.
+const beansDecaf = "decaf"
 
 // validatePourPair checks a required staged-glass-relative pour pair
 // (<name>_approach_relative_pose / <name>_relative_pose): both must be present.
@@ -642,9 +650,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		return nil, nil, err
 	}
 
-	if cfg.CanServeDecaf {
-		return nil, nil, fmt.Errorf(`%s: can_serve_decaf was replaced by bean_options; use "bean_options": [{"name": "decaf"}]`, path)
-	}
 	if err := validateBeanOptions(path, cfg.BeanOptions); err != nil {
 		return nil, nil, err
 	}
