@@ -14,7 +14,7 @@ Customer-facing kiosk UI for the Beanjamin espresso robot. Built with Next.js an
 
 - `partId` — the robot part to connect to (required for real connections).
 - `kiosk=1` — kiosk mode: hides the "← Back to Fleet Dashboard" link on the welcome and order-confirmation screens. Use when the page is the only thing on screen and you don't want customers navigating away.
-- `name` / `email` — prefill the kiosk's name and email fields, e.g. `&name=Ada&email=ada@example.com`. The fields stay editable, and are reset to these values after each order. A face-recognized returning customer still takes precedence.
+- `name` / `email` — prefill the kiosk's name and email fields, e.g. `&name=Ada&email=ada@example.com`. The fields stay editable, and are reset to these values after each order. With an `email`, the welcome screen offers that customer's usuals straight away and does not use faces at all: no camera recognition, no "Edit my profile" button, and no "remember your face?" prompt when ordering, so the link's customer is never replaced by whoever stands in front of it (a link with no `name` sends a tapped usual to the name screen to enter one).
 - `clearAfterSec` — how long, in seconds, nobody may be recognised on the welcome screen before the "Welcome back" greeting and the prefilled name and email clear. Defaults to 2. It is counted in camera checks (see `identifyIntervalMs`), so it is rounded up to a whole number of them.
 - `identifyIntervalMs` — how often, in milliseconds, the welcome screen asks the machine who is at the camera. Defaults to 1000, minimum 250. Each check captures a frame and runs the face model, so a smaller value means more load on the machine.
 - `mock=1` / `mock=0` — see dev-mode rules below.

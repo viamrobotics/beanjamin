@@ -620,7 +620,15 @@ export async function getUsualOrders(
   conn: ViamConnection,
   email: string,
 ): Promise<UsualOrder[]> {
-  if (isDevMode() || !email) return [];
+  if (!email) return [];
+  // Dev mode has no detector; give a link's email two sample usuals so the
+  // welcome screen can be tried without a machine.
+  if (isDevMode()) {
+    return [
+      { drink: "espresso", beans: "regular", fulfillment: "pickup" },
+      { drink: "lungo", beans: "regular", fulfillment: "delivery" },
+    ];
+  }
   type Wire = { drink?: string; beans?: string; fulfillment?: string };
   const res = await doCommand<
     Wire & { has_usual?: boolean; usuals?: Wire[] }

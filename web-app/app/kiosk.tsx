@@ -30,6 +30,7 @@ import {
   getMachineName,
   prepareOrder,
   getUsualOrders,
+  type UsualOrder,
   identifyCustomer,
   getQueue,
   type Fulfillment,
@@ -40,6 +41,13 @@ import { misspellName } from "./lib/misspell";
 // A usual as the kiosk holds it: the drink and beans split apart (see
 // splitDrink), with the fulfillment it is usually ordered for.
 type Usual = DrinkChoice & { fulfillment: Fulfillment };
+
+function toUsuals(found: UsualOrder[]): Usual[] {
+  return found.map((u) => ({
+    ...splitDrink(u.drink, u.beans),
+    fulfillment: u.fulfillment,
+  }));
+}
 
 type Step =
   | "welcome"
@@ -224,6 +232,9 @@ export function Kiosk() {
   // name and email, so the next person isn't greeted as, or ordering as, them.
   useEffect(() => {
     if (step !== "welcome" || !connected || !viamConn) return;
+    // A personal link (`?email=`) already says who this is; don't second-guess
+    // it with the camera.
+    if (prefillEmail.trim()) return;
     let cancelled = false;
     let greeted: string | null = null;
     let misses = 0;
@@ -246,12 +257,7 @@ export function Kiosk() {
                 .then((found) => {
                   // Drop the answer if they've left or someone else has stepped up.
                   if (!cancelled && greeted === who)
-                    setUsuals(
-                      found.map((u) => ({
-                        ...splitDrink(u.drink, u.beans),
-                        fulfillment: u.fulfillment,
-                      })),
-                    );
+                    setUsuals(toUsuals(found));
                 })
                 .catch((err) => console.log("[app] usuals lookup skipped:", err));
             }
@@ -283,6 +289,22 @@ export function Kiosk() {
     identifyIntervalMs,
     missesToClear,
   ]);
+
+  // A personal link (`?email=`) names who the kiosk is for, so offer that
+  // customer's usuals straight away; the camera isn't consulted (see above).
+  useEffect(() => {
+    if (step !== "welcome" || !connected || !viamConn) return;
+    if (!prefillEmail.trim()) return;
+    let cancelled = false;
+    getUsualOrders(viamConn, prefillEmail.trim())
+      .then((found) => {
+        if (!cancelled) setUsuals(toUsuals(found));
+      })
+      .catch((err) => console.log("[app] usuals lookup skipped:", err));
+    return () => {
+      cancelled = true;
+    };
+  }, [step, connected, viamConn, prefillEmail]);
 
   function handleDrinkNext() {
     if (!selectedDrink) return;
@@ -341,7 +363,16 @@ export function Kiosk() {
 
   /** Orders one of the greeted customer's usuals straight away: its drink, beans and fulfillment. */
   async function orderUsual(usual: Usual) {
-    if (!name.trim() || loading) return;
+    if (loading) return;
+    // A link with an email but no name has nobody to file the order under, so
+    // take the usual to the name screen to ask, instead of doing nothing.
+    if (!name.trim()) {
+      setSelectedDrink(usual.drink);
+      setSelectedBeans(usual.beans);
+      setFulfillment(usual.fulfillment);
+      setStep("name");
+      return;
+    }
     setLoading(true);
     // The selection and fulfillment feed the confirmation screen, and a failed
     // order rewinds to the name screen with them intact for a retry.
@@ -376,19 +407,26 @@ export function Kiosk() {
       setMisspelled(misspelledName);
 
       // If the customer provided an email and wasn't already identified,
-      // offer face registration before proceeding to the order.
+      // offer face registration before proceeding to the order. A personal link
+      // (`?email=`) doesn't use faces at all, so it never asks.
+      const fromLink = !!prefillEmail.trim();
       console.log("[app] handleSubmit:", {
         email: email.trim(),
         welcomeBack,
+        fromLink,
         name,
       });
-      if (email.trim() && !welcomeBack) {
+      if (email.trim() && !welcomeBack && !fromLink) {
         console.log("[app] routing to face-register");
         setStep("face-register");
       } else {
         console.log(
           "[app] skipping face-register:",
-          !email.trim() ? "no email" : "returning customer",
+          !email.trim()
+            ? "no email"
+            : fromLink
+              ? "personal link"
+              : "returning customer",
         );
         await placeOrder(misspelledName);
       }
@@ -548,29 +586,31 @@ export function Kiosk() {
             ← Back to Fleet Dashboard
           </Link>
         )}
-        <button
-          type="button"
-          onClick={() => setStep("profile")}
-          disabled={!connected}
-          aria-label="Edit my profile"
-          title="Edit my profile"
-          className="anim-in absolute bottom-6 left-6 h-11 w-11 rounded-full border border-neutral-200 bg-white text-neutral-900 transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400 disabled:text-neutral-300 disabled:hover:bg-white disabled:cursor-not-allowed"
-          style={{ animationDelay: "1400ms" }}
-        >
-          <svg
-            aria-hidden="true"
-            viewBox="0 0 24 24"
-            className="mx-auto h-5 w-5"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+        {!prefillEmail.trim() && (
+          <button
+            type="button"
+            onClick={() => setStep("profile")}
+            disabled={!connected}
+            aria-label="Edit my profile"
+            title="Edit my profile"
+            className="anim-in absolute bottom-6 left-6 h-11 w-11 rounded-full border border-neutral-200 bg-white text-neutral-900 transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400 disabled:text-neutral-300 disabled:hover:bg-white disabled:cursor-not-allowed"
+            style={{ animationDelay: "1400ms" }}
           >
-            <circle cx="12" cy="8" r="4" />
-            <path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" />
-          </svg>
-        </button>
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              className="mx-auto h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="12" cy="8" r="4" />
+              <path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" />
+            </svg>
+          </button>
+        )}
         <Image
           src="/beans.png"
           alt="coffee beans"
@@ -615,7 +655,7 @@ export function Kiosk() {
           </div>
         )}
 
-        {welcomeBack && orderableUsuals.length > 0 && (
+        {(welcomeBack || prefillEmail.trim()) && orderableUsuals.length > 0 && (
           <div className="w-full max-w-sm mb-4 flex flex-col gap-2">
             {orderableUsuals.length > 1 && (
               <p
