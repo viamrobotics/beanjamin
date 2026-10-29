@@ -178,9 +178,9 @@ func (s *beanjaminCoffee) serveIcedCoffee(ctx, cancelCtx context.Context) (int, 
 }
 
 // serveIcedLatte is the iced serving path with the milk sequence — the
-// iced_latte drink and the serve_iced_latte action.
+// serve_iced_latte action.
 func (s *beanjaminCoffee) serveIcedLatte(ctx, cancelCtx context.Context) (int, error) {
-	return s.serveIced(ctx, cancelCtx, s.firstMilk(), s.grabAndShelve)
+	return s.serveIced(ctx, cancelCtx, s.actionMilk(ctx), s.grabAndShelve)
 }
 
 // approachBrewedCup lines the open gripper up over the brewed cup: approach ->

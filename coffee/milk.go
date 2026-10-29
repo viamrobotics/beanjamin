@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	"go.viam.com/rdk/referenceframe"
@@ -42,14 +43,57 @@ func (s *beanjaminCoffee) requireMilk(action string) error {
 	return nil
 }
 
-// firstMilk is the milk the hand-run milk actions use: the first in
-// milk_options, which Validate requires on a latte machine. An order carries
-// its own milk.
+// firstMilk is the default milk: the first in milk_options, which Validate
+// requires on a latte machine.
 func (s *beanjaminCoffee) firstMilk() string {
 	if len(s.cfg.MilkOptions) == 0 {
 		return ""
 	}
 	return s.cfg.MilkOptions[0].Name
+}
+
+// actionMilkKey carries execute_action's optional milk down to the milk
+// actions, whose signatures are the shared action func and have no room for
+// it. An order carries its own milk and never sets this.
+type actionMilkKey struct{}
+
+func withActionMilk(ctx context.Context, milk string) context.Context {
+	return context.WithValue(ctx, actionMilkKey{}, milk)
+}
+
+// actionMilk is the milk a hand-run milk action uses: the one the call named,
+// or the first milk when it named none.
+func (s *beanjaminCoffee) actionMilk(ctx context.Context) string {
+	if milk, _ := ctx.Value(actionMilkKey{}).(string); milk != "" {
+		return milk
+	}
+	return s.firstMilk()
+}
+
+// milkChoiceActions are the actions execute_action's milk may be passed to: the
+// ones that take a bottle out of the fridge. return_milk and pour_milk act on
+// whichever bottle is already out.
+var milkChoiceActions = map[string]bool{
+	"fetch_milk":       true,
+	"add_milk":         true,
+	"serve_iced_latte": true,
+}
+
+// checkActionMilk refuses a milk on an action outside milkChoiceActions, or one
+// that isn't in milk_options, before the action claims the arm.
+func (s *beanjaminCoffee) checkActionMilk(action, milk string) error {
+	if !milkChoiceActions[action] {
+		allowed := make([]string, 0, len(milkChoiceActions))
+		for k := range milkChoiceActions {
+			allowed = append(allowed, k)
+		}
+		sort.Strings(allowed)
+		return fmt.Errorf("milk is not accepted by action %q, only by %v", action, allowed)
+	}
+	if _, err := s.milkSpot(milk); err != nil {
+		return fmt.Errorf("milk: %w (milk_options: %v)", err, s.cfg.milkNames())
+	}
+	return nil
 }
 
 // milkSpot returns the fridge spot the named milk stands at.

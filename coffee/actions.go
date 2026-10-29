@@ -50,15 +50,16 @@ func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.C
 			_, err := s.serveIcedCoffee(ctx, cancelCtx)
 			return err
 		},
-		// fetch_milk and add_milk use the first milk in milk_options; return_milk
-		// puts back whichever bottle is out.
+		// fetch_milk, add_milk and serve_iced_latte use the milk the call names,
+		// else the first in milk_options; return_milk puts back whichever bottle
+		// is out.
 		"fetch_milk": func(ctx, cancelCtx context.Context) error { // take the bottle off its spot in the open fridge
-			return s.fetchMilkBottle(ctx, cancelCtx, s.firstMilk())
+			return s.fetchMilkBottle(ctx, cancelCtx, s.actionMilk(ctx))
 		},
 		"pour_milk":   s.pourMilk,         // pour held bottle into the staged glass
 		"return_milk": s.returnMilkBottle, // set the bottle back on its spot
 		"add_milk": func(ctx, cancelCtx context.Context) error { // open fridge + fetch + pour + return + close
-			return s.addMilk(ctx, cancelCtx, s.firstMilk())
+			return s.addMilk(ctx, cancelCtx, s.actionMilk(ctx))
 		},
 		"serve_iced_latte": func(ctx, cancelCtx context.Context) error { // iced coffee + milk, end-to-end
 			_, err := s.serveIcedLatte(ctx, cancelCtx)
@@ -104,8 +105,9 @@ func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.C
 // withGlass takes the portafilter out of the frame system for the call and, when
 // nothing is modeled in the gripper, puts a configured glass in its place — for
 // stepping the iced sequence with the filter lifted off by hand. It is refused
-// on any action outside withGlassActions.
-func (s *beanjaminCoffee) executeAction(ctx context.Context, name string, withGlass bool) (map[string]any, error) {
+// on any action outside withGlassActions. milk, when not empty, picks the
+// bottle for the actions in milkChoiceActions and is refused on any other.
+func (s *beanjaminCoffee) executeAction(ctx context.Context, name string, withGlass bool, milk string) (map[string]any, error) {
 	actions := s.actionFuncs()
 
 	action, ok := actions[name]
@@ -122,6 +124,12 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string, withGl
 		if err := checkWithGlassAllowed(name); err != nil {
 			return nil, err
 		}
+	}
+	if milk != "" {
+		if err := s.checkActionMilk(name, milk); err != nil {
+			return nil, err
+		}
+		ctx = withActionMilk(ctx, milk)
 	}
 
 	cancelCtx, err := s.lease.claimManual("execute_action " + name)

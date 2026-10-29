@@ -123,6 +123,19 @@ func parseOptionalBool(cmd map[string]any, key string) (bool, error) {
 	return b, nil
 }
 
+// parseOptionalString is parseOptionalBool for a string.
+func parseOptionalString(cmd map[string]any, key string) (string, error) {
+	v, ok := cmd[key]
+	if !ok {
+		return "", nil
+	}
+	str, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string, got %T", key, v)
+	}
+	return str, nil
+}
+
 // commandDef is one entry in the DoCommand dispatch table. needsStr restricts a
 // match to string values (execute_action/action dispatch on the string).
 type commandDef struct {
@@ -169,7 +182,11 @@ var coffeeCommands = []commandDef{
 			if annotate {
 				ctx = icevision.WithFrameSaving(ctx)
 			}
-			return s.executeAction(ctx, cmd["execute_action"].(string), withGlass)
+			milk, err := parseOptionalString(cmd, "milk")
+			if err != nil {
+				return nil, err
+			}
+			return s.executeAction(ctx, cmd["execute_action"].(string), withGlass, milk)
 		}},
 	{key: "cancel", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.cancel(ctx)

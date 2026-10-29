@@ -102,11 +102,33 @@ func TestMilkSpot(t *testing.T) {
 	}
 }
 
-// Every iced latte and hand-run milk action uses the first milk for now.
-func TestFirstMilk(t *testing.T) {
+// A hand-run milk action uses the milk its call named, else the first milk.
+func TestActionMilk(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{MilkOptions: testMilks}}
-	if got := s.firstMilk(); got != "whole" {
-		t.Errorf("firstMilk = %q, want whole", got)
+	if got := s.actionMilk(context.Background()); got != "whole" {
+		t.Errorf("actionMilk with none named = %q, want whole", got)
+	}
+	if got := s.actionMilk(withActionMilk(context.Background(), "oat")); got != "oat" {
+		t.Errorf("actionMilk with oat named = %q, want oat", got)
+	}
+}
+
+// A milk is accepted only by the actions that take a bottle out, and only when
+// it is one of milk_options.
+func TestCheckActionMilk(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{MilkOptions: testMilks}}
+	for _, name := range []string{"fetch_milk", "add_milk", "serve_iced_latte"} {
+		if err := s.checkActionMilk(name, "oat"); err != nil {
+			t.Errorf("checkActionMilk(%q, oat) = %v, want accepted", name, err)
+		}
+	}
+	for _, name := range []string{"return_milk", "pour_milk", "open_door", "grind_coffee"} {
+		if err := s.checkActionMilk(name, "oat"); err == nil || !strings.Contains(err.Error(), "not accepted") {
+			t.Errorf("checkActionMilk(%q, oat) = %v, want refused", name, err)
+		}
+	}
+	if err := s.checkActionMilk("fetch_milk", "soy"); err == nil || !strings.Contains(err.Error(), "unknown milk") {
+		t.Errorf("checkActionMilk(fetch_milk, soy) = %v, want an unknown-milk error", err)
 	}
 }
 
