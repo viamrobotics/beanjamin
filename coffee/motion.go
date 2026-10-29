@@ -260,7 +260,15 @@ func (s *beanjaminCoffee) moveToPose(ctx, cancelCtx context.Context, step Step) 
 		}
 		return nil
 	}
-	if err := s.moveToRawPose(ctx, pd, step.LinearConstraint, step.AllowedCollisions, step.MoveOptions); err != nil {
+	fs, fsInputs, err := s.currentInputs(ctx)
+	if err != nil {
+		return err
+	}
+	plan, err := s.planToRawPose(ctx, fs, fsInputs, pd, step.LinearConstraint, step.OrientationToleranceDegs, step.AllowedCollisions)
+	if err != nil {
+		return fmt.Errorf("move to %q failed: %w", step.PoseName, err)
+	}
+	if err := s.executePlan(ctx, plan, step.MoveOptions); err != nil {
 		return fmt.Errorf("move to %q failed: %w", step.PoseName, err)
 	}
 	return nil
@@ -670,6 +678,23 @@ func buildConstraints(lc *StepLinearConstraint, allowedCollisions []AllowedColli
 	return constraints
 }
 
+// withPathOrientationConstraint bounds the moving frame's orientation to within
+// degs of the slerp between the plan's start and goal along the whole path. It
+// bounds all three rotation axes, unlike the no-spill carry's, because a step's
+// goal frame need not have +Z along the axis spin about which is harmless.
+// Returns constraints unchanged when degs is not positive.
+func withPathOrientationConstraint(constraints *motionplan.Constraints, degs float64) *motionplan.Constraints {
+	if degs <= 0 {
+		return constraints
+	}
+	if constraints == nil {
+		constraints = &motionplan.Constraints{}
+	}
+	constraints.OrientationConstraint = append(constraints.OrientationConstraint,
+		motionplan.OrientationConstraint{OrientationToleranceDegs: degs})
+	return constraints
+}
+
 // buildMoveOptions converts step-level move options into arm.MoveOptions; nil
 // leaves the arm at its default speed.
 func buildMoveOptions(opts *StepMoveOptions) *arm.MoveOptions {
@@ -768,7 +793,7 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 	if err != nil {
 		return err
 	}
-	plan, err := s.planToRawPose(ctx, fs, fsInputs, pd, lc, allowedCollisions)
+	plan, err := s.planToRawPose(ctx, fs, fsInputs, pd, lc, 0, allowedCollisions)
 	if err != nil {
 		return err
 	}
@@ -789,6 +814,7 @@ func (s *beanjaminCoffee) planToRawPose(
 	startInputs referenceframe.FrameSystemInputs,
 	pd *poseData,
 	lc *StepLinearConstraint,
+	orientTolDegs float64,
 	allowedCollisions []AllowedCollision,
 ) (motionplan.Plan, error) {
 	logger := s.activeOrderLogger()
@@ -802,13 +828,16 @@ func (s *beanjaminCoffee) planToRawPose(
 	goalPose := tf.(*referenceframe.PoseInFrame)
 
 	allowedCollisions = s.filterFakeModeCollisions(s.appendHeldItemCollisions(allowedCollisions))
-	constraints := buildConstraints(lc, allowedCollisions)
+	constraints := withPathOrientationConstraint(buildConstraints(lc, allowedCollisions), orientTolDegs)
 	plannerOpts := plannerOptionsForConstraint(lc)
 	if lc != nil {
 		logger.Infof("applying linear constraint (line=%.1fmm, orient=%.1f°)",
 			lc.LineToleranceMm, lc.OrientationToleranceDegs)
 	} else {
 		logger.Infof("applying %.1fmm collision buffer", plannerOpts.CollisionBufferMM)
+	}
+	if orientTolDegs > 0 {
+		logger.Infof("applying path orientation constraint (±%.1f°)", orientTolDegs)
 	}
 	if len(allowedCollisions) > 0 {
 		logger.Infof("allowing %d collision pair(s)", len(allowedCollisions))

@@ -401,7 +401,7 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	if err != nil {
 		return centroid, err
 	}
-	approachPlan, err := s.planToRawPose(ctx, fs, fsInputs, approachPD, nil, nil)
+	approachPlan, err := s.planToRawPose(ctx, fs, fsInputs, approachPD, nil, 0, nil)
 	if err != nil {
 		return centroid, fmt.Errorf("plan approach to centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
@@ -409,7 +409,7 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	if err != nil {
 		return centroid, fmt.Errorf("approach plan to centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
-	grabPlan, err := s.planToRawPose(ctx, fs, s.withArmInputs(fsInputs, approachEnd), grabPD, defaultApproachConstraint, s.pickupAreaShieldCollisions(t.shieldFrame))
+	grabPlan, err := s.planToRawPose(ctx, fs, s.withArmInputs(fsInputs, approachEnd), grabPD, defaultApproachConstraint, 0, s.pickupAreaShieldCollisions(t.shieldFrame))
 	if err != nil {
 		return centroid, fmt.Errorf("plan grab of centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}

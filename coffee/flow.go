@@ -252,7 +252,7 @@ func (s *beanjaminCoffee) planStep(ctx context.Context, step Step, from []refere
 	}
 	inputs := referenceframe.NewZeroInputs(s.cachedFS)
 	inputs[s.cfg.ArmName] = from
-	plan, err := s.planToRawPose(ctx, s.cachedFS, inputs, pd, step.LinearConstraint, step.AllowedCollisions)
+	plan, err := s.planToRawPose(ctx, s.cachedFS, inputs, pd, step.LinearConstraint, step.OrientationToleranceDegs, step.AllowedCollisions)
 	if err != nil {
 		return nil, err
 	}

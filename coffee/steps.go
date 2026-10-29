@@ -76,6 +76,11 @@ type Step struct {
 	// rather than a direct plan.
 	NoSpill bool
 
+	// OrientationToleranceDegs, when set, keeps the moving frame's orientation
+	// within this many degrees of the direct start-to-goal reorientation for the
+	// whole path of a direct move, so a free traverse can't tip what it carries.
+	OrientationToleranceDegs float64
+
 	// PoseSwitch is the switch this step's pose is read from (fetchPose).
 	PoseSwitch toggleswitch.Switch
 

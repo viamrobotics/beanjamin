@@ -171,3 +171,22 @@ func TestWithNoSpillOrientationConstraint(t *testing.T) {
 		t.Errorf("allowed collisions were dropped: %+v", got.CollisionSpecification)
 	}
 }
+
+// A step's path orientation bound is added only when set, bounds every axis,
+// and keeps the linear constraint it is combined with.
+func TestWithPathOrientationConstraint(t *testing.T) {
+	if got := withPathOrientationConstraint(buildConstraints(nil, nil), 0); got != nil {
+		t.Errorf("unset tolerance produced constraints %+v, want nil", got)
+	}
+
+	got := withPathOrientationConstraint(buildConstraints(defaultApproachConstraint, nil), 10)
+	if len(got.OrientationConstraint) != 1 {
+		t.Fatalf("got %d orientation constraints, want 1", len(got.OrientationConstraint))
+	}
+	if oc := got.OrientationConstraint[0]; oc.OrientationToleranceDegs != 10 || oc.IgnoreTheta {
+		t.Errorf("orientation constraint = %+v, want 10° on every axis", oc)
+	}
+	if len(got.LinearConstraint) != 1 {
+		t.Errorf("linear constraint was dropped: %+v", got.LinearConstraint)
+	}
+}

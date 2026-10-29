@@ -63,12 +63,18 @@ func (s *beanjaminCoffee) grindSteps(approachPose, activatePose string, buttonCo
 	}
 }
 
+// tamperCarryOrientationToleranceDegs bounds how far the portafilter may tilt
+// off the direct reorientation while carrying loose grounds from the grinder
+// to the tamper; a free traverse otherwise swings it enough to spill grounds.
+const tamperCarryOrientationToleranceDegs = 10.0
+
 func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
 	return s.runSteps(ctx, cancelCtx, "tamp_ground",
-		// Carries loose, un-tamped grounds to the tamper: slow it so they don't
-		// scatter. Once tamped, the puck is compact, so the retreat runs at the
-		// arm's default speed.
-		Step{PoseName: filterPoseTamperApproach, PoseSwitch: s.filterSw, MoveOptions: s.slowMoveOptions()},
+		// Carries loose, un-tamped grounds to the tamper: slow it and keep the
+		// basket near level so they don't scatter. Once tamped, the puck is
+		// compact, so the retreat runs at the arm's default speed.
+		Step{PoseName: filterPoseTamperApproach, PoseSwitch: s.filterSw, MoveOptions: s.slowMoveOptions(),
+			OrientationToleranceDegs: tamperCarryOrientationToleranceDegs},
 		Step{PoseName: filterPoseTamperActivate, PoseSwitch: s.filterSw, Pause: 3000 * time.Millisecond, LinearConstraint: defaultApproachConstraint,
 			MoveOptions: s.slowMoveOptions()},
 		Step{PoseName: filterPoseTamperApproach, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint},
