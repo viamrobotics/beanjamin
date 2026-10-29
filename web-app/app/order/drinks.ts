@@ -13,6 +13,18 @@ export function drinkLabel(drinkId: string): string {
   return drinkId.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// fullDrinkLabel names a drink made from the given beans, e.g. "Light Roast
+// Lungo". Decaf is already baked into drinkId (see isDecafId) by the time this
+// is called, so "regular" and "decaf" beans get no prefix — only a non-decaf
+// bean_options choice (a beans axis this kiosk's picker has no UI for) does.
+export function fullDrinkLabel(drinkId: string, beans: string): string {
+  if (!beans || beans === "regular" || beans === "decaf") return drinkLabel(drinkId);
+  const beansLabel = beans
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return `${beansLabel} ${drinkLabel(drinkId)}`;
+}
+
 // Base drinks shown in the selection grid, in display order. Decaf is no longer
 // its own card — it's a side toggle (see applyDecaf).
 export const GRID_DRINK_IDS = [

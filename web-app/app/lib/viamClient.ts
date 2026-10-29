@@ -376,6 +376,8 @@ export async function prepareOrder(
     pronunciation?: string;
     /** Defaults to "pickup" on the backend when omitted. */
     fulfillment?: Fulfillment;
+    /** Defaults to the regular beans on the backend when omitted. */
+    beans?: string;
   },
 ): Promise<{ status: string; queue_position?: number; order_id?: string }> {
   if (isDevMode()) {
@@ -414,6 +416,7 @@ export async function prepareOrder(
         ...(opts.customerEmail && { customer_email: opts.customerEmail }),
         ...(greeting && { initial_greeting: greeting }),
         ...(opts.fulfillment && { fulfillment: opts.fulfillment }),
+        ...(opts.beans && { beans: opts.beans }),
       },
     },
   );
@@ -512,18 +515,31 @@ export async function identifyCustomer(
   });
 }
 
-/** The customer's most-frequent drink, or null when they have no history. */
+/** A customer's most-frequent order: drink, beans, and fulfillment together. */
+export interface UsualOrder {
+  drink: string;
+  beans: string;
+  fulfillment: Fulfillment;
+}
+
+/** The customer's most-frequent order, or null when they have no history. */
 export async function getUsualDrink(
   conn: ViamConnection,
   email: string,
-): Promise<string | null> {
+): Promise<UsualOrder | null> {
   if (isDevMode() || !email) return null;
-  const res = await doCommand<{ has_usual?: boolean; drink?: string }>(
-    conn,
-    CUSTOMER_DETECTOR_SERVICE_NAME,
-    { get_usual: email },
-  );
-  return res.has_usual && res.drink ? res.drink : null;
+  const res = await doCommand<{
+    has_usual?: boolean;
+    drink?: string;
+    beans?: string;
+    fulfillment?: string;
+  }>(conn, CUSTOMER_DETECTOR_SERVICE_NAME, { get_usual: email });
+  if (!res.has_usual || !res.drink) return null;
+  return {
+    drink: res.drink,
+    beans: res.beans ?? "",
+    fulfillment: res.fulfillment === "delivery" ? "delivery" : "pickup",
+  };
 }
 
 export async function getCustomerDetectorInfo(
