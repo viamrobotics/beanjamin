@@ -85,8 +85,11 @@ type orderHistoryEntry struct {
 	Drink string `json:"drink"`
 	// Beans is absent on entries recorded before beans were their own field,
 	// when decaf was a drink id; order.LegacyDrink reads those.
-	Beans string    `json:"beans,omitempty"`
-	At    time.Time `json:"at"`
+	Beans string `json:"beans,omitempty"`
+	// Fulfillment is absent on entries recorded before fulfillment was
+	// tracked here; those predate delivery and are read as pickup.
+	Fulfillment string    `json:"fulfillment,omitempty"`
+	At          time.Time `json:"at"`
 }
 
 // customerRecord stores metadata about a registered customer.
@@ -230,7 +233,8 @@ func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]any) (
 		email, _ := rec["email"].(string)
 		drink, _ := rec["drink"].(string)
 		beans, _ := rec["beans"].(string)
-		return cd.recordOrder(email, drink, beans)
+		fulfillment, _ := rec["fulfillment"].(string)
+		return cd.recordOrder(email, drink, beans, fulfillment)
 	}
 	if email, ok := cmd["get_usual"].(string); ok {
 		return cd.getUsual(email)
@@ -559,11 +563,15 @@ func (cd *customerDetector) removeCustomer(ctx context.Context, email string) (m
 	}, nil
 }
 
-// recordOrder appends a drink and its beans to a customer's history; unknown
-// email is a no-op. Empty beans means the regular beans.
-func (cd *customerDetector) recordOrder(email, drink, beans string) (map[string]any, error) {
+// recordOrder appends a drink, its beans, and its fulfillment to a customer's
+// history; unknown email is a no-op. Empty beans means the regular beans;
+// empty fulfillment means pickup.
+func (cd *customerDetector) recordOrder(email, drink, beans, fulfillment string) (map[string]any, error) {
 	if email == "" || drink == "" {
 		return nil, fmt.Errorf("record_order requires both email and drink")
+	}
+	if fulfillment == "" {
+		fulfillment = order.FulfillmentPickup
 	}
 
 	cd.mu.Lock()
@@ -575,7 +583,7 @@ func (cd *customerDetector) recordOrder(email, drink, beans string) (map[string]
 	}
 	// Callers that predate beans send decaf as a drink id.
 	drink, beans = order.LegacyDrink(drink, beans, false)
-	rec.Orders = append(rec.Orders, orderHistoryEntry{Drink: drink, Beans: beans, At: time.Now()})
+	rec.Orders = append(rec.Orders, orderHistoryEntry{Drink: drink, Beans: beans, Fulfillment: fulfillment, At: time.Now()})
 	if len(rec.Orders) > maxOrderHistory {
 		rec.Orders = append([]orderHistoryEntry(nil), rec.Orders[len(rec.Orders)-maxOrderHistory:]...)
 	}
@@ -585,8 +593,8 @@ func (cd *customerDetector) recordOrder(email, drink, beans string) (map[string]
 	if err := cd.saveCustomers(); err != nil {
 		return nil, fmt.Errorf("failed to persist order history: %w", err)
 	}
-	cd.logger.Infof("recorded %q for %q (%d in history)", order.DrinkLabel(drink, beans), email, count)
-	return map[string]any{"recorded": true, "email": email, "drink": drink, "beans": beans}, nil
+	cd.logger.Infof("recorded %q (%s) for %q (%d in history)", order.DrinkLabel(drink, beans), fulfillment, email, count)
+	return map[string]any{"recorded": true, "email": email, "drink": drink, "beans": beans, "fulfillment": fulfillment}, nil
 }
 
 // getUsual returns the customer's usual drink, or {has_usual:false} if none.
@@ -610,26 +618,33 @@ func (cd *customerDetector) getUsual(email string) (map[string]any, error) {
 		"has_usual": true,
 		// drink keeps the legacy decaf ids (order.WireDrink): the kiosk orders
 		// the usual by this id alone, and must not drop the decaf.
-		"drink": order.WireDrink(usual.drink, usual.beans),
-		"beans": usual.beans,
-		"count": count,
+		"drink":       order.WireDrink(usual.drink, usual.beans),
+		"beans":       usual.beans,
+		"fulfillment": usual.fulfillment,
+		"count":       count,
 	}, nil
 }
 
-// drinkChoice is a drink together with the beans it was made from: the unit a
-// usual is counted in, so a decaf lungo and a lungo are different usuals.
-type drinkChoice struct{ drink, beans string }
+// drinkChoice is a drink, its beans, and its fulfillment together: the unit a
+// usual is counted in, so a decaf lungo and a lungo, or a pickup and a
+// delivery of the same drink, are different usuals.
+type drinkChoice struct{ drink, beans, fulfillment string }
 
-// usualDrink picks the most-frequent drink and beans, breaking ties toward the
-// most recent. Entries from before beans were recorded are read through
-// order.LegacyDrink, so an old "decaf" counts as a decaf espresso.
+// usualDrink picks the most-frequent drink, beans, and fulfillment, breaking
+// ties toward the most recent. Entries from before beans or fulfillment were
+// recorded are read through order.LegacyDrink and default to pickup, so an
+// old "decaf" counts as a decaf espresso and predates delivery entirely.
 func usualDrink(orders []orderHistoryEntry) (usual drinkChoice, count int) {
 	// Tally each choice's count and its most-recent timestamp.
 	counts := make(map[drinkChoice]int)
 	lastAt := make(map[drinkChoice]time.Time)
 	for _, o := range orders {
 		drink, beans := order.LegacyDrink(o.Drink, o.Beans, false)
-		c := drinkChoice{drink, beans}
+		fulfillment := o.Fulfillment
+		if fulfillment == "" {
+			fulfillment = order.FulfillmentPickup
+		}
+		c := drinkChoice{drink, beans, fulfillment}
 		counts[c]++
 		if o.At.After(lastAt[c]) {
 			lastAt[c] = o.At

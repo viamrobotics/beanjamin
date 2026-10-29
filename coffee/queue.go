@@ -261,9 +261,10 @@ func (s *beanjaminCoffee) recordOrderHistory(ctx context.Context, order order.Or
 	}
 	if _, err := s.customerDetector.DoCommand(ctx, map[string]any{
 		"record_order": map[string]any{
-			"email": order.CustomerEmail,
-			"drink": order.Drink,
-			"beans": order.Beans,
+			"email":       order.CustomerEmail,
+			"drink":       order.Drink,
+			"beans":       order.Beans,
+			"fulfillment": order.Fulfillment,
 		},
 	}); err != nil {
 		s.activeOrderLogger().Warnf("failed to record order history for %q: %v", order.CustomerEmail, err)

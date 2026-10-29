@@ -294,25 +294,35 @@ func TestUsualDrinkCountsBeans(t *testing.T) {
 	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	at := func(h int) time.Time { return t0.Add(time.Duration(h) * time.Hour) }
 	usual, count := usualDrink([]orderHistoryEntry{
-		{Drink: "lungo", Beans: "regular", At: at(0)},
-		{Drink: "lungo", Beans: "regular", At: at(1)},
-		{Drink: "decaf", At: at(2)}, // legacy decaf espresso
-		{Drink: "espresso", Beans: "decaf", At: at(3)},
-		{Drink: "espresso", Beans: "decaf", At: at(4)},
+		{Drink: "lungo", Beans: "regular", Fulfillment: "pickup", At: at(0)},
+		{Drink: "lungo", Beans: "regular", Fulfillment: "pickup", At: at(1)},
+		{Drink: "decaf", At: at(2)}, // legacy decaf espresso, legacy pickup
+		{Drink: "espresso", Beans: "decaf", Fulfillment: "pickup", At: at(3)},
+		{Drink: "espresso", Beans: "decaf", Fulfillment: "pickup", At: at(4)},
 	})
-	if usual != (drinkChoice{"espresso", "decaf"}) || count != 3 {
-		t.Errorf("usual = %+v x%d, want decaf espresso x3", usual, count)
+	if usual != (drinkChoice{"espresso", "decaf", "pickup"}) || count != 3 {
+		t.Errorf("usual = %+v x%d, want decaf espresso pickup x3", usual, count)
 	}
 
 	// Same drink, different beans: separate usuals, not one pooled lungo.
 	usual, count = usualDrink([]orderHistoryEntry{
-		{Drink: "lungo", Beans: "light_roast", At: at(0)},
-		{Drink: "lungo", Beans: "regular", At: at(1)},
-		{Drink: "espresso", At: at(2)}, // legacy regular espresso
-		{Drink: "espresso", Beans: "regular", At: at(3)},
+		{Drink: "lungo", Beans: "light_roast", Fulfillment: "pickup", At: at(0)},
+		{Drink: "lungo", Beans: "regular", Fulfillment: "pickup", At: at(1)},
+		{Drink: "espresso", At: at(2)}, // legacy regular espresso, legacy pickup
+		{Drink: "espresso", Beans: "regular", Fulfillment: "pickup", At: at(3)},
 	})
-	if usual != (drinkChoice{"espresso", "regular"}) || count != 2 {
-		t.Errorf("usual = %+v x%d, want regular espresso x2", usual, count)
+	if usual != (drinkChoice{"espresso", "regular", "pickup"}) || count != 2 {
+		t.Errorf("usual = %+v x%d, want regular espresso pickup x2", usual, count)
+	}
+
+	// Same drink and beans, different fulfillment: separate usuals.
+	usual, count = usualDrink([]orderHistoryEntry{
+		{Drink: "latte", Beans: "regular", Fulfillment: "delivery", At: at(0)},
+		{Drink: "latte", Beans: "regular", Fulfillment: "delivery", At: at(1)},
+		{Drink: "latte", Beans: "regular", Fulfillment: "pickup", At: at(2)},
+	})
+	if usual != (drinkChoice{"latte", "regular", "delivery"}) || count != 2 {
+		t.Errorf("usual = %+v x%d, want delivery latte x2", usual, count)
 	}
 }
 
@@ -324,29 +334,29 @@ func TestUsualKeepsLegacyDecafID(t *testing.T) {
 	dir, _ := cd.customerDir("alice@example.com")
 	cd.customers["alice@example.com"] = &customerRecord{Name: "Alice", Email: "alice@example.com", ImageDir: dir}
 
-	if _, err := cd.recordOrder("alice@example.com", "decaf", ""); err != nil {
+	if _, err := cd.recordOrder("alice@example.com", "decaf", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if got := cd.customers["alice@example.com"].Orders[0]; got.Drink != "espresso" || got.Beans != "decaf" {
-		t.Errorf("recorded %+v, want espresso with decaf beans", got)
+	if got := cd.customers["alice@example.com"].Orders[0]; got.Drink != "espresso" || got.Beans != "decaf" || got.Fulfillment != "pickup" {
+		t.Errorf("recorded %+v, want espresso with decaf beans and pickup fulfillment", got)
 	}
 	usual, err := cd.getUsual("alice@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usual["drink"] != "decaf" || usual["beans"] != "decaf" {
-		t.Errorf("usual = %v, want drink decaf (legacy id) and beans decaf", usual)
+	if usual["drink"] != "decaf" || usual["beans"] != "decaf" || usual["fulfillment"] != "pickup" {
+		t.Errorf("usual = %v, want drink decaf (legacy id), beans decaf, pickup", usual)
 	}
 
 	// A usual older clients have no id for goes out as the plain drink, with
 	// the beans alongside.
 	for range 2 {
-		if _, err := cd.recordOrder("alice@example.com", "lungo", "light_roast"); err != nil {
+		if _, err := cd.recordOrder("alice@example.com", "lungo", "light_roast", "delivery"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	usual, _ = cd.getUsual("alice@example.com")
-	if usual["drink"] != "lungo" || usual["beans"] != "light_roast" {
-		t.Errorf("usual = %v, want lungo / light_roast", usual)
+	if usual["drink"] != "lungo" || usual["beans"] != "light_roast" || usual["fulfillment"] != "delivery" {
+		t.Errorf("usual = %v, want lungo / light_roast / delivery", usual)
 	}
 }
