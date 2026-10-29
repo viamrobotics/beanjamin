@@ -18,6 +18,7 @@ interface OrderConfirmationProps {
   actualName: string;
   drink: string;
   beans?: string;
+  milk?: string;
   onDismiss: () => void;
   showBack?: boolean;
 }
@@ -27,6 +28,7 @@ export function OrderConfirmation({
   actualName,
   drink,
   beans,
+  milk,
   onDismiss,
   showBack = true,
 }: OrderConfirmationProps) {
@@ -65,7 +67,12 @@ export function OrderConfirmation({
       )}
       <div className="flex flex-col items-center">
         <p className="anim-in text-neutral-400 text-lg uppercase tracking-widest font-mono">
-          <DrinkName drink={drink} beans={beans} beansClassName="text-neutral-300" />{" "}
+          <DrinkName
+            drink={drink}
+            beans={beans}
+            milk={milk}
+            beansClassName="text-neutral-300"
+          />{" "}
           for
         </p>
         <div className="flex items-center gap-24">

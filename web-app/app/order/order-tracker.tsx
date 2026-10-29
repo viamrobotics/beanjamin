@@ -430,7 +430,7 @@ interface OrderCardProps {
 }
 
 function OrderCard({ order, cardClass, statusKind, label }: OrderCardProps) {
-  const drink = orderLabel(order.drink, order.beans);
+  const drink = orderLabel(order.drink, order.beans, order.milk);
   return (
     <div className={cardClass}>
       <div className="flex items-baseline justify-between gap-2">
@@ -446,7 +446,11 @@ function OrderCard({ order, cardClass, statusKind, label }: OrderCardProps) {
       </div>
       {drink && (
         <p className="text-xs font-mono text-neutral-500 mt-0.5">
-          <DrinkName drink={order.drink} beans={order.beans} />
+          <DrinkName
+            drink={order.drink}
+            beans={order.beans}
+            milk={order.milk}
+          />
         </p>
       )}
       {statusKind === "ready" ? (

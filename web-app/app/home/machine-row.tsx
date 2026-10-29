@@ -23,7 +23,7 @@ function renderQueueStatus(queue: MachineQueueState | undefined): string {
   const parts: string[] = [];
   if (current) {
     const step = current.raw_step || status.current_step;
-    const label = `making ${orderLabel(current.drink, current.beans) || current.drink} for ${current.customer_name || "?"}`;
+    const label = `making ${orderLabel(current.drink, current.beans, current.milk) || current.drink} for ${current.customer_name || "?"}`;
     parts.push(step ? `${label} · ${step}` : label);
   }
   if (waiting > 0) parts.push(`${waiting} in queue`);

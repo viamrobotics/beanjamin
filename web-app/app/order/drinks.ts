@@ -13,6 +13,18 @@ export function drinkLabel(drinkId: string): string {
   return titleCase(drinkId);
 }
 
+// milkLabel names one of a machine's milk_options for display, e.g. "oat" ->
+// "Oat". The milks come from the machine, so there is no table to look up.
+export function milkLabel(milk: string): string {
+  return titleCase(milk);
+}
+
+// hasMilkChoice reports whether the drink is made with a choice of milk (see
+// IsMilk in coffee/order/drinks.go).
+export function hasMilkChoice(drinkId: string): boolean {
+  return drinkId === "iced_latte";
+}
+
 // Base drinks shown in the selection grid, in display order. The beans are
 // chosen separately (see ChooseDrink's bean picker).
 export const GRID_DRINK_IDS = [
@@ -79,32 +91,58 @@ export function splitDrink(drink: string, beans?: string): DrinkChoice {
   return { drink, beans: beans || REGULAR_BEANS };
 }
 
-// orderParts splits an order's display name into the drink and, for anything
-// but regular beans, the beans as a lowercase qualifier: "Lungo" + "decaf".
-// DrinkName renders them with the beans set apart.
+// orderParts splits an order's display name into the drink and its
+// lowercase qualifiers: the beans for anything but regular, and the milk for a
+// drink with a milk choice: "Iced Latte" + "light roast" + "oat milk".
+// DrinkName renders them with the qualifiers set apart.
 export function orderParts(
   drink: string,
   beans?: string,
-): { drink: string; beans: string | null } {
+  milk?: string,
+): { drink: string; beans: string | null; milk: string | null } {
   const c = splitDrink(drink, beans);
   return {
     drink: drinkLabel(c.drink),
     beans: c.beans === REGULAR_BEANS ? null : beansLabel(c.beans).toLowerCase(),
+    milk:
+      milk && hasMilkChoice(c.drink)
+        ? `${milkLabel(milk).toLowerCase()} milk`
+        : null,
   };
 }
 
-// orderLabel is orderParts as plain text, e.g. "Lungo, light roast"; regular
-// beans go unmentioned.
-export function orderLabel(drink: string, beans?: string): string {
-  const p = orderParts(drink, beans);
-  if (!p.drink || !p.beans) return p.drink;
-  return `${p.drink}, ${p.beans}`;
+// orderQualifiers joins orderParts' qualifiers, e.g. "light roast, oat milk";
+// empty for regular beans and no milk.
+export function orderQualifiers(p: {
+  beans: string | null;
+  milk: string | null;
+}): string {
+  return [p.beans, p.milk].filter(Boolean).join(", ");
 }
 
-// spokenOrder names an order the way it is said: "decaf lungo".
-export function spokenOrder(drink: string, beans?: string): string {
-  const p = orderParts(drink, beans);
-  return [p.beans, p.drink.toLowerCase()].filter(Boolean).join(" ");
+// orderLabel is orderParts as plain text, e.g. "Lungo, light roast" or
+// "Iced Latte, oat milk"; regular beans go unmentioned.
+export function orderLabel(
+  drink: string,
+  beans?: string,
+  milk?: string,
+): string {
+  const p = orderParts(drink, beans, milk);
+  const q = orderQualifiers(p);
+  if (!p.drink || !q) return p.drink;
+  return `${p.drink}, ${q}`;
+}
+
+// spokenOrder names an order the way it is said: "decaf lungo", "iced latte
+// with oat milk".
+export function spokenOrder(
+  drink: string,
+  beans?: string,
+  milk?: string,
+): string {
+  const p = orderParts(drink, beans, milk);
+  const said = [p.beans, p.drink.toLowerCase()].filter(Boolean).join(" ");
+  return p.milk ? `${said} with ${p.milk}` : said;
 }
 
 export const DRINKS: Drink[] = [

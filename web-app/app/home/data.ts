@@ -57,6 +57,8 @@ export interface OrderRecord {
   // The beans the drink was made from; "regular" for readings from before
   // beans were recorded, unless they carry the old decaf flag.
   beans: string;
+  // The iced latte's milk; empty for other drinks and older readings.
+  milk: string;
   errorMessage: string;
 }
 
@@ -89,6 +91,7 @@ interface RawOrderRow {
       failed_step?: string;
       beans?: string;
       decaf?: boolean;
+      milk?: string;
       error_message?: string;
     };
   };
@@ -140,6 +143,7 @@ function parseOrderResults(rows: RawOrderRow[]): OrderRecord[] {
       ok: x.order_ok ?? false,
       cancelled: x.operator_cancelled ?? false,
       failedStep: x.failed_step ?? "",
+      milk: x.milk ?? "",
       errorMessage: x.error_message ?? "",
     };
   });
