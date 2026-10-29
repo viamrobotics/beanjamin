@@ -525,6 +525,69 @@ export async function finishRegistration(
   });
 }
 
+/** One registered face photo, as the detector's `list_faces` returns it. */
+export interface RegisteredFace {
+  /** The photo's file name; what `deleteFace` takes. */
+  file: string;
+  mime: string;
+  /** Base64 image bytes. */
+  image: string;
+}
+
+export interface FaceProfile {
+  email: string;
+  /** False when no customer record exists for the email. */
+  registered: boolean;
+  /** The name on the customer's record; absent unless `registered`. */
+  name?: string;
+  faces: RegisteredFace[];
+  /** True when the customer has more photos than one response carries. */
+  truncated: boolean;
+}
+
+// Dev mode has no detector, so the profile page runs against a few drawn
+// placeholders held here for the session.
+const DEV_FACE_COLORS = ["#d4a373", "#a98467", "#6c584c"];
+let devFaces: RegisteredFace[] = DEV_FACE_COLORS.map((c, i) => ({
+  file: `face_dev_${i + 1}.jpeg`,
+  mime: "image/svg+xml",
+  image: btoa(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><rect width="160" height="160" fill="${c}"/><circle cx="80" cy="70" r="34" fill="#fff" opacity=".7"/></svg>`,
+  ),
+}));
+
+/** The photos registered under `email`, and the name on their record. */
+export async function listFaces(
+  conn: ViamConnection,
+  email: string,
+): Promise<FaceProfile> {
+  if (isDevMode()) {
+    return {
+      email,
+      registered: true,
+      name: "Dev Customer",
+      faces: [...devFaces],
+      truncated: false,
+    };
+  }
+  return doCommand(conn, CUSTOMER_DETECTOR_SERVICE_NAME, { list_faces: email });
+}
+
+/** Deletes one registered photo; the machine retrains on what is left. */
+export async function deleteFace(
+  conn: ViamConnection,
+  email: string,
+  file: string,
+): Promise<{ deleted: string; email: string; remaining: number }> {
+  if (isDevMode()) {
+    devFaces = devFaces.filter((f) => f.file !== file);
+    return { deleted: file, email, remaining: devFaces.length };
+  }
+  return doCommand(conn, CUSTOMER_DETECTOR_SERVICE_NAME, {
+    delete_face: { email, file },
+  });
+}
+
 export async function identifyCustomer(
   conn: ViamConnection,
 ): Promise<CustomerIdentification> {

@@ -1160,6 +1160,38 @@ Returns:
 {"removed": "alice@example.com"}
 ```
 
+**`list_faces`** — Return the photos currently registered under an email, as base64, with the name on that customer's record. Behind the kiosk's "Edit my profile" page. An email with no photos returns an empty list, not an error. At most 40 photos come back (the newest by file name), with `truncated` set when there were more.
+
+```json
+{"list_faces": "alice@example.com"}
+```
+
+Returns:
+
+```json
+{
+  "email": "alice@example.com",
+  "registered": true,
+  "name": "Alice Smith",
+  "truncated": false,
+  "faces": [{"file": "face_1793210841226970719_1.jpeg", "mime": "image/jpeg", "image": "<base64>"}]
+}
+```
+
+`name` is only present for a registered customer. Anyone who can reach the service can read any customer's photos with this, so it is only as private as access to the machine.
+
+**`delete_face`** — Delete one registered photo and have the vision service forget it (it runs `recompute_embeddings`, so the call takes a moment). `file` must be a bare photo name as returned by `list_faces`; anything with a path, a non-image extension, a symlink, or a name that does not exist is refused. Deleting a customer's last photo leaves their record in place but unrecognisable until they add photos again.
+
+```json
+{"delete_face": {"email": "alice@example.com", "file": "face_1793210841226970719_1.jpeg"}}
+```
+
+Returns:
+
+```json
+{"deleted": "face_1793210841226970719_1.jpeg", "email": "alice@example.com", "remaining": 2}
+```
+
 **`record_order`** — Append a completed drink to a customer's order history (the data behind "the usual"). The coffee service calls this automatically after a successful brew when `customer_detector_name` is configured and the order carried a `customer_email`; you can also call it directly. An unknown email is a no-op (not an error), so it's safe to call for anonymous walk-ups.
 
 ```json

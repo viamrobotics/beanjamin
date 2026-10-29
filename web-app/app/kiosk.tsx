@@ -22,6 +22,7 @@ const FaceRegister = dynamic(
   { ssr: false },
 );
 import { OrderConfirmation } from "./order/order-confirmation";
+import { Profile } from "./order/profile";
 import { OrderTracker } from "./order/order-tracker";
 import { CamFeed } from "./order/cam-feed";
 import {
@@ -40,7 +41,13 @@ import { misspellName } from "./lib/misspell";
 // splitDrink), with the fulfillment it is usually ordered for.
 type Usual = DrinkChoice & { fulfillment: Fulfillment };
 
-type Step = "welcome" | "drink" | "name" | "face-register" | "confirmation";
+type Step =
+  | "welcome"
+  | "drink"
+  | "name"
+  | "face-register"
+  | "confirmation"
+  | "profile";
 
 // 'hidden' = no tracker. 'auto' = right-rail tracker that appeared either
 // because this kiosk placed an order or because the page-level poll noticed
@@ -393,6 +400,17 @@ export function Kiosk() {
     }
   }
 
+  // Back from the profile page to a fresh welcome screen. The profile page may
+  // have shown someone other than whoever is recognised, and the welcome
+  // screen only clears a greeting it set itself, so start it from scratch.
+  function leaveProfile() {
+    setStep("welcome");
+    setName(prefillName);
+    setEmail(prefillEmail);
+    setWelcomeBack(null);
+    setUsuals([]);
+  }
+
   const handleConfirmationDismiss = useCallback(() => {
     setStep("welcome");
     setName(prefillName);
@@ -441,6 +459,18 @@ export function Kiosk() {
 
   // --- Render the left panel content based on step ---
   function renderStep() {
+    if (step === "profile") {
+      return (
+        <Profile
+          viamConn={viamConn}
+          connected={connected}
+          recognizedName={welcomeBack}
+          recognizedEmail={email}
+          onBack={leaveProfile}
+        />
+      );
+    }
+
     if (step === "face-register") {
       return (
         <FaceRegister
@@ -615,6 +645,15 @@ export function Kiosk() {
           style={{ animationDelay: welcomeBack ? "1400ms" : "1200ms" }}
         >
           Place an order
+        </button>
+
+        <button
+          onClick={() => setStep("profile")}
+          disabled={!connected}
+          className="anim-in mt-6 text-sm font-mono text-neutral-400 uppercase tracking-widest hover:text-neutral-600 transition-colors disabled:text-neutral-300 disabled:cursor-not-allowed disabled:hover:text-neutral-300"
+          style={{ animationDelay: welcomeBack ? "1600ms" : "1400ms" }}
+        >
+          Edit my profile
         </button>
 
         {trackerMode === "hidden" && (

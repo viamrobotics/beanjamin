@@ -230,6 +230,14 @@ func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]any) (
 	if email, ok := cmd["remove_customer"].(string); ok {
 		return cd.removeCustomer(ctx, email)
 	}
+	if email, ok := cmd["list_faces"].(string); ok {
+		return cd.listFaces(email)
+	}
+	if del, ok := cmd["delete_face"].(map[string]any); ok {
+		email, _ := del["email"].(string)
+		file, _ := del["file"].(string)
+		return cd.deleteFace(ctx, email, file)
+	}
 	if rec, ok := cmd["record_order"].(map[string]any); ok {
 		email, _ := rec["email"].(string)
 		drink, _ := rec["drink"].(string)
@@ -245,7 +253,7 @@ func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]any) (
 			"camera_name": cd.camera.Name().ShortName(),
 		}, nil
 	}
-	return nil, fmt.Errorf("unknown command, supported: register_customer, finish_registration, cancel_registration, identify_customer, list_customers, remove_customer, record_order, get_usual, get_info")
+	return nil, fmt.Errorf("unknown command, supported: register_customer, finish_registration, cancel_registration, identify_customer, list_customers, remove_customer, list_faces, delete_face, record_order, get_usual, get_info")
 }
 
 // registerCustomer captures an image from the camera and stages it for the
