@@ -52,6 +52,12 @@
       "model": "viam:beanjamin:chore-wheel",
       "short_description": "Posts the weekly maintenance rota to Slack, rotating people through chores.",
       "markdown_link": "README.md#model-viambeanjaminchore-wheel"
+    },
+    {
+      "api": "rdk:component:camera",
+      "model": "viam:beanjamin:ipad-camera",
+      "short_description": "Camera that serves JPEG frames pushed from a browser, such as the kiosk iPad.",
+      "markdown_link": "README.md#model-viambeanjaminipad-camera"
     }
   ],
   "entrypoint": "bin/beanjamin",

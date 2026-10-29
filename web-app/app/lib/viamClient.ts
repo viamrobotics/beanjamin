@@ -135,6 +135,7 @@ function getDevStep(): string {
 let sdkCache: {
   createViamClient: typeof import("@viamrobotics/sdk").createViamClient;
   GenericServiceClient: typeof import("@viamrobotics/sdk").GenericServiceClient;
+  CameraClient: typeof import("@viamrobotics/sdk").CameraClient;
   Cookies: typeof import("js-cookie").default;
 } | null = null;
 
@@ -147,6 +148,7 @@ async function loadSDK() {
   sdkCache = {
     createViamClient: viamSdk.createViamClient,
     GenericServiceClient: viamSdk.GenericServiceClient,
+    CameraClient: viamSdk.CameraClient,
     Cookies: cookies.default,
   };
   return sdkCache;
@@ -914,4 +916,22 @@ function devFramePose(frame: string): PoseValue {
     o_z: 0.03,
     theta: -180,
   });
+}
+
+/**
+ * Push one JPEG frame to a `viam:beanjamin:ipad-camera` component, which serves
+ * the latest frame as an ordinary camera. `jpegBase64` is the bare base64 body
+ * (no `data:` prefix). Dev mode drops the frame so the kiosk can run the
+ * camera hook without a machine.
+ */
+export async function pushCameraFrame(
+  conn: ViamConnection,
+  cameraName: string,
+  jpegBase64: string,
+): Promise<void> {
+  if (isDevMode()) return;
+
+  const sdk = await loadSDK();
+  const cam = new sdk.CameraClient(conn.robotClient, cameraName);
+  await cam.doCommand({ push_frame: jpegBase64 });
 }

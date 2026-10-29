@@ -6,10 +6,12 @@ import (
 	"beanjamin/crm"
 	"beanjamin/customerdetector"
 	"beanjamin/dialcontrolmotion"
+	"beanjamin/ipadcamera"
 	"beanjamin/maintenancesensor"
 	"beanjamin/multiposesexecutionswitch"
 	"beanjamin/ordersensor"
 
+	"go.viam.com/rdk/components/camera"
 	"go.viam.com/rdk/components/sensor"
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/module"
@@ -27,5 +29,6 @@ func main() {
 		resource.APIModel{API: generic.API, Model: customerdetector.Model},
 		resource.APIModel{API: generic.API, Model: crm.Model},
 		resource.APIModel{API: generic.API, Model: chorewheel.Model},
+		resource.APIModel{API: camera.API, Model: ipadcamera.Model},
 	)
 }

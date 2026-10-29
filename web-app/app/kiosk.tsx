@@ -37,6 +37,7 @@ import {
   type Fulfillment,
 } from "./lib/viamClient";
 import { useViamConnection } from "./lib/useViamConnection";
+import { useIpadCamera } from "./lib/useIpadCamera";
 import { misspellName } from "./lib/misspell";
 
 // A usual as the kiosk holds it: the drink and beans split apart (see
@@ -168,6 +169,24 @@ export function Kiosk() {
   } = useViamConnection(partId);
   const [appError, setAppError] = useState<string | null>(null);
   const viamError = connectionError ?? appError;
+
+  // Opt-in: `?ipadcam=1` makes this browser's camera the machine's `ipad-cam`
+  // for the life of the kiosk. The rate follows who needs frames: welcome
+  // re-identifies about once a second, so 2 fps gives each check a fresh frame;
+  // face-register takes the registration still, so it gets a sharper 5 fps;
+  // everywhere else a trickle keeps the latest frame from going stale.
+  const ipadCamEnabled = searchParams.get("ipadcam") === "1";
+  const ipadCam = useIpadCamera({
+    enabled: ipadCamEnabled,
+    conn: viamConn,
+    cameraName: searchParams.get("ipadcam_name") ?? "ipad-cam",
+    fps: step === "face-register" ? 5 : step === "welcome" ? 2 : 1,
+    width: 640,
+    facing:
+      searchParams.get("ipadcam_facing") === "environment"
+        ? "environment"
+        : "user",
+  });
 
   // Make the machine-name header visible (falling back to "Beanjamin") if the
   // initial connect failed — otherwise the heading stays invisible forever.
@@ -766,6 +785,28 @@ export function Kiosk() {
 
   return (
     <div className="flex h-[var(--app-height,100dvh)]">
+      {ipadCamEnabled && (
+        <>
+          <video
+            ref={ipadCam.videoRef}
+            playsInline
+            muted
+            className="pointer-events-none fixed left-0 top-0 h-px w-px opacity-0"
+          />
+          {ipadCam.status !== "running" && (
+            <button
+              onClick={ipadCam.start}
+              className="fixed bottom-3 left-3 z-50 rounded bg-neutral-800 px-3 py-1.5 text-xs text-white"
+            >
+              {ipadCam.status === "lost"
+                ? "Camera lost, tap to retry"
+                : ipadCam.status === "starting"
+                  ? "Starting camera…"
+                  : "Tap to start camera"}
+            </button>
+          )}
+        </>
+      )}
       {/* Left panel: ordering flow */}
       <div className="flex-1 min-w-0 relative transition-all duration-500">
         {renderStep()}

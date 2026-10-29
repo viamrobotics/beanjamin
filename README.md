@@ -1480,6 +1480,55 @@ The digest's `CRON_TZ=` caveat applies here too, with one wrinkle of its own: th
 
 ---
 
+## Model: `viam:beanjamin:ipad-camera`
+
+**API:** `rdk:component:camera`
+
+A camera whose frames come from a browser instead of hardware. The web app's kiosk opens its device's camera (for example the kiosk iPad) and pushes JPEG frames here through `DoCommand`; the component keeps only the latest one and serves it from `GetImages` as a single image from source `ipad`. Point anything that takes a camera at it, such as `customer-detector`'s `camera_name`.
+
+Frames older than `max_frame_age_ms` are refused, so a locked or backgrounded device produces an error instead of a stale image reaching face recognition. Point clouds are not supported.
+
+### Configuration
+
+```json
+{
+  "max_frame_age_ms": <int>
+}
+```
+
+| Name               | Type | Required | Description |
+| ------------------ | ---- | -------- | ----------- |
+| `max_frame_age_ms` | int  | No       | How old the latest frame may be before `GetImages` returns an error. Defaults to `5000`. Keep it above the slowest rate the browser pushes at. |
+
+### Example Configuration
+
+```json
+{
+  "name": "ipad-cam",
+  "api": "rdk:component:camera",
+  "model": "viam:beanjamin:ipad-camera",
+  "attributes": {}
+}
+```
+
+### DoCommand
+
+```json
+{ "push_frame": "<base64 JPEG>" }
+```
+
+Stores a new frame. A `data:image/jpeg;base64,` prefix is accepted. Anything that isn't a decodable JPEG, or is larger than 8 MiB, is rejected.
+
+```json
+{ "status": true }
+```
+
+Returns `frames_received`, `width`, `height`, and `age_ms` (milliseconds since the last frame, absent before the first).
+
+### Using it from the kiosk
+
+Open the kiosk with `ipadcam=1` and the page keeps its camera open for as long as it is up, pushing frames to this component. Browsers only allow camera access on HTTPS or `localhost`, and the first load may need a tap on "Tap to start camera" unless the site's camera permission is already set to Allow. See the web app's [README](web-app/README.md) for the query parameters.
+
 ## Development
 
 When iterating on poses, we recommend using the built-in `viam` CLI motion commands to query and test arm positions on a running machine.
