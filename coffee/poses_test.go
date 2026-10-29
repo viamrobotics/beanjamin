@@ -46,15 +46,12 @@ func TestRequiredPosesConditional(t *testing.T) {
 			t.Errorf("bean_options should require %q", name)
 		}
 	}
-	// Grinders configured before collect poses existed keep them optional: the
-	// regular grinder, and decaf enabled through can_serve_decaf.
+	// The regular grinder, and decaf enabled through can_serve_decaf, need
+	// their collect poses like any other grinder.
 	legacy := (&beanjaminCoffee{cfg: &Config{CanServeDecaf: true}}).requiredPoses()
-	if !hasPose(legacy, "decaf_grinder_activate") {
-		t.Error("can_serve_decaf should still require the decaf activate pose")
-	}
-	for _, name := range []string{"decaf_grinder_collect", "grinder_collect"} {
-		if hasPose(legacy, name) || hasPose(base, name) {
-			t.Errorf("%q should stay optional outside bean_options", name)
+	for _, name := range []string{"grinder_collect", "decaf_grinder_activate", "decaf_grinder_collect"} {
+		if !hasPose(legacy, name) {
+			t.Errorf("should require %q", name)
 		}
 	}
 

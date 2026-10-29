@@ -767,7 +767,7 @@ One consequence worth knowing: a job that fails is only a log line plus an entry
 
 Which poses the service can reach, and which frame each moves. The frame is the switch's `component_name`; the table records what those switches are expected to carry.
 
-**The grind sequence.** A grind makes one free-planned move, to the grinder's `approach` pose, then only straight-line moves: in to `activate` to press the button, back to `collect` under the chute, circles there while beans fall, and — when `collect` is its own pose — back out to `approach`, so the next free move (to the tamper) starts clear of the row too. The free move is the one the planner routes on its own, and the grinders' modelled fronts leave a channel at chute height along the row, so a free move that ends close to the grinders can sweep the portafilter along the neighbouring grinders. A separate `collect` pose lets `approach` sit further out — the planner's goal clear of the row — while the grounds are still caught where they fall. Define it like the approach is today, relative to the activate pose:
+**The grind sequence.** A grind makes one free-planned move, to the grinder's `approach` pose, then only straight-line moves: in to `activate` to press the button, back to `collect` under the chute, circles there while beans fall, and back out to `approach`, so the next free move (to the tamper) starts clear of the row too. The free move is the one the planner routes on its own, and the grinders' modelled fronts leave a channel at chute height along the row, so a free move that ends close to the grinders can sweep the portafilter along the neighbouring grinders. A separate `collect` pose lets `approach` sit further out — the planner's goal clear of the row — while the grounds are still caught where they fall. Every grinder needs all three; define approach and collect relative to the activate pose:
 
 ```json
 {"pose_name": "decaf_grinder_collect",  "baseline": "decaf_grinder_activate", "translation": {"y": 25}},
@@ -778,9 +778,8 @@ Which poses the service can reach, and which frame each moves. The frame is the 
 
 | Pose | Used for | Required when |
 | ---- | -------- | ------------- |
-| `grinder_approach`, `grinder_activate` | grind | always |
-| `<beans>_grinder_approach`, `<beans>_grinder_activate` | grind from that beans' grinder (e.g. `decaf_grinder_approach`) | each `bean_options` entry |
-| `grinder_collect`, `<beans>_grinder_collect` | where the filter circles under the chute while the grinder dispenses | each `bean_options` entry; optional for the regular grinder and for decaf enabled through `can_serve_decaf`, which collect at their approach pose without one |
+| `grinder_approach`, `grinder_activate`, `grinder_collect` | grind (see the grind sequence above) | always |
+| `<beans>_grinder_approach`, `<beans>_grinder_activate`, `<beans>_grinder_collect` | grind from that beans' grinder (e.g. `decaf_grinder_approach`) | each `bean_options` entry, and decaf under `can_serve_decaf` |
 | `tamper_approach`, `tamper_activate` | tamp | always |
 | `coffee_approach`, `coffee_in`, `coffee_locked_final` | lock the portafilter | always |
 | `coffee_shake`, `coffee_shake_left` | dislodge a stuck puck while unlocking (the two lean opposite ways) | `portafilter_shake_sec > 0` |

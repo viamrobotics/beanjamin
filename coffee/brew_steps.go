@@ -26,16 +26,16 @@ func grindActionName(beans string) string {
 }
 
 // grindBeans approaches the grinder for beans (grinderPoses), presses its button,
-// then circles at the collect pose (grinderCollect) under the chute to
-// distribute grounds evenly while it dispenses.
+// then circles at the collect pose under the chute to distribute grounds
+// evenly while it dispenses.
 func (s *beanjaminCoffee) grindBeans(ctx, cancelCtx context.Context, beans string) error {
-	approachPose, activatePose := grinderPoses(beans)
+	poses := grinderPoses(beans)
 	label := grindActionName(beans)
-	for _, step := range s.grindSteps(approachPose, activatePose, s.grinderCollect(beans), grinderButtonCollisions(beans)) {
+	for _, step := range s.grindSteps(poses, grinderButtonCollisions(beans)) {
 		// Mark grounds only as we reach the activate pose: the approach move
 		// keeps the filter clean, and the grinder dispenses once it's under the
 		// chute. From here onward the filter needs cleaning before it goes home.
-		if step.PoseName == activatePose {
+		if step.PoseName == poses.activate {
 			s.handOffEffect(func() { s.portafilterHasGrounds.Store(true) })
 		}
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
@@ -48,35 +48,28 @@ func (s *beanjaminCoffee) grindBeans(ctx, cancelCtx context.Context, beans strin
 // grindSteps builds the grind sequence: a free move to the approach pose, a
 // straight press of the button at the activate pose, a straight move back to
 // the collect pose under the chute, circles there while the grinder
-// dispenses, and — when collect is its own pose — a straight move back out to
-// the approach. The collect pose can be the approach pose itself; a separate one
-// lets the approach — the end of the only free-planned move — sit further out
-// from the row of grinders than the filter has to be to catch the grounds.
-// buttonCollisions covers only the linear moves that press the grinder button
-// and rotate the filter under the chute: an allowance applies to the whole
-// plan, so granting it on the free-planned approach would let the planner
-// route the traverse through the button shield.
-func (s *beanjaminCoffee) grindSteps(approachPose, activatePose, collectPose string, buttonCollisions []AllowedCollision) []Step {
+// dispenses, and a straight move back out to the approach. Only the first move
+// is free-planned, so the approach can sit further out from the row of
+// grinders than the filter has to be to catch the grounds, and the next
+// free-planned move (to the tamper) starts from out there too rather than
+// sweeping the filter, full of grounds, along the neighbouring grinders.
+// buttonCollisions covers only the linear moves: an allowance applies to the
+// whole plan, so granting it on the free-planned approach would let the
+// planner route the traverse through the button shield.
+func (s *beanjaminCoffee) grindSteps(p grinderPoseNames, buttonCollisions []AllowedCollision) []Step {
 	slow := s.slowMoveOptions()
-	steps := []Step{
-		{PoseName: approachPose, PoseSwitch: s.filterSw},
-		{PoseName: activatePose, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint,
+	return []Step{
+		{PoseName: p.approach, PoseSwitch: s.filterSw},
+		{PoseName: p.activate, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint,
 			AllowedCollisions: buttonCollisions, MoveOptions: slow},
-		{PoseName: collectPose, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint,
+		{PoseName: p.collect, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint,
 			AllowedCollisions: buttonCollisions, MoveOptions: slow},
-		{PoseName: collectPose, PoseSwitch: s.filterSw,
+		{PoseName: p.collect, PoseSwitch: s.filterSw,
 			CircularRadiusMm: 8, CircularDurationSec: s.grindDurationSec(), CircularPointsPerRev: 8,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: buttonCollisions, MoveOptions: slow},
+		{PoseName: p.approach, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint,
+			AllowedCollisions: buttonCollisions, MoveOptions: slow},
 	}
-	// With a separate collect pose, back out to the approach in a straight line
-	// before handing over: the next move (to the tamper) is free-planned, and
-	// starting it from under the chute would let the planner sweep the filter,
-	// full of grounds, along the neighbouring grinders' fronts.
-	if collectPose != approachPose {
-		steps = append(steps, Step{PoseName: approachPose, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint,
-			AllowedCollisions: buttonCollisions, MoveOptions: slow})
-	}
-	return steps
 }
 
 func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
