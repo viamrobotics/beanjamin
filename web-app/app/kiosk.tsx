@@ -548,6 +548,29 @@ export function Kiosk() {
             ← Back to Fleet Dashboard
           </Link>
         )}
+        <button
+          type="button"
+          onClick={() => setStep("profile")}
+          disabled={!connected}
+          aria-label="Edit my profile"
+          title="Edit my profile"
+          className="anim-in absolute bottom-6 left-6 h-11 w-11 rounded-full border border-neutral-200 bg-white text-neutral-900 transition-colors hover:bg-neutral-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400 disabled:text-neutral-300 disabled:hover:bg-white disabled:cursor-not-allowed"
+          style={{ animationDelay: "1400ms" }}
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+            className="mx-auto h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="12" cy="8" r="4" />
+            <path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" />
+          </svg>
+        </button>
         <Image
           src="/beans.png"
           alt="coffee beans"
@@ -645,15 +668,6 @@ export function Kiosk() {
           style={{ animationDelay: welcomeBack ? "1400ms" : "1200ms" }}
         >
           Place an order
-        </button>
-
-        <button
-          onClick={() => setStep("profile")}
-          disabled={!connected}
-          className="anim-in mt-6 text-sm font-mono text-neutral-400 uppercase tracking-widest hover:text-neutral-600 transition-colors disabled:text-neutral-300 disabled:cursor-not-allowed disabled:hover:text-neutral-300"
-          style={{ animationDelay: welcomeBack ? "1600ms" : "1400ms" }}
-        >
-          Edit my profile
         </button>
 
         {trackerMode === "hidden" && (
