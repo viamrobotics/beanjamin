@@ -1,11 +1,15 @@
 package coffee
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
+	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
+	"go.viam.com/rdk/testutils/inject"
 
 	"beanjamin/coffee/order"
 )
@@ -16,10 +20,10 @@ import (
 // planner route the traverse through the button the shield protects.
 func TestGrindStepsCollisionScope(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{}}
-	steps := s.grindSteps(filterPoseGrinderApproach, filterPoseGrinderActivate, grinderButtonCollisions(order.BeansRegular))
+	steps := s.grindSteps(filterPoseGrinderApproach, filterPoseGrinderActivate, filterPoseGrinderCollect, grinderButtonCollisions(order.BeansRegular))
 
 	if len(steps) != 4 {
-		t.Fatalf("grindSteps returned %d steps, want 4 (approach, activate, retreat, rotate)", len(steps))
+		t.Fatalf("grindSteps returned %d steps, want 4 (approach, activate, collect, rotate)", len(steps))
 	}
 
 	tests := []struct {
@@ -31,8 +35,8 @@ func TestGrindStepsCollisionScope(t *testing.T) {
 	}{
 		{"approach", steps[0], filterPoseGrinderApproach, false, false},
 		{"activate", steps[1], filterPoseGrinderActivate, false, true},
-		{"retreat", steps[2], filterPoseGrinderApproach, false, true},
-		{"rotate", steps[3], filterPoseGrinderApproach, true, true},
+		{"collect", steps[2], filterPoseGrinderCollect, false, true},
+		{"rotate", steps[3], filterPoseGrinderCollect, true, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -45,7 +49,61 @@ func TestGrindStepsCollisionScope(t *testing.T) {
 			if gotCollision := len(tt.step.AllowedCollisions) > 0; gotCollision != tt.wantCollision {
 				t.Errorf("has AllowedCollisions = %v, want %v", gotCollision, tt.wantCollision)
 			}
+			if tt.wantPose != filterPoseGrinderApproach && tt.step.LinearConstraint == nil {
+				t.Error("every move after the approach should be a straight line")
+			}
 		})
+	}
+}
+
+// optionalPoseSwitch answers get_pose_by_name for the poses it has and errors
+// for the rest, as a multi-poses-execution-switch does for an unknown name.
+func optionalPoseSwitch(name string, poses map[string]map[string]any) *inject.Switch {
+	sw := inject.NewSwitch(name)
+	sw.DoFunc = func(_ context.Context, cmd map[string]any) (map[string]any, error) {
+		poseName, _ := cmd["get_pose_by_name"].(string)
+		if p, ok := poses[poseName]; ok {
+			return p, nil
+		}
+		return nil, fmt.Errorf("pose %q not found", poseName)
+	}
+	sw.GetNumberOfPositionsFunc = func(context.Context, map[string]any) (uint32, []string, error) {
+		names := make([]string, 0, len(poses))
+		for n := range poses {
+			names = append(names, n)
+		}
+		return uint32(len(names)), names, nil
+	}
+	return sw
+}
+
+// A grinder collects at its collect pose when the switch has one, and at its
+// approach pose otherwise — the behavior of every machine configured before
+// collect poses existed.
+func TestGrinderCollectFallsBackToApproach(t *testing.T) {
+	at := map[string]any{"x": 10.0, "y": -630.0, "z": 383.0, "o_z": 1.0}
+	s := &beanjaminCoffee{
+		cfg:      &Config{BeanOptions: []BeanOption{{Name: "decaf"}, {Name: "light_roast"}}},
+		logger:   logging.NewTestLogger(t),
+		filterSw: optionalPoseSwitch("filter", map[string]map[string]any{"light_roast_grinder_collect": at}),
+	}
+	if err := s.resolveGrinderCollectPoses(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for beans, want := range map[string]string{
+		"regular":     "grinder_approach",
+		"decaf":       "decaf_grinder_approach",
+		"light_roast": "light_roast_grinder_collect",
+	} {
+		if got := s.grinderCollect(beans); got != want {
+			t.Errorf("grinderCollect(%q) = %q, want %q", beans, got, want)
+		}
+	}
+
+	// A collect pose that resolves to the origin is a placeholder, not a pose.
+	s.filterSw = optionalPoseSwitch("filter", map[string]map[string]any{"grinder_collect": {"o_z": 1.0}})
+	if err := s.resolveGrinderCollectPoses(context.Background()); err == nil || !strings.Contains(err.Error(), "grinder_collect") {
+		t.Errorf("want a zero-position error naming grinder_collect, got %v", err)
 	}
 }
 
@@ -60,6 +118,9 @@ func TestGrinderNames(t *testing.T) {
 		{"decaf", "decaf_grinder_approach", "decaf_grinder_activate", "decaf-grinder-button-shield", "grind_decaf"},
 		{"light_roast", "light_roast_grinder_approach", "light_roast_grinder_activate", "light-roast-grinder-button-shield", "grind_light_roast"},
 	} {
+		if got, want := grinderCollectPose(tt.beans), strings.Replace(tt.approach, "approach", "collect", 1); got != want {
+			t.Errorf("grinderCollectPose(%q) = %q, want %q", tt.beans, got, want)
+		}
 		approach, activate := grinderPoses(tt.beans)
 		if approach != tt.approach || activate != tt.activate {
 			t.Errorf("grinderPoses(%q) = %q, %q; want %q, %q", tt.beans, approach, activate, tt.approach, tt.activate)

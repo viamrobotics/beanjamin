@@ -6,6 +6,7 @@ package coffee
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/golang/geo/r3"
@@ -19,6 +20,7 @@ const (
 	//filter pose switches
 	filterPoseGrinderApproach            = "grinder_approach"
 	filterPoseGrinderActivate            = "grinder_activate"
+	filterPoseGrinderCollect             = "grinder_collect"
 	filterPoseTamperApproach             = "tamper_approach"
 	filterPoseTamperActivate             = "tamper_activate"
 	filterPoseCoffeeApproach             = "coffee_approach"
@@ -252,7 +254,7 @@ func (s *beanjaminCoffee) validateConfiguredPoses(ctx context.Context) error {
 		}
 	}
 	s.logger.Infof("pose validation: %d configured pose(s) resolved and non-zero", len(poses))
-	return nil
+	return s.resolveGrinderCollectPoses(ctx)
 }
 
 // grinderPoses names the filter-switch poses at the grinder for beans: the
@@ -263,6 +265,59 @@ func grinderPoses(beans string) (approach, activate string) {
 		return filterPoseGrinderApproach, filterPoseGrinderActivate
 	}
 	return beans + "_" + filterPoseGrinderApproach, beans + "_" + filterPoseGrinderActivate
+}
+
+// grinderCollectPose names the optional filter-switch pose the filter sits at
+// under beans' grinder chute while it dispenses: grinder_collect, or
+// <beans>_grinder_collect. Without it the filter collects at the approach pose
+// (grinderCollect).
+func grinderCollectPose(beans string) string {
+	if beans == "" || beans == order.BeansRegular {
+		return filterPoseGrinderCollect
+	}
+	return beans + "_" + filterPoseGrinderCollect
+}
+
+// grinderCollect is the pose the filter collects grounds at for beans: its
+// collect pose when the switch has one, else its approach pose, which is where
+// every grinder collected before collect poses existed.
+func (s *beanjaminCoffee) grinderCollect(beans string) string {
+	if s.collectPoses[beans] {
+		return grinderCollectPose(beans)
+	}
+	approach, _ := grinderPoses(beans)
+	return approach
+}
+
+// resolveGrinderCollectPoses records which grinders have a collect pose on the
+// filter switch. Optional, so a missing one is not an error; one that resolves
+// to a zero position is, like any other configured pose.
+func (s *beanjaminCoffee) resolveGrinderCollectPoses(ctx context.Context) error {
+	s.collectPoses = map[string]bool{}
+	// The switch lists its pose names; asking it for an unknown one by name
+	// would work too, but logs a warning on the switch for every grinder that
+	// simply has no collect pose.
+	_, names, err := s.filterSw.GetNumberOfPositions(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("pose validation: list poses on %q switch: %w", s.filterSw.Name().ShortName(), err)
+	}
+	for _, beans := range append([]string{order.BeansRegular}, s.cfg.beanNames()...) {
+		name := grinderCollectPose(beans)
+		if !slices.Contains(names, name) {
+			s.logger.Debugf("pose validation: no %q pose; %s grinds collect at the approach pose", name, beans)
+			continue
+		}
+		pd, err := s.fetchPose(ctx, s.filterSw, name)
+		if err != nil {
+			return fmt.Errorf("pose validation: pose %q on %q switch: %w", name, s.filterSw.Name().ShortName(), err)
+		}
+		if pd.pose.Point() == (r3.Vector{}) {
+			return fmt.Errorf("pose validation: pose %q on %q switch resolves to a zero position — is it configured?", name, s.filterSw.Name().ShortName())
+		}
+		s.collectPoses[beans] = true
+		s.logger.Infof("pose validation: %s grinds collect at %q", beans, name)
+	}
+	return nil
 }
 
 // grinderShieldFrame names the obstacle guarding the button of beans'

@@ -112,7 +112,10 @@ type beanjaminCoffee struct {
 	// filter, until cleanPortafilter clears them. A fault's log reports it,
 	// since the operator then has to clean the filter by hand.
 	portafilterHasGrounds atomic.Bool
-	orderSensorSink       orderSensorSink // optional; named order-sensor from deps, nil if unset
+	// collectPoses records, per beans, whether its grinder has a collect pose
+	// on the filter switch (grinderCollect). Set once at construction.
+	collectPoses    map[string]bool
+	orderSensorSink orderSensorSink // optional; named order-sensor from deps, nil if unset
 	// Optional usage sensor updated during the brew lifecycle (sensor_usage.go).
 	// nil when usage_sensor_name is unset, in which case every update is a
 	// no-op. Holds all counters keyed by <beans>_grinds, usage,

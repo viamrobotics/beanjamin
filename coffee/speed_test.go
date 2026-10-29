@@ -37,7 +37,7 @@ func TestPickupRetreatSpeed(t *testing.T) {
 func TestContactStepsAreSlow(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
 	for label, seq := range map[string][]Step{
-		"grind":  s.grindSteps(filterPoseGrinderApproach, filterPoseGrinderActivate, grinderButtonCollisions("regular")),
+		"grind":  s.grindSteps(filterPoseGrinderApproach, filterPoseGrinderActivate, filterPoseGrinderCollect, grinderButtonCollisions("regular")),
 		"button": s.brewButtonSteps(clawPoseEspressoButtonApproach, clawPoseEspressoButtonPress),
 		"purge":  s.purgeSteps(),
 	} {

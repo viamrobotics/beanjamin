@@ -25,13 +25,13 @@ func grindActionName(beans string) string {
 	return "grind_" + beans
 }
 
-// grindBeans approaches the grinder for beans (grinderPoses), circles under its
-// chute to distribute grounds evenly while it dispenses, then returns to the
-// approach pose.
+// grindBeans approaches the grinder for beans (grinderPoses), presses its button,
+// then circles at the collect pose (grinderCollect) under the chute to
+// distribute grounds evenly while it dispenses.
 func (s *beanjaminCoffee) grindBeans(ctx, cancelCtx context.Context, beans string) error {
 	approachPose, activatePose := grinderPoses(beans)
 	label := grindActionName(beans)
-	for _, step := range s.grindSteps(approachPose, activatePose, grinderButtonCollisions(beans)) {
+	for _, step := range s.grindSteps(approachPose, activatePose, s.grinderCollect(beans), grinderButtonCollisions(beans)) {
 		// Mark grounds only as we reach the activate pose: the approach move
 		// keeps the filter clean, and the grinder dispenses once it's under the
 		// chute. From here onward the filter needs cleaning before it goes home.
@@ -45,19 +45,25 @@ func (s *beanjaminCoffee) grindBeans(ctx, cancelCtx context.Context, beans strin
 	return nil
 }
 
-// grindSteps builds the grind sequence. buttonCollisions covers only the linear
-// moves that press the grinder button and rotate the filter under the chute:
-// an allowance applies to the whole plan, so granting it on the free-planned
-// approach would let the planner route the traverse through the button shield.
-func (s *beanjaminCoffee) grindSteps(approachPose, activatePose string, buttonCollisions []AllowedCollision) []Step {
+// grindSteps builds the grind sequence: a free move to the approach pose, a
+// straight press of the button at the activate pose, a straight move back to
+// the collect pose under the chute, and circles there while the grinder
+// dispenses. The collect pose can be the approach pose itself; a separate one
+// lets the approach — the end of the only free-planned move — sit further out
+// from the row of grinders than the filter has to be to catch the grounds.
+// buttonCollisions covers only the linear moves that press the grinder button
+// and rotate the filter under the chute: an allowance applies to the whole
+// plan, so granting it on the free-planned approach would let the planner
+// route the traverse through the button shield.
+func (s *beanjaminCoffee) grindSteps(approachPose, activatePose, collectPose string, buttonCollisions []AllowedCollision) []Step {
 	slow := s.slowMoveOptions()
 	return []Step{
 		{PoseName: approachPose, PoseSwitch: s.filterSw},
 		{PoseName: activatePose, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint,
 			AllowedCollisions: buttonCollisions, MoveOptions: slow},
-		{PoseName: approachPose, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint,
+		{PoseName: collectPose, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint,
 			AllowedCollisions: buttonCollisions, MoveOptions: slow},
-		{PoseName: approachPose, PoseSwitch: s.filterSw,
+		{PoseName: collectPose, PoseSwitch: s.filterSw,
 			CircularRadiusMm: 8, CircularDurationSec: s.grindDurationSec(), CircularPointsPerRev: 8,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: buttonCollisions, MoveOptions: slow},
 	}
