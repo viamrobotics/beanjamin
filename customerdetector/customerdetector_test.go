@@ -357,6 +357,27 @@ func TestFrequentOrdersThreshold(t *testing.T) {
 	}
 }
 
+// When history is varied enough that nothing clears 25% (five distinct
+// combos, one each — 20% apiece), the single most-frequent choice is
+// returned alone, tie-broken toward the most recent, rather than leaving a
+// customer with real history offered nothing.
+func TestFrequentOrdersFallsBackBelowThreshold(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	at := func(h int) time.Time { return t0.Add(time.Duration(h) * time.Hour) }
+
+	got := frequentOrders([]orderHistoryEntry{
+		{Drink: "espresso", Beans: "regular", Fulfillment: "pickup", At: at(0)},
+		{Drink: "lungo", Beans: "regular", Fulfillment: "pickup", At: at(1)},
+		{Drink: "latte", Beans: "regular", Fulfillment: "delivery", At: at(2)},
+		{Drink: "iced_coffee", Beans: "regular", Fulfillment: "pickup", At: at(3)},
+		{Drink: "iced_latte", Beans: "regular", Fulfillment: "pickup", At: at(4)},
+	})
+	want := []frequentOrder{{drinkChoice{"iced_latte", "regular", "pickup"}, 1}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("frequentOrders = %+v, want only the most recent 1x choice: %+v", got, want)
+	}
+}
+
 // record_order from a client that predates beans still records decaf, and
 // get_usual hands a decaf espresso back under its legacy id: the kiosk orders
 // the usual by that id alone, so it must not come back as plain espresso.

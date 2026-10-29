@@ -598,8 +598,8 @@ func (cd *customerDetector) recordOrder(email, drink, beans, fulfillment string)
 	return map[string]any{"recorded": true, "email": email, "drink": drink, "beans": beans, "fulfillment": fulfillment}, nil
 }
 
-// getUsual returns every order choice making up at least minFrequentFraction
-// of the customer's history, or {has_usual:false} if none qualify.
+// getUsual returns the customer's frequent orders (see frequentOrders), or
+// {has_usual:false} if they have no recorded history at all.
 func (cd *customerDetector) getUsual(email string) (map[string]any, error) {
 	if email == "" {
 		return nil, fmt.Errorf("get_usual requires an email")
@@ -648,10 +648,13 @@ type frequentOrder struct {
 
 // frequentOrders lists every drink/beans/fulfillment choice making up at
 // least minFrequentFraction of the customer's order history, most-frequent
-// first, ties broken toward the most recent. Entries from before beans or
-// fulfillment were recorded are read through order.LegacyDrink and default to
-// pickup, so an old "decaf" counts as a decaf espresso and predates delivery
-// entirely.
+// first, ties broken toward the most recent. If the history is varied enough
+// that nothing clears the threshold, the single most-frequent choice is
+// returned alone, so a customer with real order history is never left with
+// none; nil is returned only when there is no history at all. Entries from
+// before beans or fulfillment were recorded are read through
+// order.LegacyDrink and default to pickup, so an old "decaf" counts as a
+// decaf espresso and predates delivery entirely.
 func frequentOrders(orders []orderHistoryEntry) []frequentOrder {
 	total := len(orders)
 	if total == 0 {
@@ -674,20 +677,28 @@ func frequentOrders(orders []orderHistoryEntry) []frequentOrder {
 		}
 	}
 
-	var out []frequentOrder
+	all := make([]frequentOrder, 0, len(counts))
 	for c, n := range counts {
+		all = append(all, frequentOrder{c, n})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].count != all[j].count {
+			return all[i].count > all[j].count
+		}
+		return lastAt[all[i].drinkChoice].After(lastAt[all[j].drinkChoice])
+	})
+
+	var out []frequentOrder
+	for _, fo := range all {
 		// minFrequentFraction is a power-of-two fraction and total is well
 		// within float64's exact integer range, so this comparison is exact.
-		if float64(n) >= minFrequentFraction*float64(total) {
-			out = append(out, frequentOrder{c, n})
+		if float64(fo.count) >= minFrequentFraction*float64(total) {
+			out = append(out, fo)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].count != out[j].count {
-			return out[i].count > out[j].count
-		}
-		return lastAt[out[i].drinkChoice].After(lastAt[out[j].drinkChoice])
-	})
+	if len(out) == 0 {
+		out = all[:1]
+	}
 	return out
 }
 
