@@ -813,6 +813,13 @@ func (s *beanjaminCoffee) planToRawPose(
 	if len(allowedCollisions) > 0 {
 		logger.Infof("allowing %d collision pair(s)", len(allowedCollisions))
 	}
+	if oc := s.groundsOrientationConstraint(pd.componentName, lc); oc != nil {
+		if constraints == nil {
+			constraints = &motionplan.Constraints{}
+		}
+		constraints.AddOrientationConstraint(*oc)
+		logger.Infof("portafilter holds grounds: keeping it within %.0f° of its direct reorientation", oc.OrientationToleranceDegs)
+	}
 
 	req := &armplanning.PlanRequest{
 		FrameSystem: fs,
@@ -1083,6 +1090,58 @@ func withNoSpillOrientationConstraint(constraints *motionplan.Constraints) *moti
 	constraints.OrientationConstraint = append(constraints.OrientationConstraint,
 		motionplan.OrientationConstraint{OrientationToleranceDegs: noSpillOrientationToleranceDegs, IgnoreTheta: true})
 	return constraints
+}
+
+// defaultGroundsOrientationToleranceDegs caps how far the portafilter may turn
+// off its direct start-to-goal reorientation on a free move while it holds
+// grounds (groundsOrientationConstraint).
+//
+// Like the no-spill carry, RDK checks this as a tube around the slerp between
+// the move's start and goal orientations, so it bounds the planner's excursion,
+// not the commanded reorientation. Every filter working pose holds the basket
+// upright, so a move between two of them can change heading freely: tamper to
+// group head swings the filter about 42° in yaw, all of it on the slerp. The
+// moves this guards against leave the tube by far: the spill this was added for
+// turned the portafilter upside down (J4 swept 219°), and a basket on its side
+// has lost its grounds anyway. 20° stays well short of tipping loose grounds
+// out while leaving the planner room to route around obstacles.
+const defaultGroundsOrientationToleranceDegs = 20.0
+
+// groundsOrientationToleranceDegs returns the configured tolerance, or the
+// default.
+func (s *beanjaminCoffee) groundsOrientationToleranceDegs() float64 {
+	return orDefault(s.cfg.GroundsOrientationToleranceDegs, defaultGroundsOrientationToleranceDegs)
+}
+
+// filterHoldsGrounds reports whether the portafilter has grounds in it, as
+// far as the planning thread knows: either the arm has reached the grinder
+// (portafilterHasGrounds), or a move there has been planned (groundsPlanned)
+// and the plans after it must assume the grounds.
+func (s *beanjaminCoffee) filterHoldsGrounds() bool {
+	return s.groundsPlanned.Load() || s.portafilterHasGrounds.Load()
+}
+
+// groundsOrientationConstraint returns the orientation bound for a direct move
+// of componentName, or nil when the move needs none. Only a free move of the
+// filter while it holds grounds gets one: a move with a linear constraint is
+// already held within its 2° of the start or goal orientation, and with no
+// grounds there is nothing to spill.
+//
+// It is decided here, from the grounds state, rather than marked on the steps
+// that carry grounds, so a filter move added anywhere between grinding and
+// cleaning is covered without anyone having to remember to mark it.
+//
+// Unlike the cup carry, this does not ignore theta. The filter frame's
+// orientation vector is horizontal at every working pose (along the handle,
+// e.g. (0, -1, 0) at the tamper), so theta is the roll about that horizontal
+// axis, and the roll is exactly what turns the basket over. Bounding the full
+// orientation also bounds heading changes off the slerp, which costs the
+// planner some freedom but never spills anything.
+func (s *beanjaminCoffee) groundsOrientationConstraint(componentName string, lc *StepLinearConstraint) *motionplan.OrientationConstraint {
+	if componentName != componentFilter || lc != nil || !s.filterHoldsGrounds() {
+		return nil
+	}
+	return &motionplan.OrientationConstraint{OrientationToleranceDegs: s.groundsOrientationToleranceDegs()}
 }
 
 // carryGoalForMoveFrame converts dest — a pose authored for dest.componentName —

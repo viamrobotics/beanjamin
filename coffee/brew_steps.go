@@ -36,6 +36,7 @@ func (s *beanjaminCoffee) grindBeans(ctx, cancelCtx context.Context, beans strin
 		// keeps the filter clean, and the grinder dispenses once it's under the
 		// chute. From here onward the filter needs cleaning before it goes home.
 		if step.PoseName == poses.activate {
+			s.groundsPlanned.Store(true)
 			s.handOffEffect(func() { s.portafilterHasGrounds.Store(true) })
 		}
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
@@ -73,32 +74,44 @@ func (s *beanjaminCoffee) grindSteps(p grinderPoseNames, buttonCollisions []Allo
 }
 
 func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
-	return s.runSteps(ctx, cancelCtx, "tamp_ground",
+	return s.runSteps(ctx, cancelCtx, "tamp_ground", s.tampSteps()...)
+}
+
+// tampSteps builds the tamp sequence: a free move to the tamper's approach, a
+// straight press, and a straight retreat.
+func (s *beanjaminCoffee) tampSteps() []Step {
+	return []Step{
 		// Carries loose, un-tamped grounds to the tamper: slow it so they don't
 		// scatter. Once tamped, the puck is compact, so the retreat runs at the
 		// arm's default speed.
-		Step{PoseName: filterPoseTamperApproach, PoseSwitch: s.filterSw, MoveOptions: s.slowMoveOptions()},
-		Step{PoseName: filterPoseTamperActivate, PoseSwitch: s.filterSw, Pause: 3000 * time.Millisecond, LinearConstraint: defaultApproachConstraint,
+		{PoseName: filterPoseTamperApproach, PoseSwitch: s.filterSw, MoveOptions: s.slowMoveOptions()},
+		{PoseName: filterPoseTamperActivate, PoseSwitch: s.filterSw, Pause: 3000 * time.Millisecond, LinearConstraint: defaultApproachConstraint,
 			MoveOptions: s.slowMoveOptions()},
-		Step{PoseName: filterPoseTamperApproach, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint},
-	)
+		{PoseName: filterPoseTamperApproach, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint},
+	}
 }
 
 func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error {
-	if err := s.runSteps(ctx, cancelCtx, "lock_portafilter",
-		Step{PoseName: filterPoseCoffeeApproach, PoseSwitch: s.filterSw},
-		Step{PoseName: filterPoseCoffeeIn, PoseSwitch: s.filterSw, Pause: shortPause, LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions,
-			MoveOptions: s.slowMoveOptions()},
-		Step{PoseName: filterPoseCoffeeLockedFinal, PoseSwitch: s.filterSw, PivotFromPose: filterPoseCoffeeIn, PivotDegreesPerStep: 5,
-			PivotExtraDegrees: s.cfg.LockOvershootDegs,
-			LinearConstraint:  defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions, MoveOptions: s.slowMoveOptions()},
-	); err != nil {
+	if err := s.runSteps(ctx, cancelCtx, "lock_portafilter", s.lockSteps()...); err != nil {
 		return err
 	}
 	if err := s.lockFilterFrame(ctx); err != nil {
 		return fmt.Errorf("lock filter frame: %w", err)
 	}
 	return nil
+}
+
+// lockSteps builds the lock sequence: a free move to the group head's
+// approach, straight in, then the bayonet pivot.
+func (s *beanjaminCoffee) lockSteps() []Step {
+	return []Step{
+		{PoseName: filterPoseCoffeeApproach, PoseSwitch: s.filterSw},
+		{PoseName: filterPoseCoffeeIn, PoseSwitch: s.filterSw, Pause: shortPause, LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions,
+			MoveOptions: s.slowMoveOptions()},
+		{PoseName: filterPoseCoffeeLockedFinal, PoseSwitch: s.filterSw, PivotFromPose: filterPoseCoffeeIn, PivotDegreesPerStep: 5,
+			PivotExtraDegrees: s.cfg.LockOvershootDegs,
+			LinearConstraint:  defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions, MoveOptions: s.slowMoveOptions()},
+	}
 }
 
 func (s *beanjaminCoffee) unlockPortaFilter(ctx, cancelCtx context.Context) error {
@@ -353,24 +366,31 @@ func (s *beanjaminCoffee) drinkBrewTime(drink string) time.Duration {
 }
 
 func (s *beanjaminCoffee) cleanPortafilter(ctx, cancelCtx context.Context) error {
-	slow := s.slowMoveOptions()
-	if err := s.runSteps(ctx, cancelCtx, "clean_portafilter",
-		Step{PoseName: filterPoseCloseToCleaning, PoseSwitch: s.filterSw},
-		Step{PoseName: filterPoseApproachToCleaningScrapper, PoseSwitch: s.filterSw, AllowedCollisions: cleaningCollisions},
-		Step{PoseName: filterPoseCleaningScrapperActive, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, MoveOptions: slow},
-		Step{PoseName: filterPoseCleaningScrapperActive, PoseSwitch: s.filterSw, AllowedCollisions: cleaningCollisions, CircularRadiusMm: 3, CircularDurationSec: 2.5, CircularPointsPerRev: 8, MoveOptions: slow},
-		Step{PoseName: filterPoseApproachToCleaningScrapper, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, MoveOptions: slow},
-		// Scraper to brush is a transfer with no contact, so it runs at the arm's default speed.
-		Step{PoseName: filterPoseApproachToCleaningBrush, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions},
-		Step{PoseName: filterPoseCleaningBrushActive, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, MoveOptions: slow},
-		Step{PoseName: filterPoseCleaningBrushActive, PoseSwitch: s.filterSw, AllowedCollisions: cleaningCollisions, CircularRadiusMm: 3, CircularDurationSec: 2.5, CircularPointsPerRev: 8, MoveOptions: slow},
-		Step{PoseName: filterPoseApproachToCleaningBrush, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, MoveOptions: slow},
-		Step{PoseName: filterPoseCloseToCleaning, PoseSwitch: s.filterSw, AllowedCollisions: cleaningCollisions},
-	); err != nil {
+	if err := s.runSteps(ctx, cancelCtx, "clean_portafilter", s.cleanSteps()...); err != nil {
 		return err
 	}
+	s.groundsPlanned.Store(false)
 	s.handOffEffect(func() { s.portafilterHasGrounds.Store(false) })
 	return nil
+}
+
+// cleanSteps builds the cleaning sequence: knock the puck out on the scraper,
+// brush the basket, and back off.
+func (s *beanjaminCoffee) cleanSteps() []Step {
+	slow := s.slowMoveOptions()
+	return []Step{
+		{PoseName: filterPoseCloseToCleaning, PoseSwitch: s.filterSw},
+		{PoseName: filterPoseApproachToCleaningScrapper, PoseSwitch: s.filterSw, AllowedCollisions: cleaningCollisions},
+		{PoseName: filterPoseCleaningScrapperActive, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, MoveOptions: slow},
+		{PoseName: filterPoseCleaningScrapperActive, PoseSwitch: s.filterSw, AllowedCollisions: cleaningCollisions, CircularRadiusMm: 3, CircularDurationSec: 2.5, CircularPointsPerRev: 8, MoveOptions: slow},
+		{PoseName: filterPoseApproachToCleaningScrapper, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, MoveOptions: slow},
+		// Scraper to brush is a transfer with no contact, so it runs at the arm's default speed.
+		{PoseName: filterPoseApproachToCleaningBrush, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions},
+		{PoseName: filterPoseCleaningBrushActive, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, MoveOptions: slow},
+		{PoseName: filterPoseCleaningBrushActive, PoseSwitch: s.filterSw, AllowedCollisions: cleaningCollisions, CircularRadiusMm: 3, CircularDurationSec: 2.5, CircularPointsPerRev: 8, MoveOptions: slow},
+		{PoseName: filterPoseApproachToCleaningBrush, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: cleaningCollisions, MoveOptions: slow},
+		{PoseName: filterPoseCloseToCleaning, PoseSwitch: s.filterSw, AllowedCollisions: cleaningCollisions},
+	}
 }
 
 const (
