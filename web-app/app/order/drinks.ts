@@ -10,11 +10,11 @@ export function drinkLabel(drinkId: string): string {
   if (!drinkId) return "";
   const found = DRINKS.find((d) => d.id === drinkId);
   if (found) return found.label;
-  return drinkId.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return titleCase(drinkId);
 }
 
-// Base drinks shown in the selection grid, in display order. Decaf is no longer
-// its own card — it's a side toggle (see applyDecaf).
+// Base drinks shown in the selection grid, in display order. The beans are
+// chosen separately (see ChooseDrink's bean picker).
 export const GRID_DRINK_IDS = [
   "espresso",
   "lungo",
@@ -25,28 +25,67 @@ export const GRID_DRINK_IDS = [
   "cappuccino",
 ] as const;
 
-// decaf has a real brew path only for espresso/lungo (see IsDecaf in
-// coffee/order/drinks.go). Every other drink ignores the toggle.
-const DECAF_VARIANT: Record<string, string> = {
-  espresso: "decaf",
-  lungo: "decaf_lungo",
+export const REGULAR_BEANS = "regular";
+
+// Display names for the beans a machine can grind (its get_queue bean_options).
+// Unknown names fall back to a title-cased version, so a new grinder only
+// needs a label here to read nicely.
+const BEAN_LABELS: Record<string, string> = {
+  regular: "Regular",
+  decaf: "Decaf",
+  light_roast: "Light Roast",
 };
 
-// applyDecaf maps a base grid drink to its decaf variant when the toggle is on.
-export function applyDecaf(baseId: string, decaf: boolean): string {
-  if (!decaf) return baseId;
-  return DECAF_VARIANT[baseId] ?? baseId;
+export function beansLabel(beans: string): string {
+  return BEAN_LABELS[beans] ?? titleCase(beans);
 }
 
-// baseDrinkId strips a decaf variant back to its grid card id.
-export function baseDrinkId(drinkId: string): string {
-  if (drinkId === "decaf") return "espresso";
-  if (drinkId === "decaf_lungo") return "lungo";
-  return drinkId;
+function titleCase(id: string): string {
+  return id.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export function isDecafId(drinkId: string): boolean {
-  return drinkId === "decaf" || drinkId === "decaf_lungo";
+// The beans a machine offers, regular first. Machines running a module from
+// before bean_options only report can_serve_decaf.
+export function beanOptionsOf(q: {
+  bean_options?: string[];
+  can_serve_decaf?: boolean;
+}): string[] {
+  if (q.bean_options?.length) {
+    return [
+      REGULAR_BEANS,
+      ...q.bean_options.filter((b) => b !== REGULAR_BEANS),
+    ];
+  }
+  return q.can_serve_decaf ? [REGULAR_BEANS, "decaf"] : [REGULAR_BEANS];
+}
+
+// Decaf used to be its own drink. The backend still reports decaf espresso and
+// lungo under those legacy ids (get_queue, get_usual), next to beans.
+const LEGACY_DECAF: Record<string, string> = {
+  decaf: "espresso",
+  decaf_lungo: "lungo",
+};
+
+export interface DrinkChoice {
+  drink: string;
+  beans: string;
+}
+
+// splitDrink reads a drink id that may be a legacy decaf id into its base
+// drink and beans. beans, when given, wins for non-legacy ids.
+export function splitDrink(drink: string, beans?: string): DrinkChoice {
+  const base = LEGACY_DECAF[drink];
+  if (base) return { drink: base, beans: "decaf" };
+  return { drink, beans: beans || REGULAR_BEANS };
+}
+
+// orderLabel names a drink with its beans, e.g. "Light Roast Lungo"; regular
+// beans go unmentioned.
+export function orderLabel(drink: string, beans?: string): string {
+  const c = splitDrink(drink, beans);
+  const label = drinkLabel(c.drink);
+  if (!label || c.beans === REGULAR_BEANS) return label;
+  return `${beansLabel(c.beans)} ${label}`;
 }
 
 export const DRINKS: Drink[] = [
@@ -61,20 +100,6 @@ export const DRINKS: Drink[] = [
     id: "lungo",
     label: "Lungo",
     description: "Long pull, smooth finish",
-    image: "./espresso.png",
-    available: true,
-  },
-  {
-    id: "decaf",
-    label: "Decaf",
-    description: "All the flavor, none of the buzz",
-    image: "./espresso.png",
-    available: true,
-  },
-  {
-    id: "decaf_lungo",
-    label: "Lungo",
-    description: "Long pull, decaf style",
     image: "./espresso.png",
     available: true,
   },

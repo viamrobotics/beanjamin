@@ -57,12 +57,16 @@ const DEV_STEPS = [
 interface DevOrder {
   id: string;
   name: string;
+  drink: string;
+  beans: string;
 }
 // Mirrors the backend's recent buffer in dev mode so the frontend can poll
 // a single shape regardless of which environment it's running in.
 interface DevRecentOrder {
   id: string;
   name: string;
+  drink: string;
+  beans: string;
   rawStep: string;
   completedAt: number; // ms epoch
 }
@@ -88,6 +92,8 @@ function startDevProcessing() {
         devRecent.push({
           id: finished.id,
           name: finished.name,
+          drink: finished.drink,
+          beans: finished.beans,
           rawStep: DEV_STEPS[DEV_STEPS.length - 1],
           completedAt: Date.now(),
         });
@@ -244,7 +250,10 @@ export type Fulfillment = "pickup" | "delivery";
 
 export interface QueueOrder {
   id: string;
+  /** Decaf espresso and lungo still arrive as the legacy ids "decaf" / "decaf_lungo" (see splitDrink). */
   drink: string;
+  /** The beans the drink is made from. Absent from older modules. */
+  beans?: string;
   customer_name: string;
   /** Absent from callers that don't misspell, and from older modules. */
   modified_customer_name?: string;
@@ -280,6 +289,9 @@ export interface QueueStatus {
   is_paused: boolean;
   is_busy: boolean;
   current_step: string;
+  /** Every beans the machine grinds, regular included. Absent from older modules (see beanOptionsOf). */
+  bean_options?: string[];
+  can_serve_decaf?: boolean;
 }
 
 /**
@@ -322,7 +334,8 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
     // real backend's List() / Status() output.
     const recentOrders: QueueOrder[] = [...devRecent].reverse().map((r) => ({
       id: r.id,
-      drink: "espresso",
+      drink: r.drink,
+      beans: r.beans,
       customer_name: r.name,
       fulfillment: "pickup" as const,
       enqueued_at: new Date(r.completedAt).toISOString(),
@@ -333,7 +346,8 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
     }));
     const pendingOrders: QueueOrder[] = devQueue.map((o, i) => ({
       id: o.id,
-      drink: "espresso",
+      drink: o.drink,
+      beans: o.beans,
       customer_name: o.name,
       fulfillment: "pickup" as const,
       enqueued_at: new Date().toISOString(),
@@ -351,6 +365,8 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
       is_paused: false,
       is_busy: devQueue.length > 0,
       current_step: devStep,
+      // Cappuccina's grinders, so the bean picker shows in dev mode.
+      bean_options: ["regular", "light_roast", "decaf"],
     };
   }
 
@@ -367,6 +383,8 @@ export async function prepareOrder(
   conn: ViamConnection,
   opts: {
     drink: string;
+    /** Omitted or "regular" for the regular beans. */
+    beans?: string;
     drinkLabel: string;
     /** The name the customer gave; what aggregation groups on. */
     customerName: string;
@@ -381,7 +399,12 @@ export async function prepareOrder(
   if (isDevMode()) {
     if (opts.customerName) {
       const id = `dev-${++devOrderCounter}`;
-      devQueue.push({ id, name: opts.modifiedName || opts.customerName });
+      devQueue.push({
+        id,
+        name: opts.modifiedName || opts.customerName,
+        drink: opts.drink,
+        beans: opts.beans || "regular",
+      });
       startDevProcessing();
       console.log(
         "[dev] order queued:",
@@ -409,6 +432,7 @@ export async function prepareOrder(
     {
       prepare_order: {
         drink: opts.drink,
+        ...(opts.beans && opts.beans !== "regular" && { beans: opts.beans }),
         customer_name: opts.customerName,
         ...(opts.modifiedName && { modified_customer_name: opts.modifiedName }),
         ...(opts.customerEmail && { customer_email: opts.customerEmail }),
@@ -449,7 +473,7 @@ export async function cancelOrder(
       status: "cancelled",
       order_id: removed.id,
       customer_name: removed.name,
-      drink: "espresso",
+      drink: removed.drink,
       remaining: devQueue.length,
     };
   }
@@ -512,19 +536,26 @@ export async function identifyCustomer(
   });
 }
 
-/** The customer's most-frequent drink, or null when they have no history. */
+/**
+ * The customer's most-frequent drink and beans, or null when they have no
+ * history. drink may be a legacy decaf id (see splitDrink); beans is absent
+ * from older modules.
+ */
 export async function getUsualDrink(
   conn: ViamConnection,
   email: string,
-): Promise<string | null> {
+): Promise<{ drink: string; beans?: string } | null> {
   if (isDevMode() || !email) return null;
-  const res = await doCommand<{ has_usual?: boolean; drink?: string }>(
-    conn,
-    CUSTOMER_DETECTOR_SERVICE_NAME,
-    { get_usual: email },
-  );
-  return res.has_usual && res.drink ? res.drink : null;
+  const res = await doCommand<{
+    has_usual?: boolean;
+    drink?: string;
+    beans?: string;
+  }>(conn, CUSTOMER_DETECTOR_SERVICE_NAME, { get_usual: email });
+  return res.has_usual && res.drink
+    ? { drink: res.drink, beans: res.beans }
+    : null;
 }
+
 
 export async function getCustomerDetectorInfo(
   conn: ViamConnection,

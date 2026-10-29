@@ -4,7 +4,14 @@ import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
-import { DRINKS, drinkLabel } from "./order/drinks";
+import {
+  DRINKS,
+  REGULAR_BEANS,
+  beanOptionsOf,
+  orderLabel,
+  splitDrink,
+  type DrinkChoice,
+} from "./order/drinks";
 import { ChooseDrink } from "./order/choose-drink";
 import { EnterName } from "./order/enter-name";
 import dynamic from "next/dynamic";
@@ -98,19 +105,29 @@ export function Kiosk() {
   const [name, setName] = useState(prefillName);
   const [email, setEmail] = useState(prefillEmail);
   const [selectedDrink, setSelectedDrink] = useState<string | null>(null);
+  const [selectedBeans, setSelectedBeans] = useState(REGULAR_BEANS);
+  // The beans this machine grinds, from the queue poll; regular only until
+  // the first poll answers.
+  const [beanOptions, setBeanOptions] = useState<string[]>([REGULAR_BEANS]);
+  // A pick the machine no longer offers falls back to regular.
+  const chosenBeans = beanOptions.includes(selectedBeans)
+    ? selectedBeans
+    : REGULAR_BEANS;
   // Defaults to pickup everywhere; delivery requires an email (enforced here
   // and again by the backend).
   const [fulfillment, setFulfillment] = useState<Fulfillment>("pickup");
   const [misspelled, setMisspelled] = useState("");
   const [loading, setLoading] = useState(false);
   const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
-  // The greeted customer's most-frequent drink (an id like "espresso"), offered
-  // as a one-tap shortcut on the welcome card; null when they have none.
-  const [usualDrink, setUsualDrink] = useState<string | null>(null);
-  // Only offer a usual the menu can still make; ids the menu doesn't list
-  // (decaf variants) are left to the backend to accept or reject.
+  // The greeted customer's most-frequent drink and beans, offered as a
+  // one-tap shortcut on the welcome card; null when they have none.
+  const [usualDrink, setUsualDrink] = useState<DrinkChoice | null>(null);
+  // Only offer a usual the machine can still make: a drink on the menu, from
+  // beans it still grinds.
   const usualOrderable =
-    !!usualDrink && (DRINKS.find((d) => d.id === usualDrink)?.available ?? true);
+    !!usualDrink &&
+    (DRINKS.find((d) => d.id === usualDrink.drink)?.available ?? true) &&
+    beanOptions.includes(usualDrink.beans);
   const [machineName, setMachineName] = useState<string | null>(null);
   const [camName, setCamName] = useState<string | undefined>(undefined);
   const [trackerMode, setTrackerMode] = useState<TrackerMode>("hidden");
@@ -167,6 +184,10 @@ export function Kiosk() {
       try {
         const q = await getQueue(viamConn);
         if (cancelled) return;
+        const options = beanOptionsOf(q);
+        setBeanOptions((prev) =>
+          prev.join() === options.join() ? prev : options,
+        );
         if (q.orders.length > 0) {
           setTrackerMode((m) => (m === "hidden" ? "auto" : m));
         }
@@ -209,9 +230,12 @@ export function Kiosk() {
               console.log("[app] welcome back:", id.name);
               const who = id.name;
               getUsualDrink(viamConn, id.email ?? "")
-                .then((drink) => {
+                .then((usual) => {
                   // Drop the answer if they've left or someone else has stepped up.
-                  if (!cancelled && greeted === who) setUsualDrink(drink);
+                  if (!cancelled && greeted === who)
+                    setUsualDrink(
+                      usual ? splitDrink(usual.drink, usual.beans) : null,
+                    );
                 })
                 .catch((err) => console.log("[app] usual lookup skipped:", err));
             }
@@ -253,6 +277,7 @@ export function Kiosk() {
   async function placeOrder(
     misspelledName: string,
     drink = selectedDrink,
+    beans = chosenBeans,
   ): Promise<void> {
     console.log("[app] placing order for:", misspelledName);
     setMisspelled(misspelledName);
@@ -276,7 +301,8 @@ export function Kiosk() {
     try {
       await prepareOrder(viamConn, {
         drink: drink!,
-        drinkLabel: drinkLabel(drink!),
+        beans,
+        drinkLabel: orderLabel(drink!, beans),
         customerName: name.trim(),
         modifiedName: misspelledName,
         // Credits the drink to this customer's history; empty = anonymous
@@ -301,10 +327,15 @@ export function Kiosk() {
     setLoading(true);
     // The selection and fulfillment feed the confirmation screen, and a failed
     // order rewinds to the name screen with them intact for a retry.
-    setSelectedDrink(usualDrink);
+    setSelectedDrink(usualDrink.drink);
+    setSelectedBeans(usualDrink.beans);
     setFulfillment("pickup");
     try {
-      await placeOrder(misspellName(name.trim()) || name, usualDrink);
+      await placeOrder(
+        misspellName(name.trim()) || name,
+        usualDrink.drink,
+        usualDrink.beans,
+      );
     } finally {
       setLoading(false);
     }
@@ -355,6 +386,7 @@ export function Kiosk() {
     setName(prefillName);
     setEmail(prefillEmail);
     setSelectedDrink(null);
+    setSelectedBeans(REGULAR_BEANS);
     setFulfillment("pickup");
     setWelcomeBack(null);
     setUsualDrink(null);
@@ -415,7 +447,7 @@ export function Kiosk() {
         <OrderConfirmation
           misspelled={misspelled}
           actualName={name}
-          drinkLabel={drinkLabel(selectedDrink ?? "")}
+          drinkLabel={orderLabel(selectedDrink ?? "", chosenBeans)}
           onDismiss={handleConfirmationDismiss}
           showBack={!kioskMode}
         />
@@ -449,9 +481,12 @@ export function Kiosk() {
       return (
         <ChooseDrink
           selectedDrink={selectedDrink}
+          beanOptions={beanOptions}
+          selectedBeans={chosenBeans}
           fulfillment={fulfillment}
           connected={connected}
           onSelect={setSelectedDrink}
+          onBeansChange={setSelectedBeans}
           onFulfillmentChange={setFulfillment}
           onBack={() => setStep("welcome")}
           onNext={handleDrinkNext}
@@ -521,7 +556,8 @@ export function Kiosk() {
             className="anim-in-hero press w-full max-w-sm mb-4 px-6 py-4 text-lg font-medium bg-white text-neutral-900 border-2 border-neutral-900 rounded-full transition-colors hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed"
             style={{ animationDelay: "1200ms" }}
           >
-            Your usual: {drinkLabel(usualDrink ?? "")}
+            Your usual:{" "}
+            {usualDrink ? orderLabel(usualDrink.drink, usualDrink.beans) : ""}
           </button>
         )}
 
@@ -543,6 +579,7 @@ export function Kiosk() {
             // (name -> drink) still preserves the selection; only entering from
             // welcome clears it.
             setSelectedDrink(null);
+            setSelectedBeans(REGULAR_BEANS);
             setFulfillment("pickup");
             setStep("drink");
           }}

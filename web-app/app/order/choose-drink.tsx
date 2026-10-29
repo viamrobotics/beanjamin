@@ -2,51 +2,44 @@
 
 import Image from "next/image";
 import { useState } from "react";
-import {
-  COMING_SOON_DRINKS,
-  GRID_DRINKS,
-  applyDecaf,
-  baseDrinkId,
-  isDecafId,
-} from "./drinks";
+import { COMING_SOON_DRINKS, GRID_DRINKS, beansLabel } from "./drinks";
 import type { Fulfillment } from "../lib/viamClient";
 
 export function ChooseDrink({
   selectedDrink,
+  beanOptions,
+  selectedBeans,
   fulfillment,
   connected,
   onSelect,
+  onBeansChange,
   onFulfillmentChange,
   onBack,
   onNext,
 }: {
   selectedDrink: string | null;
+  /** The machine's beans, regular first; the picker hides with only one. */
+  beanOptions: string[];
+  selectedBeans: string;
   fulfillment: Fulfillment;
   connected: boolean;
   onSelect: (id: string) => void;
+  onBeansChange: (beans: string) => void;
   onFulfillmentChange: (f: Fulfillment) => void;
   onBack: () => void;
   onNext: () => void;
 }) {
-  const [decaf, setDecaf] = useState(isDecafId(selectedDrink ?? ""));
   const [unavailableTapped, setUnavailableTapped] = useState<string | null>(
     null,
   );
-  const selectedBase = selectedDrink ? baseDrinkId(selectedDrink) : null;
-
-  const handleDecaf = (next: boolean) => {
-    setDecaf(next);
-    if (selectedBase) onSelect(applyDecaf(selectedBase, next));
-  };
-
   const renderDrinkCard = (drink: (typeof GRID_DRINKS)[number], i: number) => {
-    const isSelected = selectedBase === drink.id;
+    const isSelected = selectedDrink === drink.id;
     return (
       <button
         key={drink.id}
         onClick={() => {
           setUnavailableTapped(null);
-          onSelect(applyDecaf(drink.id, decaf));
+          onSelect(drink.id);
         }}
         style={{ animationDelay: `${150 + i * 100}ms` }}
         className={`anim-in drink-card relative w-full flex flex-col items-center justify-center gap-1 py-4 rounded-2xl transition-[background-color,border-color,transform] duration-150 ${
@@ -128,43 +121,30 @@ export function ChooseDrink({
             Choose your drink
           </h1>
 
-          <button
-            type="button"
-            role="switch"
-            aria-checked={decaf}
-            onClick={() => handleDecaf(!decaf)}
-            className="ml-auto flex items-center gap-3 p-4 transition-colors"
-          >
-            <svg
-              aria-hidden="true"
-              xmlns="http://www.w3.org/2000/svg"
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="h-5 w-5 text-neutral-400"
+          {beanOptions.length > 1 && (
+            <div
+              role="radiogroup"
+              aria-label="Which beans?"
+              className="ml-auto inline-flex rounded-full bg-neutral-100 p-1"
             >
-              <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" />
-            </svg>
-            <span className="font-mono font-semibold text-base text-black uppercase tracking-wider">
-              Decaf
-            </span>
-            <span
-              className={`relative h-7 w-12 rounded-full transition-colors duration-150 ${
-                decaf ? "bg-black" : "bg-neutral-300"
-              }`}
-            >
-              <span
-                className={`absolute top-1 left-1 h-5 w-5 rounded-full bg-white transition-transform duration-150 ${
-                  decaf ? "translate-x-5" : "translate-x-0"
-                }`}
-              />
-            </span>
-          </button>
+              {beanOptions.map((beans) => (
+                <button
+                  key={beans}
+                  type="button"
+                  role="radio"
+                  aria-checked={selectedBeans === beans}
+                  onClick={() => onBeansChange(beans)}
+                  className={`px-5 py-2.5 rounded-full font-mono font-semibold text-sm uppercase tracking-wider whitespace-nowrap transition-colors duration-150 ${
+                    selectedBeans === beans
+                      ? "bg-black text-white"
+                      : "text-neutral-500 hover:text-neutral-900"
+                  }`}
+                >
+                  {beansLabel(beans)}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="grid gap-3 grid-cols-2 @md:grid-cols-3 @lg:grid-cols-4">

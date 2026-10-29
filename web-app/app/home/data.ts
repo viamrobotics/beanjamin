@@ -1,5 +1,6 @@
 import * as VIAM from "@viamrobotics/sdk";
 import { BSON } from "bson";
+import { splitDrink } from "../order/drinks";
 
 export const ORG_ID = "e76d1b3b-0468-4efd-bb7f-fb1d2b352fcb";
 export const LOCATION_ID = "oeq47g5p1m";
@@ -53,7 +54,9 @@ export interface OrderRecord {
   // differently when scanning a day for things that went wrong.
   cancelled: boolean;
   failedStep: string;
-  decaf: boolean;
+  // The beans the drink was made from; "regular" for readings from before
+  // beans were recorded, unless they carry the old decaf flag.
+  beans: string;
   errorMessage: string;
 }
 
@@ -84,6 +87,7 @@ interface RawOrderRow {
       order_ok?: boolean;
       operator_cancelled?: boolean;
       failed_step?: string;
+      beans?: string;
       decaf?: boolean;
       error_message?: string;
     };
@@ -128,14 +132,14 @@ function parseOrderResults(rows: RawOrderRow[]): OrderRecord[] {
       orderId: x.order_id ?? "",
       robotId: r.robot_id ?? "",
       customerName: x.customer_name ?? "",
-      drink: x.drink ?? "",
+      // Decaf espresso and lungo are still recorded under the legacy ids.
+      ...splitDrink(x.drink ?? "", x.beans || (x.decaf ? "decaf" : undefined)),
       startTime: toDate(x.start_time),
       endTime: toDate(x.end_time),
       durationMs: x.duration_ms ?? 0,
       ok: x.order_ok ?? false,
       cancelled: x.operator_cancelled ?? false,
       failedStep: x.failed_step ?? "",
-      decaf: x.decaf ?? false,
       errorMessage: x.error_message ?? "",
     };
   });
