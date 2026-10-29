@@ -8,11 +8,12 @@ import {
   DRINKS,
   REGULAR_BEANS,
   beanOptionsOf,
-  orderLabel,
+  spokenOrder,
   splitDrink,
   type DrinkChoice,
 } from "./order/drinks";
 import { ChooseDrink } from "./order/choose-drink";
+import { DrinkName } from "./order/drink-name";
 import { EnterName } from "./order/enter-name";
 import dynamic from "next/dynamic";
 const FaceRegister = dynamic(
@@ -302,7 +303,7 @@ export function Kiosk() {
       await prepareOrder(viamConn, {
         drink: drink!,
         beans,
-        drinkLabel: orderLabel(drink!, beans),
+        drinkLabel: spokenOrder(drink!, beans),
         customerName: name.trim(),
         modifiedName: misspelledName,
         // Credits the drink to this customer's history; empty = anonymous
@@ -447,7 +448,8 @@ export function Kiosk() {
         <OrderConfirmation
           misspelled={misspelled}
           actualName={name}
-          drinkLabel={orderLabel(selectedDrink ?? "", chosenBeans)}
+          drink={selectedDrink ?? ""}
+          beans={chosenBeans}
           onDismiss={handleConfirmationDismiss}
           showBack={!kioskMode}
         />
@@ -557,7 +559,9 @@ export function Kiosk() {
             style={{ animationDelay: "1200ms" }}
           >
             Your usual:{" "}
-            {usualDrink ? orderLabel(usualDrink.drink, usualDrink.beans) : ""}
+            {usualDrink && (
+              <DrinkName drink={usualDrink.drink} beans={usualDrink.beans} />
+            )}
           </button>
         )}
 

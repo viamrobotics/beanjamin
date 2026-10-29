@@ -15,6 +15,7 @@ import {
   type QueueOrder,
 } from "../lib/viamClient";
 import { orderLabel } from "./drinks";
+import { DrinkName } from "./drink-name";
 
 // --- Step display rules -------------------------------------------------
 //
@@ -445,7 +446,7 @@ function OrderCard({ order, cardClass, statusKind, label }: OrderCardProps) {
       </div>
       {drink && (
         <p className="text-xs font-mono text-neutral-500 mt-0.5">
-          {drink}
+          <DrinkName drink={order.drink} beans={order.beans} />
         </p>
       )}
       {statusKind === "ready" ? (

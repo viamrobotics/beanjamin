@@ -79,13 +79,32 @@ export function splitDrink(drink: string, beans?: string): DrinkChoice {
   return { drink, beans: beans || REGULAR_BEANS };
 }
 
-// orderLabel names a drink with its beans, e.g. "Light Roast Lungo"; regular
+// orderParts splits an order's display name into the drink and, for anything
+// but regular beans, the beans as a lowercase qualifier: "Lungo" + "decaf".
+// DrinkName renders them with the beans set apart.
+export function orderParts(
+  drink: string,
+  beans?: string,
+): { drink: string; beans: string | null } {
+  const c = splitDrink(drink, beans);
+  return {
+    drink: drinkLabel(c.drink),
+    beans: c.beans === REGULAR_BEANS ? null : beansLabel(c.beans).toLowerCase(),
+  };
+}
+
+// orderLabel is orderParts as plain text, e.g. "Lungo, light roast"; regular
 // beans go unmentioned.
 export function orderLabel(drink: string, beans?: string): string {
-  const c = splitDrink(drink, beans);
-  const label = drinkLabel(c.drink);
-  if (!label || c.beans === REGULAR_BEANS) return label;
-  return `${beansLabel(c.beans)} ${label}`;
+  const p = orderParts(drink, beans);
+  if (!p.drink || !p.beans) return p.drink;
+  return `${p.drink}, ${p.beans}`;
+}
+
+// spokenOrder names an order the way it is said: "decaf lungo".
+export function spokenOrder(drink: string, beans?: string): string {
+  const p = orderParts(drink, beans);
+  return [p.beans, p.drink.toLowerCase()].filter(Boolean).join(" ");
 }
 
 export const DRINKS: Drink[] = [

@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { beanOptionsOf, orderLabel, splitDrink } from "./drinks";
+import {
+  beanOptionsOf,
+  orderLabel,
+  orderParts,
+  splitDrink,
+  spokenOrder,
+} from "./drinks";
 
 test("bean options put regular first and fall back to can_serve_decaf", () => {
   assert.deepEqual(
@@ -36,11 +42,25 @@ test("legacy decaf ids split into a drink and beans", () => {
   });
 });
 
-test("order labels name non-regular beans", () => {
+test("order labels put non-regular beans after the drink", () => {
   assert.equal(orderLabel("espresso"), "Espresso");
   assert.equal(orderLabel("espresso", "regular"), "Espresso");
-  assert.equal(orderLabel("lungo", "light_roast"), "Light Roast Lungo");
-  assert.equal(orderLabel("decaf_lungo", "decaf"), "Decaf Lungo");
-  assert.equal(orderLabel("decaf"), "Decaf Espresso");
-  assert.equal(orderLabel("iced_coffee", "dark_roast"), "Dark Roast Iced Coffee");
+  assert.equal(orderLabel("lungo", "light_roast"), "Lungo, light roast");
+  assert.equal(orderLabel("decaf_lungo", "decaf"), "Lungo, decaf");
+  assert.equal(orderLabel("decaf"), "Espresso, decaf");
+  assert.equal(
+    orderLabel("iced_coffee", "dark_roast"),
+    "Iced Coffee, dark roast",
+  );
+  assert.deepEqual(orderParts("lungo", "decaf"), {
+    drink: "Lungo",
+    beans: "decaf",
+  });
+  assert.deepEqual(orderParts("lungo"), { drink: "Lungo", beans: null });
+});
+
+test("spoken orders read naturally", () => {
+  assert.equal(spokenOrder("lungo", "light_roast"), "light roast lungo");
+  assert.equal(spokenOrder("espresso"), "espresso");
+  assert.equal(spokenOrder("decaf"), "decaf espresso");
 });
