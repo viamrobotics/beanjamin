@@ -14,6 +14,7 @@ import (
 	"net/mail"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -597,7 +598,8 @@ func (cd *customerDetector) recordOrder(email, drink, beans, fulfillment string)
 	return map[string]any{"recorded": true, "email": email, "drink": drink, "beans": beans, "fulfillment": fulfillment}, nil
 }
 
-// getUsual returns the customer's usual drink, or {has_usual:false} if none.
+// getUsual returns the customer's frequent orders (see frequentOrders), or
+// {has_usual:false} if they have no recorded history at all.
 func (cd *customerDetector) getUsual(email string) (map[string]any, error) {
 	if email == "" {
 		return nil, fmt.Errorf("get_usual requires an email")
@@ -610,19 +612,22 @@ func (cd *customerDetector) getUsual(email string) (map[string]any, error) {
 	if !exists || len(rec.Orders) == 0 {
 		return map[string]any{"has_usual": false}, nil
 	}
-	usual, count := usualDrink(rec.Orders)
-	if usual.drink == "" {
+	usuals := frequentOrders(rec.Orders)
+	if len(usuals) == 0 {
 		return map[string]any{"has_usual": false}, nil
 	}
-	return map[string]any{
-		"has_usual": true,
-		// drink keeps the legacy decaf ids (order.WireDrink): the kiosk orders
-		// the usual by this id alone, and must not drop the decaf.
-		"drink":       order.WireDrink(usual.drink, usual.beans),
-		"beans":       usual.beans,
-		"fulfillment": usual.fulfillment,
-		"count":       count,
-	}, nil
+	wire := make([]map[string]any, len(usuals))
+	for i, u := range usuals {
+		wire[i] = map[string]any{
+			// drink keeps the legacy decaf ids (order.WireDrink): the kiosk
+			// orders a usual by this id alone, and must not drop the decaf.
+			"drink":       order.WireDrink(u.drink, u.beans),
+			"beans":       u.beans,
+			"fulfillment": u.fulfillment,
+			"count":       u.count,
+		}
+	}
+	return map[string]any{"has_usual": true, "usuals": wire}, nil
 }
 
 // drinkChoice is a drink, its beans, and its fulfillment together: the unit a
@@ -630,11 +635,32 @@ func (cd *customerDetector) getUsual(email string) (map[string]any, error) {
 // delivery of the same drink, are different usuals.
 type drinkChoice struct{ drink, beans, fulfillment string }
 
-// usualDrink picks the most-frequent drink, beans, and fulfillment, breaking
-// ties toward the most recent. Entries from before beans or fulfillment were
-// recorded are read through order.LegacyDrink and default to pickup, so an
-// old "decaf" counts as a decaf espresso and predates delivery entirely.
-func usualDrink(orders []orderHistoryEntry) (usual drinkChoice, count int) {
+// minFrequentFraction is the minimum share of a customer's order history a
+// choice must have to be offered back as a quick reorder.
+const minFrequentFraction = 0.25
+
+// frequentOrder is a drink choice frequent enough to offer as a quick
+// reorder, together with how many times the customer ordered it.
+type frequentOrder struct {
+	drinkChoice
+	count int
+}
+
+// frequentOrders lists every drink/beans/fulfillment choice making up at
+// least minFrequentFraction of the customer's order history, most-frequent
+// first, ties broken toward the most recent. If the history is varied enough
+// that nothing clears the threshold, the single most-frequent choice is
+// returned alone, so a customer with real order history is never left with
+// none; nil is returned only when there is no history at all. Entries from
+// before beans or fulfillment were recorded are read through
+// order.LegacyDrink and default to pickup, so an old "decaf" counts as a
+// decaf espresso and predates delivery entirely.
+func frequentOrders(orders []orderHistoryEntry) []frequentOrder {
+	total := len(orders)
+	if total == 0 {
+		return nil
+	}
+
 	// Tally each choice's count and its most-recent timestamp.
 	counts := make(map[drinkChoice]int)
 	lastAt := make(map[drinkChoice]time.Time)
@@ -650,12 +676,30 @@ func usualDrink(orders []orderHistoryEntry) (usual drinkChoice, count int) {
 			lastAt[c] = o.At
 		}
 	}
+
+	all := make([]frequentOrder, 0, len(counts))
 	for c, n := range counts {
-		if n > count || (n == count && lastAt[c].After(lastAt[usual])) {
-			usual, count = c, n
+		all = append(all, frequentOrder{c, n})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].count != all[j].count {
+			return all[i].count > all[j].count
+		}
+		return lastAt[all[i].drinkChoice].After(lastAt[all[j].drinkChoice])
+	})
+
+	var out []frequentOrder
+	for _, fo := range all {
+		// minFrequentFraction is a power-of-two fraction and total is well
+		// within float64's exact integer range, so this comparison is exact.
+		if float64(fo.count) >= minFrequentFraction*float64(total) {
+			out = append(out, fo)
 		}
 	}
-	return usual, count
+	if len(out) == 0 {
+		out = all[:1]
+	}
+	return out
 }
 
 // maxEmailLen is the RFC 5321 limit on a forward path.
@@ -762,11 +806,16 @@ func (cd *customerDetector) Status(ctx context.Context) (map[string]any, error) 
 		status["name"] = name
 	}
 	if email != "" {
-		if usual, err := cd.getUsual(email); err == nil {
-			if has, _ := usual["has_usual"].(bool); has {
-				status["usual_drink"] = usual["drink"]
-				status["usual_beans"] = usual["beans"]
-				status["usual_count"] = usual["count"]
+		if res, err := cd.getUsual(email); err == nil {
+			if has, _ := res["has_usual"].(bool); has {
+				// Status surfaces only the single most-frequent usual, for
+				// voice-command's one-line greeting; the kiosk calls
+				// get_usual directly for the full list.
+				if usuals, ok := res["usuals"].([]map[string]any); ok && len(usuals) > 0 {
+					status["usual_drink"] = usuals[0]["drink"]
+					status["usual_beans"] = usuals[0]["beans"]
+					status["usual_count"] = usuals[0]["count"]
+				}
 			}
 		}
 	}

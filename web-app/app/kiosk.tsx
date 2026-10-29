@@ -28,13 +28,17 @@ import {
   getMachineMetadataKey,
   getMachineName,
   prepareOrder,
-  getUsualDrink,
+  getUsualOrders,
   identifyCustomer,
   getQueue,
   type Fulfillment,
 } from "./lib/viamClient";
 import { useViamConnection } from "./lib/useViamConnection";
 import { misspellName } from "./lib/misspell";
+
+// A usual as the kiosk holds it: the drink and beans split apart (see
+// splitDrink), with the fulfillment it is usually ordered for.
+type Usual = DrinkChoice & { fulfillment: Fulfillment };
 
 type Step = "welcome" | "drink" | "name" | "face-register" | "confirmation";
 
@@ -120,15 +124,16 @@ export function Kiosk() {
   const [misspelled, setMisspelled] = useState("");
   const [loading, setLoading] = useState(false);
   const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
-  // The greeted customer's most-frequent drink and beans, offered as a
-  // one-tap shortcut on the welcome card; null when they have none.
-  const [usualDrink, setUsualDrink] = useState<DrinkChoice | null>(null);
-  // Only offer a usual the machine can still make: a drink on the menu, from
+  // The greeted customer's frequent orders, most-frequent first, offered as
+  // one-tap shortcuts on the welcome card; empty when they have none.
+  const [usuals, setUsuals] = useState<Usual[]>([]);
+  // Only offer usuals the machine can still make: a drink on the menu, from
   // beans it still grinds.
-  const usualOrderable =
-    !!usualDrink &&
-    (DRINKS.find((d) => d.id === usualDrink.drink)?.available ?? true) &&
-    beanOptions.includes(usualDrink.beans);
+  const orderableUsuals = usuals.filter(
+    (u) =>
+      (DRINKS.find((d) => d.id === u.drink)?.available ?? true) &&
+      beanOptions.includes(u.beans),
+  );
   const [machineName, setMachineName] = useState<string | null>(null);
   const [camName, setCamName] = useState<string | undefined>(undefined);
   const [trackerMode, setTrackerMode] = useState<TrackerMode>("hidden");
@@ -227,18 +232,21 @@ export function Kiosk() {
               setName(id.name);
               setEmail(id.email ?? "");
               setWelcomeBack(id.name);
-              setUsualDrink(null);
+              setUsuals([]);
               console.log("[app] welcome back:", id.name);
               const who = id.name;
-              getUsualDrink(viamConn, id.email ?? "")
-                .then((usual) => {
+              getUsualOrders(viamConn, id.email ?? "")
+                .then((found) => {
                   // Drop the answer if they've left or someone else has stepped up.
                   if (!cancelled && greeted === who)
-                    setUsualDrink(
-                      usual ? splitDrink(usual.drink, usual.beans) : null,
+                    setUsuals(
+                      found.map((u) => ({
+                        ...splitDrink(u.drink, u.beans),
+                        fulfillment: u.fulfillment,
+                      })),
                     );
                 })
-                .catch((err) => console.log("[app] usual lookup skipped:", err));
+                .catch((err) => console.log("[app] usuals lookup skipped:", err));
             }
           } else if (greeted && ++misses >= missesToClear) {
             console.log("[app] customer left, clearing greeting");
@@ -247,7 +255,7 @@ export function Kiosk() {
             setName(prefillName);
             setEmail(prefillEmail);
             setWelcomeBack(null);
-            setUsualDrink(null);
+            setUsuals([]);
           }
         } catch (err) {
           // A failed check says nothing about who is there; keep the state.
@@ -279,6 +287,7 @@ export function Kiosk() {
     misspelledName: string,
     drink = selectedDrink,
     beans = chosenBeans,
+    fulfillmentOverride?: Fulfillment,
   ): Promise<void> {
     console.log("[app] placing order for:", misspelledName);
     setMisspelled(misspelledName);
@@ -310,7 +319,8 @@ export function Kiosk() {
         // (ignored). Required by the backend when fulfillment is delivery.
         customerEmail: email.trim(),
         pronunciation: undefined,
-        fulfillment,
+        // Passed in by a usual, whose fulfillment state hasn't rendered yet.
+        fulfillment: fulfillmentOverride ?? fulfillment,
       });
       setStep("confirmation");
       setTrackerMode("auto");
@@ -322,20 +332,21 @@ export function Kiosk() {
     }
   }
 
-  /** Orders the greeted customer's usual straight away, as a pickup. */
-  async function orderUsual() {
-    if (!usualDrink || !name.trim() || loading) return;
+  /** Orders one of the greeted customer's usuals straight away: its drink, beans and fulfillment. */
+  async function orderUsual(usual: Usual) {
+    if (!name.trim() || loading) return;
     setLoading(true);
     // The selection and fulfillment feed the confirmation screen, and a failed
     // order rewinds to the name screen with them intact for a retry.
-    setSelectedDrink(usualDrink.drink);
-    setSelectedBeans(usualDrink.beans);
-    setFulfillment("pickup");
+    setSelectedDrink(usual.drink);
+    setSelectedBeans(usual.beans);
+    setFulfillment(usual.fulfillment);
     try {
       await placeOrder(
         misspellName(name.trim()) || name,
-        usualDrink.drink,
-        usualDrink.beans,
+        usual.drink,
+        usual.beans,
+        usual.fulfillment,
       );
     } finally {
       setLoading(false);
@@ -390,7 +401,7 @@ export function Kiosk() {
     setSelectedBeans(REGULAR_BEANS);
     setFulfillment("pickup");
     setWelcomeBack(null);
-    setUsualDrink(null);
+    setUsuals([]);
     setAppError(null);
   }, [prefillName, prefillEmail]);
 
@@ -551,18 +562,30 @@ export function Kiosk() {
           </div>
         )}
 
-        {welcomeBack && usualOrderable && (
-          <button
-            onClick={orderUsual}
-            disabled={!connected || loading}
-            className="anim-in-hero press w-full max-w-sm mb-4 px-6 py-4 text-lg font-medium bg-white text-neutral-900 border-2 border-neutral-900 rounded-full transition-colors hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed"
-            style={{ animationDelay: "1200ms" }}
-          >
-            Your usual:{" "}
-            {usualDrink && (
-              <DrinkName drink={usualDrink.drink} beans={usualDrink.beans} />
+        {welcomeBack && orderableUsuals.length > 0 && (
+          <div className="w-full max-w-sm mb-4 flex flex-col gap-2">
+            {orderableUsuals.length > 1 && (
+              <p
+                className="anim-in-hero text-sm text-neutral-500 text-center"
+                style={{ animationDelay: "1200ms" }}
+              >
+                Your usuals
+              </p>
             )}
-          </button>
+            {orderableUsuals.map((u, i) => (
+              <button
+                key={`${u.drink}-${u.beans}-${u.fulfillment}`}
+                onClick={() => orderUsual(u)}
+                disabled={!connected || loading}
+                className="anim-in-hero press w-full px-6 py-4 text-lg font-medium bg-white text-neutral-900 border-2 border-neutral-900 rounded-full transition-colors hover:bg-neutral-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ animationDelay: `${1200 + i * 100}ms` }}
+              >
+                {orderableUsuals.length === 1 ? "Your usual: " : ""}
+                <DrinkName drink={u.drink} beans={u.beans} /> &middot;{" "}
+                {u.fulfillment === "delivery" ? "Delivery" : "Pickup"}
+              </button>
+            ))}
+          </div>
         )}
 
         {viamError && (

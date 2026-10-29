@@ -537,25 +537,45 @@ export async function identifyCustomer(
 }
 
 /**
- * The customer's most-frequent drink and beans, or null when they have no
- * history. drink may be a legacy decaf id (see splitDrink); beans is absent
- * from older modules.
+ * One order a customer places often: its drink, beans and fulfillment together.
+ * drink may be a legacy decaf id (see splitDrink); beans is absent from older
+ * modules.
  */
-export async function getUsualDrink(
-  conn: ViamConnection,
-  email: string,
-): Promise<{ drink: string; beans?: string } | null> {
-  if (isDevMode() || !email) return null;
-  const res = await doCommand<{
-    has_usual?: boolean;
-    drink?: string;
-    beans?: string;
-  }>(conn, CUSTOMER_DETECTOR_SERVICE_NAME, { get_usual: email });
-  return res.has_usual && res.drink
-    ? { drink: res.drink, beans: res.beans }
-    : null;
+export interface UsualOrder {
+  drink: string;
+  beans?: string;
+  fulfillment: Fulfillment;
 }
 
+/**
+ * Every order the customer has placed at least 25% of the time, most-frequent
+ * first (just their most-frequent when none reaches that), or an empty list
+ * when they have no history. Older modules answer with a single drink instead
+ * of a list; that is read as one pickup usual.
+ */
+export async function getUsualOrders(
+  conn: ViamConnection,
+  email: string,
+): Promise<UsualOrder[]> {
+  if (isDevMode() || !email) return [];
+  type Wire = { drink?: string; beans?: string; fulfillment?: string };
+  const res = await doCommand<
+    Wire & { has_usual?: boolean; usuals?: Wire[] }
+  >(conn, CUSTOMER_DETECTOR_SERVICE_NAME, { get_usual: email });
+  if (!res.has_usual) return [];
+  const list = res.usuals ?? [res];
+  return list.flatMap((u) =>
+    u.drink
+      ? [
+          {
+            drink: u.drink,
+            beans: u.beans,
+            fulfillment: u.fulfillment === "delivery" ? "delivery" : "pickup",
+          },
+        ]
+      : [],
+  );
+}
 
 export async function getCustomerDetectorInfo(
   conn: ViamConnection,

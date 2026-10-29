@@ -5,6 +5,7 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -288,41 +289,92 @@ func TestFinishRegistrationWithoutVisionLeavesFacesStaged(t *testing.T) {
 	}
 }
 
-// A usual is a drink and its beans together, and history recorded before beans
-// were their own field counts an old "decaf" as a decaf espresso.
-func TestUsualDrinkCountsBeans(t *testing.T) {
+// A usual is a drink, its beans, and its fulfillment together: a decaf lungo
+// is a different usual from a lungo, and a delivery is different from a
+// pickup of the same drink. History recorded before beans or fulfillment were
+// their own fields reads an old "decaf" as a decaf espresso pickup.
+func TestFrequentOrdersDistinguishesBeansAndFulfillment(t *testing.T) {
 	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	at := func(h int) time.Time { return t0.Add(time.Duration(h) * time.Hour) }
-	usual, count := usualDrink([]orderHistoryEntry{
-		{Drink: "lungo", Beans: "regular", Fulfillment: "pickup", At: at(0)},
-		{Drink: "lungo", Beans: "regular", Fulfillment: "pickup", At: at(1)},
-		{Drink: "decaf", At: at(2)}, // legacy decaf espresso, legacy pickup
-		{Drink: "espresso", Beans: "decaf", Fulfillment: "pickup", At: at(3)},
-		{Drink: "espresso", Beans: "decaf", Fulfillment: "pickup", At: at(4)},
-	})
-	if usual != (drinkChoice{"espresso", "decaf", "pickup"}) || count != 3 {
-		t.Errorf("usual = %+v x%d, want decaf espresso pickup x3", usual, count)
-	}
 
-	// Same drink, different beans: separate usuals, not one pooled lungo.
-	usual, count = usualDrink([]orderHistoryEntry{
+	// Same drink, different beans: separate usuals, not one pooled lungo. All
+	// three clear 25% of 4 orders, so ties (the two 1x lungos) are broken
+	// toward the more recent.
+	got := frequentOrders([]orderHistoryEntry{
 		{Drink: "lungo", Beans: "light_roast", Fulfillment: "pickup", At: at(0)},
 		{Drink: "lungo", Beans: "regular", Fulfillment: "pickup", At: at(1)},
 		{Drink: "espresso", At: at(2)}, // legacy regular espresso, legacy pickup
 		{Drink: "espresso", Beans: "regular", Fulfillment: "pickup", At: at(3)},
 	})
-	if usual != (drinkChoice{"espresso", "regular", "pickup"}) || count != 2 {
-		t.Errorf("usual = %+v x%d, want regular espresso pickup x2", usual, count)
+	want := []frequentOrder{
+		{drinkChoice{"espresso", "regular", "pickup"}, 2},
+		{drinkChoice{"lungo", "regular", "pickup"}, 1},
+		{drinkChoice{"lungo", "light_roast", "pickup"}, 1},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("frequentOrders = %+v, want %+v", got, want)
 	}
 
 	// Same drink and beans, different fulfillment: separate usuals.
-	usual, count = usualDrink([]orderHistoryEntry{
+	got = frequentOrders([]orderHistoryEntry{
 		{Drink: "latte", Beans: "regular", Fulfillment: "delivery", At: at(0)},
 		{Drink: "latte", Beans: "regular", Fulfillment: "delivery", At: at(1)},
 		{Drink: "latte", Beans: "regular", Fulfillment: "pickup", At: at(2)},
 	})
-	if usual != (drinkChoice{"latte", "regular", "delivery"}) || count != 2 {
-		t.Errorf("usual = %+v x%d, want delivery latte x2", usual, count)
+	want = []frequentOrder{
+		{drinkChoice{"latte", "regular", "delivery"}, 2},
+		{drinkChoice{"latte", "regular", "pickup"}, 1},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("frequentOrders = %+v, want %+v", got, want)
+	}
+}
+
+// Only choices making up at least 25% of the history are offered back: below
+// that, a choice is left out entirely, not merely out of first place.
+func TestFrequentOrdersThreshold(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	at := func(h int) time.Time { return t0.Add(time.Duration(h) * time.Hour) }
+
+	// Of 8 orders: espresso 4x (50%) and lungo 2x (25%) clear the threshold;
+	// latte and iced coffee, 1x each (12.5%), fall under it.
+	got := frequentOrders([]orderHistoryEntry{
+		{Drink: "espresso", Beans: "regular", Fulfillment: "pickup", At: at(0)},
+		{Drink: "espresso", Beans: "regular", Fulfillment: "pickup", At: at(1)},
+		{Drink: "espresso", Beans: "regular", Fulfillment: "pickup", At: at(2)},
+		{Drink: "espresso", Beans: "regular", Fulfillment: "pickup", At: at(3)},
+		{Drink: "lungo", Beans: "regular", Fulfillment: "pickup", At: at(4)},
+		{Drink: "lungo", Beans: "regular", Fulfillment: "pickup", At: at(5)},
+		{Drink: "latte", Beans: "regular", Fulfillment: "delivery", At: at(6)},
+		{Drink: "iced_coffee", Beans: "regular", Fulfillment: "pickup", At: at(7)},
+	})
+	want := []frequentOrder{
+		{drinkChoice{"espresso", "regular", "pickup"}, 4},
+		{drinkChoice{"lungo", "regular", "pickup"}, 2},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("frequentOrders = %+v, want %+v", got, want)
+	}
+}
+
+// When history is varied enough that nothing clears 25% (five distinct
+// combos, one each — 20% apiece), the single most-frequent choice is
+// returned alone, tie-broken toward the most recent, rather than leaving a
+// customer with real history offered nothing.
+func TestFrequentOrdersFallsBackBelowThreshold(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	at := func(h int) time.Time { return t0.Add(time.Duration(h) * time.Hour) }
+
+	got := frequentOrders([]orderHistoryEntry{
+		{Drink: "espresso", Beans: "regular", Fulfillment: "pickup", At: at(0)},
+		{Drink: "lungo", Beans: "regular", Fulfillment: "pickup", At: at(1)},
+		{Drink: "latte", Beans: "regular", Fulfillment: "delivery", At: at(2)},
+		{Drink: "iced_coffee", Beans: "regular", Fulfillment: "pickup", At: at(3)},
+		{Drink: "iced_latte", Beans: "regular", Fulfillment: "pickup", At: at(4)},
+	})
+	want := []frequentOrder{{drinkChoice{"iced_latte", "regular", "pickup"}, 1}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("frequentOrders = %+v, want only the most recent 1x choice: %+v", got, want)
 	}
 }
 
@@ -340,23 +392,28 @@ func TestUsualKeepsLegacyDecafID(t *testing.T) {
 	if got := cd.customers["alice@example.com"].Orders[0]; got.Drink != "espresso" || got.Beans != "decaf" || got.Fulfillment != "pickup" {
 		t.Errorf("recorded %+v, want espresso with decaf beans and pickup fulfillment", got)
 	}
-	usual, err := cd.getUsual("alice@example.com")
+	res, err := cd.getUsual("alice@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usual["drink"] != "decaf" || usual["beans"] != "decaf" || usual["fulfillment"] != "pickup" {
-		t.Errorf("usual = %v, want drink decaf (legacy id), beans decaf, pickup", usual)
+	usuals, _ := res["usuals"].([]map[string]any)
+	if len(usuals) != 1 || usuals[0]["drink"] != "decaf" || usuals[0]["beans"] != "decaf" || usuals[0]["fulfillment"] != "pickup" {
+		t.Errorf("usuals = %v, want a single drink decaf (legacy id), beans decaf, pickup", usuals)
 	}
 
 	// A usual older clients have no id for goes out as the plain drink, with
-	// the beans alongside.
+	// the beans alongside. Both choices still clear 25% of the now 3-order
+	// history, so both come back, most-frequent first.
 	for range 2 {
 		if _, err := cd.recordOrder("alice@example.com", "lungo", "light_roast", "delivery"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	usual, _ = cd.getUsual("alice@example.com")
-	if usual["drink"] != "lungo" || usual["beans"] != "light_roast" || usual["fulfillment"] != "delivery" {
-		t.Errorf("usual = %v, want lungo / light_roast / delivery", usual)
+	res, _ = cd.getUsual("alice@example.com")
+	usuals, _ = res["usuals"].([]map[string]any)
+	if len(usuals) != 2 ||
+		usuals[0]["drink"] != "lungo" || usuals[0]["beans"] != "light_roast" || usuals[0]["fulfillment"] != "delivery" ||
+		usuals[1]["drink"] != "decaf" || usuals[1]["beans"] != "decaf" || usuals[1]["fulfillment"] != "pickup" {
+		t.Errorf("usuals = %v, want lungo/light_roast/delivery x2 then decaf/decaf/pickup x1", usuals)
 	}
 }

@@ -1163,18 +1163,18 @@ Returns:
 **`record_order`** — Append a completed drink to a customer's order history (the data behind "the usual"). The coffee service calls this automatically after a successful brew when `customer_detector_name` is configured and the order carried a `customer_email`; you can also call it directly. An unknown email is a no-op (not an error), so it's safe to call for anonymous walk-ups.
 
 ```json
-{"record_order": {"email": "alice@example.com", "drink": "espresso", "beans": "decaf"}}
+{"record_order": {"email": "alice@example.com", "drink": "espresso", "beans": "decaf", "fulfillment": "delivery"}}
 ```
 
-`beans` is optional and defaults to `"regular"`.
+`beans` is optional and defaults to `"regular"`; `fulfillment` is optional and defaults to `"pickup"`.
 
 Returns:
 
 ```json
-{"recorded": true, "email": "alice@example.com", "drink": "espresso", "beans": "decaf"}
+{"recorded": true, "email": "alice@example.com", "drink": "espresso", "beans": "decaf", "fulfillment": "delivery"}
 ```
 
-**`get_usual`** — Return a customer's usual drink and beans, derived from their recorded order history: the most frequent drink-and-beans pair, so a decaf espresso and an espresso count separately. History recorded before beans were tracked is read with decaf as the beans (an old `"decaf"` counts as a decaf espresso) and anything else as regular. `drink` uses the legacy decaf ids (`"decaf"` for a decaf espresso), because the kiosk orders the usual by this id alone. `record_order` also accepts those ids. Returns `{"has_usual": false}` when the customer is unknown or has no history. The kiosk calls it for the customer it recognises on the welcome screen and offers the drink as a "Your usual" button that skips the drink grid.
+**`get_usual`** — Return every drink/beans/fulfillment combination making up at least 25% of a customer's recorded order history, most-frequent first (so a decaf espresso, an espresso, and a delivery of either all count separately). If the history is varied enough that nothing clears 25% (e.g. five or more different combinations ordered equally often), the single most-frequent one is returned alone, so a customer with real order history is never offered none. History recorded before beans or fulfillment were tracked is read with decaf as the beans (an old `"decaf"` counts as a decaf espresso) and pickup as the fulfillment. Each entry's `drink` uses the legacy decaf ids (`"decaf"` for a decaf espresso), because the kiosk orders a usual by this id alone. `record_order` also accepts those ids. Returns `{"has_usual": false}` only when the customer is unknown or has no recorded history. The kiosk calls it for the customer it recognises on the welcome screen and offers each entry as a "Your usual" button that skips the drink grid.
 
 ```json
 {"get_usual": "alice@example.com"}
@@ -1183,7 +1183,13 @@ Returns:
 Returns:
 
 ```json
-{"has_usual": true, "drink": "decaf", "beans": "decaf", "count": 7}
+{
+  "has_usual": true,
+  "usuals": [
+    {"drink": "decaf", "beans": "decaf", "fulfillment": "pickup", "count": 7},
+    {"drink": "lungo", "beans": "light_roast", "fulfillment": "delivery", "count": 3}
+  ]
+}
 ```
 
 **`get_info`** — Return static service info. Currently `{"camera_name": <short name>}` for the camera the detector is wired to.
