@@ -41,7 +41,7 @@ func TestSetStepReflectedInStatus(t *testing.T) {
 func TestStatusReportsQueueAndFlags(t *testing.T) {
 	s := newStatusService(t, &Config{BeanOptions: []BeanOption{{Name: "decaf"}}})
 	s.queue.Enqueue(order.Order{ID: "o1", Drink: "espresso", CustomerName: "Ada", RawStep: "Grinding"})
-	s.queue.Enqueue(order.Order{ID: "o2", Drink: "lungo", CustomerName: "Grace"})
+	s.queue.Enqueue(order.Order{ID: "o2", Drink: "lungo", Beans: "decaf", CustomerName: "Grace"})
 
 	st, err := s.Status(context.Background())
 	if err != nil {
@@ -58,9 +58,18 @@ func TestStatusReportsQueueAndFlags(t *testing.T) {
 	if st["is_paused"] != false || st["is_busy"] != false {
 		t.Errorf("is_paused/is_busy = %v/%v, want false/false", st["is_paused"], st["is_busy"])
 	}
+	if st["can_serve_decaf"] != true {
+		t.Errorf("can_serve_decaf = %v, want true for clients that predate bean_options", st["can_serve_decaf"])
+	}
 	orders, ok := st["orders"].([]any)
 	if !ok || len(orders) != 2 {
 		t.Fatalf("orders = %v, want a 2-element []any", st["orders"])
+	}
+	// A decaf lungo goes out under its legacy id, so an older kiosk still
+	// labels it; beans carries the exact choice.
+	o2 := orders[1].(map[string]any)
+	if o2["drink"] != "decaf_lungo" || o2["beans"] != "decaf" {
+		t.Errorf("order o2 drink/beans = %v/%v, want decaf_lungo/decaf", o2["drink"], o2["beans"])
 	}
 }
 

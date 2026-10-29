@@ -110,3 +110,32 @@ func TestLegacyDrink(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacyDrinkIDs(t *testing.T) {
+	for _, tt := range []struct{ id, base, beans string }{
+		{"decaf", "espresso", "decaf"},
+		{"decaf_lungo", "lungo", "decaf"},
+	} {
+		base, beans, ok := ParseLegacyDrink(tt.id)
+		if !ok || base != tt.base || beans != tt.beans {
+			t.Errorf("ParseLegacyDrink(%q) = %q, %q, %v", tt.id, base, beans, ok)
+		}
+		// And the round trip: what goes out is what old clients send back.
+		if got := WireDrink(tt.base, tt.beans); got != tt.id {
+			t.Errorf("WireDrink(%q, %q) = %q, want %q", tt.base, tt.beans, got, tt.id)
+		}
+	}
+	if _, _, ok := ParseLegacyDrink("espresso"); ok {
+		t.Error("espresso is not a legacy id")
+	}
+	// Anything old clients had no id for goes out as the plain drink.
+	for _, tt := range []struct{ drink, beans, want string }{
+		{"espresso", "regular", "espresso"},
+		{"espresso", "light_roast", "espresso"},
+		{"iced_latte", "decaf", "iced_latte"},
+	} {
+		if got := WireDrink(tt.drink, tt.beans); got != tt.want {
+			t.Errorf("WireDrink(%q, %q) = %q, want %q", tt.drink, tt.beans, got, tt.want)
+		}
+	}
+}

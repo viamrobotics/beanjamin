@@ -412,7 +412,9 @@ When `can_serve_iced_latte` is enabled, the dedicated milk-observe switch must h
 
 ### DoCommand
 
-**`prepare_order`** - Prepare a drink order with optional speech greetings. Supports `"espresso"` and `"lungo"`, `"iced_coffee"` when `can_serve_iced` is set, and `"iced_latte"` when `can_serve_iced_latte` is set. `beans` picks the grinder: `"regular"` (the default when omitted) or a `bean_options` name such as `"decaf"`; any drink can take any of the machine's beans. Unknown beans are rejected before anything is queued. Decaf used to be its own drink; the `"decaf"` and `"decaf_lungo"` ids are no longer accepted — send `"espresso"` or `"lungo"` with `"beans": "decaf"`.
+**`prepare_order`** - Prepare a drink order with optional speech greetings. Supports `"espresso"` and `"lungo"`, `"iced_coffee"` when `can_serve_iced` is set, and `"iced_latte"` when `can_serve_iced_latte` is set. `beans` picks the grinder: `"regular"` (the default when omitted) or a `bean_options` name such as `"decaf"`; any drink can take any of the machine's beans. Unknown beans are rejected before anything is queued. Decaf used to be its own drink: the legacy ids `"decaf"` and `"decaf_lungo"` are still accepted, as `"espresso"` / `"lungo"` with `"beans": "decaf"` (a contradicting `beans` is rejected), so clients that predate `beans` keep working. New clients should send `beans`.
+
+**Legacy decaf ids on the way out.** Until every client sends `beans`, wherever the service reports a drink id — `get_queue` orders, `cancel_order`, delivery snapshots, order-sensor readings, and the customer detector's `get_usual` / `Status` — a decaf espresso or lungo is reported as `"decaf"` / `"decaf_lungo"`, with `beans` alongside carrying the exact choice. Combinations older clients had no id for (a light-roast lungo, a decaf iced latte) go out as the plain drink plus `beans`. `get_queue` likewise keeps `can_serve_decaf`, and readings keep the `decaf` flag.
 
 ```json
 {
@@ -512,18 +514,19 @@ Returns:
     {"id": "3f8c1e2a-…", "drink": "espresso", "beans": "regular", "customer_name": "Alice", "fulfillment": "pickup",
      "enqueued_at": "2026-09-17T09:12:03Z", "raw_step": "Brewing", "step_history": [],
      "completed_at": "", "cancellable": false},
-    {"id": "9b21d740-…", "drink": "lungo", "beans": "decaf", "customer_name": "Bob", "fulfillment": "pickup",
+    {"id": "9b21d740-…", "drink": "decaf_lungo", "beans": "decaf", "customer_name": "Bob", "fulfillment": "pickup",
      "enqueued_at": "2026-09-17T09:12:40Z", "raw_step": "", "step_history": [],
      "completed_at": "", "cancellable": true}
   ],
   "is_paused": false,
   "is_busy": true,
   "arm_holder": "order queue",
-  "bean_options": ["regular", "decaf"]
+  "bean_options": ["regular", "decaf"],
+  "can_serve_decaf": true
 }
 ```
 
-`bean_options` lists the beans an order may name, `regular` first, so a client can offer the choice.
+`bean_options` lists the beans an order may name, `regular` first, so a client can offer the choice. `can_serve_decaf` (whether `decaf` is among them) and the legacy `drink` ids are kept for older clients; see "Legacy decaf ids" under `prepare_order`.
 
 `arm_holder` names what currently holds the arm — `order queue`, `keepalive purge`, `reset_world`, `execute_action open_door` and so on — and is empty when the arm is free. A command refused because the arm is busy names the holder in its error too.
 
@@ -981,6 +984,7 @@ After each order attempt completes (success, failure, or panic), the **next** `R
   "failed_step": "",
   "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
   "beans": "regular",
+  "decaf": false,
   "start_time": "2026-04-01T12:00:00.000000000Z",
   "end_time": "2026-04-01T12:02:05.000000000Z",
   "duration_ms": 125000
@@ -996,7 +1000,7 @@ The remaining fields exist to support observability (per-step error rates and fa
 - **`failed_step`** — the step label the order errored at (e.g. `"Brewing"`, `"Grinding"`), matching the `setStep` labels surfaced through `get_queue`. Empty on success. Count readings by `failed_step` to see where orders die.
 - **`operator_cancelled`** — `true` when the failure was an operator `cancel` (a `context.Canceled` interruption), not a genuine fault. **Exclude these from step error-rate metrics** so intentional cancellations don't inflate failure counts. `failed_step` is still populated (it marks where the cancel interrupted).
 - **`trace_id`** — the OpenTelemetry trace ID for the order. Use it to jump from a failed reading to the order's full distributed trace (every motion plan and step span). Empty if no trace context was present.
-- **`beans`** — the beans the drink was ground from (`regular` or a `bean_options` name), so you can tell which grinder ran without cross-referencing the coffee service config. Readings recorded before this field existed carry a `decaf` boolean instead, and decaf drinks among them have the drink `"decaf"` or `"decaf_lungo"`; the daily digest reads both forms.
+- **`beans`** — the beans the drink was ground from (`regular` or a `bean_options` name), so you can tell which grinder ran without cross-referencing the coffee service config. Readings also keep the older `decaf` boolean, and a decaf espresso or lungo keeps its legacy `drink` id (`"decaf"` / `"decaf_lungo"`), so readers that predate `beans` (the dashboard) see what they always did. Readings recorded before `beans` existed have only the `decaf` flag; the daily digest reads both forms.
 
 A per-step error rate is then `count(failed_step == X AND NOT operator_cancelled) / count(all orders)`.
 
@@ -1163,7 +1167,7 @@ Returns:
 {"recorded": true, "email": "alice@example.com", "drink": "espresso", "beans": "decaf"}
 ```
 
-**`get_usual`** — Return a customer's usual drink and beans, derived from their recorded order history: the most frequent drink-and-beans pair, so a decaf espresso and an espresso count separately. History recorded before beans were tracked is read with decaf as the beans (an old `"decaf"` counts as a decaf espresso) and anything else as regular. Returns `{"has_usual": false}` when the customer is unknown or has no history. The kiosk calls it for the customer it recognises on the welcome screen and offers the drink as a "Your usual" button that skips the drink grid.
+**`get_usual`** — Return a customer's usual drink and beans, derived from their recorded order history: the most frequent drink-and-beans pair, so a decaf espresso and an espresso count separately. History recorded before beans were tracked is read with decaf as the beans (an old `"decaf"` counts as a decaf espresso) and anything else as regular. `drink` uses the legacy decaf ids (`"decaf"` for a decaf espresso), because the kiosk orders the usual by this id alone. `record_order` also accepts those ids. Returns `{"has_usual": false}` when the customer is unknown or has no history. The kiosk calls it for the customer it recognises on the welcome screen and offers the drink as a "Your usual" button that skips the drink grid.
 
 ```json
 {"get_usual": "alice@example.com"}
@@ -1172,7 +1176,7 @@ Returns:
 Returns:
 
 ```json
-{"has_usual": true, "drink": "espresso", "beans": "decaf", "count": 7}
+{"has_usual": true, "drink": "decaf", "beans": "decaf", "count": 7}
 ```
 
 **`get_info`** — Return static service info. Currently `{"camera_name": <short name>}` for the camera the detector is wired to.
@@ -1193,7 +1197,7 @@ When a registered customer is recognized:
   "name": "Alice Smith",
   "email": "alice@example.com",
   "confidence": 0.87,
-  "usual_drink": "espresso",
+  "usual_drink": "decaf",
   "usual_beans": "decaf",
   "usual_count": 7
 }

@@ -32,6 +32,16 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		return nil, err
 	}
 	drink := req.Drink
+	// Legacy decaf ids name the beans too; they may not contradict an
+	// explicit beans.
+	if base, beans, ok := order.ParseLegacyDrink(drink); ok {
+		if req.Beans != "" && req.Beans != beans {
+			err := fmt.Errorf("drink %q is %s beans, but the order asks for beans %q", drink, beans, req.Beans)
+			s.logger.Warnf("rejected order: %v", err)
+			return nil, err
+		}
+		drink, req.Beans = base, beans
+	}
 	customerName := strings.TrimSpace(req.CustomerName)
 	s.logger.Infof("order request: drink=%q beans=%q customer=%q", drink, req.Beans, customerName)
 

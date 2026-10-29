@@ -106,8 +106,12 @@ func TestOrderSensor_Readings_Failure(t *testing.T) {
 	if r["beans"] != "decaf" {
 		t.Fatalf("beans: want %q got %#v", "decaf", r["beans"])
 	}
-	if _, ok := r["decaf"]; ok {
-		t.Fatal("readings should no longer carry the decaf flag")
+	// Readers that predate beans keep their decaf flag and legacy drink id.
+	if d, _ := r["decaf"].(bool); !d {
+		t.Fatalf("decaf: want true got %#v", r["decaf"])
+	}
+	if r["drink"] != "decaf_lungo" {
+		t.Fatalf("drink: want the legacy %q got %#v", "decaf_lungo", r["drink"])
 	}
 	if r["failed_step"] != "Grinding" {
 		t.Fatalf("failed_step: want %q got %q", "Grinding", r["failed_step"])

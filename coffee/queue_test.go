@@ -313,16 +313,47 @@ func TestEnqueueOrder_RejectsBatchOfUnsupportedDrink(t *testing.T) {
 	}
 }
 
-// Decaf is chosen through beans now; the old drink ids are unknown drinks.
-func TestEnqueueOrder_RejectsRetiredDecafDrinks(t *testing.T) {
-	c, _ := newTestCoffee(t, &Config{BeanOptions: []BeanOption{{Name: "decaf"}}})
-	for _, drink := range []string{"decaf", "decaf_lungo"} {
-		if _, err := c.enqueueOrder(context.Background(), map[string]any{"drink": drink}); err == nil {
-			t.Errorf("drink %q should be rejected", drink)
-		}
+// Clients that predate beans still order decaf by drink id ("decaf",
+// "decaf_lungo"): those are taken as espresso or lungo with decaf beans, on a
+// machine with a decaf grinder, whether configured the new or the old way.
+func TestEnqueueOrder_LegacyDecafDrinks(t *testing.T) {
+	for name, cfg := range map[string]*Config{
+		"bean_options":    {BeanOptions: []BeanOption{{Name: "decaf"}}},
+		"can_serve_decaf": {CanServeDecaf: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := newTestCoffee(t, cfg)
+			for _, req := range []map[string]any{
+				{"drink": "decaf"},
+				{"drink": "decaf_lungo"},
+				{"drink": "decaf", "beans": "decaf"}, // redundant but consistent
+			} {
+				if _, err := c.enqueueOrder(context.Background(), req); err != nil {
+					t.Fatalf("%v: %v", req, err)
+				}
+			}
+			var got []string
+			for _, o := range c.queue.List() {
+				got = append(got, o.Drink+"/"+o.Beans)
+			}
+			if want := "espresso/decaf,lungo/decaf,espresso/decaf"; strings.Join(got, ",") != want {
+				t.Errorf("queued %v, want %s", got, want)
+			}
+		})
 	}
-	if c.queue.Len() != 0 {
-		t.Errorf("queue should stay empty, got len=%d", c.queue.Len())
+
+	// A legacy id that contradicts an explicit beans is refused.
+	c, _ := newTestCoffee(t, &Config{BeanOptions: []BeanOption{{Name: "decaf"}, {Name: "light_roast"}}})
+	if _, err := c.enqueueOrder(context.Background(), map[string]any{"drink": "decaf", "beans": "light_roast"}); err == nil {
+		t.Error("decaf with light_roast beans should be rejected")
+	}
+	// And decaf still needs a decaf grinder.
+	plain, _ := newTestCoffee(t, &Config{})
+	if _, err := plain.enqueueOrder(context.Background(), map[string]any{"drink": "decaf"}); err == nil {
+		t.Error("decaf should be rejected without a decaf grinder")
+	}
+	if c.queue.Len()+plain.queue.Len() != 0 {
+		t.Error("rejected orders must not be queued")
 	}
 }
 

@@ -106,7 +106,7 @@ func (s *orderSensor) PushOrderReading(r order.Reading) {
 	defer s.mu.Unlock()
 	s.pending = append(s.pending, map[string]any{
 		"order_id":      r.Order.ID,
-		"drink":         r.Order.Drink,
+		"drink":         r.Order.WireDrink(),
 		"customer_name": r.Order.CustomerName,
 		// What the customer was actually shown.
 		"modified_customer_name": r.Order.ModifiedCustomerName,
@@ -116,8 +116,10 @@ func (s *orderSensor) PushOrderReading(r order.Reading) {
 		"failed_step":            failedStep,
 		"trace_id":               r.TraceID,
 		"beans":                  r.Order.Beans,
-		"start_time":             r.StartedAt.UTC().Format(time.RFC3339Nano),
-		"end_time":               r.EndedAt.UTC().Format(time.RFC3339Nano),
-		"duration_ms":            float64(r.EndedAt.Sub(r.StartedAt).Milliseconds()),
+		// Kept for readers that predate beans (the dashboard's DECAF badge).
+		"decaf":       r.Order.Beans == "decaf",
+		"start_time":  r.StartedAt.UTC().Format(time.RFC3339Nano),
+		"end_time":    r.EndedAt.UTC().Format(time.RFC3339Nano),
+		"duration_ms": float64(r.EndedAt.Sub(r.StartedAt).Milliseconds()),
 	})
 }

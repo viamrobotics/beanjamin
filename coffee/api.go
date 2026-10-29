@@ -7,6 +7,7 @@ package coffee
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"go.viam.com/rdk/module/trace"
@@ -42,7 +43,7 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		}
 		orderMaps[i] = map[string]any{
 			"id":                     o.ID,
-			"drink":                  o.Drink,
+			"drink":                  o.WireDrink(),
 			"beans":                  o.Beans,
 			"customer_name":          o.CustomerName,
 			"modified_customer_name": o.ModifiedCustomerName,
@@ -68,7 +69,9 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		"arm_holder":   s.lease.holderName(),
 		"current_step": step,
 		// The beans an order may name, regular first, for a client to offer.
-		"bean_options":    stringsToAny(s.menu().BeanOptions()),
+		"bean_options": stringsToAny(s.menu().BeanOptions()),
+		// Kept for clients that predate bean_options.
+		"can_serve_decaf": slices.Contains(s.menu().Beans, "decaf"),
 		"fault_active":    s.faultAlarm.Active(),
 		"accept_delivery": s.deliveryAccepting(),
 	}

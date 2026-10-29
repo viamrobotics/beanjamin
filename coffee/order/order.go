@@ -81,6 +81,11 @@ func (o Order) DisplayName() string {
 	return o.CustomerName
 }
 
+// WireDrink is the drink id to report to clients for this order (WireDrink).
+func (o Order) WireDrink() string {
+	return WireDrink(o.Drink, o.Beans)
+}
+
 // Label names the order's drink and beans for speech and Slack (DrinkLabel).
 func (o Order) Label() string {
 	return DrinkLabel(o.Drink, o.Beans)

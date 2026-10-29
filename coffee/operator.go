@@ -290,7 +290,7 @@ func (s *beanjaminCoffee) cancelOrder(ctx context.Context, v any) (map[string]an
 		"status":        "cancelled",
 		"order_id":      order.ID,
 		"customer_name": order.CustomerName,
-		"drink":         order.Drink,
+		"drink":         order.WireDrink(),
 		"remaining":     float64(remaining),
 	}, nil
 }

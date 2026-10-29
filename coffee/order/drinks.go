@@ -49,19 +49,57 @@ func DrinkLabel(drink, beans string) string {
 // already carrying beans is returned unchanged. For readers of stored history
 // (order-sensor readings, customer order history), never for new orders.
 func LegacyDrink(drink, beans string, decaf bool) (string, string) {
-	switch drink {
-	case "decaf":
-		return "espresso", "decaf"
-	case "decaf_lungo":
-		return "lungo", "decaf"
+	if base, b, ok := ParseLegacyDrink(drink); ok {
+		return base, b
 	}
 	if beans == "" {
 		if decaf {
-			return drink, "decaf"
+			return drink, beansDecaf
 		}
 		return drink, BeansRegular
 	}
 	return drink, beans
+}
+
+// The drink ids decaf was ordered by before beans were their own field. Older
+// clients (the kiosk's decaf toggle, voice-command and Stream Deck configs, the
+// Slack ordering bot) still send and expect them, so the service keeps
+// speaking them at its edges — accepted on prepare_order (ParseLegacyDrink),
+// and reported for decaf espresso and lungo wherever a drink id goes out
+// (WireDrink) — until those clients send beans. Remove both together.
+const (
+	legacyDecaf      = "decaf"
+	legacyDecafLungo = "decaf_lungo"
+	beansDecaf       = "decaf"
+)
+
+// ParseLegacyDrink maps a legacy decaf drink id onto the drink and beans it
+// stands for; ok is false for any other id.
+func ParseLegacyDrink(drink string) (base, beans string, ok bool) {
+	switch drink {
+	case legacyDecaf:
+		return "espresso", beansDecaf, true
+	case legacyDecafLungo:
+		return "lungo", beansDecaf, true
+	}
+	return "", "", false
+}
+
+// WireDrink is the drink id to report to clients for drink made from beans:
+// the drink itself, except a decaf espresso or lungo, which keeps its legacy
+// id ("decaf", "decaf_lungo") so clients that predate beans still recognize
+// it and can order it again. Reported alongside beans, which is exact.
+func WireDrink(drink, beans string) string {
+	if beans != beansDecaf {
+		return drink
+	}
+	switch drink {
+	case "espresso":
+		return legacyDecaf
+	case "lungo":
+		return legacyDecafLungo
+	}
+	return drink
 }
 
 // Menu is the set of drinks and beans a machine is configured to serve. Plain

@@ -573,9 +573,8 @@ func (cd *customerDetector) recordOrder(email, drink, beans string) (map[string]
 		cd.logger.Debugf("record_order: no customer for %q — nothing to remember", email)
 		return map[string]any{"recorded": false, "reason": "unknown customer"}, nil
 	}
-	if beans == "" {
-		beans = order.BeansRegular
-	}
+	// Callers that predate beans send decaf as a drink id.
+	drink, beans = order.LegacyDrink(drink, beans, false)
 	rec.Orders = append(rec.Orders, orderHistoryEntry{Drink: drink, Beans: beans, At: time.Now()})
 	if len(rec.Orders) > maxOrderHistory {
 		rec.Orders = append([]orderHistoryEntry(nil), rec.Orders[len(rec.Orders)-maxOrderHistory:]...)
@@ -609,9 +608,11 @@ func (cd *customerDetector) getUsual(email string) (map[string]any, error) {
 	}
 	return map[string]any{
 		"has_usual": true,
-		"drink":     usual.drink,
-		"beans":     usual.beans,
-		"count":     count,
+		// drink keeps the legacy decaf ids (order.WireDrink): the kiosk orders
+		// the usual by this id alone, and must not drop the decaf.
+		"drink": order.WireDrink(usual.drink, usual.beans),
+		"beans": usual.beans,
+		"count": count,
 	}, nil
 }
 

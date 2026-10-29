@@ -315,3 +315,38 @@ func TestUsualDrinkCountsBeans(t *testing.T) {
 		t.Errorf("usual = %+v x%d, want regular espresso x2", usual, count)
 	}
 }
+
+// record_order from a client that predates beans still records decaf, and
+// get_usual hands a decaf espresso back under its legacy id: the kiosk orders
+// the usual by that id alone, so it must not come back as plain espresso.
+func TestUsualKeepsLegacyDecafID(t *testing.T) {
+	cd := newTestDetector(t)
+	dir, _ := cd.customerDir("alice@example.com")
+	cd.customers["alice@example.com"] = &customerRecord{Name: "Alice", Email: "alice@example.com", ImageDir: dir}
+
+	if _, err := cd.recordOrder("alice@example.com", "decaf", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := cd.customers["alice@example.com"].Orders[0]; got.Drink != "espresso" || got.Beans != "decaf" {
+		t.Errorf("recorded %+v, want espresso with decaf beans", got)
+	}
+	usual, err := cd.getUsual("alice@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usual["drink"] != "decaf" || usual["beans"] != "decaf" {
+		t.Errorf("usual = %v, want drink decaf (legacy id) and beans decaf", usual)
+	}
+
+	// A usual older clients have no id for goes out as the plain drink, with
+	// the beans alongside.
+	for range 2 {
+		if _, err := cd.recordOrder("alice@example.com", "lungo", "light_roast"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	usual, _ = cd.getUsual("alice@example.com")
+	if usual["drink"] != "lungo" || usual["beans"] != "light_roast" {
+		t.Errorf("usual = %v, want lungo / light_roast", usual)
+	}
+}
