@@ -169,13 +169,20 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		)
 	}
 
-	// Each extra grinder's poses, named after its beans.
+	// Each extra grinder's poses, named after its beans. A grinder listed in
+	// bean_options needs all three; the collect pose stays optional only for
+	// grinders configured before it existed (the regular grinder, and decaf
+	// enabled through the deprecated can_serve_decaf), which collect at their
+	// approach pose without one (grinderCollect).
 	for _, beans := range s.cfg.beanNames() {
 		approach, activate := grinderPoses(beans)
 		poses = append(poses,
 			requiredPose{s.filterSw, approach},
 			requiredPose{s.filterSw, activate},
 		)
+		if s.cfg.listsBeans(beans) {
+			poses = append(poses, requiredPose{s.filterSw, grinderCollectPose(beans)})
+		}
 	}
 
 	// Gated: requiring these unconditionally would fail construction on every
@@ -338,8 +345,9 @@ func grinderShieldFrame(beans string) string {
 func checkGrinderShields(fs *referenceframe.FrameSystem, beans []string) error {
 	for _, b := range beans {
 		if name := grinderShieldFrame(b); fs.Frame(name) == nil {
-			return fmt.Errorf("bean_options %q: grinder button shield %q not found in the frame system — "+
-				"apply the grinder fragment with prefix %q", b, name, strings.TrimSuffix(name, "-grinder-button-shield"))
+			return fmt.Errorf("bean_options %q: grinder button shield %q is not in the frame system — "+
+				"it is either disabled (check fragment_mods) or missing (apply the grinder fragment with prefix %q)",
+				b, name, strings.TrimSuffix(name, "-grinder-button-shield"))
 		}
 	}
 	return nil

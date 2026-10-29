@@ -469,6 +469,12 @@ func (cfg *Config) beanNames() []string {
 	return names
 }
 
+// listsBeans reports whether beans is listed in bean_options itself, as opposed
+// to implied by the deprecated can_serve_decaf.
+func (cfg *Config) listsBeans(beans string) bool {
+	return slices.ContainsFunc(cfg.BeanOptions, func(b BeanOption) bool { return b.Name == beans })
+}
+
 // beansDecaf is the bean_options name the deprecated can_serve_decaf stands for.
 const beansDecaf = "decaf"
 

@@ -189,7 +189,8 @@ func TestCheckGrinderShields(t *testing.T) {
 		t.Errorf("decaf shield present, got %v", err)
 	}
 	err := checkGrinderShields(fs, []string{"decaf", "light_roast"})
-	if err == nil || !strings.Contains(err.Error(), "light-roast-grinder-button-shield") || !strings.Contains(err.Error(), `prefix "light-roast"`) {
+	if err == nil || !strings.Contains(err.Error(), "light-roast-grinder-button-shield") ||
+		!strings.Contains(err.Error(), "disabled") || !strings.Contains(err.Error(), `prefix "light-roast"`) {
 		t.Errorf("want an error naming the missing light-roast shield and its prefix, got %v", err)
 	}
 	if err := checkGrinderShields(fs, nil); err != nil {
