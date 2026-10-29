@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/golang/geo/r3"
+	"go.viam.com/rdk/referenceframe"
+	"go.viam.com/rdk/spatialmath"
 	"go.viam.com/rdk/testutils/inject"
 
 	"beanjamin/coffee/geom"
@@ -114,5 +116,58 @@ func TestFetchMilkWhileOneIsOutFails(t *testing.T) {
 	err := s.fetchMilkBottle(context.Background(), context.Background(), "oat")
 	if err == nil || !strings.Contains(err.Error(), "already out") {
 		t.Fatalf("expected an already-out error, got %v", err)
+	}
+}
+
+// fridgeFloorFS is a grip point at gripZ above a fridge floor whose top face is
+// at Z=200 and spans the bottle's spot.
+func fridgeFloorFS(t *testing.T, gripZ float64) *referenceframe.FrameSystem {
+	t.Helper()
+	fs := gripPointStaticFS(t, spatialmath.NewPoseFromPoint(r3.Vector{X: 400, Y: 100, Z: gripZ}))
+	floorBox, err := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 400, Y: 100, Z: 190}),
+		r3.Vector{X: 400, Y: 400, Z: 20}, "fridge-floor")
+	if err != nil {
+		t.Fatalf("new floor box: %v", err)
+	}
+	floor, err := referenceframe.NewStaticFrameWithGeometry("fridge-floor", spatialmath.NewZeroPose(), floorBox)
+	if err != nil {
+		t.Fatalf("new floor frame: %v", err)
+	}
+	if err := fs.AddFrame(floor, fs.World()); err != nil {
+		t.Fatalf("add floor frame: %v", err)
+	}
+	return fs
+}
+
+// The bottle model stands on the fridge floor wherever up the bottle the grab
+// pose was taught, keeping the grip point's X/Y.
+func TestMilkBottleBoxRestsOnSurface(t *testing.T) {
+	dims := &ContainerDimensions{DiameterMm: 90, HeightMm: 250}
+	wantCenter := r3.Vector{X: 400, Y: 100, Z: 200 + surfaceRestClearanceMm + dims.HeightMm/2}
+	for _, gripZ := range []float64{240, 325, 430} {
+		fs := fridgeFloorFS(t, gripZ)
+		s := heldGeomService(t, fs)
+		s.cfg.MilkBottleDimensions = dims
+		box, err := s.milkBottleBox(fs, referenceframe.NewZeroInputs(fs))
+		if err != nil {
+			t.Fatalf("grip Z=%.0f: milkBottleBox: %v", gripZ, err)
+		}
+		requireVecEqual(t, box.Pose().Point(), wantCenter, 1e-6)
+	}
+}
+
+func TestMilkBottleBoxRejectsUnseatableBottle(t *testing.T) {
+	dims := &ContainerDimensions{DiameterMm: 90, HeightMm: 250}
+	for name, fs := range map[string]*referenceframe.FrameSystem{
+		// Nothing modeled under the bottle.
+		"no surface": gripPointStaticFS(t, spatialmath.NewPoseFromPoint(r3.Vector{X: 400, Y: 100, Z: 325})),
+		// The grip point is above the top of a bottle standing on the floor.
+		"grab above the bottle": fridgeFloorFS(t, 470),
+	} {
+		s := heldGeomService(t, fs)
+		s.cfg.MilkBottleDimensions = dims
+		if _, err := s.milkBottleBox(fs, referenceframe.NewZeroInputs(fs)); err == nil {
+			t.Errorf("%s: milkBottleBox succeeded, want an error", name)
+		}
 	}
 }

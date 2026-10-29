@@ -14,7 +14,13 @@ package coffee
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
+
+	"go.viam.com/rdk/referenceframe"
+	"go.viam.com/rdk/spatialmath"
+
+	"beanjamin/coffee/geom"
 )
 
 // milkAreaShieldFrameName is the optional obstacle enclosing the fridge
@@ -99,6 +105,59 @@ func (s *beanjaminCoffee) fridgeLinearStep(pose string, moveOpts *StepMoveOption
 		MoveOptions: moveOpts}
 }
 
+// attachMilkBottleGeometry models the bottle just grabbed and attaches it to the
+// gripper as the held item (see milkBottleBox).
+func (s *beanjaminCoffee) attachMilkBottleGeometry(ctx context.Context) error {
+	fs, fsInputs, err := s.currentInputs(ctx)
+	if err != nil {
+		return err
+	}
+	box, err := s.milkBottleBox(fs, fsInputs)
+	if err != nil {
+		return err
+	}
+	return s.attachDetectedGeometry(ctx, pickupLabelMilk, box)
+}
+
+// milkBottleBox builds the world-frame box of a bottle the jaws are closed on:
+// milk_bottle_dimensions, under the grip point, with its base resting on the
+// highest static surface beneath it (the fridge floor or the shelf the spot is
+// on). Seating it rather than centering it on the grip point keeps the model
+// independent of how high up the bottle the milk_<spot>_grab pose was taught.
+//
+// The jaws are around the bottle, so the grip point must fall within its
+// height. A seated box that misses the grip point means the surface the bottle
+// stands on isn't modeled (the box landed on something lower, like the table
+// under the fridge) or the grab pose is above the bottle, and both are errors
+// rather than a model that is silently wrong.
+func (s *beanjaminCoffee) milkBottleBox(fs *referenceframe.FrameSystem, fsInputs referenceframe.FrameSystemInputs) (spatialmath.Geometry, error) {
+	dims := s.cfg.MilkBottleDimensions
+	box, err := s.configuredContainerBox(fs, fsInputs, pickupLabelMilk, dims, &RelativePose{})
+	if err != nil {
+		return nil, err
+	}
+	// Enumerated before the bottle is attached, so it is never taken for the
+	// surface it stands on.
+	surfaces, err := geom.WorldAnchoredSurfaceBoxes(fs, fsInputs)
+	if err != nil {
+		return nil, fmt.Errorf("find the surface under the milk bottle: %w", err)
+	}
+	grip := box.Pose().Point()
+	seated, dz, ok := geom.SeatOnSurface(surfaces, box, surfaceRestClearanceMm)
+	if !ok {
+		return nil, fmt.Errorf("no surface modeled beneath the milk bottle at (x=%.1f, y=%.1f): add the fridge floor to the frame system", grip.X, grip.Y)
+	}
+	// box was centered on the grip point, so after the shift the grip point sits
+	// -dz from the bottle's center.
+	if math.Abs(dz) > dims.HeightMm/2 {
+		return nil, fmt.Errorf("the milk bottle seated on the surface beneath it (shifted %.1fmm) does not reach the grip point at Z=%.1f: "+
+			"check that the surface it stands on is modeled and that the grab pose is within milk_bottle_dimensions' height_mm", dz, grip.Z)
+	}
+	s.activeOrderLogger().Infof("modeling the held milk bottle (%.0f×%.0f mm) on the surface beneath it: base %.1fmm below the grip point",
+		dims.DiameterMm, dims.HeightMm, dims.HeightMm/2-dz)
+	return seated, nil
+}
+
 // milkStepErr wraps a failure inside the milk sequence, saying so when the
 // fridge is left standing open. The arm does not try to shut the door itself
 // after a failure: it may still be holding the bottle, and a sweep needs the
@@ -146,9 +205,9 @@ func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context, milk s
 		return fmt.Errorf("fetch_milk: grab the %s milk: %w", milk, err)
 	}
 	s.heldMilk = milk
-	// Model the bottle from milk_bottle_dimensions, centered on the grip point,
-	// so the retreat and the carry to the glass route around it.
-	if err := s.attachConfiguredGeometry(ctx, pickupLabelMilk, s.cfg.MilkBottleDimensions, &RelativePose{}); err != nil {
+	// Model the bottle from milk_bottle_dimensions, standing on the surface under
+	// it, so the retreat and the carry to the glass route around it.
+	if err := s.attachMilkBottleGeometry(ctx); err != nil {
 		s.activeOrderLogger().Warnf("fetch_milk: model bottle from milk_bottle_dimensions failed, continuing untracked: %v", err)
 	}
 	if err := s.executeStep(ctx, cancelCtx, s.fridgeLinearStep(milkApproachPose(spot), s.slowMoveOptions())); err != nil {

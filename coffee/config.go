@@ -242,8 +242,8 @@ type Config struct {
 	MilkPourRelativePose         *RelativePose `json:"milk_pour_relative_pose,omitempty"`
 
 	// MilkBottleDimensions is the known bottle diameter/height the held bottle is
-	// modeled from (see ContainerDimensions), centered on the grip point at the
-	// grab pose. Shared by every milk. Required when can_serve_iced_latte is set.
+	// modeled from (see ContainerDimensions), standing on the surface beneath the
+	// grip point (milkBottleBox). Shared by every milk. Required when can_serve_iced_latte is set.
 	MilkBottleDimensions *ContainerDimensions `json:"milk_bottle_dimensions,omitempty"`
 	// MilkOptions lists the milk bottles in the fridge and the spot each stands
 	// at; the arm fetches and returns each bottle at its spot's poses. Every iced
