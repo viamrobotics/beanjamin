@@ -20,18 +20,18 @@ import (
 // serving area at the next round-robin slots: the empty espresso cup first, then
 // the iced glass (re-grabbed from staging).
 //
-// With withMilk set (the iced_latte drink) the milk sequence runs on the staged
-// glass between those two placements — once the espresso cup is out of the
+// With milk set (the iced_latte drink, naming one of milk_options) the milk
+// sequence runs on the staged glass between those two placements — once the espresso cup is out of the
 // gripper and before the glass is picked back up (see addMilk, milk.go).
 //
 // placeDrink re-grabs the filled glass from staging and sets it down, returning
 // where it went — the actual drink, placed last — for the delivery
 // pickup_position.
-func (s *beanjaminCoffee) serveIced(ctx, cancelCtx context.Context, withMilk bool, placeDrink servePlacement) (int, error) {
-	if err := s.prepIcedGlass(ctx, cancelCtx, withMilk); err != nil {
+func (s *beanjaminCoffee) serveIced(ctx, cancelCtx context.Context, milk string, placeDrink servePlacement) (int, error) {
+	if err := s.prepIcedGlass(ctx, cancelCtx, milk != ""); err != nil {
 		return -1, err
 	}
-	return s.finishIced(ctx, cancelCtx, withMilk, placeDrink)
+	return s.finishIced(ctx, cancelCtx, milk, placeDrink)
 }
 
 // grabDrink takes the finished drink into the gripper.
@@ -79,13 +79,13 @@ func (s *beanjaminCoffee) prepIcedGlass(ctx, cancelCtx context.Context, withMilk
 // and the glass is staged: milk for a latte, then grab the brewed cup, pour it
 // over the ice, and place both items. The glass (the actual drink) is set down
 // by placeDrink, whose position is returned.
-func (s *beanjaminCoffee) finishIced(ctx, cancelCtx context.Context, withMilk bool, placeDrink servePlacement) (int, error) {
+func (s *beanjaminCoffee) finishIced(ctx, cancelCtx context.Context, milk string, placeDrink servePlacement) (int, error) {
 	// 4. For a latte, fetch the milk from the fridge and pour it into the glass.
 	//    It runs here, with the gripper empty and the glass still standing in
 	//    staging, because the pour needs both a free gripper and a glass the arm
 	//    is not holding.
-	if withMilk {
-		if err := s.addMilk(ctx, cancelCtx); err != nil {
+	if milk != "" {
+		if err := s.addMilk(ctx, cancelCtx, milk); err != nil {
 			return -1, err
 		}
 		// addMilk and the door sweeps publish their own step labels; put the
@@ -174,13 +174,13 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 // serveIcedCoffee is the iced serving path without milk — the iced_coffee drink
 // and the serve_iced_coffee action.
 func (s *beanjaminCoffee) serveIcedCoffee(ctx, cancelCtx context.Context) (int, error) {
-	return s.serveIced(ctx, cancelCtx, false, s.grabAndShelve)
+	return s.serveIced(ctx, cancelCtx, "", s.grabAndShelve)
 }
 
 // serveIcedLatte is the iced serving path with the milk sequence — the
 // iced_latte drink and the serve_iced_latte action.
 func (s *beanjaminCoffee) serveIcedLatte(ctx, cancelCtx context.Context) (int, error) {
-	return s.serveIced(ctx, cancelCtx, true, s.grabAndShelve)
+	return s.serveIced(ctx, cancelCtx, s.firstMilk(), s.grabAndShelve)
 }
 
 // approachBrewedCup lines the open gripper up over the brewed cup: approach ->
