@@ -151,11 +151,6 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 	s.incrementSensorReading(ctx, s.usageSensor, "water", "usage", waterDelta(drink))
 	s.incrementSensorReading(ctx, s.usageSensor, "drip tray", "drip_tray_brews", 1)
 
-	// Every iced latte gets the first milk in milk_options.
-	milk := ""
-	if order.IsMilk(drink) {
-		milk = s.firstMilk()
-	}
 	var servedSlot int
 	inCart := false
 	// placeDrink grabs the filled drink and sets it down: in the docked cart for
@@ -188,9 +183,9 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 		switch {
 		case order.IsIced(drink) && armFreeDuringPour:
 			// Glass already iced and staged during the brew; finish the rest.
-			servedSlot, err = s.finishIced(ctx, cancelCtx, milk, placeDrink)
+			servedSlot, err = s.finishIced(ctx, cancelCtx, o.Milk, placeDrink)
 		case order.IsIced(drink):
-			servedSlot, err = s.serveIced(ctx, cancelCtx, milk, placeDrink)
+			servedSlot, err = s.serveIced(ctx, cancelCtx, o.Milk, placeDrink)
 		case cupApproached:
 			// Hot drink, gripper already poised over the cup: grasp it and serve it.
 			servedSlot, err = placeDrink(ctx, cancelCtx, s.graspBrewedCup)

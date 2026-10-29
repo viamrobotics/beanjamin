@@ -15,6 +15,7 @@ func (s *beanjaminCoffee) menu() order.Menu {
 		Beans:     s.cfg.beanNames(),
 		Iced:      s.cfg.CanServeIced,
 		IcedLatte: s.cfg.CanServeIcedLatte,
+		Milks:     s.cfg.milkNames(),
 	}
 }
 
@@ -43,7 +44,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		drink, req.Beans = base, beans
 	}
 	customerName := strings.TrimSpace(req.CustomerName)
-	s.logger.Infof("order request: drink=%q beans=%q customer=%q", drink, req.Beans, customerName)
+	s.logger.Infof("order request: drink=%q beans=%q milk=%q customer=%q", drink, req.Beans, req.Milk, customerName)
 
 	if ok, reason := s.menu().Supports(drink); !ok {
 		s.logger.Infof("rejected order for drink %q from %s (%s)", drink, customerName, reason)
@@ -63,6 +64,12 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		return nil, err
 	}
 	label := order.DrinkLabel(drink, beans)
+
+	milk, err := s.menu().ResolveMilk(drink, req.Milk)
+	if err != nil {
+		s.logger.Warnf("rejected order: %v", err)
+		return nil, err
+	}
 
 	fulfillment, err := order.ParseFulfillment(req.Fulfillment)
 	if err != nil {
@@ -114,6 +121,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		o.ModifiedCustomerName = req.ModifiedCustomerName
 		o.CustomerEmail = req.CustomerEmail
 		o.Fulfillment = fulfillment
+		o.Milk = milk
 		s.delivery.track(o)
 		if count > 1 {
 			o.BatchIndex = i + 1

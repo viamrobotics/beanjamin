@@ -112,6 +112,9 @@ type Menu struct {
 	// IcedLatte implies Iced (the coffee config's Validate rejects it
 	// otherwise), so the one flag is the whole gate for an iced latte.
 	IcedLatte bool
+	// Milks are the milks in the fridge, by the name an order asks for one with.
+	// The first is the default for a milk drink that names none.
+	Milks []string
 }
 
 // Supports reports whether a machine serving this menu can make drink and,
@@ -145,4 +148,28 @@ func (m Menu) ResolveBeans(beans string) (string, error) {
 		return beans, nil
 	}
 	return "", fmt.Errorf("unsupported beans %q: this machine offers %s", beans, strings.Join(m.BeanOptions(), ", "))
+}
+
+// ResolveMilk validates an order's milk choice against the menu and returns the
+// milk the drink will be made with: the requested one, the default (first)
+// milk when a milk drink names none, or "" for a drink without milk. Naming a
+// milk on a drink that has none is an error rather than silently ignored, so a
+// client that thinks it ordered oat milk finds out it didn't.
+func (m Menu) ResolveMilk(drink, milk string) (string, error) {
+	if !IsMilk(drink) {
+		if milk != "" {
+			return "", fmt.Errorf("milk %q given for %q, which has no milk", milk, drink)
+		}
+		return "", nil
+	}
+	if len(m.Milks) == 0 {
+		return "", fmt.Errorf("no milk options are configured")
+	}
+	if milk == "" {
+		return m.Milks[0], nil
+	}
+	if !slices.Contains(m.Milks, milk) {
+		return "", fmt.Errorf("unknown milk %q, available: %s", milk, strings.Join(m.Milks, ", "))
+	}
+	return milk, nil
 }

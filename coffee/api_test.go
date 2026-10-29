@@ -39,9 +39,10 @@ func TestSetStepReflectedInStatus(t *testing.T) {
 }
 
 func TestStatusReportsQueueAndFlags(t *testing.T) {
-	s := newStatusService(t, &Config{BeanOptions: []BeanOption{{Name: "decaf"}}})
+	s := newStatusService(t, &Config{BeanOptions: []BeanOption{{Name: "decaf"}}, CanServeIcedLatte: true, MilkOptions: testMilks})
 	s.queue.Enqueue(order.Order{ID: "o1", Drink: "espresso", CustomerName: "Ada", RawStep: "Grinding"})
 	s.queue.Enqueue(order.Order{ID: "o2", Drink: "lungo", Beans: "decaf", CustomerName: "Grace"})
+	s.queue.Enqueue(order.Order{ID: "o3", Drink: "iced_latte", CustomerName: "Edsger", Milk: "oat"})
 
 	st, err := s.Status(context.Background())
 	if err != nil {
@@ -49,11 +50,15 @@ func TestStatusReportsQueueAndFlags(t *testing.T) {
 	}
 
 	// count is the pending depth, returned as float64 to match the gRPC wire type.
-	if got, ok := st["count"].(float64); !ok || got != 2 {
-		t.Errorf("count = %v (%T), want float64(2)", st["count"], st["count"])
+	if got, ok := st["count"].(float64); !ok || got != 3 {
+		t.Errorf("count = %v (%T), want float64(3)", st["count"], st["count"])
 	}
 	if got, ok := st["bean_options"].([]any); !ok || len(got) != 2 || got[0] != "regular" || got[1] != "decaf" {
 		t.Errorf("bean_options = %#v, want [regular decaf]", st["bean_options"])
+	}
+	// []any, not []string: structpb rejects typed slices.
+	if milks, ok := st["milk_options"].([]any); !ok || len(milks) != 2 || milks[0] != "whole" || milks[1] != "oat" {
+		t.Errorf("milk_options = %v (%T), want []any{whole, oat}", st["milk_options"], st["milk_options"])
 	}
 	if st["is_paused"] != false || st["is_busy"] != false {
 		t.Errorf("is_paused/is_busy = %v/%v, want false/false", st["is_paused"], st["is_busy"])
@@ -62,14 +67,30 @@ func TestStatusReportsQueueAndFlags(t *testing.T) {
 		t.Errorf("can_serve_decaf = %v, want true for clients that predate bean_options", st["can_serve_decaf"])
 	}
 	orders, ok := st["orders"].([]any)
-	if !ok || len(orders) != 2 {
-		t.Fatalf("orders = %v, want a 2-element []any", st["orders"])
+	if !ok || len(orders) != 3 {
+		t.Fatalf("orders = %v, want a 3-element []any", st["orders"])
 	}
 	// A decaf lungo goes out under its legacy id, so an older kiosk still
 	// labels it; beans carries the exact choice.
 	o2 := orders[1].(map[string]any)
 	if o2["drink"] != "decaf_lungo" || o2["beans"] != "decaf" {
 		t.Errorf("order o2 drink/beans = %v/%v, want decaf_lungo/decaf", o2["drink"], o2["beans"])
+	}
+	if milk := orders[2].(map[string]any)["milk"]; milk != "oat" {
+		t.Errorf("iced latte order milk = %v, want oat", milk)
+	}
+}
+
+// milk_options is validated only on a machine serving the iced latte, so only
+// that machine reports it.
+func TestStatusOmitsMilkOptionsWithoutIcedLatte(t *testing.T) {
+	s := newStatusService(t, &Config{MilkOptions: testMilks})
+	st, err := s.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status error: %v", err)
+	}
+	if v, ok := st["milk_options"]; ok {
+		t.Errorf("milk_options = %v, want absent when can_serve_iced_latte is off", v)
 	}
 }
 
