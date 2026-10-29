@@ -22,8 +22,8 @@ func TestGrindStepsCollisionScope(t *testing.T) {
 	s := &beanjaminCoffee{cfg: &Config{}}
 	steps := s.grindSteps(filterPoseGrinderApproach, filterPoseGrinderActivate, filterPoseGrinderCollect, grinderButtonCollisions(order.BeansRegular))
 
-	if len(steps) != 4 {
-		t.Fatalf("grindSteps returned %d steps, want 4 (approach, activate, collect, rotate)", len(steps))
+	if len(steps) != 5 {
+		t.Fatalf("grindSteps returned %d steps, want 5 (approach, activate, collect, rotate, retreat)", len(steps))
 	}
 
 	tests := []struct {
@@ -37,6 +37,7 @@ func TestGrindStepsCollisionScope(t *testing.T) {
 		{"activate", steps[1], filterPoseGrinderActivate, false, true},
 		{"collect", steps[2], filterPoseGrinderCollect, false, true},
 		{"rotate", steps[3], filterPoseGrinderCollect, true, true},
+		{"retreat", steps[4], filterPoseGrinderApproach, false, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -49,10 +50,26 @@ func TestGrindStepsCollisionScope(t *testing.T) {
 			if gotCollision := len(tt.step.AllowedCollisions) > 0; gotCollision != tt.wantCollision {
 				t.Errorf("has AllowedCollisions = %v, want %v", gotCollision, tt.wantCollision)
 			}
-			if tt.wantPose != filterPoseGrinderApproach && tt.step.LinearConstraint == nil {
+			if tt.name != "approach" && tt.step.LinearConstraint == nil {
 				t.Error("every move after the approach should be a straight line")
 			}
 		})
+	}
+}
+
+// Without a separate collect pose the filter is already at the approach when
+// it finishes collecting, so there is nothing to retreat from: the sequence is
+// the original four moves.
+func TestGrindStepsWithoutCollectPose(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{}}
+	steps := s.grindSteps(filterPoseGrinderApproach, filterPoseGrinderActivate, filterPoseGrinderApproach, grinderButtonCollisions(order.BeansRegular))
+	var got []string
+	for _, st := range steps {
+		got = append(got, st.PoseName)
+	}
+	want := []string{filterPoseGrinderApproach, filterPoseGrinderActivate, filterPoseGrinderApproach, filterPoseGrinderApproach}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("steps = %v, want %v", got, want)
 	}
 }
 

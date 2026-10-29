@@ -47,8 +47,9 @@ func (s *beanjaminCoffee) grindBeans(ctx, cancelCtx context.Context, beans strin
 
 // grindSteps builds the grind sequence: a free move to the approach pose, a
 // straight press of the button at the activate pose, a straight move back to
-// the collect pose under the chute, and circles there while the grinder
-// dispenses. The collect pose can be the approach pose itself; a separate one
+// the collect pose under the chute, circles there while the grinder
+// dispenses, and — when collect is its own pose — a straight move back out to
+// the approach. The collect pose can be the approach pose itself; a separate one
 // lets the approach — the end of the only free-planned move — sit further out
 // from the row of grinders than the filter has to be to catch the grounds.
 // buttonCollisions covers only the linear moves that press the grinder button
@@ -57,7 +58,7 @@ func (s *beanjaminCoffee) grindBeans(ctx, cancelCtx context.Context, beans strin
 // route the traverse through the button shield.
 func (s *beanjaminCoffee) grindSteps(approachPose, activatePose, collectPose string, buttonCollisions []AllowedCollision) []Step {
 	slow := s.slowMoveOptions()
-	return []Step{
+	steps := []Step{
 		{PoseName: approachPose, PoseSwitch: s.filterSw},
 		{PoseName: activatePose, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint,
 			AllowedCollisions: buttonCollisions, MoveOptions: slow},
@@ -67,6 +68,15 @@ func (s *beanjaminCoffee) grindSteps(approachPose, activatePose, collectPose str
 			CircularRadiusMm: 8, CircularDurationSec: s.grindDurationSec(), CircularPointsPerRev: 8,
 			LinearConstraint: defaultApproachConstraint, AllowedCollisions: buttonCollisions, MoveOptions: slow},
 	}
+	// With a separate collect pose, back out to the approach in a straight line
+	// before handing over: the next move (to the tamper) is free-planned, and
+	// starting it from under the chute would let the planner sweep the filter,
+	// full of grounds, along the neighbouring grinders' fronts.
+	if collectPose != approachPose {
+		steps = append(steps, Step{PoseName: approachPose, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint,
+			AllowedCollisions: buttonCollisions, MoveOptions: slow})
+	}
+	return steps
 }
 
 func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
