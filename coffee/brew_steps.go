@@ -36,6 +36,7 @@ func (s *beanjaminCoffee) grindBeans(ctx, cancelCtx context.Context, beans strin
 		// keeps the filter clean, and the grinder dispenses once it's under the
 		// chute. From here onward the filter needs cleaning before it goes home.
 		if step.PoseName == poses.activate {
+			s.groundsPlanned.Store(true)
 			s.handOffEffect(func() { s.portafilterHasGrounds.Store(true) })
 		}
 		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
@@ -368,6 +369,7 @@ func (s *beanjaminCoffee) cleanPortafilter(ctx, cancelCtx context.Context) error
 	if err := s.runSteps(ctx, cancelCtx, "clean_portafilter", s.cleanSteps()...); err != nil {
 		return err
 	}
+	s.groundsPlanned.Store(false)
 	s.handOffEffect(func() { s.portafilterHasGrounds.Store(false) })
 	return nil
 }

@@ -67,6 +67,9 @@ func (s *beanjaminCoffee) startFlow(ctx, cancelCtx context.Context) (end func() 
 		defer cancel()
 		err := s.settle()
 		s.flow = nil
+		// Planning can run ahead of a move that then fails; once the arm has
+		// caught up, its own record of the grounds is the true one.
+		s.groundsPlanned.Store(s.portafilterHasGrounds.Load())
 		return err
 	}
 }

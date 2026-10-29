@@ -64,6 +64,11 @@ type Config struct {
 	// bayonet load, then unwinds back onto it (Step.PivotExtraDegrees).
 	// Defaults to 0 — tune it on the machine.
 	LockOvershootDegs float64 `json:"lock_overshoot_degs,omitempty"`
+	// GroundsOrientationToleranceDegs bounds how far the portafilter may turn
+	// off its direct start-to-goal reorientation on a free move while it holds
+	// grounds (groundsOrientationConstraint). Defaults to
+	// defaultGroundsOrientationToleranceDegs.
+	GroundsOrientationToleranceDegs float64 `json:"grounds_orientation_tolerance_degs,omitempty"`
 	// CoffeeLockedFinalGripRelativePose is the grip point's pose relative to the
 	// portafilter-handle frame when grab_filter closes on the locked filter. The
 	// claws' coffee_locked_final is derived from it and the filter switch's
@@ -533,6 +538,11 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 	if cfg.DeliveryHeartbeatTimeoutSec < 0 {
 		return nil, nil, fmt.Errorf("%s: delivery_heartbeat_timeout_sec must be >= 0", path)
+	}
+	// At 90° the basket is on its side and the grounds are out, so a bound that
+	// wide no longer protects anything.
+	if cfg.GroundsOrientationToleranceDegs < 0 || cfg.GroundsOrientationToleranceDegs >= 90 {
+		return nil, nil, fmt.Errorf("%s: grounds_orientation_tolerance_degs must be >= 0 and < 90", path)
 	}
 	if err := validateDeliverySlots(cfg, path); err != nil {
 		return nil, nil, err

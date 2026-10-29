@@ -154,6 +154,7 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 	// state that no longer matches reality.
 	s.portafilterInMachine.Store(false)
 	s.portafilterHasGrounds.Store(false)
+	s.groundsPlanned.Store(false)
 	// Only an operator can assert the fridge door is physically shut, so clearing
 	// the recorded angle belongs to the commands that say so — this one and
 	// proceed. A rebuild on its own re-applies it rather than pretending a door
