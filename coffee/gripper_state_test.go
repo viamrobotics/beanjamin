@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/testutils/inject"
@@ -30,6 +31,8 @@ func TestGrabAndVerifyHolding(t *testing.T) {
 	cases := []struct {
 		name string
 		// positions returned by successive reads; the last repeats once exhausted.
+		// The first is the position before the grab, then the settle polls, then
+		// the verifying read.
 		positions  []float64
 		badResp    bool
 		doErr      error
@@ -38,10 +41,10 @@ func TestGrabAndVerifyHolding(t *testing.T) {
 		wantMiss   bool // expect errors.Is(err, errGripMissed)
 		wantOpen   bool // expect the jaws reopened
 	}{
-		{name: "holding", positions: []float64{520}},
-		{name: "miss reopens", positions: []float64{357, 850}, wantErr: true, wantMiss: true, wantOpen: true},
+		{name: "holding", positions: []float64{850, 600, 520, 520}},
+		{name: "miss reopens", positions: []float64{850, 357, 357, 357, 850}, wantErr: true, wantMiss: true, wantOpen: true},
 		// Order 66936cfa: the jaws snagged at 755 with the cup still between them.
-		{name: "snagged open reopens", positions: []float64{755, 850}, wantErr: true, wantMiss: true, wantOpen: true},
+		{name: "snagged open reopens", positions: []float64{850, 755, 755, 755, 850}, wantErr: true, wantMiss: true, wantOpen: true},
 		{name: "reopen fails not miss", positions: []float64{357}, timeoutSec: 0.001, wantErr: true, wantOpen: true},
 		{name: "read error not miss", doErr: errors.New("boom"), wantErr: true},
 		{name: "malformed resp", badResp: true, wantErr: true},
@@ -157,14 +160,16 @@ func TestOpenAndVerifyOpenHonorsCancel(t *testing.T) {
 
 func TestNormalizeGripperAtStart(t *testing.T) {
 	cases := []struct {
-		name      string
-		positions []float64 // successive gripperPos reads
+		name string
+		// successive gripperPos reads: the check, then (after a close) the
+		// position before the close, the settle polls and the final read.
+		positions []float64
 		wantErr   bool
 		wantGrab  bool
 	}{
 		{name: "already closed", positions: []float64{357}, wantGrab: false},
-		{name: "open self-heals", positions: []float64{850, 357}, wantGrab: true},
-		{name: "jammed", positions: []float64{850, 520}, wantErr: true, wantGrab: true},
+		{name: "open self-heals", positions: []float64{850, 850, 600, 357, 357}, wantGrab: true},
+		{name: "jammed", positions: []float64{850, 850, 520, 520}, wantErr: true, wantGrab: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -191,5 +196,112 @@ func TestNormalizeGripperAtStart(t *testing.T) {
 				t.Errorf("Grab called = %v, want %v", grabbed, tc.wantGrab)
 			}
 		})
+	}
+}
+
+// TestActuateGripperSettles covers the wait after a plain open or close: it
+// returns once the jaws settle, never on a reading taken before they started
+// moving, and falls back to the fixed gripperPause without ever failing when
+// the jaws are slow or unreadable.
+func TestActuateGripperSettles(t *testing.T) {
+	cases := []struct {
+		name   string
+		action gripperAction
+		// positions returned by successive reads, starting with the position
+		// before the command; the last repeats once exhausted.
+		positions []float64
+		doErr     error
+		wantReads int // 0 skips the check
+		wantWarn  bool
+		// wantFullPause expects the wait to last gripperPause, else less.
+		wantFullPause bool
+	}{
+		{
+			name: "open settles in the open band", action: openGripperAction,
+			positions: []float64{357, 500, 850}, wantReads: 3,
+		},
+		{
+			name: "close settles on a stable holding read", action: closeGripperAction,
+			positions: []float64{850, 600, 520, 521}, wantReads: 4,
+		},
+		{
+			name: "close settles on a stable closed read", action: closeGripperAction,
+			positions: []float64{850, 600, 357, 357}, wantReads: 4,
+		},
+		{
+			name: "close ignores stale reads before the jaws move", action: closeGripperAction,
+			positions: []float64{850, 850, 850, 600, 520, 520}, wantReads: 6,
+		},
+		{
+			name: "close from closed settles at once", action: closeGripperAction,
+			positions: []float64{357, 357, 357}, wantReads: 3,
+		},
+		{
+			name: "open that never settles times out without error", action: openGripperAction,
+			positions: []float64{357}, wantWarn: true, wantFullPause: true,
+		},
+		{
+			name: "close that stays at its start times out without error", action: closeGripperAction,
+			positions: []float64{850}, wantWarn: true, wantFullPause: true,
+		},
+		{
+			name: "unreadable gripper falls back to the fixed pause", action: closeGripperAction,
+			doErr: errors.New("boom"), wantReads: 1, wantFullPause: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reads, commands := 0, 0
+			g := inject.NewGripper("g")
+			g.OpenFunc = func(context.Context, map[string]any) error { commands++; return nil }
+			g.GrabFunc = func(context.Context, map[string]any) (bool, error) { commands++; return true, nil }
+			g.DoFunc = func(context.Context, map[string]any) (map[string]any, error) {
+				reads++
+				if tc.doErr != nil {
+					return nil, tc.doErr
+				}
+				return map[string]any{"pos": tc.positions[min(reads-1, len(tc.positions)-1)]}, nil
+			}
+			logger, logs := logging.NewObservedTestLogger(t)
+			s := &beanjaminCoffee{cfg: &Config{}, gripper: g, logger: logger}
+
+			start := time.Now()
+			if err := s.actuateGripper(context.Background(), tc.action); err != nil {
+				t.Fatalf("actuateGripper err = %v, want nil", err)
+			}
+			elapsed := time.Since(start)
+
+			if commands != 1 {
+				t.Errorf("gripper commanded %d times, want 1", commands)
+			}
+			if tc.wantReads != 0 && reads != tc.wantReads {
+				t.Errorf("position reads = %d, want %d", reads, tc.wantReads)
+			}
+			if got := logs.FilterMessageSnippet("not settled").Len() > 0; got != tc.wantWarn {
+				t.Errorf("settle warning logged = %v, want %v", got, tc.wantWarn)
+			}
+			if tc.wantFullPause {
+				if elapsed < gripperPause || elapsed > gripperPause+3*gripperPollInterval {
+					t.Errorf("waited %s, want about %s", elapsed, gripperPause)
+				}
+			} else if elapsed >= gripperPause {
+				t.Errorf("waited %s, want less than the fixed %s", elapsed, gripperPause)
+			}
+		})
+	}
+}
+
+// TestActuateGripperHonorsCancel checks a cancel interrupts the settle wait.
+func TestActuateGripperHonorsCancel(t *testing.T) {
+	g := inject.NewGripper("g")
+	g.OpenFunc = func(context.Context, map[string]any) error { return nil }
+	g.DoFunc = func(context.Context, map[string]any) (map[string]any, error) {
+		return map[string]any{"pos": 357.0}, nil // never opens
+	}
+	s := &beanjaminCoffee{cfg: &Config{}, gripper: g, logger: logging.NewTestLogger(t)}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.actuateGripper(ctx, openGripperAction); !errors.Is(err, context.Canceled) {
+		t.Errorf("actuateGripper err = %v, want context.Canceled", err)
 	}
 }
