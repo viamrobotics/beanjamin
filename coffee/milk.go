@@ -278,7 +278,7 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 	// heldMilk is empty only for a hand-run pour_milk with no fetch_milk before
 	// it, where there's no telling which bottle was poured.
 	if s.heldMilk != "" {
-		s.incrementSensorReading(ctx, s.usageSensor, s.heldMilk+" milk", milkPourCounter(s.heldMilk), 1)
+		s.incrementSensorReading(ctx, s.usageSensor, s.heldMilk+"_milk", milkPourCounter(s.heldMilk), 1)
 	}
 	return nil
 }
