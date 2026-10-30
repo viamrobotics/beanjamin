@@ -40,6 +40,12 @@ const (
 
 	deliveryCartPollInterval = time.Second
 	deliverySlotLabel        = "delivery-slot"
+
+	// deliveryAreaFrameName is the obstacle in the machine frame system that
+	// encloses the docked cart. It stays a hard obstacle on the carry over the
+	// slot; only the linear descent into the slot may pass through it
+	// (deliveryAreaCollisions).
+	deliveryAreaFrameName = "delivery-area"
 )
 
 // deliverySlot is one detected cart slot: where the held container is lowered
@@ -86,6 +92,22 @@ func (s *beanjaminCoffee) locateCartSlot(ctx, cancelCtx context.Context, orderID
 		logger.Warnf("delivery cart: no slot detected within %s — serving on the shelf", s.deliverySlotSearch())
 	}
 	return slot, found, err
+}
+
+// deliveryAreaCollisions lets the claws, the gripper bodies, and the held drink
+// pass through the delivery-area obstacle on the linear descent into a cart
+// slot. Like servingAreaShieldCollisions, the gripper sub-frames are dropped
+// under FakeMode by filterFakeModeCollisions, and the held-item pair is gated by
+// heldItemSurfaceCollisions.
+func (s *beanjaminCoffee) deliveryAreaCollisions() []AllowedCollision {
+	out := []AllowedCollision{
+		{Frame1: componentClaws, Frame2: deliveryAreaFrameName},
+		{Frame1: "gripper:claws", Frame2: deliveryAreaFrameName},
+		{Frame1: "gripper:case-gripper", Frame2: deliveryAreaFrameName},
+	}
+	return append(out, s.heldItemSurfaceCollisions([]AllowedCollision{
+		{Frame1: heldItemFrameName, Frame2: deliveryAreaFrameName},
+	})...)
 }
 
 // placeHeldInCart puts the held, filled drink into a slot found earlier by
@@ -325,7 +347,7 @@ func (s *beanjaminCoffee) dropHeldInDeliverySlot(ctx context.Context, slot deliv
 	if err := s.carryHeldLevel(ctx, approach, nil, s.slowMoveOptions()); err != nil {
 		return false, fmt.Errorf("approach slot: %w", err)
 	}
-	if err := s.moveToRawPose(ctx, release, defaultApproachConstraint, nil, s.slowMoveOptions()); err != nil {
+	if err := s.moveToRawPose(ctx, release, defaultApproachConstraint, s.deliveryAreaCollisions(), s.slowMoveOptions()); err != nil {
 		return false, fmt.Errorf("descend into slot: %w", err)
 	}
 
