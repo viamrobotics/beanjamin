@@ -43,8 +43,8 @@ const (
 
 	// deliveryAreaFrameName is the obstacle in the machine frame system that
 	// encloses the docked cart. It stays a hard obstacle on the carry over the
-	// slot; only the linear descent into the slot may pass through it
-	// (deliveryAreaCollisions).
+	// slot; only the linear descent into the slot and the retreat back out may
+	// pass through it (deliveryAreaCollisions).
 	deliveryAreaFrameName = "delivery-area"
 )
 
@@ -96,9 +96,10 @@ func (s *beanjaminCoffee) locateCartSlot(ctx, cancelCtx context.Context, orderID
 
 // deliveryAreaCollisions lets the claws, the gripper bodies, and the held drink
 // pass through the delivery-area obstacle on the linear descent into a cart
-// slot. Like servingAreaShieldCollisions, the gripper sub-frames are dropped
-// under FakeMode by filterFakeModeCollisions, and the held-item pair is gated by
-// heldItemSurfaceCollisions.
+// slot and the retreat back out. Like servingAreaShieldCollisions, the gripper
+// sub-frames are dropped under FakeMode by filterFakeModeCollisions, and the
+// held-item pair is gated by heldItemSurfaceCollisions, so it is omitted on the
+// retreat once the drink is released.
 func (s *beanjaminCoffee) deliveryAreaCollisions() []AllowedCollision {
 	out := []AllowedCollision{
 		{Frame1: componentClaws, Frame2: deliveryAreaFrameName},
@@ -361,7 +362,7 @@ func (s *beanjaminCoffee) dropHeldInDeliverySlot(ctx context.Context, slot deliv
 	s.detachHeldGeometry()
 
 	// The gripper is empty: the arm's default speed.
-	if err := s.moveToRawPose(ctx, approach, defaultApproachConstraint, nil, nil); err != nil {
+	if err := s.moveToRawPose(ctx, approach, defaultApproachConstraint, s.deliveryAreaCollisions(), nil); err != nil {
 		return true, fmt.Errorf("retreat from slot: %w", err)
 	}
 	if err := s.closeGripper(ctx); err != nil {
