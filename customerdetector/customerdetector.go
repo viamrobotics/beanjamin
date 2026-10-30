@@ -788,7 +788,8 @@ func (cd *customerDetector) saveCustomers() error {
 	return os.WriteFile(cd.customersFilePath(), data, 0o644)
 }
 
-// Status reports who is at the camera and their usual; a miss is {recognized:false}.
+// Status reports who is at the camera and their frequent orders; a miss is
+// {recognized:false}.
 func (cd *customerDetector) Status(ctx context.Context) (map[string]any, error) {
 	ctx, span := trace.StartSpan(ctx, "customer-detector::Status")
 	defer span.End()
@@ -816,13 +817,14 @@ func (cd *customerDetector) Status(ctx context.Context) (map[string]any, error) 
 	if email != "" {
 		if res, err := cd.getUsual(email); err == nil {
 			if has, _ := res["has_usual"].(bool); has {
-				// Status surfaces only the single most-frequent usual, for
-				// voice-command's one-line greeting; the kiosk calls
-				// get_usual directly for the full list.
 				if usuals, ok := res["usuals"].([]map[string]any); ok && len(usuals) > 0 {
-					status["usual_drink"] = usuals[0]["drink"]
-					status["usual_beans"] = usuals[0]["beans"]
-					status["usual_count"] = usuals[0]["count"]
+					// []any of map[string]any, not a typed slice: RDK's
+					// Status() serializer (structpb) rejects anything else.
+					wire := make([]any, len(usuals))
+					for i, u := range usuals {
+						wire[i] = u
+					}
+					status["usuals"] = wire
 				}
 			}
 		}
