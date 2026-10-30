@@ -249,7 +249,7 @@ Add a **`viam:beanjamin:order-sensor`** component to the machine, put it in the 
 - `ice_dispenses` — +1 after each ice dispense (iced coffee only)
 - `ice_dispense_timeouts` — +1 when a watched ice dispense hits either ceiling — `ice_dispense_max_sec` from the pin opening, or `ice_after_first_seen_max_sec` from the first sighting — without the surface passing the stop row (`ice_vision_enabled` only). The glass is served as it is, so a climbing counter is how an empty hopper — or a stop row that no longer matches how the glass is being gripped — shows up. The log line names which ceiling fired, and the saved frame is tagged `ice_timeout` or `ice_surface_cap`.
 - `ice_shadow_disagreements` — +1 per watched dispense where the brightness shadow and the contrast step differed in kind rather than in timing: the shadow never saw ice, saw it but never reached the stop row, or reached the stop row on the first surface it ever saw. The last means it locked onto something already there — the rim or a reflection — and is the one that would rule out ever promoting it. Timing gaps are expected and are not counted. See "Brightness shadow" below.
-- `milk_pours` — +1 after each milk pour (iced latte only)
+- `<milk>_milk_pours` — +1 after each pour of that milk (iced latte only), one per `milk_options` entry: `whole_milk_pours`, `oat_milk_pours`, …
 - `drip_tray_brews` — +1 after each brew
 - `espresso_cups_used` — +1 after the brew cup is placed, on every drink
 - `latte_glasses_used` — +1 after a latte glass is fetched, on iced drinks only (`iced_coffee`/`iced_latte`)
