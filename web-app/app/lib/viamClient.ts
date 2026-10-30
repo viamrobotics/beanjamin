@@ -559,9 +559,22 @@ export interface FaceProfile {
   truncated: boolean;
 }
 
-// Dev mode has no detector, so the profile page runs against a few drawn
-// placeholders held here for the session.
-const DEV_FACE_COLORS = ["#d4a373", "#a98467", "#6c584c"];
+// Dev mode has no detector, so the profile page runs against a dozen drawn
+// placeholders (enough to need scrolling) held here for the session.
+const DEV_FACE_COLORS = [
+  "#d4a373",
+  "#a98467",
+  "#6c584c",
+  "#b08968",
+  "#7f5539",
+  "#9c6644",
+  "#ddb892",
+  "#ede0d4",
+  "#e6ccb2",
+  "#bc8a5f",
+  "#8a5a44",
+  "#c9ada7",
+];
 let devFaces: RegisteredFace[] = DEV_FACE_COLORS.map((c, i) => ({
   file: `face_dev_${i + 1}.jpeg`,
   mime: "image/svg+xml",
