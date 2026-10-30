@@ -1217,7 +1217,7 @@ Returns:
 
 ### `Status()`
 
-`Status()` reports the customer currently in front of the camera and their frequent orders, so a poller (notably `viam:conversation-bundle:voice-command`'s `command_status`) can greet them by name and offer one. It runs a best-effort identification and folds in `get_usual` uncapped — the 25% threshold already bounds `usuals` to at most 4 entries, since five choices can't each hold a quarter of one history — so a caller with a tighter budget (e.g. a voice assistant's prompt) says so in its own instructions rather than here. Results are cached briefly so per-turn polling doesn't re-run the vision model on every call.
+`Status()` reports the customer currently in front of the camera and their frequent orders, so a poller (notably `viam:conversation-bundle:voice-command`'s `command_status`) can greet them by name and offer one. It runs a best-effort identification and folds in `get_usual` uncapped. Results are cached briefly so per-turn polling doesn't re-run the vision model on every call.
 
 When a registered customer is recognized:
 

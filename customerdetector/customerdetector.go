@@ -789,10 +789,7 @@ func (cd *customerDetector) saveCustomers() error {
 }
 
 // Status reports who is at the camera and their frequent orders (see
-// frequentOrders); a miss is {recognized:false}. The 25% threshold already
-// bounds this to at most 4 entries (five choices can't each hold a quarter of
-// one history), so Status doesn't cap it further — callers that want fewer,
-// like a voice assistant with a token budget, can say so in their own prompt.
+// frequentOrders); a miss is {recognized:false}.
 func (cd *customerDetector) Status(ctx context.Context) (map[string]any, error) {
 	ctx, span := trace.StartSpan(ctx, "customer-detector::Status")
 	defer span.End()
