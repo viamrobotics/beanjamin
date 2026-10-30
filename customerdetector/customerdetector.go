@@ -238,6 +238,9 @@ func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]any) (
 		file, _ := del["file"].(string)
 		return cd.deleteFace(ctx, email, file)
 	}
+	if _, ok := cmd["normalize_faces"]; ok {
+		return cd.normalizeFaces(ctx)
+	}
 	if rec, ok := cmd["record_order"].(map[string]any); ok {
 		email, _ := rec["email"].(string)
 		drink, _ := rec["drink"].(string)
@@ -253,7 +256,7 @@ func (cd *customerDetector) DoCommand(ctx context.Context, cmd map[string]any) (
 			"camera_name": cd.camera.Name().ShortName(),
 		}, nil
 	}
-	return nil, fmt.Errorf("unknown command, supported: register_customer, finish_registration, cancel_registration, identify_customer, list_customers, remove_customer, list_faces, delete_face, record_order, get_usual, get_info")
+	return nil, fmt.Errorf("unknown command, supported: register_customer, finish_registration, cancel_registration, identify_customer, list_customers, remove_customer, list_faces, delete_face, normalize_faces, record_order, get_usual, get_info")
 }
 
 // registerCustomer captures an image from the camera and stages it for the
@@ -274,7 +277,10 @@ func (cd *customerDetector) registerCustomer(ctx context.Context, name, email st
 		return nil, fmt.Errorf("failed to capture image: %w", err)
 	}
 
-	imgPath, err := cd.stageFace(email, pose, centerCrop(img))
+	// Saved at a standard brightness, to match the corrected frames identify
+	// compares them with (see normalizeBrightness).
+	face, _ := normalizeBrightness(centerCrop(img))
+	imgPath, err := cd.stageFace(email, pose, face)
 	if err != nil {
 		return nil, err
 	}
@@ -450,7 +456,7 @@ func (cd *customerDetector) identifyCustomer(ctx context.Context) (map[string]an
 		return nil, fmt.Errorf("failed to capture image: %w", err)
 	}
 
-	img = centerCrop(img)
+	img, _ = normalizeBrightness(centerCrop(img))
 
 	bounds := img.Bounds()
 	imageArea := bounds.Dx() * bounds.Dy()

@@ -1177,6 +1177,20 @@ Returns:
 {"deleted": "face_1793210841226970719_1.jpeg", "email": "alice@example.com", "remaining": 2}
 ```
 
+**`normalize_faces`** — Bring every registered photo to the standard brightness and rebuild the vision service's embeddings. Run it once after upgrading from a version that did not correct brightness. Each rewritten photo is first copied to `<data_dir>/faces_backup_<timestamp>/<email>/` (outside `known_faces`, so the matcher never reads it), a photo already at the standard brightness is left alone, and running it again changes nothing, so it is safe to repeat. The embeddings are only rebuilt when something changed.
+
+```json
+{"normalize_faces": true}
+```
+
+Returns:
+
+```json
+{"normalized": 34, "unchanged": 2, "failed": 0, "backup": "/.viam/customer-data/faces_backup_20261030T191351Z"}
+```
+
+**Brightness correction.** Every frame the detector captures, for `register_customer` (before the photo is saved) and for `identify_customer` (before the vision service sees it), is centre-cropped and then given a gamma curve that brings its average brightness to 128/255. The face matcher cannot tell dark faces of different people apart: on one kiosk's 36 photos, faces darker than 65 sat a median 0.20 from other people, against 0.58 for brighter ones, and with the correction no stranger was matched at a 0.40 `identification_threshold` while same-person recall across sessions rose from 48% to 100%. The curve is limited (exponent 0.3 to 3.0) so a near-black frame is not stretched into noise, and a frame that is already at the target is left untouched. Photos saved before this existed are only corrected by `normalize_faces`.
+
 **`record_order`** — Append a completed drink to a customer's order history (the data behind "the usual"). The coffee service calls this automatically after a successful brew when `customer_detector_name` is configured and the order carried a `customer_email`; you can also call it directly. An unknown email is a no-op (not an error), so it's safe to call for anonymous walk-ups.
 
 ```json
