@@ -788,8 +788,8 @@ func (cd *customerDetector) saveCustomers() error {
 	return os.WriteFile(cd.customersFilePath(), data, 0o644)
 }
 
-// Status reports who is at the camera and their frequent orders (see
-// frequentOrders); a miss is {recognized:false}.
+// Status reports who is at the camera and their frequent orders; a miss is
+// {recognized:false}.
 func (cd *customerDetector) Status(ctx context.Context) (map[string]any, error) {
 	ctx, span := trace.StartSpan(ctx, "customer-detector::Status")
 	defer span.End()
