@@ -90,9 +90,14 @@ func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
 	)
 }
 
+// coffeeApproachOrientationToleranceDegs bounds how far the portafilter may
+// tilt off the direct reorientation on the free traverse from the tamper to the
+// group head approach.
+const coffeeApproachOrientationToleranceDegs = 15.0
+
 func (s *beanjaminCoffee) lockPortaFilter(ctx, cancelCtx context.Context) error {
 	if err := s.runSteps(ctx, cancelCtx, "lock_portafilter",
-		Step{PoseName: filterPoseCoffeeApproach, PoseSwitch: s.filterSw},
+		Step{PoseName: filterPoseCoffeeApproach, PoseSwitch: s.filterSw, OrientationToleranceDegs: coffeeApproachOrientationToleranceDegs},
 		Step{PoseName: filterPoseCoffeeIn, PoseSwitch: s.filterSw, Pause: shortPause, LinearConstraint: defaultApproachConstraint, AllowedCollisions: coffeeBrewingCollisions,
 			MoveOptions: s.slowMoveOptions()},
 		Step{PoseName: filterPoseCoffeeLockedFinal, PoseSwitch: s.filterSw, PivotFromPose: filterPoseCoffeeIn, PivotDegreesPerStep: 5,
