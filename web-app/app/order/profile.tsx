@@ -207,9 +207,12 @@ export function Profile({
   const noProfile = !!profile && !profile.registered;
 
   return (
-    <main className="relative h-full overflow-y-auto bg-white flex flex-col items-center p-8 pt-24 font-sans">
+    <main className="relative h-full min-h-0 overflow-y-auto bg-white flex flex-col items-center p-8 pt-24 pb-12 font-sans">
       <BackButton onClick={onBack} />
-      <div className="w-full max-w-[512px] flex flex-col gap-6">
+      {/* shrink-0: in this fixed-height column the block would otherwise
+          compress to fit the screen, and the photos below the fold would never
+          scroll into view. */}
+      <div className="w-full max-w-[512px] shrink-0 flex flex-col gap-6">
         {noProfile ? (
           <div className="anim-in flex flex-col items-center gap-4 text-center">
             <h1 className="text-2xl font-semibold text-neutral-900">
