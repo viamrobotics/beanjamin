@@ -67,7 +67,7 @@ func TestGrabAndVerifyHolding(t *testing.T) {
 				gripper: g,
 				logger:  logging.NewTestLogger(t),
 			}
-			err := s.grabAndVerifyHolding(context.Background())
+			err := s.grabAndVerifyHolding(context.Background(), "cup")
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("grabAndVerifyHolding err = %v, wantErr = %v", err, tc.wantErr)
 			}

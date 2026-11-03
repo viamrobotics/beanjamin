@@ -430,7 +430,7 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	}
 
 	// 4. Grab and verify the gripper is holding the item.
-	if err := s.grabAndVerifyHolding(ctx); err != nil {
+	if err := s.grabAndVerifyHolding(ctx, t.label); err != nil {
 		s.recoverToObserve(ctx, cancelCtx, t, !errors.Is(err, errGripMissed))
 		return fmt.Errorf("grab %s: %w", t.label, err)
 	}
