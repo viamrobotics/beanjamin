@@ -221,7 +221,7 @@ func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context, milk s
 	if err := s.executeStep(ctx, cancelCtx, s.fridgeLinearStep(milkGrabPose(spot), nil)); err != nil {
 		return fmt.Errorf("fetch_milk: %w", err)
 	}
-	if err := s.grabAndVerifyHolding(ctx); err != nil {
+	if err := s.grabAndVerifyHolding(ctx, milk+" milk"); err != nil {
 		return fmt.Errorf("fetch_milk: grab the %s milk: %w", milk, err)
 	}
 	s.heldMilk = milk

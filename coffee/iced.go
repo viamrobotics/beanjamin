@@ -213,7 +213,7 @@ func (s *beanjaminCoffee) graspBrewedCup(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
 		return fmt.Errorf("grasp_brewed_cup: %w", err)
 	}
-	if err := s.grabAndVerifyHolding(ctx); err != nil {
+	if err := s.grabAndVerifyHolding(ctx, "brewed cup"); err != nil {
 		return fmt.Errorf("grasp_brewed_cup: grab gripper: %w", err)
 	}
 	// The cup was tracked at pickup and released under the machine; restore its
@@ -271,7 +271,7 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
 		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
-	if err := s.grabAndVerifyHolding(ctx); err != nil {
+	if err := s.grabAndVerifyHolding(ctx, "staged glass"); err != nil {
 		return fmt.Errorf("grab_staged_glass: grab gripper: %w", err)
 	}
 	// Glass is back in the gripper: move it from the world obstacle to a held item.

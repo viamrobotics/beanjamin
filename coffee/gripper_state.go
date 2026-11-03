@@ -93,7 +93,7 @@ func (s *beanjaminCoffee) gripperPos(ctx context.Context) (float64, error) {
 	return pos, nil
 }
 
-// grabAndVerifyHolding closes the jaws and confirms they landed on an object.
+// grabAndVerifyHolding closes the jaws on item and confirms they landed on it.
 // Returns errGripMissed (wrapped) when the settled position is not in the
 // holding band, after reopening the jaws: a close that reads as missed may be a
 // jaw that snagged on the way in and is still around the item, and leaving it
@@ -102,7 +102,10 @@ func (s *beanjaminCoffee) gripperPos(ctx context.Context) (float64, error) {
 // position read or a failed reopen returns a plain error (NOT errGripMissed) so
 // callers never treat an unreadable or stuck gripper as a missed grab. Absorbs
 // the post-grab settle pause so the read happens at rest.
-func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context) error {
+//
+// A confirmed grab logs its jaw position with item: each object settles at its
+// own position, and the holding band can only be tuned from those readings.
+func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context, item string) error {
 	if err := s.settle(); err != nil {
 		return err
 	}
@@ -121,6 +124,8 @@ func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context) error {
 		}
 		return missErr
 	}
+	s.activeOrderLogger().Infof("grabbed %s: gripper pos=%.0f (holding band [%.0f, %.0f])",
+		item, pos, s.gripperHoldMinPos(), s.gripperHoldMaxPos())
 	return nil
 }
 
