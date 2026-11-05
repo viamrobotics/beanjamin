@@ -19,11 +19,15 @@ import (
 
 // Fixed clip padding around each order (not configurable). Pre-roll is limited by the camera ring buffer;
 // trail extends the clip past the order so post-order seconds are still captured.
-// maxBrewDuration caps the clip window when a pending save is replayed after an interruption.
+// maxBrewDuration caps the clip window when a pending save is replayed after an interruption,
+// and is also how long the cleanup sweep assumes an order can still be running. It must sit well
+// above the longest real order: a milk drink can run ~5 min, and a sweep that fires on a still-live
+// record saves the clip under the same filename as the order's own save, and the two writes corrupt
+// the uploaded mp4.
 const (
 	clipLead        = 15 * time.Second
 	clipTrail       = 15 * time.Second
-	maxBrewDuration = 180 * time.Second
+	maxBrewDuration = 10 * time.Minute
 
 	// The video-store writes video in fixed-length segments and a synchronous
 	// ("async":false) save can only slice segments that have already rolled over and
