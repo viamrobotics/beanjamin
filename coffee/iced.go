@@ -115,11 +115,13 @@ func (s *beanjaminCoffee) finishIced(ctx, cancelCtx context.Context, milk string
 // brewAndPrep pokes the brew button, then does the one bit of prep it can while
 // the machine pours — prepIcedGlass for an iced drink, or hotPrep for an
 // espresso or lungo (approachBrewedCup to line the open gripper up over the cup,
-// or finding the delivery cart's slot) — then waits out the rest of the brew
-// window. On return the pour is done and that prep is complete, so the caller
-// finishes with only what's left. Separate-buttons
-// machines only — the toggle style holds the switch for the whole pour, leaving
-// no idle arm time to reclaim.
+// or finding the delivery cart's slot) — then queues a wait for the rest of the
+// brew window. On return the prep is planned and the arm will not move again
+// until the pour is done, so the caller goes on planning only what's left. A
+// prep that fails waits out the pour before returning, so the machine is
+// quiescent when the order ends. Separate-buttons machines only — the toggle
+// style holds the switch for the whole pour, leaving no idle arm time to
+// reclaim.
 func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink string, hotPrep func(ctx, cancelCtx context.Context) error) error {
 	if !s.cfg.HasSeparateBrewButtons {
 		return fmt.Errorf("brew_and_prep: requires has_separate_brew_buttons (the toggle machine's claw holds the switch for the whole pour)")
@@ -134,6 +136,7 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 	// Recorded when the arm actually presses, not when the planner gets here.
 	var brewStarted atomic.Int64
 	s.handOffEffect(func() { brewStarted.Store(time.Now().UnixNano()) })
+	brewTime := s.drinkBrewTime(drink)
 
 	// Fill the pour time with prep: an iced drink stages its glass, anything else
 	// runs hotPrep.
@@ -144,31 +147,36 @@ func (s *beanjaminCoffee) brewAndPrep(ctx, cancelCtx context.Context, drink stri
 		return hotPrep(ctx, cancelCtx)
 	}()
 
-	// Wait out the rest of the pour even when the prep failed, so the machine is
-	// quiescent before an operator gets near it. Settle first, since the wait is
-	// timed from the actual press; skip it only if the press never ran.
-	settleErr := s.settle()
-	var waitErr error
-	if started := brewStarted.Load(); started != 0 {
-		if prepErr == nil {
-			prepErr = settleErr
+	if prepErr == nil {
+		// Queue the rest of the pour behind the prep, timed from the actual press,
+		// so the planner goes on to plan the post-brew moves while the machine pours.
+		brewCtx, done := mergedCancelContext(ctx, cancelCtx) // cancel stops the wait
+		defer done()
+		if err := s.handOff(brewCtx, move{name: "brew", sleepUntil: func() time.Time {
+			return time.Unix(0, brewStarted.Load()).Add(brewTime)
+		}}); err != nil {
+			return fmt.Errorf("brew_and_prep: %w", err)
 		}
-		remaining := s.drinkBrewTime(drink) - time.Since(time.Unix(0, started))
-		s.activeOrderLogger().Infof("waiting out the remaining %s of the %s brew (prep error: %v)", remaining, drink, prepErr)
-		waitErr = waitOutBrew(ctx, cancelCtx, remaining)
-	} else if settleErr != nil {
-		return fmt.Errorf("brew_and_prep: %w", settleErr)
-	}
-	if prepErr != nil {
-		return fmt.Errorf("brew_and_prep: %w", prepErr)
-	}
-	if waitErr != nil {
-		return fmt.Errorf("brew_and_prep: %w", waitErr)
+		// Water has run, so the keep-alive clock restarts (keepalive.go).
+		s.handOffEffect(s.recordMachineActivity)
+		return nil
 	}
 
-	// Water has run, so the keep-alive clock restarts (keepalive.go).
-	s.recordMachineActivity()
-	return nil
+	// Wait out the rest of the pour even when the prep failed to plan, so the
+	// machine is quiescent before an operator gets near it. Settle first, since
+	// the wait is timed from the actual press; skip it if the press never ran.
+	settleErr := s.settle()
+	started := brewStarted.Load()
+	if started == 0 {
+		if settleErr != nil {
+			return fmt.Errorf("brew_and_prep: %w", settleErr)
+		}
+		return fmt.Errorf("brew_and_prep: %w", prepErr)
+	}
+	remaining := brewTime - time.Since(time.Unix(0, started))
+	s.activeOrderLogger().Infof("waiting out the remaining %s of the %s brew (prep error: %v)", remaining, drink, prepErr)
+	_ = waitOutBrew(ctx, cancelCtx, remaining) //nolint:errcheck // a cancelled wait only cuts it short; prepErr is the failure
+	return fmt.Errorf("brew_and_prep: %w", prepErr)
 }
 
 // serveIcedCoffee is the iced serving path without milk — the iced_coffee drink
@@ -217,9 +225,9 @@ func (s *beanjaminCoffee) graspBrewedCup(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("grasp_brewed_cup: grab gripper: %w", err)
 	}
 	// The cup was tracked at pickup and released under the machine; restore its
-	// geometry now that it's back in the gripper so the retreat routes around it.
-	// grabAndVerifyHolding only returns nil on a confirmed grab, so this never
-	// reattaches onto empty jaws.
+	// geometry so the retreat routes around it. The grab may still be running, so
+	// this can go on before the cup is confirmed in the jaws; a missed grab fails
+	// the order before the retreat runs.
 	if err := s.reattachGeometry(pickupLabelCup); err != nil {
 		s.activeOrderLogger().Warnf("grasp_brewed_cup: reattach cup geometry failed, continuing untracked: %v", err)
 	}
