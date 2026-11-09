@@ -308,10 +308,9 @@ func (s *beanjaminCoffee) planStep(ctx context.Context, step Step, from []refere
 	if err != nil {
 		return nil, err
 	}
-	fs := s.scene().fs
-	inputs := referenceframe.NewZeroInputs(fs)
+	inputs := referenceframe.NewZeroInputs(s.scene().fs)
 	inputs[s.cfg.ArmName] = from
-	plan, err := s.planToRawPose(ctx, fs, inputs, pd, step.LinearConstraint, step.OrientationToleranceDegs, step.AllowedCollisions)
+	plan, err := s.planToRawPose(ctx, inputs, pd, step.LinearConstraint, step.OrientationToleranceDegs, step.AllowedCollisions)
 	if err != nil {
 		return nil, err
 	}

@@ -123,21 +123,16 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 	default:
 	}
 
-	if step.PivotFromPose != "" {
+	switch {
+	case step.PivotFromPose != "":
 		logger.Infof("pivoting from %q to %q", step.PivotFromPose, step.PoseName)
-		if err := s.executePivot(ctx, cancelCtx, step); err != nil {
-			return err
-		}
-	} else if step.CircularRadiusMm > 0 {
+	case step.CircularRadiusMm > 0:
 		logger.Infof("circular motion around %q", step.PoseName)
-		if err := s.executeCircularMotion(ctx, cancelCtx, step); err != nil {
-			return err
-		}
-	} else {
+	default:
 		logger.Infof("moving to %q", step.PoseName)
-		if err := s.moveToPose(ctx, cancelCtx, step); err != nil {
-			return err
-		}
+	}
+	if err := s.runStepMotion(ctx, cancelCtx, step); err != nil {
+		return err
 	}
 
 	if step.Pause > 0 {
@@ -148,6 +143,31 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 			return fmt.Errorf("cancelled during pause after %q: %w", step.PoseName, ctx.Err())
 		case <-cancelCtx.Done():
 			return fmt.Errorf("cancelled during pause after %q", step.PoseName)
+		}
+	}
+	return nil
+}
+
+// runStepMotion plans step's arm motion from where the arm stands and runs it.
+func (s *beanjaminCoffee) runStepMotion(ctx, cancelCtx context.Context, step Step) error {
+	ctx, done := mergedCancelContext(ctx, cancelCtx)
+	defer done()
+	_, fsInputs, err := s.currentInputs(ctx)
+	if err != nil {
+		return err
+	}
+	m, err := s.stepMotion(ctx, step, fsInputs)
+	if err != nil {
+		return err
+	}
+	if err := s.runMotion(ctx, m); err != nil {
+		switch {
+		case step.PivotFromPose != "" || step.CircularRadiusMm > 0:
+			return err
+		case step.NoSpill:
+			return fmt.Errorf("no-spill carry to %q failed: %w", step.PoseName, err)
+		default:
+			return fmt.Errorf("move to %q failed: %w", step.PoseName, err)
 		}
 	}
 	return nil

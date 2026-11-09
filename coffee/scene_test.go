@@ -3,11 +3,14 @@ package coffee
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"testing"
 
+	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
+	"go.viam.com/rdk/testutils/inject"
 )
 
 // sceneCoffee returns a service whose settled scene has an empty frame system.
@@ -133,6 +136,58 @@ func TestFailedEditPublishesNothing(t *testing.T) {
 	}
 	if s.scene() != before {
 		t.Error("a failed edit replaced the scene")
+	}
+}
+
+// A scene edit made while moves are in flight is applied where the run has
+// planned the arm to be, without waiting for the arm to get there.
+func TestSceneEditUsesThePlannedArm(t *testing.T) {
+	fs := clawsRevoluteFS(t)
+	s := heldGeomService(t, fs)
+	s.cfg.ArmName = "j0"
+	s.arm = &inject.Arm{CurrentInputsFunc: func(context.Context) ([]referenceframe.Input, error) {
+		t.Error("the arm was read although the run had planned where it will be")
+		return []referenceframe.Input{0}, nil
+	}}
+	end := s.startRun(context.Background(), context.Background(), "order", true)
+	release := make(chan struct{})
+	_ = s.handOff(context.Background(), blocking(release))
+
+	planned := []referenceframe.Input{math.Pi / 2}
+	s.run.planned = s.run.planned.withArm("j0", planned)
+	// With j0 at 90° the claws stand at (0, 100) rather than (100, 0).
+	worldCenter := r3.Vector{X: 0, Y: 100, Z: 60}
+	if err := s.attachDetectedGeometry(context.Background(), pickupLabelCup, testBox(t, spatialmath.NewPoseFromPoint(worldCenter))); err != nil {
+		t.Fatal(err)
+	}
+	if s.run.executed.Load().heldItemAttached {
+		t.Error("the held item reached the executed scene while the arm was still moving")
+	}
+	inputs := referenceframe.NewZeroInputs(fs)
+	inputs["j0"] = planned
+	requireVecEqual(t, heldItemWorldCenter(t, s.scene().fs, inputs), worldCenter, 1e-6)
+
+	close(release)
+	if err := end(); err != nil {
+		t.Fatal(err)
+	}
+	if !s.settledScene.heldItemAttached {
+		t.Error("the held item is missing from the settled scene")
+	}
+}
+
+// Without a planned arm position, expectedInputs reads the arm.
+func TestExpectedInputsReadsTheArmWhenUnplanned(t *testing.T) {
+	s := heldGeomService(t, clawsRevoluteFS(t))
+	s.cfg.ArmName = "j0"
+	live := []referenceframe.Input{0.3}
+	s.arm = &inject.Arm{CurrentInputsFunc: func(context.Context) ([]referenceframe.Input, error) { return live, nil }}
+	got, err := s.expectedInputs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got["j0"], live) {
+		t.Errorf("expectedInputs j0 = %v, want the arm's %v", got["j0"], live)
 	}
 }
 

@@ -109,7 +109,7 @@ func (s *beanjaminCoffee) fridgeLinearStep(pose string, moveOpts *StepMoveOption
 // attachMilkBottleGeometry models the bottle just grabbed and attaches it to the
 // gripper as the held item (see milkBottleBox).
 func (s *beanjaminCoffee) attachMilkBottleGeometry(ctx context.Context) error {
-	_, fsInputs, err := s.currentInputs(ctx)
+	fsInputs, err := s.expectedInputs(ctx)
 	if err != nil {
 		return err
 	}

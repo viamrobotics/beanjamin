@@ -167,27 +167,6 @@ func (s *beanjaminCoffee) planTrajectory(ctx context.Context, req *armplanning.P
 	return s.armInputs(plan, label)
 }
 
-// worldGoals turns poses authored in refFrame into plan states commanding
-// componentName, each transformed into the world frame.
-func worldGoals(
-	fs *referenceframe.FrameSystem,
-	inputs *referenceframe.LinearInputs,
-	refFrame, componentName string,
-	poses []spatialmath.Pose,
-) ([]*armplanning.PlanState, error) {
-	goals := make([]*armplanning.PlanState, 0, len(poses))
-	for _, pose := range poses {
-		tf, err := fs.Transform(inputs, referenceframe.NewPoseInFrame(refFrame, pose), referenceframe.World)
-		if err != nil {
-			return nil, fmt.Errorf("transform waypoint to world: %w", err)
-		}
-		goals = append(goals, armplanning.NewPlanState(
-			referenceframe.FrameSystemPoses{componentName: tf.(*referenceframe.PoseInFrame)}, nil,
-		))
-	}
-	return goals, nil
-}
-
 // freeMoveCollisionBufferMM is the clearance the planner must keep between any
 // two geometries that did not begin the motion in collision. It applies to free
 // traverses — both the ordinary direct plans and the no-spill level carry — but
@@ -239,39 +218,6 @@ func (s *beanjaminCoffee) slowMoveOptions() *StepMoveOptions {
 		MaxVelDegsPerSec:  orDefault(s.cfg.SlowMovementVelDegsPerSec, defaultSlowMovementVelDegsPerSec),
 		MaxAccDegsPerSec2: orDefault(s.cfg.SlowMovementAccDegsPerSec2, defaultSlowMovementAccDegsPerSec2),
 	}
-}
-
-// moveToPose fetches a named pose and moves to it.
-func (s *beanjaminCoffee) moveToPose(ctx, cancelCtx context.Context, step Step) error {
-	ctx, done := mergedCancelContext(ctx, cancelCtx)
-	defer done()
-
-	pd, err := s.resolvePose(ctx, step.PoseSwitch, step.PoseName)
-	if err != nil {
-		return err
-	}
-	// A filled-container traverse (NoSpill) routes through the level carry so the
-	// drink doesn't slosh. The carry adds an orientation constraint in place of a
-	// LinearConstraint, but still honors the step's AllowedCollisions and
-	// MoveOptions. For every ordinary step, plan straight to the pose.
-	if step.NoSpill {
-		if err := s.carryHeldLevel(ctx, pd, step.AllowedCollisions, step.MoveOptions); err != nil {
-			return fmt.Errorf("no-spill carry to %q failed: %w", step.PoseName, err)
-		}
-		return nil
-	}
-	fs, fsInputs, err := s.currentInputs(ctx)
-	if err != nil {
-		return err
-	}
-	plan, err := s.planToRawPose(ctx, fs, fsInputs, pd, step.LinearConstraint, step.OrientationToleranceDegs, step.AllowedCollisions)
-	if err != nil {
-		return fmt.Errorf("move to %q failed: %w", step.PoseName, err)
-	}
-	if err := s.executePlan(ctx, plan, step.MoveOptions); err != nil {
-		return fmt.Errorf("move to %q failed: %w", step.PoseName, err)
-	}
-	return nil
 }
 
 type poseData struct {
@@ -342,12 +288,25 @@ func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.Fr
 	return s.scene().fs, fsInputs, nil
 }
 
-// lockFilterFrame locks the filter frame into the machine with the arm where it
-// stands now (sceneState.lockFilter). Call this after physically locking the
+// expectedInputs returns where the frames will stand once every move handed off
+// so far has run: the planned inputs of the run's scene, or, when the run has
+// not planned where the arm ends up, the arm read now (currentInputs, a
+// stopping point). It is what a scene edit is applied at, so an edit made while
+// moves are still in flight lands where the arm will be when it takes effect.
+func (s *beanjaminCoffee) expectedInputs(ctx context.Context) (referenceframe.FrameSystemInputs, error) {
+	if inputs := s.scene().inputs; inputs != nil {
+		return inputs, nil
+	}
+	_, inputs, err := s.currentInputs(ctx)
+	return inputs, err
+}
+
+// lockFilterFrame locks the filter frame into the machine with the arm where the
+// moves handed off so far leave it (expectedInputs, sceneState.lockFilter). Call this after physically locking the
 // portafilter, so all subsequent planning calls see the filter at its locked
 // position.
 func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
-	_, fsInputs, err := s.currentInputs(ctx)
+	fsInputs, err := s.expectedInputs(ctx)
 	if err != nil {
 		return err
 	}
@@ -829,15 +788,15 @@ func stepTag(step string) string {
 
 // moveToRawPose plans a motion using armplanning and executes it on the arm.
 func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
-	fs, fsInputs, err := s.currentInputs(ctx)
+	_, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return err
 	}
-	plan, err := s.planToRawPose(ctx, fs, fsInputs, pd, lc, 0, allowedCollisions)
+	m, err := s.rawMotion("raw pose", pd, lc, 0, allowedCollisions, moveOpts, fsInputs)
 	if err != nil {
 		return err
 	}
-	return s.executePlan(ctx, plan, moveOpts)
+	return s.runMotion(ctx, m)
 }
 
 // planToRawPose plans a motion to pd starting from startInputs, without touching
@@ -850,49 +809,17 @@ func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *S
 // (see tryGrab).
 func (s *beanjaminCoffee) planToRawPose(
 	ctx context.Context,
-	fs *referenceframe.FrameSystem,
 	startInputs referenceframe.FrameSystemInputs,
 	pd *poseData,
 	lc *StepLinearConstraint,
 	orientTolDegs float64,
 	allowedCollisions []AllowedCollision,
 ) (motionplan.Plan, error) {
-	logger := s.activeOrderLogger()
-
-	// Transform destination to world frame.
-	destination := referenceframe.NewPoseInFrame(pd.refFrame, pd.pose)
-	tf, err := fs.Transform(startInputs.ToLinearInputs(), destination, referenceframe.World)
+	m, err := s.rawMotion("raw pose", pd, lc, orientTolDegs, allowedCollisions, nil, startInputs)
 	if err != nil {
-		return nil, fmt.Errorf("transform destination to world: %w", err)
+		return nil, err
 	}
-	goalPose := tf.(*referenceframe.PoseInFrame)
-
-	allowedCollisions = s.filterFakeModeCollisions(s.scene().appendHeldItemCollisions(allowedCollisions))
-	constraints := withPathOrientationConstraint(buildConstraints(lc, allowedCollisions), orientTolDegs)
-	plannerOpts := plannerOptionsForConstraint(lc)
-	if lc != nil {
-		logger.Infof("applying linear constraint (line=%.1fmm, orient=%.1f°)",
-			lc.LineToleranceMm, lc.OrientationToleranceDegs)
-	} else {
-		logger.Infof("applying %.1fmm collision buffer", plannerOpts.CollisionBufferMM)
-	}
-	if orientTolDegs > 0 {
-		logger.Infof("applying path orientation constraint (±%.1f°)", orientTolDegs)
-	}
-	if len(allowedCollisions) > 0 {
-		logger.Infof("allowing %d collision pair(s)", len(allowedCollisions))
-	}
-
-	req := &armplanning.PlanRequest{
-		FrameSystem: fs,
-		Goals: []*armplanning.PlanState{
-			armplanning.NewPlanState(referenceframe.FrameSystemPoses{pd.componentName: goalPose}, nil),
-		},
-		StartState:     armplanning.NewPlanState(nil, startInputs),
-		Constraints:    constraints,
-		PlannerOptions: plannerOpts,
-	}
-	return s.planMotion(ctx, req, "move")
+	return s.planMotion(ctx, m.req, m.label)
 }
 
 // executePlan sends a planned trajectory to the arm.
@@ -948,110 +875,6 @@ func pivotSeedPoint(start, end, actual r3.Vector) (r3.Vector, float64) {
 	return seed, actual.Sub(seed).Norm()
 }
 
-// executePivot fetches start and end poses, computes interpolated waypoints,
-// plans a single multi-goal trajectory through all of them, and executes it
-// in one MoveThroughJointPositions call. The two poses may sit at different
-// points: the position then moves in a straight line while the orientation
-// rotates, in lockstep (e.g. raising a bottle as it tilts to pour); identical
-// points give a pure rotation in place.
-func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step) error {
-	logger := s.activeOrderLogger()
-	ctx, done := mergedCancelContext(ctx, cancelCtx)
-	defer done()
-
-	startPD, err := s.resolvePose(ctx, step.PoseSwitch, step.PivotFromPose)
-	if err != nil {
-		return fmt.Errorf("pivot start: %w", err)
-	}
-	endPD, err := s.resolvePose(ctx, step.PoseSwitch, step.PoseName)
-	if err != nil {
-		return fmt.Errorf("pivot end: %w", err)
-	}
-
-	if startPD.componentName != endPD.componentName {
-		return fmt.Errorf("pivot %q → %q: component mismatch (%q vs %q)",
-			step.PivotFromPose, step.PoseName, startPD.componentName, endPD.componentName)
-	}
-	const pivotStartToleranceMm = 2.0
-
-	fs, fsInputs, err := s.currentInputs(ctx)
-	if err != nil {
-		return err
-	}
-	linearInputs := fsInputs.ToLinearInputs()
-
-	// Seed the arc from where the arm ACTUALLY is rather than from the authored
-	// start pose. Each segment's first waypoint is dropped on the assumption
-	// we're already standing on it, so an arm that ended the previous step off
-	// the authored pose would get one coarse planner segment to climb back onto
-	// the arc — precisely the free-form rotation the fine waypoints exist to
-	// prevent, and with a portafilter engaged in the bayonet while it happens.
-	// The position is snapped onto the authored start→end line so the pivot
-	// stays on it even if the arm has drifted a fraction of a mm.
-	curTF, err := fs.Transform(linearInputs,
-		referenceframe.NewPoseInFrame(startPD.componentName, spatialmath.NewZeroPose()),
-		startPD.refFrame)
-	if err != nil {
-		return fmt.Errorf("pivot %q: current pose of %q: %w", step.PivotFromPose, startPD.componentName, err)
-	}
-	actual := curTF.(*referenceframe.PoseInFrame).Pose()
-	seed, dist := pivotSeedPoint(startPD.pose.Point(), endPD.pose.Point(), actual.Point())
-	if dist > pivotStartToleranceMm {
-		return fmt.Errorf("pivot %q → %q: arm is %.2f mm off the pivot line (max %.1f mm) — refusing to pivot about the wrong point",
-			step.PivotFromPose, step.PoseName, dist, pivotStartToleranceMm)
-	}
-	fromPose := spatialmath.NewPose(seed, actual.Orientation())
-
-	// Rotate straight onto the goal, or past it and back when the step asks for
-	// an overshoot. Both segments are planned together and run as one
-	// trajectory, so the arm never stops at the overshot pose.
-	targets := []spatialmath.Pose{endPD.pose}
-	if step.PivotExtraDegrees != 0 {
-		// Axis from the authored pair, not fromPose: the arm's drift should seed
-		// where the arc starts, never tilt the axis it turns about.
-		over, err := pivotOvershootPose(startPD.pose, endPD.pose, step.PivotExtraDegrees)
-		if err != nil {
-			return fmt.Errorf("pivot %q → %q: %w", step.PivotFromPose, step.PoseName, err)
-		}
-		targets = []spatialmath.Pose{over, endPD.pose}
-	}
-
-	var poses []spatialmath.Pose
-	segStart := fromPose
-	for _, target := range targets {
-		seg := computePivotPoses(logger, segStart, target, step.PivotDegreesPerStep)
-		poses = append(poses, seg[1:]...) // seg[0] is where the previous segment left us
-		segStart = target
-	}
-	logger.Infof("pivot %q → %q: %d waypoints (%.1f°/step, %.1f° overshoot)",
-		step.PivotFromPose, step.PoseName, len(poses), step.PivotDegreesPerStep, step.PivotExtraDegrees)
-
-	goals, err := worldGoals(fs, linearInputs, startPD.refFrame, startPD.componentName, poses)
-	if err != nil {
-		return err
-	}
-
-	var plannerOpts *armplanning.PlannerOptions
-	if step.AcceptPartialPlan {
-		plannerOpts = armplanning.NewBasicPlannerOptions()
-		plannerOpts.ReturnPartialPlan = true
-	}
-
-	// Every waypoint is planned in a single call and run as one trajectory, so
-	// the arm never stops partway through the arc.
-	positions, err := s.planTrajectory(ctx, &armplanning.PlanRequest{
-		FrameSystem:    fs,
-		Goals:          goals,
-		StartState:     armplanning.NewPlanState(nil, fsInputs),
-		Constraints:    buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.scene().appendHeldItemCollisions(step.AllowedCollisions))),
-		PlannerOptions: plannerOpts,
-	}, "pivot")
-	if err != nil {
-		return err
-	}
-	return s.arm.MoveThroughJointPositions(ctx, positions, buildMoveOptions(step.MoveOptions), nil)
-}
-
 // computeCircularPoses generates waypoints evenly spaced around a circle in
 // the XY plane of the given center pose. Orientation is kept constant.
 // It returns pointsPerRev poses forming one full revolution (the closing
@@ -1065,65 +888,6 @@ func computeCircularPoses(centerPose spatialmath.Pose, radiusMm float64, pointsP
 		poses[i] = spatialmath.NewPose(center.Add(offset), centerPose.Orientation())
 	}
 	return poses
-}
-
-// executeCircularMotion fetches the center pose, computes one revolution of
-// circular waypoints, plans the trajectory once, then executes it in a loop
-// until the configured duration is exceeded.
-func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, step Step) error {
-	logger := s.activeOrderLogger()
-	ctx, done := mergedCancelContext(ctx, cancelCtx)
-	defer done()
-
-	centerPD, err := s.resolvePose(ctx, step.PoseSwitch, step.PoseName)
-	if err != nil {
-		return fmt.Errorf("circular center: %w", err)
-	}
-
-	pointsPerRev := step.CircularPointsPerRev
-	if pointsPerRev < 4 {
-		pointsPerRev = 8
-	}
-
-	poses := computeCircularPoses(centerPD.pose, step.CircularRadiusMm, pointsPerRev)
-	logger.Infof("circular motion around %q: radius=%.1fmm, %d pts/rev",
-		step.PoseName, step.CircularRadiusMm, pointsPerRev)
-
-	fs, fsInputs, err := s.currentInputs(ctx)
-	if err != nil {
-		return err
-	}
-	linearInputs := fsInputs.ToLinearInputs()
-
-	// One revolution is planned once and replayed until the duration is up.
-	goals, err := worldGoals(fs, linearInputs, centerPD.refFrame, centerPD.componentName, poses)
-	if err != nil {
-		return err
-	}
-	positions, err := s.planTrajectory(ctx, &armplanning.PlanRequest{
-		FrameSystem: fs,
-		Goals:       goals,
-		StartState:  armplanning.NewPlanState(nil, fsInputs),
-		Constraints: buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.scene().appendHeldItemCollisions(step.AllowedCollisions))),
-	}, "circular")
-	if err != nil {
-		return err
-	}
-
-	// Execute revolutions until the duration is exceeded.
-	deadline := time.Now().Add(time.Duration(step.CircularDurationSec * float64(time.Second)))
-	for rev := 0; time.Now().Before(deadline); rev++ {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("cancelled during circular motion: %w", ctx.Err())
-		default:
-		}
-		logger.Debugf("circular revolution %d", rev+1)
-		if err := s.arm.MoveThroughJointPositions(ctx, positions, buildMoveOptions(step.MoveOptions), nil); err != nil {
-			return fmt.Errorf("execute circular revolution %d: %w", rev+1, err)
-		}
-	}
-	return nil
 }
 
 // noSpillOrientationToleranceDegs caps how far the carried container's
@@ -1154,103 +918,18 @@ func withNoSpillOrientationConstraint(constraints *motionplan.Constraints) *moti
 	return constraints
 }
 
-// carryGoalForMoveFrame converts dest — a pose authored for dest.componentName —
-// into the world pose moveFrame must reach for that component to land on dest.
-// Returns dest's world pose unchanged when moveFrame is the authored component.
-//
-// The two frames are rigidly linked but not co-oriented: held-item sits on the
-// grip point but is rotated onto the container's axes (heldItemFramePose).
-// Commanding the container straight at a grip-point goal leaves the gripper
-// mis-rotated. The conversion goes through the frame system rather than assuming
-// the frames share an origin, so it holds for any rigid offset between them.
-func carryGoalForMoveFrame(
-	fs *referenceframe.FrameSystem,
-	inputs *referenceframe.LinearInputs,
-	dest *poseData,
-	moveFrame string,
-) (spatialmath.Pose, error) {
-	destTF, err := fs.Transform(inputs,
-		referenceframe.NewPoseInFrame(dest.refFrame, dest.pose), referenceframe.World)
-	if err != nil {
-		return nil, fmt.Errorf("transform carry destination to world: %w", err)
-	}
-	destPose := destTF.(*referenceframe.PoseInFrame).Pose()
-	if moveFrame == dest.componentName {
-		return destPose, nil
-	}
-	// moveFrame expressed in the authored component's frame — constant, since both
-	// hang rigidly off the gripper.
-	offTF, err := fs.Transform(inputs,
-		referenceframe.NewPoseInFrame(moveFrame, spatialmath.NewZeroPose()), dest.componentName)
-	if err != nil {
-		return nil, fmt.Errorf("transform %q into %q: %w", moveFrame, dest.componentName, err)
-	}
-	return spatialmath.Compose(destPose, offTF.(*referenceframe.PoseInFrame).Pose()), nil
-}
-
-// carryHeldLevel carries the held container from its current pose to dest,
-// free-planning the path but holding the container's orientation within
-// noSpillOrientationToleranceDegs of the direct start-to-goal reorientation for
-// the whole traverse — so the drink doesn't slosh.
-//
-// The goal commands the held-item frame rather than the gripper, because the
-// orientation bound only bounds the drink's tilt when expressed about the
-// container's own axis. That frame is neither coincident nor co-oriented with
-// the one dest is authored for, so dest is converted into it
-// (carryGoalForMoveFrame); with nothing attached it falls back to the gripper
-// frame and the conversion is a no-op.
+// carryHeldLevel carries the held container from where the arm stands to dest,
+// level (carryMotion), and runs it.
 func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
-	logger := s.activeOrderLogger()
-	fs, fsInputs, err := s.currentInputs(ctx)
+	_, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return err
 	}
-	linearInputs := fsInputs.ToLinearInputs()
-
-	// dest targets its own component (grip-point for a switch pose, held-item
-	// for a pour pose). When an item is held, move the held-item frame: it is
-	// the container that must stay level.
-	moveFrame := gripPoint
-	if s.scene().heldItemAttached {
-		moveFrame = heldItemFrameName
-	}
-
-	// Start: current world pose of the moving frame (the container is upright).
-	startPIF := referenceframe.NewPoseInFrame(moveFrame, spatialmath.NewZeroPose())
-	startTF, err := fs.Transform(linearInputs, startPIF, referenceframe.World)
-	if err != nil {
-		return fmt.Errorf("transform held-container start pose to world: %w", err)
-	}
-	startPose := startTF.(*referenceframe.PoseInFrame).Pose()
-
-	// End: the goal moveFrame must reach for dest's component to land on dest.
-	destPose, err := carryGoalForMoveFrame(fs, linearInputs, dest, moveFrame)
+	m, err := s.carryMotion("carry", dest, allowedCollisions, moveOpts, fsInputs)
 	if err != nil {
 		return err
 	}
-
-	logger.Infof("no-spill carry: moving %q over %.0fmm (path±%.0f°, buffer: %.1fmm)",
-		moveFrame, destPose.Point().Sub(startPose.Point()).Norm(),
-		noSpillOrientationToleranceDegs, freeMoveCollisionBufferMM)
-
-	goal := armplanning.NewPlanState(referenceframe.FrameSystemPoses{
-		moveFrame: referenceframe.NewPoseInFrame(referenceframe.World, destPose),
-	}, nil)
-
-	constraints := withNoSpillOrientationConstraint(
-		buildConstraints(nil, s.filterFakeModeCollisions(s.scene().appendHeldItemCollisions(allowedCollisions))))
-
-	positions, err := s.planTrajectory(ctx, &armplanning.PlanRequest{
-		FrameSystem:    fs,
-		Goals:          []*armplanning.PlanState{goal},
-		StartState:     armplanning.NewPlanState(nil, fsInputs),
-		Constraints:    constraints,
-		PlannerOptions: freeMovePlannerOptions(),
-	}, "carry")
-	if err != nil {
-		return err
-	}
-	return s.arm.MoveThroughJointPositions(ctx, positions, buildMoveOptions(moveOpts), nil)
+	return s.runMotion(ctx, m)
 }
 
 // minPivotThetaRads is the smallest authored rotation an overshoot direction
