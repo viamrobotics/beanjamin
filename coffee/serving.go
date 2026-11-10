@@ -33,7 +33,7 @@ func (s *beanjaminCoffee) servingAreaShieldCollisions() []AllowedCollision {
 		{Frame1: "gripper:claws", Frame2: servingAreaShieldFrameName},
 		{Frame1: "gripper:case-gripper", Frame2: servingAreaShieldFrameName},
 	}
-	return append(out, s.heldItemSurfaceCollisions([]AllowedCollision{
+	return append(out, s.scene().heldItemSurfaceCollisions([]AllowedCollision{
 		{Frame1: heldItemFrameName, Frame2: servingAreaShieldFrameName},
 	})...)
 }
@@ -52,7 +52,7 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
 	// The cup is empty, so the arm's default speed.
-	readyStep := Step{PoseName: clawPoseCupReadyForCoffee, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions)}
+	readyStep := Step{PoseName: clawPoseCupReadyForCoffee, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.scene().heldItemSurfaceCollisions(heldItemMachineCollisions)}
 	if err := s.executeStep(ctx, cancelCtx, readyStep); err != nil {
 		return fmt.Errorf("set_cup_for_coffee: %w", err)
 	}
@@ -224,7 +224,7 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, tileW
 	// stays a hard obstacle on the lateral carry above so the arm avoids cups
 	// already on the shelf. Build a fresh slice so neither package-level
 	// allow-list is aliased by append.
-	descentCollisions := append([]AllowedCollision{}, s.heldItemSurfaceCollisions(heldItemServingAreaCollisions)...)
+	descentCollisions := append([]AllowedCollision{}, s.scene().heldItemSurfaceCollisions(heldItemServingAreaCollisions)...)
 	descentCollisions = append(descentCollisions, s.servingAreaShieldCollisions()...)
 
 	// 2. Linear descent to the drop pose. A planning failure leaves the arm at

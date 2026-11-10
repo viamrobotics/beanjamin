@@ -26,9 +26,7 @@ func TestServingAreaDropZOffset(t *testing.T) {
 
 	// Container held: half its height (the 80mm test box -> 40), so its bottom
 	// lands on the shelf rather than being driven in like a taller glass was.
-	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
-		t.Fatalf("addHeldItemFrame: %v", err)
-	}
+	addHeldItem(t, s, testBox(t, spatialmath.NewZeroPose()))
 	if got := s.servingAreaDropZOffset(); math.Abs(got-40) > 1e-6 {
 		t.Fatalf("height-derived offset = %g, want 40", got)
 	}

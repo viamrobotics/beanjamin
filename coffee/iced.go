@@ -232,7 +232,7 @@ func (s *beanjaminCoffee) graspBrewedCup(ctx, cancelCtx context.Context) error {
 			s.activeOrderLogger().Warnf("grasp_brewed_cup: model cup from cup_dimensions failed, continuing untracked: %v", err)
 		}
 	}
-	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemMachineCollisions),
+	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: s.scene().heldItemSurfaceCollisions(heldItemMachineCollisions),
 		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("grasp_brewed_cup: %w", err)
@@ -267,7 +267,7 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 	// Descend onto the glass; it stays a world obstacle, but allow the jaws to
 	// contact it for this step (the rest of the arm still routes around it). The
 	// gripper is empty on the way down, so the arm's default speed.
-	grabStep := Step{PoseName: clawPoseStaging, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.stagedGlassGrabCollisions()}
+	grabStep := Step{PoseName: clawPoseStaging, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.scene().stagedGlassGrabCollisions()}
 	if err := s.executeStep(ctx, cancelCtx, grabStep); err != nil {
 		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
@@ -427,7 +427,7 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
-	placeStep := Step{PoseName: clawPoseStaging, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.heldItemSurfaceCollisions(heldItemStagingCollisions),
+	placeStep := Step{PoseName: clawPoseStaging, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.scene().heldItemSurfaceCollisions(heldItemStagingCollisions),
 		MoveOptions: s.slowMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)

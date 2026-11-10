@@ -232,7 +232,7 @@ func (s *beanjaminCoffee) servingAreaSlots(ctx context.Context) ([]r3.Vector, fl
 // glass is not driven into the shelf the way the fixed offset did). Falls back
 // to shelfDropZOffsetMm (tuned for the cup) when nothing is tracked.
 func (s *beanjaminCoffee) servingAreaDropZOffset() float64 {
-	if half, ok := s.heldItemHalfHeightMm(); ok {
+	if half, ok := s.scene().heldItemHalfHeightMm(); ok {
 		return half
 	}
 	return shelfDropZOffsetMm
