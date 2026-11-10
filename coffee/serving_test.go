@@ -32,7 +32,7 @@ func newDropTestRig(t *testing.T, onArmRead func(ctx context.Context)) *dropTest
 		ServingGrabRelativePose:     &RelativePose{OZ: -1},
 		ServingApproachRelativePose: &RelativePose{Z: 100, OZ: -1},
 	})
-	s.cachedFS = referenceframe.NewEmptyFrameSystem("test")
+	s.scene().fs = referenceframe.NewEmptyFrameSystem("test")
 	rig := &dropTestRig{s: s}
 
 	a := inject.NewArm("arm")

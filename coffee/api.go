@@ -277,6 +277,7 @@ func (s *beanjaminCoffee) handleOpenGripper(ctx context.Context) (map[string]any
 		return nil, err
 	}
 	defer s.lease.release()
+	defer s.startDirectRun("open_gripper")()
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		return nil, fmt.Errorf("failed to open gripper: %w", err)
 	}
@@ -291,6 +292,7 @@ func (s *beanjaminCoffee) handleCloseGripper(ctx context.Context) (map[string]an
 		return nil, err
 	}
 	defer s.lease.release()
+	defer s.startDirectRun("close_gripper")()
 	grabbed, err := s.gripper.Grab(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to close gripper: %w", err)

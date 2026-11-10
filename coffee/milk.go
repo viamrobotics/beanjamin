@@ -165,10 +165,20 @@ func (s *beanjaminCoffee) milkBottleBox(fs *referenceframe.FrameSystem, fsInputs
 // gripper for the handle. So the door stays open, the model keeps recording the
 // angle it really is at, and the message tells the operator what to fix.
 func (s *beanjaminCoffee) milkStepErr(milk string, err error) error {
-	if s.doorOpenDegs != 0 {
-		return fmt.Errorf("add_milk: %w (the fridge door is standing open at %.0f° — %s; put the rest of the machine back to its starting state by hand, then shut the door before sending proceed: proceed is what declares the door shut again)", err, s.doorOpenDegs, s.milkPutBackHint(milk))
+	if s.scene().doorOpenDegs != 0 {
+		return fmt.Errorf("add_milk: %w (the fridge door is standing open at %.0f° — %s; put the rest of the machine back to its starting state by hand, then shut the door before sending proceed: proceed is what declares the door shut again)", err, s.scene().doorOpenDegs, s.milkPutBackHint(milk))
 	}
 	return fmt.Errorf("add_milk: %w", err)
+}
+
+// setHeldMilk records which milk is out of the fridge, "" for none.
+func (s *beanjaminCoffee) setHeldMilk(milk string) {
+	if err := s.editScene(func(sc *sceneState) error {
+		sc.heldMilk = milk
+		return nil
+	}); err != nil {
+		s.activeOrderLogger().Errorf("record the milk out of the fridge as %q: %v", milk, err)
+	}
 }
 
 // milkPutBackHint tells the operator where a bottle taken out of the gripper by
@@ -198,8 +208,8 @@ func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context, milk s
 	if s.gripper == nil {
 		return fmt.Errorf("fetch_milk: no gripper configured")
 	}
-	if s.heldMilk != "" {
-		return fmt.Errorf("fetch_milk: the %s milk is already out of the fridge — run return_milk first", s.heldMilk)
+	if s.scene().heldMilk != "" {
+		return fmt.Errorf("fetch_milk: the %s milk is already out of the fridge — run return_milk first", s.scene().heldMilk)
 	}
 	// Merge cancelCtx in so an operator cancel also interrupts the gripper calls,
 	// which take a single context (executeStep merges it for the moves).
@@ -224,7 +234,7 @@ func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context, milk s
 	if err := s.grabAndVerifyHolding(ctx, milk+" milk"); err != nil {
 		return fmt.Errorf("fetch_milk: grab the %s milk: %w", milk, err)
 	}
-	s.heldMilk = milk
+	s.setHeldMilk(milk)
 	// Model the bottle from milk_bottle_dimensions, standing on the surface under
 	// it, so the retreat and the carry to the glass route around it. Without the
 	// model nothing that follows can run — the pour poses and the level carry
@@ -277,8 +287,8 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 	}
 	// heldMilk is empty only for a hand-run pour_milk with no fetch_milk before
 	// it, where there's no telling which bottle was poured.
-	if s.heldMilk != "" {
-		s.incrementSensorReading(ctx, s.usageSensor, s.heldMilk+"_milk", milkPourCounter(s.heldMilk), 1)
+	if s.scene().heldMilk != "" {
+		s.incrementSensorReading(ctx, s.usageSensor, s.scene().heldMilk+"_milk", milkPourCounter(s.scene().heldMilk), 1)
 	}
 	return nil
 }
@@ -298,7 +308,7 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 	if s.gripper == nil {
 		return fmt.Errorf("return_milk: no gripper configured")
 	}
-	milk := s.heldMilk
+	milk := s.scene().heldMilk
 	if milk == "" {
 		return fmt.Errorf("return_milk: no milk is out of the fridge — run fetch_milk first")
 	}
@@ -328,7 +338,7 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 	}
 	// The bottle is standing on the shelf; it no longer travels with the gripper.
 	s.detachHeldGeometry()
-	s.heldMilk = ""
+	s.setHeldMilk("")
 
 	// The gripper starts inside the interior shield, so it stays allowed for the
 	// straight-out retreat (the held-item pair drops out now that nothing is held).

@@ -12,11 +12,11 @@ import (
 	"go.viam.com/rdk/testutils/inject"
 )
 
-// flowCoffee returns a service with a flow started, as during an order.
-func flowCoffee(t *testing.T) (*beanjaminCoffee, func() error) {
+// runCoffee returns a service with a plan-ahead run started, as during an order.
+func runCoffee(t *testing.T) (*beanjaminCoffee, func() error) {
 	t.Helper()
 	s, _ := newTestCoffee(t, nil)
-	end := s.startFlow(context.Background(), context.Background())
+	end := s.startRun(context.Background(), context.Background(), "order", true)
 	t.Cleanup(func() { _ = end() })
 	return s, end
 }
@@ -53,8 +53,8 @@ func blocking(release chan struct{}) move {
 	return move{bookkeep: func() { <-release }}
 }
 
-// Outside an order (execute_action, rewind, keepalive) there is no flow.
-func TestHandOffRunsNowWithoutAFlow(t *testing.T) {
+// Outside any run (a test calling a step directly) moves run immediately.
+func TestHandOffRunsNowWithoutARun(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
 	var r recorder
 	if err := s.handOff(context.Background(), r.move("a")); err != nil {
@@ -66,7 +66,7 @@ func TestHandOffRunsNowWithoutAFlow(t *testing.T) {
 }
 
 func TestHandOffDoesNotWaitAndRunsInOrder(t *testing.T) {
-	s, _ := flowCoffee(t)
+	s, _ := runCoffee(t)
 	var r recorder
 	release := make(chan struct{})
 	ctx := context.Background()
@@ -93,7 +93,7 @@ func TestHandOffDoesNotWaitAndRunsInOrder(t *testing.T) {
 }
 
 func TestFailureSkipsTheRest(t *testing.T) {
-	s, _ := flowCoffee(t)
+	s, _ := runCoffee(t)
 	boom := errors.New("gripper faulted")
 	s.gripper = failingGripper(boom)
 	var r recorder
@@ -117,7 +117,7 @@ func TestFailureSkipsTheRest(t *testing.T) {
 }
 
 func TestExecutionPanicFailsTheOrder(t *testing.T) {
-	s, _ := flowCoffee(t)
+	s, _ := runCoffee(t)
 	var r recorder
 	ctx := context.Background()
 	_ = s.handOff(ctx, move{name: "boom", bookkeep: func() { panic("boom") }})
@@ -147,7 +147,7 @@ func TestRunMoveOrder(t *testing.T) {
 }
 
 func TestSetStepFollowsTheArm(t *testing.T) {
-	s, _ := flowCoffee(t)
+	s, _ := runCoffee(t)
 	s.setStepNow(stepTamping)
 	release := make(chan struct{})
 	_ = s.handOff(context.Background(), blocking(release))
@@ -166,7 +166,7 @@ func TestSetStepFollowsTheArm(t *testing.T) {
 }
 
 func TestSyncRegionRunsNow(t *testing.T) {
-	s, _ := flowCoffee(t)
+	s, _ := runCoffee(t)
 	var r recorder
 	release, err := s.syncRegion()
 	if err != nil {
@@ -177,21 +177,21 @@ func TestSyncRegionRunsNow(t *testing.T) {
 		t.Errorf("ran %v, want a to run immediately inside the region", got)
 	}
 	release()
-	if s.activeFlow() == nil {
-		t.Error("the flow should be active again after the region")
+	if s.aheadRun() == nil {
+		t.Error("the run should plan ahead again after the region")
 	}
 }
 
-func TestEndFlowReportsAQueuedFailure(t *testing.T) {
-	s, end := flowCoffee(t)
+func TestEndRunReportsAQueuedFailure(t *testing.T) {
+	s, end := runCoffee(t)
 	boom := errors.New("gripper faulted")
 	s.gripper = failingGripper(boom)
 	_ = s.openGripper(context.Background())
 	if err := end(); !errors.Is(err, boom) {
 		t.Fatalf("end = %v, want the queued failure", err)
 	}
-	if s.flow != nil {
-		t.Error("end should clear the flow")
+	if s.run != nil {
+		t.Error("end should clear the run")
 	}
 }
 

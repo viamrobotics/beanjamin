@@ -25,9 +25,9 @@ func requireVecEqual(t *testing.T, got, want r3.Vector, tol float64) {
 func heldGeomService(t *testing.T, fs *referenceframe.FrameSystem) *beanjaminCoffee {
 	t.Helper()
 	return &beanjaminCoffee{
-		cfg:      &Config{},
-		logger:   logging.NewTestLogger(t),
-		cachedFS: fs,
+		cfg:          &Config{},
+		logger:       logging.NewTestLogger(t),
+		settledScene: &sceneState{fs: fs},
 	}
 }
 
@@ -142,7 +142,7 @@ func TestAttachRoundTrip(t *testing.T) {
 		t.Fatalf("addHeldItemFrame: %v", err)
 	}
 
-	got := heldItemWorldCenter(t, fs, inputs)
+	got := heldItemWorldCenter(t, s.scene().fs, inputs)
 	requireVecEqual(t, got, worldCenter, 1e-4)
 }
 
@@ -201,7 +201,7 @@ func TestHeldItemFrameIsContainerAligned(t *testing.T) {
 				t.Fatalf("addHeldItemFrame: %v", err)
 			}
 
-			tf, err := fs.Transform(inputs.ToLinearInputs(),
+			tf, err := s.scene().fs.Transform(inputs.ToLinearInputs(),
 				referenceframe.NewPoseInFrame(heldItemFrameName, spatialmath.NewZeroPose()), referenceframe.World)
 			if err != nil {
 				t.Fatalf("transform held-item to world: %v", err)
@@ -221,8 +221,8 @@ func TestHeldItemFrameIsContainerAligned(t *testing.T) {
 			// And the geometry is unmoved by the frame's pose: RDK places a frame's
 			// geometry at the frame's parent, so it stays where the gripper-local pose
 			// puts it, turned as it was built.
-			requireVecEqual(t, heldItemWorldCenter(t, fs, inputs), worldCenter, 1e-4)
-			worldGeoms, err := referenceframe.FrameSystemGeometries(fs, inputs)
+			requireVecEqual(t, heldItemWorldCenter(t, s.scene().fs, inputs), worldCenter, 1e-4)
+			worldGeoms, err := referenceframe.FrameSystemGeometries(s.scene().fs, inputs)
 			if err != nil {
 				t.Fatalf("frame system geometries: %v", err)
 			}
@@ -248,12 +248,12 @@ func TestHeldItemTracksGripper(t *testing.T) {
 
 	// At j0=0 the claws sit at world (100,0,0), the grip point above them.
 	at0 := referenceframe.NewZeroInputs(fs)
-	requireVecEqual(t, heldItemWorldCenter(t, fs, at0), r3.Vector{X: 100, Z: gripPointOffsetMm}, 1e-4)
+	requireVecEqual(t, heldItemWorldCenter(t, s.scene().fs, at0), r3.Vector{X: 100, Z: gripPointOffsetMm}, 1e-4)
 
 	// At j0=+90° the gripper (and held item) rotate to world (0,100,·).
 	at90 := referenceframe.NewZeroInputs(fs)
 	at90["j0"] = []referenceframe.Input{math.Pi / 2}
-	requireVecEqual(t, heldItemWorldCenter(t, fs, at90), r3.Vector{Y: 100, Z: gripPointOffsetMm}, 1e-4)
+	requireVecEqual(t, heldItemWorldCenter(t, s.scene().fs, at90), r3.Vector{Y: 100, Z: gripPointOffsetMm}, 1e-4)
 }
 
 func TestDetachRemovesFrame(t *testing.T) {
@@ -262,14 +262,14 @@ func TestDetachRemovesFrame(t *testing.T) {
 	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
 		t.Fatalf("addHeldItemFrame: %v", err)
 	}
-	if !s.heldItemAttached {
+	if !s.scene().heldItemAttached {
 		t.Fatalf("expected heldItemAttached after attach")
 	}
 	s.detachHeldGeometry()
-	if s.heldItemAttached {
+	if s.scene().heldItemAttached {
 		t.Fatalf("expected !heldItemAttached after detach")
 	}
-	if fs.Frame(heldItemFrameName) != nil {
+	if s.scene().fs.Frame(heldItemFrameName) != nil {
 		t.Fatalf("expected held-item frame removed from frame system")
 	}
 	// Idempotent.
@@ -284,15 +284,15 @@ func TestReattachUsesCache(t *testing.T) {
 	if err := s.reattachGeometry(pickupLabelCup); err != nil {
 		t.Fatalf("reattach with empty cache: %v", err)
 	}
-	if s.heldItemAttached {
+	if s.scene().heldItemAttached {
 		t.Fatalf("reattach must be a no-op when nothing is cached")
 	}
 
-	s.cacheHeldGeometry(pickupLabelCup, testBox(t, spatialmath.NewZeroPose()))
+	s.scene().cacheHeldGeometry(pickupLabelCup, testBox(t, spatialmath.NewZeroPose()))
 	if err := s.reattachGeometry(pickupLabelCup); err != nil {
 		t.Fatalf("reattach: %v", err)
 	}
-	if !s.heldItemAttached || fs.Frame(heldItemFrameName) == nil {
+	if !s.scene().heldItemAttached || s.scene().fs.Frame(heldItemFrameName) == nil {
 		t.Fatalf("expected held-item frame present after reattach")
 	}
 }
@@ -363,44 +363,26 @@ func TestConfiguredContainerBox(t *testing.T) {
 	}
 }
 
-func TestClearHeldGeometry(t *testing.T) {
-	fs := clawsStaticFS(t, spatialmath.NewZeroPose())
-	s := heldGeomService(t, fs)
-	s.cacheHeldGeometry(pickupLabelCup, testBox(t, spatialmath.NewZeroPose()))
-	s.cacheHeldGeometry(pickupLabelGlass, testBox(t, spatialmath.NewZeroPose()))
-	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
-		t.Fatalf("addHeldItemFrame: %v", err)
-	}
-
-	s.clearHeldGeometry()
-	if s.heldItemAttached {
-		t.Fatalf("expected !heldItemAttached after clear")
-	}
-	if s.heldCupGeom != nil || s.heldGlassGeom != nil {
-		t.Fatalf("expected caches cleared, got cup=%v glass=%v", s.heldCupGeom, s.heldGlassGeom)
-	}
-}
-
 func TestCacheRoutingByLabel(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{}}
+	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{}}
 	cup := testBox(t, spatialmath.NewZeroPose())
 	glass := testBox(t, spatialmath.NewPoseFromPoint(r3.Vector{Z: 10}))
-	s.cacheHeldGeometry(pickupLabelCup, cup)
-	s.cacheHeldGeometry(pickupLabelGlass, glass)
-	if s.cachedHeldGeometry(pickupLabelCup) != cup {
+	s.scene().cacheHeldGeometry(pickupLabelCup, cup)
+	s.scene().cacheHeldGeometry(pickupLabelGlass, glass)
+	if s.scene().cachedHeldGeometry(pickupLabelCup) != cup {
 		t.Fatalf("cup cache mismatch")
 	}
-	if s.cachedHeldGeometry(pickupLabelGlass) != glass {
+	if s.scene().cachedHeldGeometry(pickupLabelGlass) != glass {
 		t.Fatalf("glass cache mismatch")
 	}
 }
 
 func TestHeldItemSelfCollisions(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{}}
+	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{}}
 	if got := s.heldItemSelfCollisions(); got != nil {
 		t.Fatalf("expected nil when not attached, got %v", got)
 	}
-	s.heldItemAttached = true
+	s.scene().heldItemAttached = true
 	got := s.heldItemSelfCollisions()
 	if len(got) != 3 {
 		t.Fatalf("expected 3 self-collision pairs, got %d (%v)", len(got), got)
@@ -413,7 +395,7 @@ func TestHeldItemSelfCollisions(t *testing.T) {
 }
 
 func TestAppendHeldItemCollisions(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{}}
+	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{}}
 	base := []AllowedCollision{{Frame1: "a", Frame2: "b"}}
 
 	// Not attached: returned unchanged.
@@ -422,7 +404,7 @@ func TestAppendHeldItemCollisions(t *testing.T) {
 	}
 
 	// Attached: base + 3 self pairs, and input is not mutated.
-	s.heldItemAttached = true
+	s.scene().heldItemAttached = true
 	got := s.appendHeldItemCollisions(base)
 	if len(got) != 4 {
 		t.Fatalf("expected 4 pairs, got %d (%v)", len(got), got)
@@ -433,12 +415,12 @@ func TestAppendHeldItemCollisions(t *testing.T) {
 }
 
 func TestHeldItemSurfaceCollisions(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{}}
+	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{}}
 	pairs := []AllowedCollision{{Frame1: heldItemFrameName, Frame2: "serving-area"}}
 	if got := s.heldItemSurfaceCollisions(pairs); got != nil {
 		t.Fatalf("expected nil when not attached, got %v", got)
 	}
-	s.heldItemAttached = true
+	s.scene().heldItemAttached = true
 	if got := s.heldItemSurfaceCollisions(pairs); len(got) != 1 {
 		t.Fatalf("expected the pairs when attached, got %v", got)
 	}
@@ -472,7 +454,7 @@ func TestHeldItemHalfHeightMm(t *testing.T) {
 }
 
 func TestServingAreaShieldCollisions(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{}}
+	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{}}
 
 	// Detached (the retreat): gripper + claws pairs only, no held-item pair.
 	got := s.servingAreaShieldCollisions()
@@ -489,7 +471,7 @@ func TestServingAreaShieldCollisions(t *testing.T) {
 	}
 
 	// Attached (the descent): adds the held-item↔shield pair.
-	s.heldItemAttached = true
+	s.scene().heldItemAttached = true
 	got = s.servingAreaShieldCollisions()
 	if len(got) != 4 {
 		t.Fatalf("expected 4 pairs when attached, got %d (%v)", len(got), got)
@@ -514,7 +496,7 @@ func TestSwapFilterForGlassNeedsGlassConfig(t *testing.T) {
 	if _, err := s.swapFilterForGlass(context.Background()); err == nil {
 		t.Error("swapFilterForGlass succeeded without glass_dimensions, want an error")
 	}
-	if s.cachedFS.Frame(componentFilter) == nil {
+	if s.scene().fs.Frame(componentFilter) == nil {
 		t.Error("filter was left detached after the refusal")
 	}
 }
@@ -526,27 +508,27 @@ func TestSwapFilterForGlassKeepsAttachedItem(t *testing.T) {
 	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
 		t.Fatalf("addHeldItemFrame: %v", err)
 	}
-	s.cacheHeldGeometry(pickupLabelGlass, testBox(t, spatialmath.NewZeroPose()))
+	s.scene().cacheHeldGeometry(pickupLabelGlass, testBox(t, spatialmath.NewZeroPose()))
 
 	restore, err := s.swapFilterForGlass(context.Background())
 	if err != nil {
 		t.Fatalf("swapFilterForGlass: %v", err)
 	}
-	if s.cachedFS.Frame(componentFilter) != nil {
+	if s.scene().fs.Frame(componentFilter) != nil {
 		t.Error("filter still modeled during the swap")
 	}
-	if !s.heldItemAttached || s.cachedFS.Frame(heldItemFrameName) == nil {
+	if !s.scene().heldItemAttached || s.scene().fs.Frame(heldItemFrameName) == nil {
 		t.Error("the already-attached glass was dropped by the swap")
 	}
 
 	restore()
-	if !s.heldItemAttached || s.cachedFS.Frame(heldItemFrameName) == nil {
+	if !s.scene().heldItemAttached || s.scene().fs.Frame(heldItemFrameName) == nil {
 		t.Error("the already-attached glass was dropped by the restore")
 	}
-	if s.heldGlassGeom == nil {
+	if s.scene().heldGlassGeom == nil {
 		t.Error("the cached glass grasp was cleared by the restore")
 	}
-	if s.cachedFS.Frame(componentFilter) == nil {
+	if s.scene().fs.Frame(componentFilter) == nil {
 		t.Error("filter was not restored")
 	}
 }
@@ -570,24 +552,24 @@ func glassSwapService(t *testing.T) *beanjaminCoffee {
 func TestSwapFilterForGlassKeepsCachedGrasp(t *testing.T) {
 	s := glassSwapService(t)
 	cached := testBox(t, spatialmath.NewZeroPose())
-	s.cacheHeldGeometry(pickupLabelGlass, cached)
+	s.scene().cacheHeldGeometry(pickupLabelGlass, cached)
 
 	restore, err := s.swapFilterForGlass(context.Background())
 	if err != nil {
 		t.Fatalf("swapFilterForGlass: %v", err)
 	}
-	if s.heldGlassGeom != cached {
+	if s.scene().heldGlassGeom != cached {
 		t.Error("the stand-in displaced the cached glass grasp")
 	}
-	if !s.heldItemAttached {
+	if !s.scene().heldItemAttached {
 		t.Error("the stand-in was not attached")
 	}
 
 	restore()
-	if s.heldItemAttached {
+	if s.scene().heldItemAttached {
 		t.Error("the stand-in outlived the action")
 	}
-	if s.heldGlassGeom != cached {
+	if s.scene().heldGlassGeom != cached {
 		t.Error("the restore cleared the cached glass grasp")
 	}
 }
@@ -607,7 +589,7 @@ func TestSwapFilterForGlassKeepsItemAttachedByTheAction(t *testing.T) {
 	}
 
 	restore()
-	if !s.heldItemAttached || s.cachedFS.Frame(heldItemFrameName) == nil {
+	if !s.scene().heldItemAttached || s.scene().fs.Frame(heldItemFrameName) == nil {
 		t.Error("the restore detached the item the action grabbed")
 	}
 }

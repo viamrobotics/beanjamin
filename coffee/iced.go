@@ -227,7 +227,7 @@ func (s *beanjaminCoffee) graspBrewedCup(ctx, cancelCtx context.Context) error {
 	// the vision cup pickup) — model the cup from cup_dimensions so the pour and the
 	// shelf placement still carry it as a tracked held-item instead of an untracked
 	// grip-point move.
-	if !s.heldItemAttached {
+	if !s.scene().heldItemAttached {
 		if err := s.attachConfiguredCupGeometry(ctx); err != nil {
 			s.activeOrderLogger().Warnf("grasp_brewed_cup: model cup from cup_dimensions failed, continuing untracked: %v", err)
 		}

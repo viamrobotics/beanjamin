@@ -22,7 +22,7 @@ import (
 // refreshFrameSystemIfClean declines to rebuild precisely because they are
 // present. A faulted order pauses the queue for this, but a
 // manually-stepped execute_action that fails leaves them behind with the queue
-// running. The running gate is required because cachedFS may only be swapped
+// running. The arm is claimed because the scene may only be replaced
 // while no sequence owns the arm.
 //
 // It clears the recorded fridge-door angle too: proceed is the operator saying
@@ -36,27 +36,21 @@ func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, err
 	if _, err := s.lease.claimManual("proceed"); err != nil {
 		return nil, fmt.Errorf("proceed: %w — wait for it to stop, or cancel it first", err)
 	}
-	// Warn before the flag is cleared: forgetting a held item without opening
+	endRun := s.startDirectRun("proceed")
+	// Warn before the scene is rebuilt: forgetting a held item without opening
 	// the jaws leaves the arm planning through whatever it is still carrying.
-	if s.heldItemAttached {
+	sc := s.scene()
+	if sc.heldItemAttached {
 		s.activeOrderLogger().Warn("proceed: forgetting a held item — if the gripper really is holding something, take it out by hand first")
 	}
-	if s.heldMilk != "" {
-		s.activeOrderLogger().Warnf("proceed: forgetting that the %s milk is out of the fridge — %s", s.heldMilk, s.milkPutBackHint(s.heldMilk))
+	if sc.heldMilk != "" {
+		s.activeOrderLogger().Warnf("proceed: forgetting that the %s milk is out of the fridge — %s", sc.heldMilk, s.milkPutBackHint(sc.heldMilk))
 	}
-	// Clear the recorded door angle before the rebuild, so resetFrameSystem has
-	// nothing to re-apply and the door lands at its authored shut transform with
-	// everything else. Ordering is load-bearing: cleared afterward, the rebuilt
-	// frame system would still be carrying the swing.
-	doorOpenDegs := s.doorOpenDegs
-	s.doorOpenDegs = 0
-	err := s.resetFrameSystem(ctx)
-	if err != nil {
-		// A failed proceed asserts nothing: cachedFS still holds the swung door,
-		// so the record has to keep matching it. Zeroed here, the next rebuild
-		// would quietly shut a door this proceed never got to vouch for.
-		s.doorOpenDegs = doorOpenDegs
-	}
+	// Rebuilt with the door shut. A failed rebuild leaves the scene, swung door
+	// included, as it was: a failed proceed asserts nothing.
+	doorOpenDegs := sc.doorOpenDegs
+	err := s.rebuildScene(ctx, 0)
+	endRun()
 	s.lease.release()
 	if err != nil {
 		return nil, fmt.Errorf("proceed: %w", err)
@@ -118,7 +112,7 @@ func (s *beanjaminCoffee) clearQueue() (map[string]any, error) {
 
 // resetWorld brings the service back to an idle state from anywhere: cancels a
 // running sequence (waiting for it to actually stop), clears any pending and
-// recently-completed orders, rebuilds the cached frame system from the service
+// recently-completed orders, rebuilds the scene from the service
 // (discarding mid-cycle mutations like a portafilter frame reparented to world
 // by lockFilterFrame), forgets that the fridge door is standing open, and
 // releases the cancel-induced queue pause so processQueue is ready for new
@@ -126,7 +120,7 @@ func (s *beanjaminCoffee) clearQueue() (map[string]any, error) {
 // safe to call from any state.
 //
 // Everything between the cancel and the unpause runs holding the running gate:
-// the rebuild swaps cachedFS and the mutation flags, which only the gate holder
+// the rebuild replaces the scene, which only the gate holder
 // may touch, and without it a keepalive purge or execute_action could start
 // planning against a half-swapped world. The gate is released before the
 // unpause, as in proceed, so the order the resume lets through can claim it.
@@ -157,13 +151,13 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 	// state that no longer matches reality.
 	s.portafilterInMachine.Store(false)
 	s.portafilterHasGrounds.Store(false)
-	// Only an operator can assert the fridge door is physically shut, so clearing
-	// the recorded angle belongs to the commands that say so — this one and
-	// proceed. A rebuild on its own re-applies it rather than pretending a door
-	// closed itself.
-	s.doorOpenDegs = 0
-
-	err := s.resetFrameSystem(ctx)
+	// Only an operator can assert the fridge door is physically shut, so
+	// rebuilding with it shut belongs to the commands that say so — this one and
+	// proceed. A rebuild on its own re-applies the recorded angle rather than
+	// pretending a door closed itself.
+	endRun := s.startDirectRun("reset_world")
+	err := s.rebuildScene(ctx, 0)
+	endRun()
 	s.lease.release()
 	if err != nil {
 		return nil, fmt.Errorf("reset_world: %w", err)

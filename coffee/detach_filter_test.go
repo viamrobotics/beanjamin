@@ -53,11 +53,11 @@ func TestDetachFilterFrame(t *testing.T) {
 	}
 	// A handle left behind would still block every plan.
 	for _, name := range []string{componentFilter, componentFilter + "_origin", "portafilter-handle"} {
-		if s.cachedFS.Frame(name) != nil {
+		if s.scene().fs.Frame(name) != nil {
 			t.Errorf("frame %q still present after detach", name)
 		}
 	}
-	if s.cachedFS.Frame(componentClaws) == nil {
+	if s.scene().fs.Frame(componentClaws) == nil {
 		t.Error("claws frame was removed; only the portafilter should go")
 	}
 }
@@ -79,12 +79,12 @@ func TestDetachFilterFrameRefusesWhenLocked(t *testing.T) {
 	// A locked filter is the real portafilter sitting in the espresso machine.
 	// Dropping it would let the arm plan through it.
 	s := heldGeomService(t, filterOnArmFS(t))
-	s.filterFrameLocked = true
+	s.scene().filterFrameLocked = true
 
 	if _, err := s.detachFilterFrame(); err == nil {
 		t.Fatal("detachFilterFrame succeeded with the filter frame locked, want an error")
 	}
-	if s.cachedFS.Frame(componentFilter) == nil {
+	if s.scene().fs.Frame(componentFilter) == nil {
 		t.Error("filter frame was removed despite the error")
 	}
 }
@@ -94,7 +94,7 @@ func TestReattachFilterFrameRestoresSubtree(t *testing.T) {
 
 	parents := map[string]string{}
 	for _, name := range []string{componentFilter, componentFilter + "_origin", "portafilter-handle"} {
-		p, err := s.cachedFS.Parent(s.cachedFS.Frame(name))
+		p, err := s.scene().fs.Parent(s.scene().fs.Frame(name))
 		if err != nil {
 			t.Fatalf("parent of %q: %v", name, err)
 		}
@@ -111,7 +111,7 @@ func TestReattachFilterFrameRestoresSubtree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new held frame: %v", err)
 	}
-	if err := s.cachedFS.AddFrame(held, s.cachedFS.Frame(componentClaws)); err != nil {
+	if err := s.scene().fs.AddFrame(held, s.scene().fs.Frame(componentClaws)); err != nil {
 		t.Fatalf("add held frame: %v", err)
 	}
 
@@ -119,11 +119,11 @@ func TestReattachFilterFrameRestoresSubtree(t *testing.T) {
 		t.Fatalf("reattachFilterFrame: %v", err)
 	}
 	for name, wantParent := range parents {
-		f := s.cachedFS.Frame(name)
+		f := s.scene().fs.Frame(name)
 		if f == nil {
 			t.Fatalf("frame %q was not restored", name)
 		}
-		p, err := s.cachedFS.Parent(f)
+		p, err := s.scene().fs.Parent(f)
 		if err != nil {
 			t.Fatalf("parent of restored %q: %v", name, err)
 		}
@@ -131,7 +131,7 @@ func TestReattachFilterFrameRestoresSubtree(t *testing.T) {
 			t.Errorf("frame %q restored under %q, want %q", name, p.Name(), wantParent)
 		}
 	}
-	if s.cachedFS.Frame(heldItemFrameName) == nil {
+	if s.scene().fs.Frame(heldItemFrameName) == nil {
 		t.Error("held item frame was lost by the reattach")
 	}
 }
@@ -143,11 +143,11 @@ func TestDropFilterRestores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dropFilter: %v", err)
 	}
-	if s.cachedFS.Frame(componentFilter) != nil {
+	if s.scene().fs.Frame(componentFilter) != nil {
 		t.Error("filter still present after the drop")
 	}
 	restore()
-	if s.cachedFS.Frame(componentFilter) == nil {
+	if s.scene().fs.Frame(componentFilter) == nil {
 		t.Error("filter not restored")
 	}
 }
@@ -156,13 +156,13 @@ func TestDropFilterLeavesLockedFilterAlone(t *testing.T) {
 	// The iced sequence runs with the portafilter locked in the machine: there is
 	// nothing on the claws to drop, and dropping it would plan through the real one.
 	s := heldGeomService(t, filterOnArmFS(t))
-	s.filterFrameLocked = true
+	s.scene().filterFrameLocked = true
 
 	restore, err := s.dropFilter()
 	if err != nil {
 		t.Fatalf("dropFilter with a locked filter: %v", err)
 	}
-	if s.cachedFS.Frame(componentFilter) == nil {
+	if s.scene().fs.Frame(componentFilter) == nil {
 		t.Error("locked filter was removed from the frame system")
 	}
 	restore()
@@ -192,7 +192,7 @@ func TestWithGlassAllowlist(t *testing.T) {
 // Every allowlisted name must be a real action, or the flag is accepted on
 // something that then fails as unknown.
 func TestWithGlassAllowlistNamesRealActions(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{CanServeIced: true}}
+	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{CanServeIced: true}}
 	actions := s.actionFuncs()
 	for name := range withGlassActions {
 		if _, ok := actions[name]; !ok {

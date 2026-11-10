@@ -17,7 +17,7 @@ import (
 // Returning with no milk out must fail rather than drive an empty gripper
 // at a shelf where the bottle may already stand.
 func TestReturnMilkBottleWithoutPickupFails(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{CanServeIcedLatte: true}, gripper: inject.NewGripper("g")}
+	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{CanServeIcedLatte: true}, gripper: inject.NewGripper("g")}
 	err := s.returnMilkBottle(context.Background(), context.Background())
 	if err == nil || !strings.Contains(err.Error(), "no milk is out") {
 		t.Fatalf("expected a no-milk-out error, got %v", err)
@@ -27,7 +27,7 @@ func TestReturnMilkBottleWithoutPickupFails(t *testing.T) {
 // Every milk action refuses to run on a machine that isn't configured for milk,
 // rather than failing partway through a motion on nil config.
 func TestMilkActionsRequireConfiguredMilk(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{}}
+	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{}}
 	actions := map[string]func(ctx, cancelCtx context.Context) error{
 		"add_milk":    func(ctx, cancelCtx context.Context) error { return s.addMilk(ctx, cancelCtx, "whole") },
 		"fetch_milk":  func(ctx, cancelCtx context.Context) error { return s.fetchMilkBottle(ctx, cancelCtx, "whole") },
@@ -47,7 +47,7 @@ func TestMilkActionsRequireConfiguredMilk(t *testing.T) {
 // The milk actions are on the execute_action surface so the poses and the grasp
 // offsets can be stepped through one at a time on hardware.
 func TestMilkActionsRegistered(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{}}
+	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{}}
 	actions := s.actionFuncs()
 	for _, name := range []string{"fetch_milk", "pour_milk", "return_milk", "add_milk", "serve_iced_latte"} {
 		if _, ok := actions[name]; !ok {
@@ -60,7 +60,7 @@ func TestMilkActionsRegistered(t *testing.T) {
 // iced latte carries all three within one order, and a re-grab restores the
 // cached shape by label.
 func TestHeldGeometryCachePerLabel(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{}}
+	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{}}
 	cup, err := geom.ContainerBox(r3.Vector{}, (&ContainerDimensions{DiameterMm: 80, HeightMm: 95}).boxDims(), 0, pickupLabelCup)
 	if err != nil {
 		t.Fatal(err)
@@ -69,31 +69,21 @@ func TestHeldGeometryCachePerLabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.cacheHeldGeometry(pickupLabelCup, cup)
-	s.cacheHeldGeometry(pickupLabelMilk, milk)
+	s.scene().cacheHeldGeometry(pickupLabelCup, cup)
+	s.scene().cacheHeldGeometry(pickupLabelMilk, milk)
 
-	if got := s.cachedHeldGeometry(pickupLabelCup); got != cup {
+	if got := s.scene().cachedHeldGeometry(pickupLabelCup); got != cup {
 		t.Error("caching milk geometry clobbered the cup's")
 	}
-	if got := s.cachedHeldGeometry(pickupLabelMilk); got != milk {
+	if got := s.scene().cachedHeldGeometry(pickupLabelMilk); got != milk {
 		t.Error("milk geometry did not round-trip through the cache")
-	}
-}
-
-// A frame-system reset forgets which milk is out along with the cached geometry
-// — it describes a bottle the gripper is no longer known to hold.
-func TestClearHeldGeometryForgetsHeldMilk(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{}, heldMilk: "oat"}
-	s.clearHeldGeometry()
-	if s.heldMilk != "" {
-		t.Errorf("heldMilk = %q, want empty after clearHeldGeometry", s.heldMilk)
 	}
 }
 
 // Each milk is looked up to the spot it stands at; a milk that isn't configured
 // has no spot.
 func TestMilkSpot(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{MilkOptions: testMilks}}
+	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{MilkOptions: testMilks}}
 	if spot, err := s.milkSpot("oat"); err != nil || spot != "right" {
 		t.Errorf("milkSpot(oat) = %q, %v; want right", spot, err)
 	}
@@ -104,7 +94,7 @@ func TestMilkSpot(t *testing.T) {
 
 // Every iced latte and hand-run milk action uses the first milk for now.
 func TestFirstMilk(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{MilkOptions: testMilks}}
+	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{MilkOptions: testMilks}}
 	if got := s.firstMilk(); got != "whole" {
 		t.Errorf("firstMilk = %q, want whole", got)
 	}
@@ -113,7 +103,7 @@ func TestFirstMilk(t *testing.T) {
 // Fetching a second bottle while one is out would leave nothing to say which
 // spot the first goes back to.
 func TestFetchMilkWhileOneIsOutFails(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{CanServeIcedLatte: true, MilkOptions: testMilks}, gripper: inject.NewGripper("g"), heldMilk: "whole"}
+	s := &beanjaminCoffee{cfg: &Config{CanServeIcedLatte: true, MilkOptions: testMilks}, gripper: inject.NewGripper("g"), settledScene: &sceneState{heldMilk: "whole"}}
 	err := s.fetchMilkBottle(context.Background(), context.Background(), "oat")
 	if err == nil || !strings.Contains(err.Error(), "already out") {
 		t.Fatalf("expected an already-out error, got %v", err)
@@ -175,7 +165,7 @@ func TestMilkBottleBoxRejectsUnseatableBottle(t *testing.T) {
 
 // A failure with the fridge open names where the bottle goes back.
 func TestMilkStepErrNamesTheSpot(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{MilkOptions: testMilks}, doorOpenDegs: 90}
+	s := &beanjaminCoffee{cfg: &Config{MilkOptions: testMilks}, settledScene: &sceneState{doorOpenDegs: 90}}
 	err := s.milkStepErr("oat", errors.New("boom"))
 	if !strings.Contains(err.Error(), "oat milk") || !strings.Contains(err.Error(), "right spot") {
 		t.Errorf("milkStepErr = %v, want it to name the oat milk's right spot", err)
@@ -184,7 +174,7 @@ func TestMilkStepErrNamesTheSpot(t *testing.T) {
 
 // A bottle out of the fridge is reported as stranded state on a fault.
 func TestStrandedStateReportsMilkOut(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{}, heldMilk: "oat"}
+	s := &beanjaminCoffee{cfg: &Config{}, settledScene: &sceneState{heldMilk: "oat"}}
 	if got := s.strandedState(); len(got) != 1 || got[0] != "oat milk out of the fridge" {
 		t.Errorf("strandedState = %v, want [oat milk out of the fridge]", got)
 	}
@@ -194,12 +184,12 @@ func TestStrandedStateReportsMilkOut(t *testing.T) {
 // hand-run actions: the rebuild would clear heldMilk and return_milk would no
 // longer know where it goes.
 func TestRefreshFrameSystemSkippedWhileMilkIsOut(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{}, heldMilk: "oat"}
+	s := &beanjaminCoffee{cfg: &Config{}, settledScene: &sceneState{heldMilk: "oat"}}
 	// No frame system service is configured, so a rebuild attempt would fail.
 	if err := s.refreshFrameSystemIfClean(context.Background()); err != nil {
 		t.Fatalf("refreshFrameSystemIfClean = %v, want a skipped rebuild", err)
 	}
-	if s.heldMilk != "oat" {
-		t.Errorf("heldMilk = %q, want it kept", s.heldMilk)
+	if s.scene().heldMilk != "oat" {
+		t.Errorf("heldMilk = %q, want it kept", s.scene().heldMilk)
 	}
 }

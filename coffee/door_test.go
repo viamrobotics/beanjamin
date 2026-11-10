@@ -318,7 +318,7 @@ func TestNearestTheta(t *testing.T) {
 }
 
 func TestDoorGetters_Defaults(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{}}
+	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{}}
 	if got := s.doorOpenAngleDegs(); got != 90 {
 		t.Errorf("doorOpenAngleDegs default = %v, want 90", got)
 	}
@@ -328,7 +328,7 @@ func TestDoorGetters_Defaults(t *testing.T) {
 }
 
 func TestDoorGetters_Configured(t *testing.T) {
-	s := &beanjaminCoffee{cfg: &Config{DoorOpenAngleDegs: 75, DoorPivotDegreesPerStep: 5}}
+	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{DoorOpenAngleDegs: 75, DoorPivotDegreesPerStep: 5}}
 	if got := s.doorOpenAngleDegs(); got != 75 {
 		t.Errorf("doorOpenAngleDegs = %v, want 75", got)
 	}
@@ -358,10 +358,10 @@ func TestDoorApproachFromBall(t *testing.T) {
 }
 
 func TestDoorGraspFrameName(t *testing.T) {
-	if got := (&beanjaminCoffee{cfg: &Config{}}).doorGraspFrameName(); got != frameFridgeHandleBall {
+	if got := (&beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{}}).doorGraspFrameName(); got != frameFridgeHandleBall {
 		t.Errorf("default grasp frame = %q, want %q", got, frameFridgeHandleBall)
 	}
-	if got := (&beanjaminCoffee{cfg: &Config{DoorGraspFrameName: "custom-knob"}}).doorGraspFrameName(); got != "custom-knob" {
+	if got := (&beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{DoorGraspFrameName: "custom-knob"}}).doorGraspFrameName(); got != "custom-knob" {
 		t.Errorf("configured grasp frame = %q, want custom-knob", got)
 	}
 }
@@ -370,11 +370,11 @@ func TestDoorGraspFrameName(t *testing.T) {
 // values — they are real settings (hold the orientation fixed / counter-rotate),
 // and the orDefault helper the other door tunables use would swallow both.
 func TestDoorGraspYawRatio(t *testing.T) {
-	if got := (&beanjaminCoffee{cfg: &Config{}}).doorGraspYawRatio(); got != defaultDoorGraspYawRatio {
+	if got := (&beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{}}).doorGraspYawRatio(); got != defaultDoorGraspYawRatio {
 		t.Errorf("default yaw ratio = %v, want %v", got, defaultDoorGraspYawRatio)
 	}
 	for _, want := range []float64{0, -1, 0.5} {
-		if got := (&beanjaminCoffee{cfg: &Config{DoorGraspYawRatio: &want}}).doorGraspYawRatio(); got != want {
+		if got := (&beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{DoorGraspYawRatio: &want}}).doorGraspYawRatio(); got != want {
 			t.Errorf("configured yaw ratio = %v, want %v", got, want)
 		}
 	}
