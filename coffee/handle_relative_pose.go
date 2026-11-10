@@ -78,11 +78,11 @@ func (s *beanjaminCoffee) handleRelativeGripPoseData(ctx context.Context, poseNa
 // filterToHandle returns the handle frame's pose in the filter frame. The two
 // are rigidly linked, so the transform holds wherever the filter is parented.
 func (s *beanjaminCoffee) filterToHandle() (spatialmath.Pose, error) {
-	if s.cachedFS == nil {
+	if s.scene().fs == nil {
 		return nil, fmt.Errorf("no frame system")
 	}
-	tf, err := s.cachedFS.Transform(
-		referenceframe.NewZeroInputs(s.cachedFS).ToLinearInputs(),
+	tf, err := s.scene().fs.Transform(
+		referenceframe.NewZeroInputs(s.scene().fs).ToLinearInputs(),
 		referenceframe.NewPoseInFrame(portafilterHandleFrame, spatialmath.NewZeroPose()),
 		componentFilter,
 	)

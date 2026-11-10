@@ -1,9 +1,10 @@
 package coffee
 
-// Plan-ahead: during an order the brew code is the planning thread.
-// It turns each step into a move (trajectory, gripper action, sleep) and hands it
-// to an execution goroutine, which only ever sees moves. At a stopping point it
-// settles: closes the channel and waits for execution to drain.
+// An arm run is one holder's use of the arm. During an order the brew code is
+// the planning thread: it turns each step into a move (trajectory, gripper
+// action, sleep) and hands it to an execution goroutine, which only ever sees
+// moves. At a stopping point it settles: closes the channel and waits for
+// execution to drain. Every other run executes each move as it is handed off.
 
 import (
 	"context"
@@ -20,8 +21,8 @@ const (
 	// planAheadStartToleranceRad is how far, per joint, the arm may be from a
 	// move's start before the move fails.
 	planAheadStartToleranceRad = 0.01
-	// flowQueueSize bounds how far planning can get ahead of execution.
-	flowQueueSize = 64
+	// runQueueSize bounds how far planning can get ahead of execution.
+	runQueueSize = 64
 )
 
 type gripperAction int
@@ -44,75 +45,123 @@ type move struct {
 
 	gripper gripperAction
 	sleep   time.Duration
+
+	// scene is the scene the move leaves the cell in, the run's executed scene
+	// once the move has run. handOff sets it.
+	scene *sceneState
 }
 
-// flow is one order's plan-ahead state, owned by the planning thread.
-type flow struct {
-	ctx context.Context // order ctx merged with cancelCtx
+// armRun is one holder's use of the arm: an order, a manual action, the
+// keepalive purge or an operator command. It follows the scene through planning
+// and execution: planned is where the moves handed off so far leave the cell,
+// executed is where the moves that have run left it. Planning reads planned
+// rather than the arm.
+//
+// An order plans ahead: its moves run on an execution goroutine while the order
+// goroutine plans the next ones. Any other run executes each move as it is
+// handed off, so its two scenes stay the same.
+type armRun struct {
+	name      string
+	planAhead bool
+	ctx       context.Context // plan-ahead only: the order ctx merged with cancelCtx
 
-	from   []referenceframe.Input // end of the last handed-off move; nil means read the arm
-	moves  chan move              // nil when execution is idle
+	planned  *sceneState // owned by the planning goroutine
+	executed atomic.Pointer[sceneState]
+
+	moves  chan move // nil when execution is idle
 	done   chan error
 	failed atomic.Bool // set by the execution thread
-	err    error       // first execution error; ends the order
+	err    error       // first execution error; ends the run
 	synced bool        // true inside syncRegion
 }
 
-// startFlow starts plan-ahead for an order. end settles and returns the first
+// startRun opens a run on the settled scene for whoever just claimed the arm.
+// end settles, makes the executed scene the settled one and returns the first
 // execution error.
-func (s *beanjaminCoffee) startFlow(ctx, cancelCtx context.Context) (end func() error) {
+func (s *beanjaminCoffee) startRun(ctx, cancelCtx context.Context, name string, planAhead bool) (end func() error) {
+	if s.run != nil {
+		s.activeOrderLogger().Warnf("run %q started while %q is open; it joins that run", name, s.run.name)
+		return func() error { return nil }
+	}
 	merged, cancel := mergedCancelContext(ctx, cancelCtx)
-	s.flow = &flow{ctx: merged}
+	r := &armRun{name: name, planAhead: planAhead, ctx: merged, planned: s.settledScene.withInputs(nil)}
+	r.executed.Store(r.planned)
+	s.run = r
 	return func() error {
 		defer cancel()
 		err := s.settle()
-		s.flow = nil
+		s.settledScene = r.executed.Load().withInputs(nil)
+		s.run = nil
 		return err
 	}
 }
 
-// activeFlow returns the flow when moves should be handed off, else nil.
-func (s *beanjaminCoffee) activeFlow() *flow {
-	if s.flow == nil || s.flow.synced {
+// startDirectRun opens a run that executes each move as it is handed off, for
+// the troubleshooting commands and the keepalive purge, and returns its end.
+func (s *beanjaminCoffee) startDirectRun(name string) (end func()) {
+	endRun := s.startRun(context.Background(), context.Background(), name, false)
+	return func() {
+		if err := endRun(); err != nil {
+			s.activeOrderLogger().Errorf("run %q: %v", name, err)
+		}
+	}
+}
+
+// aheadRun returns the run when moves should be handed to its execution
+// goroutine, else nil.
+func (s *beanjaminCoffee) aheadRun() *armRun {
+	if s.run == nil || !s.run.planAhead || s.run.synced {
 		return nil
 	}
-	return s.flow
+	return s.run
 }
 
 // settle waits for all handed-off moves to finish and returns the first
-// execution error.
+// execution error. After a failure the planned scene goes back to the executed
+// one; either way the arm has to be read again to know where it stands.
 func (s *beanjaminCoffee) settle() error {
-	f := s.flow
-	if f == nil {
-		s.activeOrderLogger().Warn("settle: no order flow, nothing to wait for")
+	r := s.run
+	if r == nil {
+		s.activeOrderLogger().Warn("settle: no arm run, nothing to wait for")
 		return nil
 	}
-	if f.moves != nil {
-		close(f.moves)
-		if err := <-f.done; f.err == nil {
-			f.err = err
+	if r.moves != nil {
+		close(r.moves)
+		if err := <-r.done; r.err == nil {
+			r.err = err
 		}
-		f.moves = nil
+		r.moves = nil
 	}
-	f.from = nil
-	return f.err
+	if r.err != nil {
+		r.planned = r.executed.Load()
+	}
+	r.planned = r.planned.withInputs(nil)
+	return r.err
 }
 
-// handOff gives m to the execution thread, or runs it now when there's no
-// active flow.
+// handOff gives m to the execution thread, or runs it now when the run doesn't
+// plan ahead.
 func (s *beanjaminCoffee) handOff(ctx context.Context, m move) error {
-	f := s.activeFlow()
-	if f == nil {
-		s.activeOrderLogger().Warnf("handOff: no active order flow, running %q directly", m.name)
+	r := s.run
+	if r == nil {
+		s.activeOrderLogger().Warnf("handOff: no arm run, running %q directly", m.name)
 		return s.runMove(ctx, m)
 	}
-	if f.err != nil || f.failed.Load() {
+	m.scene = r.planned
+	if s.aheadRun() == nil {
+		if err := s.runMove(ctx, m); err != nil {
+			return err
+		}
+		r.ran(m)
+		return nil
+	}
+	if r.err != nil || r.failed.Load() {
 		return s.settle()
 	}
-	if f.moves == nil {
-		f.startExecution(s)
+	if r.moves == nil {
+		r.startExecution(s)
 	}
-	f.moves <- m
+	r.moves <- m
 	return nil
 }
 
@@ -124,33 +173,42 @@ func (s *beanjaminCoffee) handOffEffect(effect func()) {
 // syncRegion settles, then runs moves immediately until release. For code that
 // needs each step's result right away.
 func (s *beanjaminCoffee) syncRegion() (release func(), err error) {
-	f := s.flow
-	if f == nil {
-		s.activeOrderLogger().Warn("syncRegion: no order flow, moves already run directly")
+	r := s.run
+	if r == nil {
+		s.activeOrderLogger().Warn("syncRegion: no arm run, moves already run directly")
 		return func() {}, nil
 	}
 	if err := s.settle(); err != nil {
 		return nil, err
 	}
-	f.synced = true
-	return func() { f.synced = false }, nil
+	r.synced = true
+	return func() { r.synced = false }, nil
+}
+
+// ran makes the scene m leaves the cell in the executed one, once m has run.
+func (r *armRun) ran(m move) {
+	if m.scene != nil {
+		r.executed.Store(m.scene)
+	}
 }
 
 // startExecution runs moves in order, skipping the rest after a failure.
-func (f *flow) startExecution(s *beanjaminCoffee) {
-	moves := make(chan move, flowQueueSize)
+func (r *armRun) startExecution(s *beanjaminCoffee) {
+	moves := make(chan move, runQueueSize)
 	done := make(chan error, 1)
-	f.moves, f.done = moves, done
+	r.moves, r.done = moves, done
 	go func() {
 		var first error
 		for m := range moves {
 			if first != nil {
 				continue // drain so the planner never blocks
 			}
-			if err := s.runMoveRecovered(f.ctx, m); err != nil {
+			if err := s.runMoveRecovered(r.ctx, m); err != nil {
 				first = err
-				f.failed.Store(true)
+				r.failed.Store(true)
+				continue
 			}
+			r.ran(m)
 		}
 		done <- first
 	}()
@@ -215,10 +273,10 @@ func (s *beanjaminCoffee) runTrajectory(ctx context.Context, m move) error {
 	return s.arm.MoveThroughJointPositions(ctx, m.positions, m.speed, nil)
 }
 
-// handOffStep turns a direct-move step into a move, planned from where the last
-// handed-off move ends, and hands it off.
-func (s *beanjaminCoffee) handOffStep(ctx context.Context, f *flow, step Step) error {
-	from := f.from
+// handOffStep turns a direct-move step into a move, planned from where the
+// planned scene leaves the arm, and hands it off.
+func (s *beanjaminCoffee) handOffStep(ctx context.Context, r *armRun, step Step) error {
+	from := r.planned.armInputs(s.cfg.ArmName)
 	if from == nil {
 		now, err := s.arm.CurrentInputs(ctx)
 		if err != nil {
@@ -233,7 +291,7 @@ func (s *beanjaminCoffee) handOffStep(ctx context.Context, f *flow, step Step) e
 		}
 		return fmt.Errorf("move to %q failed: %w", step.PoseName, planErr)
 	}
-	f.from = positions[len(positions)-1]
+	r.planned = r.planned.withArm(s.cfg.ArmName, positions[len(positions)-1])
 	return s.handOff(ctx, move{
 		name:      step.PoseName,
 		positions: positions,
@@ -250,9 +308,10 @@ func (s *beanjaminCoffee) planStep(ctx context.Context, step Step, from []refere
 	if err != nil {
 		return nil, err
 	}
-	inputs := referenceframe.NewZeroInputs(s.cachedFS)
+	fs := s.scene().fs
+	inputs := referenceframe.NewZeroInputs(fs)
 	inputs[s.cfg.ArmName] = from
-	plan, err := s.planToRawPose(ctx, s.cachedFS, inputs, pd, step.LinearConstraint, step.OrientationToleranceDegs, step.AllowedCollisions)
+	plan, err := s.planToRawPose(ctx, fs, inputs, pd, step.LinearConstraint, step.OrientationToleranceDegs, step.AllowedCollisions)
 	if err != nil {
 		return nil, err
 	}

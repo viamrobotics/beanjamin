@@ -72,7 +72,7 @@ func (s *beanjaminCoffee) resolvePose(ctx context.Context, sw toggleswitch.Switc
 // glass. It fails when no glass is staged, or no container is modeled in the
 // gripper: pouring blind would empty the cup onto the table.
 func (s *beanjaminCoffee) glassRelativePoseData(poseName string, rel *RelativePose) (*poseData, error) {
-	if !s.heldItemAttached {
+	if !s.scene().heldItemAttached {
 		return nil, fmt.Errorf("resolve %q: no container is modeled in the gripper to pour from", poseName)
 	}
 	glass, err := s.stagedGlassGeometry()
@@ -100,10 +100,10 @@ func (s *beanjaminCoffee) glassRelativePoseData(poseName string, rel *RelativePo
 // identity transform, so the geometry's own pose is already in world
 // coordinates.
 func (s *beanjaminCoffee) stagedGlassGeometry() (spatialmath.Geometry, error) {
-	if !s.stagedGlassPlaced || s.cachedFS == nil {
+	if !s.scene().stagedGlassPlaced || s.scene().fs == nil {
 		return nil, fmt.Errorf("no glass is staged in the frame system")
 	}
-	frame := s.cachedFS.Frame(stagedGlassFrameName)
+	frame := s.scene().fs.Frame(stagedGlassFrameName)
 	if frame == nil {
 		return nil, fmt.Errorf("no %q frame in the frame system", stagedGlassFrameName)
 	}

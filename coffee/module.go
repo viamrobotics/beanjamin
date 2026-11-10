@@ -20,12 +20,10 @@ import (
 	toggleswitch "go.viam.com/rdk/components/switch"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/module"
-	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot/framesystem"
 	generic "go.viam.com/rdk/services/generic"
 	"go.viam.com/rdk/services/vision"
-	"go.viam.com/rdk/spatialmath"
 
 	"beanjamin/coffee/clips"
 	"beanjamin/coffee/icevision"
@@ -66,8 +64,7 @@ type beanjaminCoffee struct {
 	cameraObserveSw  toggleswitch.Switch // holds the camera observation vantages for cup pickup.
 	arm              arm.Arm
 	fsSvc            framesystem.Service
-	cachedFS         *referenceframe.FrameSystem // cached frame system, mutated at lock/unlock
-	speaker          *speech.Speaker             // says nothing when speech_service_name is not configured
+	speaker          *speech.Speaker // says nothing when speech_service_name is not configured
 	gripper          gripper.Gripper
 	clips            *clips.Saver     // saves order clips via cam_storage_mux_name; records pending clips under data_dir
 	iceBoard         board.Board      // optional; drives the ice-machine GPIO pin; nil if ice_board_name unset
@@ -85,9 +82,12 @@ type beanjaminCoffee struct {
 	// lease holds running, paused and the shared cancelCtx (arm_lease.go).
 	lease       armLease
 	currentStep atomic.Value // string: current step label for the active order (debug)
-	// flow is the running order's plan-ahead state (flow.go). nil outside an
-	// order, where moves run directly.
-	flow *flow
+	// run is the arm run of whoever holds the lease (arm_run.go), nil between
+	// runs. Only the lease holder touches it.
+	run *armRun
+	// settledScene is the scene the last run left the cell in, where the next one
+	// starts (scene.go). Only the lease holder touches it.
+	settledScene *sceneState
 	// failedStep holds the step label the most recent order errored at,
 	// captured inside prepareDrink before `running` flips false so cancel
 	// recovery can't overwrite it. "" when the order succeeded. Reported on
@@ -122,7 +122,7 @@ type beanjaminCoffee struct {
 	// the keep-alive loop (keepalive.go). nil when keepalive is unconfigured.
 	machineActivity *machineActivityStore
 	cupVision       vision.Service // vision service for cup pickup (always configured)
-	cupCameraName   string         // SrcCameraName, validated to exist in cachedFS
+	cupCameraName   string         // SrcCameraName, validated to exist in the frame system
 	// iceVision reads the same camera as cupCameraName, held as a resource so
 	// the ice-level measurement (coffee/icevision) can read frames directly. The
 	// vision pipelines reach it by name through their own services instead.
@@ -132,42 +132,6 @@ type beanjaminCoffee struct {
 	// servingSlot is the round-robin counter for serving-area placement
 	// (serving_slots.go), persisted across rebuilds.
 	servingSlot *servingSlotStore
-
-	// Held-item geometry tracking (held_geometry.go).
-	// heldCupGeom / heldGlassGeom / heldMilkGeom cache the gripper-local geometry
-	// of the cup / glass (detected at pickup) and the milk bottle (modeled from
-	// milk_bottle_dimensions) so a re-grab can restore it; heldItemAttached
-	// tracks whether the held-item frame is currently present in cachedFS. These are mutated only on the motion sequence goroutine (like
-	// cachedFS, gated by the running flag), so they need no extra locking.
-	heldCupGeom      spatialmath.Geometry
-	heldGlassGeom    spatialmath.Geometry
-	heldMilkGeom     spatialmath.Geometry
-	heldItemAttached bool
-
-	// heldMilk names the milk bottle out of the fridge, set by fetchMilkBottle and
-	// read by returnMilkBottle to put it back at its own spot (milk.go). Empty
-	// when no bottle is out. Mutated only on the motion sequence goroutine, like
-	// cachedFS.
-	heldMilk string
-
-	// filterFrameLocked tracks whether lockFilterFrame has re-parented the filter
-	// frame to world in cachedFS (i.e. an in-flight lock that must be preserved).
-	// Mutated only on the motion sequence goroutine, like cachedFS.
-	filterFrameLocked bool
-
-	// stagedGlassPlaced tracks whether stageGlassAsObstacle has added the released
-	// glass geometry to world in cachedFS
-	stagedGlassPlaced bool
-
-	// doorOpenDegs is how far the fridge door physically stands open, in degrees
-	// about its hinge (0 = shut). The frame system always rebuilds with the door
-	// at its authored shut transform, so this is the only record that survives a
-	// rebuild — resetFrameSystem re-applies it, keeping the modeled panel where
-	// the real one actually is instead of snapping it closed behind the arm's
-	// back. Cleared only by the two commands in which an operator asserts the
-	// world is as configured — reset_world and proceed — and never by a rebuild
-	// on its own. Mutated only on the motion sequence goroutine, like cachedFS.
-	doorOpenDegs float64
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -256,21 +220,21 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		return nil, fmt.Errorf("frame system service not found in dependencies: %w", err)
 	}
 
-	cachedFS, err := framesystem.NewFromService(ctx, fsSvc, nil)
+	frameSystem, err := framesystem.NewFromService(ctx, fsSvc, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build initial frame system: %w", err)
 	}
 
-	if err := applyJointLimits(logger, cachedFS, conf.InputRangeOverride); err != nil {
+	if err := applyJointLimits(logger, frameSystem, conf.InputRangeOverride); err != nil {
 		return nil, fmt.Errorf("apply joint limits: %w", err)
 	}
 
 	// The camera backs every vision pickup, so it is checked once here.
-	if cachedFS.Frame(conf.SrcCameraName) == nil {
+	if frameSystem.Frame(conf.SrcCameraName) == nil {
 		return nil, fmt.Errorf("src_camera_name %q not found in frame system — add the camera to the frame system fragment", conf.SrcCameraName)
 	}
 
-	if err := checkGrinderShields(cachedFS, conf.beanNames()); err != nil {
+	if err := checkGrinderShields(frameSystem, conf.beanNames()); err != nil {
 		return nil, err
 	}
 
@@ -397,7 +361,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		cameraObserveSw:  cameraObserveSw,
 		arm:              armComp,
 		fsSvc:            fsSvc,
-		cachedFS:         cachedFS,
+		settledScene:     &sceneState{fs: frameSystem},
 		speaker:          speaker,
 		faultAlarm:       speech.NewFaultAlarm(speaker, logger),
 		iceBoard:         iceBoard,

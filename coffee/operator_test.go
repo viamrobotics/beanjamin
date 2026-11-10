@@ -18,7 +18,7 @@ import (
 
 // TestCancelStopsAndNothingElse pins the contract that cancel is a stop, not a
 // recovery: it halts the arm, pauses the queue and announces, while leaving the
-// portafilter state flags and the cached frame system exactly as the
+// portafilter state flags and the scene exactly as the
 // interruption found them, so they keep describing the real world until the
 // operator has put it right and proceeds.
 func TestCancelStopsAndNothingElse(t *testing.T) {
@@ -102,7 +102,7 @@ func TestCancelIdlePausesSilently(t *testing.T) {
 	}
 }
 
-// coffeeWithDirtyWorld returns a service whose cached frame system carries the
+// coffeeWithDirtyWorld returns a service whose scene carries the
 // mid-cycle mutations an interrupted order leaves behind (a held item, a locked
 // filter frame, a staged glass), with the queue running. The frame system it
 // returns is the dirty one, so a caller can tell a rebuild from a no-op, and
@@ -124,10 +124,10 @@ func coffeeWithDirtyWorld(t *testing.T, cfgErr error) (*beanjaminCoffee, *refere
 	s.fsSvc = fsSvc
 
 	dirty := referenceframe.NewEmptyFrameSystem("dirty")
-	s.cachedFS = dirty
-	s.heldItemAttached = true
-	s.filterFrameLocked = true
-	s.stagedGlassPlaced = true
+	s.scene().fs = dirty
+	s.scene().heldItemAttached = true
+	s.scene().filterFrameLocked = true
+	s.scene().stagedGlassPlaced = true
 
 	return s, dirty, &rebuilds
 }
@@ -142,7 +142,7 @@ func pausedCoffeeWithDirtyWorld(t *testing.T, cfgErr error) (*beanjaminCoffee, *
 }
 
 // TestProceedRebuildsFrameSystemWhenPaused pins the reset half of proceed:
-// resuming from a cancel-induced pause rebuilds the cached frame system from
+// resuming from a cancel-induced pause rebuilds the scene from
 // the service, so the next order plans against the configured world instead of
 // the mutations the cancelled order left behind.
 func TestProceedRebuildsFrameSystemWhenPaused(t *testing.T) {
@@ -158,12 +158,12 @@ func TestProceedRebuildsFrameSystemWhenPaused(t *testing.T) {
 	if *rebuilds != 1 {
 		t.Errorf("frame system rebuilt %d times, want 1", *rebuilds)
 	}
-	if s.cachedFS == dirty {
-		t.Error("cached frame system should have been replaced by the rebuild")
+	if s.scene().fs == dirty {
+		t.Error("the scene's frame system should have been replaced by the rebuild")
 	}
-	if s.heldItemAttached || s.filterFrameLocked || s.stagedGlassPlaced {
+	if s.scene().heldItemAttached || s.scene().filterFrameLocked || s.scene().stagedGlassPlaced {
 		t.Errorf("rebuild must clear the mutation flags: held=%v locked=%v staged=%v",
-			s.heldItemAttached, s.filterFrameLocked, s.stagedGlassPlaced)
+			s.scene().heldItemAttached, s.scene().filterFrameLocked, s.scene().stagedGlassPlaced)
 	}
 	if s.lease.busy() {
 		t.Error("proceed must hand the arm back after rebuilding")
@@ -175,7 +175,7 @@ func TestProceedRebuildsFrameSystemWhenPaused(t *testing.T) {
 
 // TestProceedRebuildsFrameSystemWhenNotPaused is the order-failed-on-its-own
 // case: nothing cancelled, so the queue never paused, but the failed order still
-// left its mutations in cachedFS and refreshFrameSystemIfClean won't clear them
+// left its mutations in the scene and refreshFrameSystemIfClean won't clear them
 // for the next order. proceed has to rebuild anyway.
 func TestProceedRebuildsFrameSystemWhenNotPaused(t *testing.T) {
 	s, dirty, rebuilds := coffeeWithDirtyWorld(t, nil)
@@ -193,12 +193,12 @@ func TestProceedRebuildsFrameSystemWhenNotPaused(t *testing.T) {
 	if *rebuilds != 1 {
 		t.Errorf("frame system rebuilt %d times, want 1", *rebuilds)
 	}
-	if s.cachedFS == dirty {
-		t.Error("cached frame system should have been replaced by the rebuild")
+	if s.scene().fs == dirty {
+		t.Error("the scene's frame system should have been replaced by the rebuild")
 	}
-	if s.heldItemAttached || s.filterFrameLocked || s.stagedGlassPlaced {
+	if s.scene().heldItemAttached || s.scene().filterFrameLocked || s.scene().stagedGlassPlaced {
 		t.Errorf("rebuild must clear the mutation flags: held=%v locked=%v staged=%v",
-			s.heldItemAttached, s.filterFrameLocked, s.stagedGlassPlaced)
+			s.scene().heldItemAttached, s.scene().filterFrameLocked, s.scene().stagedGlassPlaced)
 	}
 }
 
@@ -297,10 +297,10 @@ func coffeeWithFridge(t *testing.T) (*beanjaminCoffee, spatialmath.Pose) {
 }
 
 // doorOriginPose reads the door origin frame's current transform out of the
-// service's cached frame system.
+// service's scene.
 func doorOriginPose(t *testing.T, s *beanjaminCoffee) spatialmath.Pose {
 	t.Helper()
-	pose, err := doorBasePose(s.cachedFS)
+	pose, err := doorBasePose(s.scene().fs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,11 +310,11 @@ func doorOriginPose(t *testing.T, s *beanjaminCoffee) spatialmath.Pose {
 // TestProceedClearsTheFridgeDoorAngle: proceed is the operator saying the
 // machine has been put right, fridge included, so the recorded swing goes with
 // every other mid-cycle mutation and the rebuilt world has a shut door. The
-// angle must be cleared BEFORE the rebuild — cleared after, resetFrameSystem
-// would have already re-applied the swing to the frame system it just built.
+// rebuild is made with the door shut rather than with the recorded swing
+// re-applied.
 func TestProceedClearsTheFridgeDoorAngle(t *testing.T) {
 	s, shut := coffeeWithFridge(t)
-	s.doorOpenDegs = 90
+	s.scene().doorOpenDegs = 90
 
 	resp, err := s.proceedQueue(context.Background())
 	if err != nil {
@@ -323,8 +323,8 @@ func TestProceedClearsTheFridgeDoorAngle(t *testing.T) {
 	if got, _ := resp["fridge_door_cleared_degs"].(float64); got != 90 {
 		t.Errorf("fridge_door_cleared_degs = %v, want 90", resp["fridge_door_cleared_degs"])
 	}
-	if s.doorOpenDegs != 0 {
-		t.Errorf("doorOpenDegs = %v, want 0 — proceed asserts the door is shut", s.doorOpenDegs)
+	if s.scene().doorOpenDegs != 0 {
+		t.Errorf("doorOpenDegs = %v, want 0 — proceed asserts the door is shut", s.scene().doorOpenDegs)
 	}
 	if got := doorOriginPose(t, s); !spatialmath.PoseAlmostEqual(got, shut) {
 		t.Errorf("rebuilt door origin at %v, want the authored shut transform %v", got, shut)
@@ -332,18 +332,18 @@ func TestProceedClearsTheFridgeDoorAngle(t *testing.T) {
 }
 
 // TestProceedRebuildFailureKeepsTheFridgeDoorAngle: a proceed that cannot
-// rebuild asserts nothing. cachedFS still holds the swung door, so the recorded
+// rebuild asserts nothing. The scene still holds the swung door, so the recorded
 // angle has to stay with it — dropped here, the next rebuild would quietly shut
 // a door this proceed never got to vouch for.
 func TestProceedRebuildFailureKeepsTheFridgeDoorAngle(t *testing.T) {
 	s, _, _ := coffeeWithDirtyWorld(t, errors.New("boom"))
-	s.doorOpenDegs = 90
+	s.scene().doorOpenDegs = 90
 
 	if _, err := s.proceedQueue(context.Background()); err == nil {
 		t.Fatal("proceed should fail when the frame system can't be rebuilt")
 	}
-	if s.doorOpenDegs != 90 {
-		t.Errorf("doorOpenDegs = %v, want 90 — a failed proceed must not forget the door", s.doorOpenDegs)
+	if s.scene().doorOpenDegs != 90 {
+		t.Errorf("doorOpenDegs = %v, want 90 — a failed proceed must not forget the door", s.scene().doorOpenDegs)
 	}
 }
 
@@ -363,7 +363,7 @@ func TestProceedOmitsTheFridgeFieldWhenShut(t *testing.T) {
 }
 
 // TestProceedRefusesWhileASequenceRuns covers the ownership gate: a cancelled
-// sequence that has not unwound yet is still planning against cachedFS, so
+// sequence that has not unwound yet is still planning against the scene, so
 // proceed must not swap it out from under it.
 func TestProceedRefusesWhileASequenceRuns(t *testing.T) {
 	s, dirty, rebuilds := pausedCoffeeWithDirtyWorld(t, nil)
@@ -375,8 +375,8 @@ func TestProceedRefusesWhileASequenceRuns(t *testing.T) {
 	if *rebuilds != 0 {
 		t.Errorf("frame system rebuilt %d times, want 0", *rebuilds)
 	}
-	if s.cachedFS != dirty {
-		t.Error("a refused proceed must leave the cached frame system alone")
+	if s.scene().fs != dirty {
+		t.Error("a refused proceed must leave the scene alone")
 	}
 	if !s.lease.isPaused() {
 		t.Error("a refused proceed must not unpause the queue")
@@ -401,7 +401,7 @@ func TestProceedRebuildFailureKeepsQueuePaused(t *testing.T) {
 }
 
 // TestResetWorldRefusesWhileASequenceHoldsTheArm covers the ownership gate: a
-// cancelled sequence that never unwinds is still planning against cachedFS, so
+// cancelled sequence that never unwinds is still planning against the scene, so
 // reset_world must give up without clearing the queue, the portafilter flags,
 // the door angle or the frame system — and must not release a gate it never
 // held.
@@ -411,7 +411,7 @@ func TestResetWorldRefusesWhileASequenceHoldsTheArm(t *testing.T) {
 	s.queue.Enqueue(order.Order{ID: "next", Drink: "espresso"})
 	s.portafilterInMachine.Store(true)
 	s.portafilterHasGrounds.Store(true)
-	s.doorOpenDegs = 90
+	s.scene().doorOpenDegs = 90
 	mustClaim(t, s, "test sequence")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -422,12 +422,12 @@ func TestResetWorldRefusesWhileASequenceHoldsTheArm(t *testing.T) {
 	if *rebuilds != 0 {
 		t.Errorf("frame system rebuilt %d times, want 0", *rebuilds)
 	}
-	if s.cachedFS != dirty {
-		t.Error("a refused reset_world must leave the cached frame system alone")
+	if s.scene().fs != dirty {
+		t.Error("a refused reset_world must leave the scene alone")
 	}
-	if !s.heldItemAttached || !s.filterFrameLocked || !s.stagedGlassPlaced {
+	if !s.scene().heldItemAttached || !s.scene().filterFrameLocked || !s.scene().stagedGlassPlaced {
 		t.Errorf("a refused reset_world must keep the mutation flags: held=%v locked=%v staged=%v",
-			s.heldItemAttached, s.filterFrameLocked, s.stagedGlassPlaced)
+			s.scene().heldItemAttached, s.scene().filterFrameLocked, s.scene().stagedGlassPlaced)
 	}
 	if got := s.queue.Len(); got != 1 {
 		t.Errorf("queue Len = %d, want 1 — a refused reset_world must not clear the queue", got)
@@ -435,8 +435,8 @@ func TestResetWorldRefusesWhileASequenceHoldsTheArm(t *testing.T) {
 	if !s.portafilterInMachine.Load() || !s.portafilterHasGrounds.Load() {
 		t.Error("a refused reset_world must keep the portafilter state flags")
 	}
-	if s.doorOpenDegs != 90 {
-		t.Errorf("doorOpenDegs = %v, want 90", s.doorOpenDegs)
+	if s.scene().doorOpenDegs != 90 {
+		t.Errorf("doorOpenDegs = %v, want 90", s.scene().doorOpenDegs)
 	}
 	if !s.lease.busy() {
 		t.Error("reset_world released a running gate it never claimed")
@@ -479,8 +479,8 @@ func TestResetWorldHoldsTheGateWhileRebuilding(t *testing.T) {
 		t.Errorf("rebuild ran with gate held=%v, competing claim succeeded=%v — want held and refused",
 			heldDuringRebuild, claimedDuringRebuild)
 	}
-	if s.cachedFS == dirty {
-		t.Error("cached frame system should have been replaced by the rebuild")
+	if s.scene().fs == dirty {
+		t.Error("the scene's frame system should have been replaced by the rebuild")
 	}
 	if s.lease.busy() {
 		t.Error("reset_world must hand the arm back after rebuilding")

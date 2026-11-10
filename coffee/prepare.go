@@ -42,6 +42,15 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 		}
 	}()
 
+	// Registered after the defers above so the run has settled, and its executed
+	// scene is the settled one, before they read err and the stranded state.
+	endRun := s.startRun(ctx, cancelCtx, "order", true)
+	defer func() {
+		if runErr := endRun(); err == nil {
+			err = runErr
+		}
+	}()
+
 	// Pick up any out-of-band frame-system edits (e.g. portafilter handle geometry
 	// changed during calibration) before planning. Guarded so an in-flight held
 	// item or locked filter from a prior call is preserved.
@@ -54,14 +63,6 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 	if err := s.normalizeGripperAtStart(ctx); err != nil {
 		return fmt.Errorf("normalize gripper before brew: %w", err)
 	}
-
-	// Registered last so it settles before the defers above read err.
-	endFlow := s.startFlow(ctx, cancelCtx)
-	defer func() {
-		if flowErr := endFlow(); err == nil {
-			err = flowErr
-		}
-	}()
 
 	// runPhase publishes the step label, logs the progress line and runs the
 	// phase in its own trace span. Keep the label and the "step N/9" line in
@@ -252,30 +253,31 @@ func (s *beanjaminCoffee) pauseOnFault(logger logging.Logger, fault error) {
 // portafilter left in the group head or holding grounds, a filter frame locked
 // to world, an item modeled in the gripper, a glass staged as an obstacle, or a
 // fridge door modeled open. Empty means the recorded world is the one a brew
-// cycle starts from. The non-atomic fields are owned by the arm holder, so
-// the caller must hold it.
+// cycle starts from. The scene is owned by the arm holder, so the caller must
+// hold it.
 func (s *beanjaminCoffee) strandedState() []string {
 	var stranded []string
+	sc := s.scene()
 	if s.portafilterInMachine.Load() {
 		stranded = append(stranded, "portafilter in machine")
 	}
 	if s.portafilterHasGrounds.Load() {
 		stranded = append(stranded, "grounds in portafilter")
 	}
-	if s.filterFrameLocked {
+	if sc.filterFrameLocked {
 		stranded = append(stranded, "filter frame locked")
 	}
-	if s.heldItemAttached {
+	if sc.heldItemAttached {
 		stranded = append(stranded, "item in gripper")
 	}
-	if s.heldMilk != "" {
-		stranded = append(stranded, fmt.Sprintf("%s milk out of the fridge", s.heldMilk))
+	if sc.heldMilk != "" {
+		stranded = append(stranded, fmt.Sprintf("%s milk out of the fridge", sc.heldMilk))
 	}
-	if s.stagedGlassPlaced {
+	if sc.stagedGlassPlaced {
 		stranded = append(stranded, "glass staged")
 	}
-	if s.doorOpenDegs != 0 {
-		stranded = append(stranded, fmt.Sprintf("fridge door open %.0f°", s.doorOpenDegs))
+	if sc.doorOpenDegs != 0 {
+		stranded = append(stranded, fmt.Sprintf("fridge door open %.0f°", sc.doorOpenDegs))
 	}
 	return stranded
 }

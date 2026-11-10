@@ -43,9 +43,9 @@ func TestResolvePoseHandleRelativeGrip(t *testing.T) {
 		},
 		filterSw: filterSw,
 		// The claws switch has no DoFunc: the handoff must never read it.
-		clawsSw:  inject.NewSwitch("claws"),
-		cachedFS: filterOnArmFS(t),
-		logger:   logging.NewTestLogger(t),
+		clawsSw:      inject.NewSwitch("claws"),
+		settledScene: &sceneState{fs: filterOnArmFS(t)},
+		logger:       logging.NewTestLogger(t),
 	}
 
 	// The offsets are in the handle's axes, so their +X runs along world +Y.
@@ -80,11 +80,11 @@ func TestResolvePoseHandleRelativeGripMissingHandle(t *testing.T) {
 		filterPoseCoffeeLockedFinal: {"x": 500.0, "o_z": 1.0, "component_name": componentFilter},
 	})
 	s := &beanjaminCoffee{
-		cfg:      &Config{CoffeeLockedFinalGripRelativePose: &RelativePose{OZ: 1}},
-		filterSw: filterSw,
-		clawsSw:  inject.NewSwitch("claws"),
-		cachedFS: clawsStaticFS(t, spatialmath.NewZeroPose()),
-		logger:   logging.NewTestLogger(t),
+		cfg:          &Config{CoffeeLockedFinalGripRelativePose: &RelativePose{OZ: 1}},
+		filterSw:     filterSw,
+		clawsSw:      inject.NewSwitch("claws"),
+		settledScene: &sceneState{fs: clawsStaticFS(t, spatialmath.NewZeroPose())},
+		logger:       logging.NewTestLogger(t),
 	}
 	if _, err := s.resolvePose(context.Background(), s.clawsSw, clawPoseCoffeeLockedFinal); err == nil {
 		t.Fatal("resolvePose succeeded without a portafilter-handle frame")

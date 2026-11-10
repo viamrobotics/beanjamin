@@ -47,7 +47,7 @@ func stagingService(t *testing.T, fs *referenceframe.FrameSystem) *beanjaminCoff
 	if err := s.addHeldItemFrame(pickupGrasp); err != nil {
 		t.Fatalf("addHeldItemFrame: %v", err)
 	}
-	s.cacheHeldGeometry(pickupLabelGlass, pickupGrasp)
+	s.scene().cacheHeldGeometry(pickupLabelGlass, pickupGrasp)
 	return s
 }
 
@@ -61,7 +61,7 @@ func TestStageAndRegrabGlassSeatsOnSurface(t *testing.T) {
 	if err := s.stageHeldGlass(inputs); err != nil {
 		t.Fatalf("stageHeldGlass: %v", err)
 	}
-	if s.heldItemAttached || fs.Frame(heldItemFrameName) != nil {
+	if s.scene().heldItemAttached || s.scene().fs.Frame(heldItemFrameName) != nil {
 		t.Fatalf("the held-item frame must be gone once the glass is staged")
 	}
 	staged, err := s.stagedGlassGeometry()
@@ -75,11 +75,11 @@ func TestStageAndRegrabGlassSeatsOnSurface(t *testing.T) {
 	if err := s.regrabStagedGlass(context.Background()); err != nil {
 		t.Fatalf("regrabStagedGlass: %v", err)
 	}
-	if s.stagedGlassPlaced || fs.Frame(stagedGlassFrameName) != nil {
+	if s.scene().stagedGlassPlaced || s.scene().fs.Frame(stagedGlassFrameName) != nil {
 		t.Fatalf("the staged-glass obstacle must be gone once re-grabbed")
 	}
-	requireVecEqual(t, heldItemWorldCenter(t, fs, inputs), seatedCenter, 1e-6)
-	requireVecEqual(t, s.cachedHeldGeometry(pickupLabelGlass).Pose().Point(), r3.Vector{Z: seatedCenter.Z - stagingGripZ}, 1e-6)
+	requireVecEqual(t, heldItemWorldCenter(t, s.scene().fs, inputs), seatedCenter, 1e-6)
+	requireVecEqual(t, s.scene().cachedHeldGeometry(pickupLabelGlass).Pose().Point(), r3.Vector{Z: seatedCenter.Z - stagingGripZ}, 1e-6)
 }
 
 // With no surface modeled beneath it, the glass is staged where it was released.
@@ -104,5 +104,5 @@ func TestRegrabWithoutStagedGlassUsesCache(t *testing.T) {
 	if err := s.regrabStagedGlass(context.Background()); err != nil {
 		t.Fatalf("regrabStagedGlass: %v", err)
 	}
-	requireVecEqual(t, heldItemWorldCenter(t, fs, referenceframe.NewZeroInputs(fs)), r3.Vector{Z: stagingGripZ}, 1e-6)
+	requireVecEqual(t, heldItemWorldCenter(t, s.scene().fs, referenceframe.NewZeroInputs(fs)), r3.Vector{Z: stagingGripZ}, 1e-6)
 }

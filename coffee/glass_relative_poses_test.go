@@ -25,10 +25,10 @@ func withStagedGlass(t *testing.T, s *beanjaminCoffee, centroid spatialmath.Pose
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.cachedFS.AddFrame(frame, s.cachedFS.World()); err != nil {
+	if err := s.scene().fs.AddFrame(frame, s.scene().fs.World()); err != nil {
 		t.Fatal(err)
 	}
-	s.stagedGlassPlaced = true
+	s.scene().stagedGlassPlaced = true
 }
 
 // newPourTestCoffee returns a service holding a cup: upright above the glass on
@@ -40,9 +40,9 @@ func newPourTestCoffee(t *testing.T) *beanjaminCoffee {
 			PourRelativePose:         &RelativePose{X: 20, Z: 50, OX: 1, OZ: 1},
 		},
 		// The switch has no DoFunc: resolving a pour pose must never read it.
-		clawsSw:  inject.NewSwitch("claws"),
-		cachedFS: clawsStaticFS(t, spatialmath.NewZeroPose()),
-		logger:   logging.NewTestLogger(t),
+		clawsSw:      inject.NewSwitch("claws"),
+		settledScene: &sceneState{fs: clawsStaticFS(t, spatialmath.NewZeroPose())},
+		logger:       logging.NewTestLogger(t),
 	}
 	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
 		t.Fatalf("addHeldItemFrame: %v", err)

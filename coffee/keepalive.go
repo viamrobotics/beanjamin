@@ -207,6 +207,7 @@ func (s *beanjaminCoffee) runPurge(ctx context.Context) error {
 		return fmt.Errorf("keepalive: %w", err)
 	}
 	defer s.lease.release()
+	defer s.startDirectRun("keepalive purge")()
 
 	ctx, cancel := context.WithTimeout(ctx, keepAlivePurgeTimeout)
 	defer cancel()

@@ -46,9 +46,9 @@ func TestFaultWithStrandedStatePausesQueue(t *testing.T) {
 // everything a fault can leave behind.
 func TestFaultWithCleanWorldPausesQueue(t *testing.T) {
 	s, _, _ := coffeeWithDirtyWorld(t, nil)
-	s.heldItemAttached = false
-	s.filterFrameLocked = false
-	s.stagedGlassPlaced = false
+	s.scene().heldItemAttached = false
+	s.scene().filterFrameLocked = false
+	s.scene().stagedGlassPlaced = false
 	s.gripper = faultingGripper()
 	s.lease.cancelCtx, s.lease.cancelFunc = context.WithCancel(context.Background())
 
@@ -89,10 +89,10 @@ func TestStrandedStateNamesEachFlag(t *testing.T) {
 		{name: "clean", setup: func(*beanjaminCoffee) {}},
 		{name: "portafilter in machine", setup: func(s *beanjaminCoffee) { s.portafilterInMachine.Store(true) }, want: "portafilter in machine"},
 		{name: "grounds in portafilter", setup: func(s *beanjaminCoffee) { s.portafilterHasGrounds.Store(true) }, want: "grounds in portafilter"},
-		{name: "filter frame locked", setup: func(s *beanjaminCoffee) { s.filterFrameLocked = true }, want: "filter frame locked"},
-		{name: "item in gripper", setup: func(s *beanjaminCoffee) { s.heldItemAttached = true }, want: "item in gripper"},
-		{name: "glass staged", setup: func(s *beanjaminCoffee) { s.stagedGlassPlaced = true }, want: "glass staged"},
-		{name: "fridge door open", setup: func(s *beanjaminCoffee) { s.doorOpenDegs = 90 }, want: "fridge door open 90°"},
+		{name: "filter frame locked", setup: func(s *beanjaminCoffee) { s.scene().filterFrameLocked = true }, want: "filter frame locked"},
+		{name: "item in gripper", setup: func(s *beanjaminCoffee) { s.scene().heldItemAttached = true }, want: "item in gripper"},
+		{name: "glass staged", setup: func(s *beanjaminCoffee) { s.scene().stagedGlassPlaced = true }, want: "glass staged"},
+		{name: "fridge door open", setup: func(s *beanjaminCoffee) { s.scene().doorOpenDegs = 90 }, want: "fridge door open 90°"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

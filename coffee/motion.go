@@ -315,7 +315,8 @@ func (s *beanjaminCoffee) fetchPose(ctx context.Context, sw toggleswitch.Switch,
 	return &poseData{pose: pose, refFrame: refFrame, componentName: componentName}, nil
 }
 
-// currentInputs returns the cached frame system and fresh joint inputs.
+// currentInputs settles, then returns the scene's frame system and fresh joint
+// inputs.
 // We build the inputs directly from the arm rather than calling fsSvc.CurrentInputs,
 // which iterates all resources and can fail on modular arms whose kinematics
 // proto round-trip produces KINEMATICS_FILE_FORMAT_UNSPECIFIED.
@@ -325,7 +326,7 @@ func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.Fr
 		return nil, nil, err
 	}
 	logger := s.activeOrderLogger()
-	fsInputs := referenceframe.NewZeroInputs(s.cachedFS)
+	fsInputs := referenceframe.NewZeroInputs(s.scene().fs)
 
 	// Get current joint positions directly from the arm.
 	armInputs, err := s.arm.CurrentInputs(ctx)
@@ -338,13 +339,13 @@ func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.Fr
 	logger.Debugf("currentInputs: arm=%q, armInputsLen=%d", s.cfg.ArmName, len(armInputs))
 	fsInputs[s.cfg.ArmName] = armInputs
 
-	return s.cachedFS, fsInputs, nil
+	return s.scene().fs, fsInputs, nil
 }
 
 // lockFilterFrame re-parents the "filter" frame from the arm subtree to the
 // world at its current pose. Call this after physically locking the portafilter.
-// The cached frame system is mutated in place so all subsequent planning calls
-// see the filter at its locked position.
+// The scene is edited so all subsequent planning calls see the filter at its
+// locked position.
 func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	logger := s.activeOrderLogger()
 	const filterFrameName = componentFilter
@@ -354,14 +355,14 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 		return err
 	}
 
-	filterFrame := s.cachedFS.Frame(filterFrameName)
+	filterFrame := s.scene().fs.Frame(filterFrameName)
 	if filterFrame == nil {
 		return fmt.Errorf("frame %q not found in frame system", filterFrameName)
 	}
 
 	// 1. Compute filter's world pose using current joint inputs.
 	filterPIF := referenceframe.NewPoseInFrame(filterFrameName, spatialmath.NewZeroPose())
-	tf, err := s.cachedFS.Transform(fsInputs.ToLinearInputs(), filterPIF, referenceframe.World)
+	tf, err := s.scene().fs.Transform(fsInputs.ToLinearInputs(), filterPIF, referenceframe.World)
 	if err != nil {
 		return fmt.Errorf("transform filter to world: %w", err)
 	}
@@ -374,7 +375,7 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	//    which correctly applies only the parent-to-world transform (the RDK
 	//    skips the frame's own transform for GeometriesInFrame objects).
 	filterOriginFrameName := filterFrameName + "_origin"
-	originFrame := s.cachedFS.Frame(filterOriginFrameName)
+	originFrame := s.scene().fs.Frame(filterOriginFrameName)
 	if originFrame == nil {
 		return fmt.Errorf("frame %q not found in frame system", filterOriginFrameName)
 	}
@@ -391,7 +392,7 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	// geom.Transform(worldPose) because Geometries() on a tailGeometryStaticFrame
 	// already pre-applies the origin offset — composing worldPose on top would
 	// double-count it.
-	worldGeoTF, err := s.cachedFS.Transform(
+	worldGeoTF, err := s.scene().fs.Transform(
 		fsInputs.ToLinearInputs(),
 		referenceframe.NewGeometriesInFrame(filterOriginFrameName, geos),
 		referenceframe.World,
@@ -405,55 +406,70 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	}
 	worldGeom := worldGeos[0]
 
-	// 3. Collect filter's descendants in BFS order before removal.
-	descendants := collectDescendants(s.cachedFS, filterFrameName)
+	var descendants []descendantEntry
+	if err := s.editScene(func(sc *sceneState) error {
+		// 3. Collect filter's descendants in BFS order before removal.
+		descendants = collectDescendants(sc.fs, filterFrameName)
 
-	// 4. Remove filter (and all descendants) from the arm subtree.
-	//    Also remove the companion "filter_origin" frame that the RDK creates
-	//    for every part — it carries the collision geometry and must not remain
-	//    attached to the arm.
-	s.cachedFS.RemoveFrame(filterFrame)
-	if filterOriginFrame := s.cachedFS.Frame(filterOriginFrameName); filterOriginFrame != nil {
-		s.cachedFS.RemoveFrame(filterOriginFrame)
-	}
-
-	// 5. Re-add filter as a static frame parented to world at the locked position.
-	//    The geometry is already in world coordinates (from step 2). Since the
-	//    planner uses the parent-to-world transform for geometry positioning and
-	//    the parent is world (identity), this places the collision volume correctly.
-	newFrame, err := referenceframe.NewStaticFrameWithGeometry(filterFrameName, worldPose, worldGeom)
-	if err != nil {
-		return fmt.Errorf("create static filter frame: %w", err)
-	}
-	if err := s.cachedFS.AddFrame(newFrame, s.cachedFS.World()); err != nil {
-		return fmt.Errorf("add filter frame to world: %w", err)
-	}
-
-	// 6. Re-attach descendants under the new static filter, preserving subtree structure.
-	for _, d := range descendants {
-		parent := s.cachedFS.Frame(d.parentName)
-		if err := s.cachedFS.AddFrame(d.frame, parent); err != nil {
-			return fmt.Errorf("re-add descendant %q under %q: %w", d.frame.Name(), d.parentName, err)
+		// 4. Remove filter (and all descendants) from the arm subtree.
+		//    Also remove the companion "filter_origin" frame that the RDK creates
+		//    for every part — it carries the collision geometry and must not remain
+		//    attached to the arm.
+		sc.fs.RemoveFrame(filterFrame)
+		if filterOriginFrame := sc.fs.Frame(filterOriginFrameName); filterOriginFrame != nil {
+			sc.fs.RemoveFrame(filterOriginFrame)
 		}
-	}
 
-	s.filterFrameLocked = true
+		// 5. Re-add filter as a static frame parented to world at the locked position.
+		//    The geometry is already in world coordinates (from step 2). Since the
+		//    planner uses the parent-to-world transform for geometry positioning and
+		//    the parent is world (identity), this places the collision volume correctly.
+		newFrame, err := referenceframe.NewStaticFrameWithGeometry(filterFrameName, worldPose, worldGeom)
+		if err != nil {
+			return fmt.Errorf("create static filter frame: %w", err)
+		}
+		if err := sc.fs.AddFrame(newFrame, sc.fs.World()); err != nil {
+			return fmt.Errorf("add filter frame to world: %w", err)
+		}
+
+		// 6. Re-attach descendants under the new static filter, preserving subtree structure.
+		for _, d := range descendants {
+			parent := sc.fs.Frame(d.parentName)
+			if err := sc.fs.AddFrame(d.frame, parent); err != nil {
+				return fmt.Errorf("re-add descendant %q under %q: %w", d.frame.Name(), d.parentName, err)
+			}
+		}
+
+		sc.filterFrameLocked = true
+		return nil
+	}); err != nil {
+		return err
+	}
 	logger.Infof("locked filter frame at world pose %v (%d descendants preserved)", worldPose.Point(), len(descendants))
 	return nil
 }
 
-// resetFrameSystem rebuilds the cached frame system from the service, discarding
-// any in-flight mutations (e.g. a filter frame that was reparented to world by
+// resetFrameSystem rebuilds the scene from the service, discarding any
+// in-flight mutations (e.g. a filter frame that was reparented to world by
 // lockFilterFrame). Shared by unlockFilterFrame during the normal brew cycle and
-// by the reset_world and proceed operator commands to recover from a
-// mid-cycle cancel.
+// by refreshFrameSystemIfClean.
 //
 // The fridge door is the exception: a rebuild puts the panel back at its authored
 // shut transform, but rebuilding a model does not close a real door, so the
 // recorded doorOpenDegs is re-applied afterward. Clearing that record is an
-// operator's call, not a rebuild's — reset_world and proceed each clear it
-// before calling this, and both say so in their response.
+// operator's call, not a rebuild's — reset_world and proceed rebuild with the
+// door shut (rebuildScene), and both say so in their response.
 func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
+	return s.rebuildScene(ctx, s.scene().doorOpenDegs)
+}
+
+// rebuildScene replaces the scene with one built from the service, with the
+// fridge door standing doorOpenDegs open. The rebuilt frame system has no
+// held-item frame, and any cached grasp no longer corresponds to reality, so
+// none is carried over and a stale geometry can't be re-attached after a reset.
+// It also has the filter frame back in the arm subtree and no staged-glass
+// obstacle. On failure the scene is left as it was.
+func (s *beanjaminCoffee) rebuildScene(ctx context.Context, doorOpenDegs float64) error {
 	logger := s.activeOrderLogger()
 	fs, err := framesystem.NewFromService(ctx, s.fsSvc, nil)
 	if err != nil {
@@ -462,42 +478,31 @@ func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 	if err := applyJointLimits(logger, fs, s.cfg.InputRangeOverride); err != nil {
 		return fmt.Errorf("re-apply joint limits: %w", err)
 	}
-	s.cachedFS = fs
-	// The rebuilt frame system has no held-item frame, and any cached grasp no
-	// longer corresponds to reality — forget it so a stale geometry can't be
-	// re-attached after a reset. The rebuilt frame system also restores the
-	// filter frame to the arm subtree (undoing any lockFilterFrame mutation) and
-	// drops the staged-glass obstacle (undoing any stageGlassAsObstacle mutation).
-	s.clearHeldGeometry()
-	s.filterFrameLocked = false
-	s.stagedGlassPlaced = false
-	if s.doorOpenDegs != 0 {
+	if doorOpenDegs != 0 {
 		base, berr := doorBasePose(fs)
 		if berr != nil {
 			return fmt.Errorf("re-apply fridge door angle: %w", berr)
 		}
-		if derr := setDoorTheta(fs, frameFridgeDoor, base, s.doorOpenDegs); derr != nil {
+		if derr := setDoorTheta(fs, frameFridgeDoor, base, doorOpenDegs); derr != nil {
 			return fmt.Errorf("re-apply fridge door angle: %w", derr)
 		}
-		logger.Infof("frame system rebuilt with fridge door held open at %.1f°", s.doorOpenDegs)
+		logger.Infof("frame system rebuilt with fridge door held open at %.1f°", doorOpenDegs)
 	}
+	s.publishScene(&sceneState{fs: fs, doorOpenDegs: doorOpenDegs})
 	return nil
 }
 
-// refreshFrameSystemIfClean rebuilds cachedFS from the service when no in-flight
+// refreshFrameSystemIfClean rebuilds the scene from the service when no in-flight
 // state would be lost — i.e. nothing is held, no milk bottle is out of the
 // fridge, the filter frame is not locked, and no glass is staged as an obstacle
 // — so a manually-invoked action picks up out-of-band config edits (e.g. the
 // portafilter handle geometry being changed during calibration) instead of
-// planning against a stale snapshot. Otherwise cachedFS (or heldMilk, which a
-// rebuild clears) carries state that must persist across separate DoCommand
-// calls, so it is left untouched. Must be
-// called on the motion sequence goroutine (gated by the running flag), like
-// resetFrameSystem.
+// planning against a stale snapshot. Otherwise the scene carries state that must
+// persist across separate DoCommand calls, so it is left untouched.
 func (s *beanjaminCoffee) refreshFrameSystemIfClean(ctx context.Context) error {
 	// heldMilk on its own: the rebuild would clear it, and return_milk would no
 	// longer know which spot the bottle in the gripper goes back on.
-	if s.heldItemAttached || s.heldMilk != "" || s.filterFrameLocked || s.stagedGlassPlaced {
+	if s.scene().heldItemAttached || s.scene().heldMilk != "" || s.scene().filterFrameLocked || s.scene().stagedGlassPlaced {
 		return nil
 	}
 	if err := s.resetFrameSystem(ctx); err != nil {
@@ -512,7 +517,7 @@ func (s *beanjaminCoffee) refreshFrameSystemIfClean(ctx context.Context) error {
 // the real portafilter in the bayonet rather than one on the claws, so it is
 // left in place and the restore is a no-op.
 func (s *beanjaminCoffee) dropFilter() (func(), error) {
-	if s.filterFrameLocked {
+	if s.scene().filterFrameLocked {
 		return func() {}, nil
 	}
 	detached, err := s.detachFilterFrame()
@@ -526,7 +531,7 @@ func (s *beanjaminCoffee) dropFilter() (func(), error) {
 	}, nil
 }
 
-// detachFilterFrame removes the portafilter from the cached frame system, for
+// detachFilterFrame removes the portafilter from the frame system, for
 // driving the arm after it has physically been taken off the gripper. Returns
 // what it removed, for reattachFilterFrame.
 //
@@ -535,26 +540,31 @@ func (s *beanjaminCoffee) dropFilter() (func(), error) {
 func (s *beanjaminCoffee) detachFilterFrame() ([]descendantEntry, error) {
 	// A locked filter models the real portafilter in the machine, not one on the
 	// arm; dropping it would let the arm plan straight through it.
-	if s.filterFrameLocked {
+	if s.scene().filterFrameLocked {
 		return nil, fmt.Errorf("detach filter: the filter frame is locked into the machine, so it is not on the arm; unlock_portafilter first")
 	}
 	// RemoveFrame takes descendants with it, and the RDK parents the model frame
 	// under its "_origin", so the origin carries the whole part away.
 	var removed []descendantEntry
-	for _, name := range []string{componentFilter + "_origin", componentFilter} {
-		root := s.cachedFS.Frame(name)
-		if root == nil {
-			continue
+	if err := s.editScene(func(sc *sceneState) error {
+		for _, name := range []string{componentFilter + "_origin", componentFilter} {
+			root := sc.fs.Frame(name)
+			if root == nil {
+				continue
+			}
+			parent, err := sc.fs.Parent(root)
+			if err != nil {
+				return fmt.Errorf("detach filter: parent of %q: %w", name, err)
+			}
+			// Root first, then BFS descendants, so reattaching in order always finds
+			// the parent already present.
+			removed = append(removed, descendantEntry{root, parent.Name()})
+			removed = append(removed, collectDescendants(sc.fs, name)...)
+			sc.fs.RemoveFrame(root)
 		}
-		parent, err := s.cachedFS.Parent(root)
-		if err != nil {
-			return nil, fmt.Errorf("detach filter: parent of %q: %w", name, err)
-		}
-		// Root first, then BFS descendants, so reattaching in order always finds
-		// the parent already present.
-		removed = append(removed, descendantEntry{root, parent.Name()})
-		removed = append(removed, collectDescendants(s.cachedFS, name)...)
-		s.cachedFS.RemoveFrame(root)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	if len(removed) == 0 {
 		return nil, nil
@@ -568,25 +578,31 @@ func (s *beanjaminCoffee) detachFilterFrame() ([]descendantEntry, error) {
 // the action may have attached a held item, which refreshFrameSystemIfClean
 // declines to rebuild around.
 func (s *beanjaminCoffee) reattachFilterFrame(removed []descendantEntry) error {
-	for _, e := range removed {
-		if s.cachedFS.Frame(e.frame.Name()) != nil {
-			continue // already back
-		}
-		parent := s.cachedFS.Frame(e.parentName)
-		if parent == nil {
-			return fmt.Errorf("reattach filter: parent %q is gone, cannot restore %q", e.parentName, e.frame.Name())
-		}
-		if err := s.cachedFS.AddFrame(e.frame, parent); err != nil {
-			return fmt.Errorf("reattach filter: add %q under %q: %w", e.frame.Name(), e.parentName, err)
-		}
+	if len(removed) == 0 {
+		return nil
 	}
-	if len(removed) > 0 {
-		s.activeOrderLogger().Infof("reattached %q to the frame system (%d frames)", componentFilter, len(removed))
+	if err := s.editScene(func(sc *sceneState) error {
+		for _, e := range removed {
+			if sc.fs.Frame(e.frame.Name()) != nil {
+				continue // already back
+			}
+			parent := sc.fs.Frame(e.parentName)
+			if parent == nil {
+				return fmt.Errorf("reattach filter: parent %q is gone, cannot restore %q", e.parentName, e.frame.Name())
+			}
+			if err := sc.fs.AddFrame(e.frame, parent); err != nil {
+				return fmt.Errorf("reattach filter: add %q under %q: %w", e.frame.Name(), e.parentName, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
+	s.activeOrderLogger().Infof("reattached %q to the frame system (%d frames)", componentFilter, len(removed))
 	return nil
 }
 
-// unlockFilterFrame rebuilds the cached frame system from the service,
+// unlockFilterFrame rebuilds the scene from the service,
 // restoring the filter frame to its original position in the arm subtree.
 func (s *beanjaminCoffee) unlockFilterFrame(ctx context.Context) error {
 	if err := s.settle(); err != nil {
@@ -1174,7 +1190,7 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, al
 	// for a pour pose). When an item is held, move the held-item frame: it is
 	// the container that must stay level.
 	moveFrame := gripPoint
-	if s.heldItemAttached {
+	if s.scene().heldItemAttached {
 		moveFrame = heldItemFrameName
 	}
 
