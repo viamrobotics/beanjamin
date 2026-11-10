@@ -54,7 +54,6 @@ func TestCarryGoalForMoveFrame_ShiftsByHeldItemOffset(t *testing.T) {
 		&spatialmath.OrientationVectorDegrees{OX: 1, Theta: -180},
 	)
 	fs := gripperFS(t, gripperPose)
-	inputs := referenceframe.NewZeroInputs(fs).ToLinearInputs()
 
 	authored := spatialmath.NewPose(
 		r3.Vector{X: 160, Y: -300, Z: 240},
@@ -62,7 +61,7 @@ func TestCarryGoalForMoveFrame_ShiftsByHeldItemOffset(t *testing.T) {
 	)
 	dest := &poseData{pose: authored, refFrame: referenceframe.World, componentName: gripPoint}
 
-	goal, err := carryGoalForMoveFrame(fs, inputs, dest, heldItemFrameName)
+	goal, err := carryGoalForMoveFrame(fs, referenceframe.NewZeroInputs(fs), dest, heldItemFrameName)
 	if err != nil {
 		t.Fatalf("carryGoalForMoveFrame: %v", err)
 	}
@@ -79,7 +78,6 @@ func TestCarryGoalForMoveFrame_ShiftsByHeldItemOffset(t *testing.T) {
 // is already the goal and no shift may be applied.
 func TestCarryGoalForMoveFrame_NoShiftWhenFrameMatches(t *testing.T) {
 	fs := gripperFS(t, spatialmath.NewZeroPose())
-	inputs := referenceframe.NewZeroInputs(fs).ToLinearInputs()
 
 	authored := spatialmath.NewPose(
 		r3.Vector{X: 160, Y: -300, Z: 240},
@@ -87,7 +85,7 @@ func TestCarryGoalForMoveFrame_NoShiftWhenFrameMatches(t *testing.T) {
 	)
 	dest := &poseData{pose: authored, refFrame: referenceframe.World, componentName: gripPoint}
 
-	goal, err := carryGoalForMoveFrame(fs, inputs, dest, gripPoint)
+	goal, err := carryGoalForMoveFrame(fs, referenceframe.NewZeroInputs(fs), dest, gripPoint)
 	if err != nil {
 		t.Fatalf("carryGoalForMoveFrame: %v", err)
 	}
@@ -119,7 +117,7 @@ func TestCarryGoalForMoveFrame_UndoesHeldItemRotation(t *testing.T) {
 	)
 	dest := &poseData{pose: authored, refFrame: referenceframe.World, componentName: gripPoint}
 
-	goal, err := carryGoalForMoveFrame(fs, inputs, dest, heldItemFrameName)
+	goal, err := carryGoalForMoveFrame(fs, referenceframe.NewZeroInputs(fs), dest, heldItemFrameName)
 	if err != nil {
 		t.Fatalf("carryGoalForMoveFrame: %v", err)
 	}

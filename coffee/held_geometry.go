@@ -51,14 +51,14 @@ const stagedGlassFrameName = "staged-glass"
 
 // attachDetectedGeometry records the vision-detected geometry of a freshly
 // grabbed item (geomWorld, in world coordinates as lifted in observeVantage)
-// and attaches it to the gripper with the arm where it stands now
-// (sceneState.attachHeldItem). No-op when geomWorld is nil (no detection
-// geometry available).
+// and attaches it to the gripper with the arm where the moves handed off so
+// far leave it (expectedInputs, sceneState.attachHeldItem). No-op when
+// geomWorld is nil (no detection geometry available).
 func (s *beanjaminCoffee) attachDetectedGeometry(ctx context.Context, label string, geomWorld spatialmath.Geometry) error {
 	if geomWorld == nil {
 		return nil
 	}
-	_, fsInputs, err := s.currentInputs(ctx)
+	fsInputs, err := s.expectedInputs(ctx)
 	if err != nil {
 		return err
 	}
@@ -157,7 +157,7 @@ func (s *beanjaminCoffee) attachConfiguredGlassGeometry(ctx context.Context) err
 func (s *beanjaminCoffee) attachConfiguredGeometry(
 	ctx context.Context, label string, dims *ContainerDimensions, grabRel *RelativePose,
 ) error {
-	_, fsInputs, err := s.currentInputs(ctx)
+	fsInputs, err := s.expectedInputs(ctx)
 	if err != nil {
 		return err
 	}
@@ -381,14 +381,14 @@ func (sc *sceneState) detachHeldItem() {
 }
 
 // stageGlassAsObstacle is stageGlass's release path: it stages the held glass
-// with the arm where it stands now (sceneState.stageHeldGlass), so the released
-// glass stays a collision obstacle. No-op when nothing is attached, like
-// detachHeldGeometry.
+// with the arm where the moves handed off so far leave it (expectedInputs,
+// sceneState.stageHeldGlass), so the released glass stays a collision obstacle.
+// No-op when nothing is attached, like detachHeldGeometry.
 func (s *beanjaminCoffee) stageGlassAsObstacle(ctx context.Context) error {
 	if !s.scene().heldItemAttached {
 		return nil
 	}
-	_, fsInputs, err := s.currentInputs(ctx)
+	fsInputs, err := s.expectedInputs(ctx)
 	if err != nil {
 		return err
 	}
@@ -495,12 +495,12 @@ func (sc *sceneState) stageHeldGlass(fsInputs referenceframe.FrameSystemInputs) 
 
 // regrabStagedGlass moves the staged glass from the world back into the gripper
 // once the jaws have closed on it (sceneState.regrabStagedGlass), with the arm
-// where it stands now.
+// where the moves handed off so far leave it (expectedInputs).
 func (s *beanjaminCoffee) regrabStagedGlass(ctx context.Context) error {
 	var fsInputs referenceframe.FrameSystemInputs
 	if s.scene().stagedGlassPlaced {
 		var err error
-		if _, fsInputs, err = s.currentInputs(ctx); err != nil {
+		if fsInputs, err = s.expectedInputs(ctx); err != nil {
 			return err
 		}
 	}
