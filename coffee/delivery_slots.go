@@ -106,7 +106,7 @@ func (s *beanjaminCoffee) deliveryAreaCollisions() []AllowedCollision {
 		{Frame1: "gripper:claws", Frame2: deliveryAreaFrameName},
 		{Frame1: "gripper:case-gripper", Frame2: deliveryAreaFrameName},
 	}
-	return append(out, s.heldItemSurfaceCollisions([]AllowedCollision{
+	return append(out, s.scene().heldItemSurfaceCollisions([]AllowedCollision{
 		{Frame1: heldItemFrameName, Frame2: deliveryAreaFrameName},
 	})...)
 }

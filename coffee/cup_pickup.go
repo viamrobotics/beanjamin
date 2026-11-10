@@ -344,7 +344,7 @@ func (s *beanjaminCoffee) pickupAreaShieldCollisions(shieldFrame string) []Allow
 		{Frame1: "gripper:claws", Frame2: shieldFrame},
 		{Frame1: "gripper:case-gripper", Frame2: shieldFrame},
 	}
-	return append(out, s.heldItemSurfaceCollisions([]AllowedCollision{
+	return append(out, s.scene().heldItemSurfaceCollisions([]AllowedCollision{
 		{Frame1: heldItemFrameName, Frame2: shieldFrame},
 	})...)
 }

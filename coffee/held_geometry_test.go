@@ -138,9 +138,7 @@ func TestAttachRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("to gripper frame: %v", err)
 	}
-	if err := s.addHeldItemFrame(gripperLocal); err != nil {
-		t.Fatalf("addHeldItemFrame: %v", err)
-	}
+	addHeldItem(t, s, gripperLocal)
 
 	got := heldItemWorldCenter(t, s.scene().fs, inputs)
 	requireVecEqual(t, got, worldCenter, 1e-4)
@@ -197,9 +195,7 @@ func TestHeldItemFrameIsContainerAligned(t *testing.T) {
 			if err != nil {
 				t.Fatalf("to gripper frame: %v", err)
 			}
-			if err := s.addHeldItemFrame(gripperLocal); err != nil {
-				t.Fatalf("addHeldItemFrame: %v", err)
-			}
+			addHeldItem(t, s, gripperLocal)
 
 			tf, err := s.scene().fs.Transform(inputs.ToLinearInputs(),
 				referenceframe.NewPoseInFrame(heldItemFrameName, spatialmath.NewZeroPose()), referenceframe.World)
@@ -242,9 +238,7 @@ func TestHeldItemTracksGripper(t *testing.T) {
 	s := heldGeomService(t, fs)
 
 	// Geometry at the grip point (grip-point-local zero pose).
-	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
-		t.Fatalf("addHeldItemFrame: %v", err)
-	}
+	addHeldItem(t, s, testBox(t, spatialmath.NewZeroPose()))
 
 	// At j0=0 the claws sit at world (100,0,0), the grip point above them.
 	at0 := referenceframe.NewZeroInputs(fs)
@@ -259,9 +253,7 @@ func TestHeldItemTracksGripper(t *testing.T) {
 func TestDetachRemovesFrame(t *testing.T) {
 	fs := clawsStaticFS(t, spatialmath.NewZeroPose())
 	s := heldGeomService(t, fs)
-	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
-		t.Fatalf("addHeldItemFrame: %v", err)
-	}
+	addHeldItem(t, s, testBox(t, spatialmath.NewZeroPose()))
 	if !s.scene().heldItemAttached {
 		t.Fatalf("expected heldItemAttached after attach")
 	}
@@ -346,9 +338,9 @@ func TestConfiguredContainerBox(t *testing.T) {
 			fs := gripPointStaticFS(t, spatialmath.NewPoseFromPoint(tc.gripPoint))
 			s := heldGeomService(t, fs)
 
-			box, err := s.configuredContainerBox(fs, referenceframe.NewZeroInputs(fs), tc.label, tc.dims, tc.grab)
+			box, err := s.scene().containerBox(referenceframe.NewZeroInputs(fs), tc.label, tc.dims, tc.grab)
 			if err != nil {
-				t.Fatalf("configuredContainerBox: %v", err)
+				t.Fatalf("containerBox: %v", err)
 			}
 
 			requireVecEqual(t, box.Pose().Point(), tc.wantCentroid, 1e-6)
@@ -379,11 +371,11 @@ func TestCacheRoutingByLabel(t *testing.T) {
 
 func TestHeldItemSelfCollisions(t *testing.T) {
 	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{}}
-	if got := s.heldItemSelfCollisions(); got != nil {
+	if got := s.scene().heldItemSelfCollisions(); got != nil {
 		t.Fatalf("expected nil when not attached, got %v", got)
 	}
 	s.scene().heldItemAttached = true
-	got := s.heldItemSelfCollisions()
+	got := s.scene().heldItemSelfCollisions()
 	if len(got) != 3 {
 		t.Fatalf("expected 3 self-collision pairs, got %d (%v)", len(got), got)
 	}
@@ -399,13 +391,13 @@ func TestAppendHeldItemCollisions(t *testing.T) {
 	base := []AllowedCollision{{Frame1: "a", Frame2: "b"}}
 
 	// Not attached: returned unchanged.
-	if got := s.appendHeldItemCollisions(base); len(got) != 1 {
+	if got := s.scene().appendHeldItemCollisions(base); len(got) != 1 {
 		t.Fatalf("expected passthrough when not attached, got %v", got)
 	}
 
 	// Attached: base + 3 self pairs, and input is not mutated.
 	s.scene().heldItemAttached = true
-	got := s.appendHeldItemCollisions(base)
+	got := s.scene().appendHeldItemCollisions(base)
 	if len(got) != 4 {
 		t.Fatalf("expected 4 pairs, got %d (%v)", len(got), got)
 	}
@@ -417,11 +409,11 @@ func TestAppendHeldItemCollisions(t *testing.T) {
 func TestHeldItemSurfaceCollisions(t *testing.T) {
 	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{}}
 	pairs := []AllowedCollision{{Frame1: heldItemFrameName, Frame2: "serving-area"}}
-	if got := s.heldItemSurfaceCollisions(pairs); got != nil {
+	if got := s.scene().heldItemSurfaceCollisions(pairs); got != nil {
 		t.Fatalf("expected nil when not attached, got %v", got)
 	}
 	s.scene().heldItemAttached = true
-	if got := s.heldItemSurfaceCollisions(pairs); len(got) != 1 {
+	if got := s.scene().heldItemSurfaceCollisions(pairs); len(got) != 1 {
 		t.Fatalf("expected the pairs when attached, got %v", got)
 	}
 }
@@ -431,7 +423,7 @@ func TestHeldItemHalfHeightMm(t *testing.T) {
 	s := heldGeomService(t, fs)
 
 	// Nothing attached: no height available, callers fall back to a fixed offset.
-	if _, ok := s.heldItemHalfHeightMm(); ok {
+	if _, ok := s.scene().heldItemHalfHeightMm(); ok {
 		t.Fatalf("expected ok=false when nothing is attached")
 	}
 
@@ -441,10 +433,8 @@ func TestHeldItemHalfHeightMm(t *testing.T) {
 		r3.Vector{X: 10, Y: 20, Z: 30},
 		&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: 37},
 	)
-	if err := s.addHeldItemFrame(testBox(t, rotated)); err != nil {
-		t.Fatalf("addHeldItemFrame: %v", err)
-	}
-	got, ok := s.heldItemHalfHeightMm()
+	addHeldItem(t, s, testBox(t, rotated))
+	got, ok := s.scene().heldItemHalfHeightMm()
 	if !ok {
 		t.Fatalf("expected ok=true when attached")
 	}
@@ -505,9 +495,7 @@ func TestSwapFilterForGlassNeedsGlassConfig(t *testing.T) {
 // drops only the filter and leaves it — and the restore must not take it away.
 func TestSwapFilterForGlassKeepsAttachedItem(t *testing.T) {
 	s := heldGeomService(t, filterOnArmFS(t))
-	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
-		t.Fatalf("addHeldItemFrame: %v", err)
-	}
+	addHeldItem(t, s, testBox(t, spatialmath.NewZeroPose()))
 	s.scene().cacheHeldGeometry(pickupLabelGlass, testBox(t, spatialmath.NewZeroPose()))
 
 	restore, err := s.swapFilterForGlass(context.Background())
@@ -584,12 +572,27 @@ func TestSwapFilterForGlassKeepsItemAttachedByTheAction(t *testing.T) {
 		t.Fatalf("swapFilterForGlass: %v", err)
 	}
 	// Stand in for the action re-grabbing the real glass mid-call.
-	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
-		t.Fatalf("addHeldItemFrame: %v", err)
-	}
+	addHeldItem(t, s, testBox(t, spatialmath.NewZeroPose()))
 
 	restore()
 	if !s.scene().heldItemAttached || s.scene().fs.Frame(heldItemFrameName) == nil {
 		t.Error("the restore detached the item the action grabbed")
 	}
+}
+
+// addHeldItem publishes a scene with gripperLocal attached as the held item.
+func addHeldItem(t *testing.T, s *beanjaminCoffee, gripperLocal spatialmath.Geometry) {
+	t.Helper()
+	if err := s.editScene(func(sc *sceneState) error { return sc.addHeldItemFrame(gripperLocal) }); err != nil {
+		t.Fatalf("addHeldItemFrame: %v", err)
+	}
+}
+
+// stageHeldGlassAt publishes a scene with the held glass staged with the frames
+// standing at fsInputs.
+func stageHeldGlassAt(s *beanjaminCoffee, fsInputs referenceframe.FrameSystemInputs) error {
+	return s.editScene(func(sc *sceneState) error {
+		_, err := sc.stageHeldGlass(fsInputs)
+		return err
+	})
 }

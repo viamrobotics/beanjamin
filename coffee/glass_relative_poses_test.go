@@ -44,9 +44,7 @@ func newPourTestCoffee(t *testing.T) *beanjaminCoffee {
 		settledScene: &sceneState{fs: clawsStaticFS(t, spatialmath.NewZeroPose())},
 		logger:       logging.NewTestLogger(t),
 	}
-	if err := s.addHeldItemFrame(testBox(t, spatialmath.NewZeroPose())); err != nil {
-		t.Fatalf("addHeldItemFrame: %v", err)
-	}
+	addHeldItem(t, s, testBox(t, spatialmath.NewZeroPose()))
 	return s
 }
 

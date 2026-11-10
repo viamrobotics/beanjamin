@@ -342,29 +342,44 @@ func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.Fr
 	return s.scene().fs, fsInputs, nil
 }
 
-// lockFilterFrame re-parents the "filter" frame from the arm subtree to the
-// world at its current pose. Call this after physically locking the portafilter.
-// The scene is edited so all subsequent planning calls see the filter at its
-// locked position.
+// lockFilterFrame locks the filter frame into the machine with the arm where it
+// stands now (sceneState.lockFilter). Call this after physically locking the
+// portafilter, so all subsequent planning calls see the filter at its locked
+// position.
 func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
-	logger := s.activeOrderLogger()
-	const filterFrameName = componentFilter
-
 	_, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return err
 	}
+	var worldPose spatialmath.Pose
+	var descendants int
+	if err := s.editScene(func(sc *sceneState) error {
+		var err error
+		worldPose, descendants, err = sc.lockFilter(fsInputs)
+		return err
+	}); err != nil {
+		return err
+	}
+	s.activeOrderLogger().Infof("locked filter frame at world pose %v (%d descendants preserved)", worldPose.Point(), descendants)
+	return nil
+}
 
-	filterFrame := s.scene().fs.Frame(filterFrameName)
+// lockFilter re-parents the "filter" frame from the arm subtree to the world at
+// the pose it has with the frames standing at fsInputs. Returns that pose and
+// how many descendant frames moved with it.
+func (sc *sceneState) lockFilter(fsInputs referenceframe.FrameSystemInputs) (spatialmath.Pose, int, error) {
+	const filterFrameName = componentFilter
+
+	filterFrame := sc.fs.Frame(filterFrameName)
 	if filterFrame == nil {
-		return fmt.Errorf("frame %q not found in frame system", filterFrameName)
+		return nil, 0, fmt.Errorf("frame %q not found in frame system", filterFrameName)
 	}
 
-	// 1. Compute filter's world pose using current joint inputs.
+	// 1. Compute filter's world pose at fsInputs.
 	filterPIF := referenceframe.NewPoseInFrame(filterFrameName, spatialmath.NewZeroPose())
-	tf, err := s.scene().fs.Transform(fsInputs.ToLinearInputs(), filterPIF, referenceframe.World)
+	tf, err := sc.fs.Transform(fsInputs.ToLinearInputs(), filterPIF, referenceframe.World)
 	if err != nil {
-		return fmt.Errorf("transform filter to world: %w", err)
+		return nil, 0, fmt.Errorf("transform filter to world: %w", err)
 	}
 	worldPose := tf.(*referenceframe.PoseInFrame).Pose()
 
@@ -375,78 +390,71 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	//    which correctly applies only the parent-to-world transform (the RDK
 	//    skips the frame's own transform for GeometriesInFrame objects).
 	filterOriginFrameName := filterFrameName + "_origin"
-	originFrame := s.scene().fs.Frame(filterOriginFrameName)
+	originFrame := sc.fs.Frame(filterOriginFrameName)
 	if originFrame == nil {
-		return fmt.Errorf("frame %q not found in frame system", filterOriginFrameName)
+		return nil, 0, fmt.Errorf("frame %q not found in frame system", filterOriginFrameName)
 	}
 	originGeos, err := originFrame.Geometries([]referenceframe.Input{})
 	if err != nil {
-		return fmt.Errorf("get geometries from %q: %w", filterOriginFrameName, err)
+		return nil, 0, fmt.Errorf("get geometries from %q: %w", filterOriginFrameName, err)
 	}
 	geos := originGeos.Geometries()
 	if len(geos) == 0 {
-		return fmt.Errorf("no geometry found on frame %q", filterOriginFrameName)
+		return nil, 0, fmt.Errorf("no geometry found on frame %q", filterOriginFrameName)
 	}
 	// Transform the geometry to world coordinates via the frame system so that
 	// the parent-to-world transform is applied correctly.  We cannot simply call
 	// geom.Transform(worldPose) because Geometries() on a tailGeometryStaticFrame
 	// already pre-applies the origin offset — composing worldPose on top would
 	// double-count it.
-	worldGeoTF, err := s.scene().fs.Transform(
+	worldGeoTF, err := sc.fs.Transform(
 		fsInputs.ToLinearInputs(),
 		referenceframe.NewGeometriesInFrame(filterOriginFrameName, geos),
 		referenceframe.World,
 	)
 	if err != nil {
-		return fmt.Errorf("transform filter geometry to world: %w", err)
+		return nil, 0, fmt.Errorf("transform filter geometry to world: %w", err)
 	}
 	worldGeos := worldGeoTF.(*referenceframe.GeometriesInFrame).Geometries()
 	if len(worldGeos) == 0 {
-		return fmt.Errorf("no geometry after transforming %q to world", filterOriginFrameName)
+		return nil, 0, fmt.Errorf("no geometry after transforming %q to world", filterOriginFrameName)
 	}
 	worldGeom := worldGeos[0]
 
-	var descendants []descendantEntry
-	if err := s.editScene(func(sc *sceneState) error {
-		// 3. Collect filter's descendants in BFS order before removal.
-		descendants = collectDescendants(sc.fs, filterFrameName)
+	// 3. Collect filter's descendants in BFS order before removal.
+	descendants := collectDescendants(sc.fs, filterFrameName)
 
-		// 4. Remove filter (and all descendants) from the arm subtree.
-		//    Also remove the companion "filter_origin" frame that the RDK creates
-		//    for every part — it carries the collision geometry and must not remain
-		//    attached to the arm.
-		sc.fs.RemoveFrame(filterFrame)
-		if filterOriginFrame := sc.fs.Frame(filterOriginFrameName); filterOriginFrame != nil {
-			sc.fs.RemoveFrame(filterOriginFrame)
-		}
-
-		// 5. Re-add filter as a static frame parented to world at the locked position.
-		//    The geometry is already in world coordinates (from step 2). Since the
-		//    planner uses the parent-to-world transform for geometry positioning and
-		//    the parent is world (identity), this places the collision volume correctly.
-		newFrame, err := referenceframe.NewStaticFrameWithGeometry(filterFrameName, worldPose, worldGeom)
-		if err != nil {
-			return fmt.Errorf("create static filter frame: %w", err)
-		}
-		if err := sc.fs.AddFrame(newFrame, sc.fs.World()); err != nil {
-			return fmt.Errorf("add filter frame to world: %w", err)
-		}
-
-		// 6. Re-attach descendants under the new static filter, preserving subtree structure.
-		for _, d := range descendants {
-			parent := sc.fs.Frame(d.parentName)
-			if err := sc.fs.AddFrame(d.frame, parent); err != nil {
-				return fmt.Errorf("re-add descendant %q under %q: %w", d.frame.Name(), d.parentName, err)
-			}
-		}
-
-		sc.filterFrameLocked = true
-		return nil
-	}); err != nil {
-		return err
+	// 4. Remove filter (and all descendants) from the arm subtree.
+	//    Also remove the companion "filter_origin" frame that the RDK creates
+	//    for every part — it carries the collision geometry and must not remain
+	//    attached to the arm.
+	sc.fs.RemoveFrame(filterFrame)
+	if filterOriginFrame := sc.fs.Frame(filterOriginFrameName); filterOriginFrame != nil {
+		sc.fs.RemoveFrame(filterOriginFrame)
 	}
-	logger.Infof("locked filter frame at world pose %v (%d descendants preserved)", worldPose.Point(), len(descendants))
-	return nil
+
+	// 5. Re-add filter as a static frame parented to world at the locked position.
+	//    The geometry is already in world coordinates (from step 2). Since the
+	//    planner uses the parent-to-world transform for geometry positioning and
+	//    the parent is world (identity), this places the collision volume correctly.
+	newFrame, err := referenceframe.NewStaticFrameWithGeometry(filterFrameName, worldPose, worldGeom)
+	if err != nil {
+		return nil, 0, fmt.Errorf("create static filter frame: %w", err)
+	}
+	if err := sc.fs.AddFrame(newFrame, sc.fs.World()); err != nil {
+		return nil, 0, fmt.Errorf("add filter frame to world: %w", err)
+	}
+
+	// 6. Re-attach descendants under the new static filter, preserving subtree structure.
+	for _, d := range descendants {
+		parent := sc.fs.Frame(d.parentName)
+		if err := sc.fs.AddFrame(d.frame, parent); err != nil {
+			return nil, 0, fmt.Errorf("re-add descendant %q under %q: %w", d.frame.Name(), d.parentName, err)
+		}
+	}
+
+	sc.filterFrameLocked = true
+	return worldPose, len(descendants), nil
 }
 
 // resetFrameSystem rebuilds the scene from the service, discarding any
@@ -531,38 +539,14 @@ func (s *beanjaminCoffee) dropFilter() (func(), error) {
 	}, nil
 }
 
-// detachFilterFrame removes the portafilter from the frame system, for
-// driving the arm after it has physically been taken off the gripper. Returns
-// what it removed, for reattachFilterFrame.
-//
-// Every filterSw step fails to plan while it is gone — motion goals are keyed by
-// frame name — so this is for claw-only sequences.
+// detachFilterFrame removes the portafilter from the scene
+// (sceneState.detachFilter). Returns what it removed, for reattachFilterFrame.
 func (s *beanjaminCoffee) detachFilterFrame() ([]descendantEntry, error) {
-	// A locked filter models the real portafilter in the machine, not one on the
-	// arm; dropping it would let the arm plan straight through it.
-	if s.scene().filterFrameLocked {
-		return nil, fmt.Errorf("detach filter: the filter frame is locked into the machine, so it is not on the arm; unlock_portafilter first")
-	}
-	// RemoveFrame takes descendants with it, and the RDK parents the model frame
-	// under its "_origin", so the origin carries the whole part away.
 	var removed []descendantEntry
 	if err := s.editScene(func(sc *sceneState) error {
-		for _, name := range []string{componentFilter + "_origin", componentFilter} {
-			root := sc.fs.Frame(name)
-			if root == nil {
-				continue
-			}
-			parent, err := sc.fs.Parent(root)
-			if err != nil {
-				return fmt.Errorf("detach filter: parent of %q: %w", name, err)
-			}
-			// Root first, then BFS descendants, so reattaching in order always finds
-			// the parent already present.
-			removed = append(removed, descendantEntry{root, parent.Name()})
-			removed = append(removed, collectDescendants(sc.fs, name)...)
-			sc.fs.RemoveFrame(root)
-		}
-		return nil
+		var err error
+		removed, err = sc.detachFilter()
+		return err
 	}); err != nil {
 		return nil, err
 	}
@@ -573,32 +557,69 @@ func (s *beanjaminCoffee) detachFilterFrame() ([]descendantEntry, error) {
 	return removed, nil
 }
 
-// reattachFilterFrame puts back what detachFilterFrame removed, parents first.
-// It restores the exact frames rather than rebuilding from the service because
-// the action may have attached a held item, which refreshFrameSystemIfClean
-// declines to rebuild around.
+// detachFilter removes the portafilter from the frame system, for driving the
+// arm after it has physically been taken off the gripper. Returns what it
+// removed, for reattachFilter.
+//
+// Every filterSw step fails to plan while it is gone — motion goals are keyed by
+// frame name — so this is for claw-only sequences.
+func (sc *sceneState) detachFilter() ([]descendantEntry, error) {
+	// A locked filter models the real portafilter in the machine, not one on the
+	// arm; dropping it would let the arm plan straight through it.
+	if sc.filterFrameLocked {
+		return nil, fmt.Errorf("detach filter: the filter frame is locked into the machine, so it is not on the arm; unlock_portafilter first")
+	}
+	// RemoveFrame takes descendants with it, and the RDK parents the model frame
+	// under its "_origin", so the origin carries the whole part away.
+	var removed []descendantEntry
+	for _, name := range []string{componentFilter + "_origin", componentFilter} {
+		root := sc.fs.Frame(name)
+		if root == nil {
+			continue
+		}
+		parent, err := sc.fs.Parent(root)
+		if err != nil {
+			return nil, fmt.Errorf("detach filter: parent of %q: %w", name, err)
+		}
+		// Root first, then BFS descendants, so reattaching in order always finds
+		// the parent already present.
+		removed = append(removed, descendantEntry{root, parent.Name()})
+		removed = append(removed, collectDescendants(sc.fs, name)...)
+		sc.fs.RemoveFrame(root)
+	}
+	return removed, nil
+}
+
+// reattachFilterFrame puts back what detachFilterFrame removed
+// (sceneState.reattachFilter).
 func (s *beanjaminCoffee) reattachFilterFrame(removed []descendantEntry) error {
 	if len(removed) == 0 {
 		return nil
 	}
-	if err := s.editScene(func(sc *sceneState) error {
-		for _, e := range removed {
-			if sc.fs.Frame(e.frame.Name()) != nil {
-				continue // already back
-			}
-			parent := sc.fs.Frame(e.parentName)
-			if parent == nil {
-				return fmt.Errorf("reattach filter: parent %q is gone, cannot restore %q", e.parentName, e.frame.Name())
-			}
-			if err := sc.fs.AddFrame(e.frame, parent); err != nil {
-				return fmt.Errorf("reattach filter: add %q under %q: %w", e.frame.Name(), e.parentName, err)
-			}
-		}
-		return nil
-	}); err != nil {
+	if err := s.editScene(func(sc *sceneState) error { return sc.reattachFilter(removed) }); err != nil {
 		return err
 	}
 	s.activeOrderLogger().Infof("reattached %q to the frame system (%d frames)", componentFilter, len(removed))
+	return nil
+}
+
+// reattachFilter puts back what detachFilter removed, parents first. It
+// restores the exact frames rather than rebuilding from the service because the
+// action may have attached a held item, which refreshFrameSystemIfClean
+// declines to rebuild around.
+func (sc *sceneState) reattachFilter(removed []descendantEntry) error {
+	for _, e := range removed {
+		if sc.fs.Frame(e.frame.Name()) != nil {
+			continue // already back
+		}
+		parent := sc.fs.Frame(e.parentName)
+		if parent == nil {
+			return fmt.Errorf("reattach filter: parent %q is gone, cannot restore %q", e.parentName, e.frame.Name())
+		}
+		if err := sc.fs.AddFrame(e.frame, parent); err != nil {
+			return fmt.Errorf("reattach filter: add %q under %q: %w", e.frame.Name(), e.parentName, err)
+		}
+	}
 	return nil
 }
 
@@ -846,7 +867,7 @@ func (s *beanjaminCoffee) planToRawPose(
 	}
 	goalPose := tf.(*referenceframe.PoseInFrame)
 
-	allowedCollisions = s.filterFakeModeCollisions(s.appendHeldItemCollisions(allowedCollisions))
+	allowedCollisions = s.filterFakeModeCollisions(s.scene().appendHeldItemCollisions(allowedCollisions))
 	constraints := withPathOrientationConstraint(buildConstraints(lc, allowedCollisions), orientTolDegs)
 	plannerOpts := plannerOptionsForConstraint(lc)
 	if lc != nil {
@@ -1022,7 +1043,7 @@ func (s *beanjaminCoffee) executePivot(ctx, cancelCtx context.Context, step Step
 		FrameSystem:    fs,
 		Goals:          goals,
 		StartState:     armplanning.NewPlanState(nil, fsInputs),
-		Constraints:    buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.appendHeldItemCollisions(step.AllowedCollisions))),
+		Constraints:    buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.scene().appendHeldItemCollisions(step.AllowedCollisions))),
 		PlannerOptions: plannerOpts,
 	}, "pivot")
 	if err != nil {
@@ -1083,7 +1104,7 @@ func (s *beanjaminCoffee) executeCircularMotion(ctx, cancelCtx context.Context, 
 		FrameSystem: fs,
 		Goals:       goals,
 		StartState:  armplanning.NewPlanState(nil, fsInputs),
-		Constraints: buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.appendHeldItemCollisions(step.AllowedCollisions))),
+		Constraints: buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.scene().appendHeldItemCollisions(step.AllowedCollisions))),
 	}, "circular")
 	if err != nil {
 		return err
@@ -1217,7 +1238,7 @@ func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, al
 	}, nil)
 
 	constraints := withNoSpillOrientationConstraint(
-		buildConstraints(nil, s.filterFakeModeCollisions(s.appendHeldItemCollisions(allowedCollisions))))
+		buildConstraints(nil, s.filterFakeModeCollisions(s.scene().appendHeldItemCollisions(allowedCollisions))))
 
 	positions, err := s.planTrajectory(ctx, &armplanning.PlanRequest{
 		FrameSystem:    fs,

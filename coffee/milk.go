@@ -109,15 +109,36 @@ func (s *beanjaminCoffee) fridgeLinearStep(pose string, moveOpts *StepMoveOption
 // attachMilkBottleGeometry models the bottle just grabbed and attaches it to the
 // gripper as the held item (see milkBottleBox).
 func (s *beanjaminCoffee) attachMilkBottleGeometry(ctx context.Context) error {
-	fs, fsInputs, err := s.currentInputs(ctx)
+	_, fsInputs, err := s.currentInputs(ctx)
 	if err != nil {
 		return err
 	}
-	box, err := s.milkBottleBox(fs, fsInputs)
-	if err != nil {
+	dims := s.cfg.MilkBottleDimensions
+	var baseBelowGripMm float64
+	if err := s.editScene(func(sc *sceneState) error {
+		var err error
+		baseBelowGripMm, err = sc.attachMilkBottle(fsInputs, dims)
+		return err
+	}); err != nil {
 		return err
 	}
-	return s.attachDetectedGeometry(ctx, pickupLabelMilk, box)
+	s.activeOrderLogger().Infof("attached the held milk bottle (%.0f×%.0f mm) on the surface beneath it: base %.1fmm below the grip point",
+		dims.DiameterMm, dims.HeightMm, baseBelowGripMm)
+	return nil
+}
+
+// attachMilkBottle models the bottle the jaws are closed on with the frames
+// standing at fsInputs (milkBottleBox) and attaches it as the held item.
+// Returns how far below the grip point the bottle's base is.
+func (sc *sceneState) attachMilkBottle(fsInputs referenceframe.FrameSystemInputs, dims *ContainerDimensions) (float64, error) {
+	box, baseBelowGripMm, err := sc.milkBottleBox(fsInputs, dims)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := sc.attachHeldItem(fsInputs, pickupLabelMilk, box); err != nil {
+		return 0, err
+	}
+	return baseBelowGripMm, nil
 }
 
 // milkBottleBox builds the world-frame box of a bottle the jaws are closed on:
@@ -131,32 +152,33 @@ func (s *beanjaminCoffee) attachMilkBottleGeometry(ctx context.Context) error {
 // stands on isn't modeled (the box landed on something lower, like the table
 // under the fridge) or the grab pose is above the bottle, and both are errors
 // rather than a model that is silently wrong.
-func (s *beanjaminCoffee) milkBottleBox(fs *referenceframe.FrameSystem, fsInputs referenceframe.FrameSystemInputs) (spatialmath.Geometry, error) {
-	dims := s.cfg.MilkBottleDimensions
-	box, err := s.configuredContainerBox(fs, fsInputs, pickupLabelMilk, dims, &RelativePose{})
+//
+// Returns the box and how far below the grip point its base is.
+func (sc *sceneState) milkBottleBox(
+	fsInputs referenceframe.FrameSystemInputs, dims *ContainerDimensions,
+) (spatialmath.Geometry, float64, error) {
+	box, err := sc.containerBox(fsInputs, pickupLabelMilk, dims, &RelativePose{})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	// Enumerated before the bottle is attached, so it is never taken for the
 	// surface it stands on.
-	surfaces, err := geom.WorldAnchoredSurfaceBoxes(fs, fsInputs)
+	surfaces, err := geom.WorldAnchoredSurfaceBoxes(sc.fs, fsInputs)
 	if err != nil {
-		return nil, fmt.Errorf("find the surface under the milk bottle: %w", err)
+		return nil, 0, fmt.Errorf("find the surface under the milk bottle: %w", err)
 	}
 	grip := box.Pose().Point()
 	seated, dz, ok := geom.SeatOnSurface(surfaces, box, surfaceRestClearanceMm)
 	if !ok {
-		return nil, fmt.Errorf("no surface modeled beneath the milk bottle at (x=%.1f, y=%.1f): add the fridge floor to the frame system", grip.X, grip.Y)
+		return nil, 0, fmt.Errorf("no surface modeled beneath the milk bottle at (x=%.1f, y=%.1f): add the fridge floor to the frame system", grip.X, grip.Y)
 	}
 	// box was centered on the grip point, so after the shift the grip point sits
 	// -dz from the bottle's center.
 	if math.Abs(dz) > dims.HeightMm/2 {
-		return nil, fmt.Errorf("the milk bottle seated on the surface beneath it (shifted %.1fmm) does not reach the grip point at Z=%.1f: "+
+		return nil, 0, fmt.Errorf("the milk bottle seated on the surface beneath it (shifted %.1fmm) does not reach the grip point at Z=%.1f: "+
 			"check that the surface it stands on is modeled and that the grab pose is within milk_bottle_dimensions' height_mm", dz, grip.Z)
 	}
-	s.activeOrderLogger().Infof("modeling the held milk bottle (%.0f×%.0f mm) on the surface beneath it: base %.1fmm below the grip point",
-		dims.DiameterMm, dims.HeightMm, dims.HeightMm/2-dz)
-	return seated, nil
+	return seated, dims.HeightMm/2 - dz, nil
 }
 
 // milkStepErr wraps a failure inside the milk sequence, saying so when the

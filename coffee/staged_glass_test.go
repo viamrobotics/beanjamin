@@ -44,9 +44,7 @@ func stagingService(t *testing.T, fs *referenceframe.FrameSystem) *beanjaminCoff
 		return nil, nil
 	}}
 	pickupGrasp := testBox(t, spatialmath.NewZeroPose())
-	if err := s.addHeldItemFrame(pickupGrasp); err != nil {
-		t.Fatalf("addHeldItemFrame: %v", err)
-	}
+	addHeldItem(t, s, pickupGrasp)
 	s.scene().cacheHeldGeometry(pickupLabelGlass, pickupGrasp)
 	return s
 }
@@ -58,13 +56,13 @@ func TestStageAndRegrabGlassSeatsOnSurface(t *testing.T) {
 	s := stagingService(t, fs)
 	inputs := referenceframe.NewZeroInputs(fs)
 
-	if err := s.stageHeldGlass(inputs); err != nil {
+	if err := stageHeldGlassAt(s, inputs); err != nil {
 		t.Fatalf("stageHeldGlass: %v", err)
 	}
 	if s.scene().heldItemAttached || s.scene().fs.Frame(heldItemFrameName) != nil {
 		t.Fatalf("the held-item frame must be gone once the glass is staged")
 	}
-	staged, err := s.stagedGlassGeometry()
+	staged, err := s.scene().stagedGlassGeometry()
 	if err != nil {
 		t.Fatalf("stagedGlassGeometry: %v", err)
 	}
@@ -86,10 +84,10 @@ func TestStageAndRegrabGlassSeatsOnSurface(t *testing.T) {
 func TestStageGlassWithoutSurfaceStaysPut(t *testing.T) {
 	fs := stagingFS(t, false)
 	s := stagingService(t, fs)
-	if err := s.stageHeldGlass(referenceframe.NewZeroInputs(fs)); err != nil {
+	if err := stageHeldGlassAt(s, referenceframe.NewZeroInputs(fs)); err != nil {
 		t.Fatalf("stageHeldGlass: %v", err)
 	}
-	staged, err := s.stagedGlassGeometry()
+	staged, err := s.scene().stagedGlassGeometry()
 	if err != nil {
 		t.Fatalf("stagedGlassGeometry: %v", err)
 	}
