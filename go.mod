@@ -7,7 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/viamrobotics/visualization v1.45.2-0.20260923153413-0f4faf2c4e70
 	go.viam.com/api v0.1.603
-	go.viam.com/rdk v1.16.0
+	go.viam.com/rdk v1.16.1-0.20261110221501-046082ec9d51
 	go.viam.com/utils v0.17.0
 	golang.org/x/image v0.41.0
 	gonum.org/v1/gonum v0.17.0
