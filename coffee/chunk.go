@@ -53,6 +53,13 @@ const (
 type chunkOp struct {
 	motion *motionRequest
 	pause  time.Duration
+	// join runs the motion's trajectory and the next one's as one arm move, so
+	// the arm does not stop between them.
+	join bool
+	// recover, when set on a motion, is the scene the cell is left in when its
+	// move fails partway. It gets the trajectory of each motion joined into the
+	// move, in order.
+	recover func(ctx context.Context, segments [][][]referenceframe.Input) *sceneState
 	// scene is the planned scene as the op was recorded, the executed scene once
 	// it has run.
 	scene *sceneState
@@ -161,7 +168,7 @@ type motionBuilder func(start referenceframe.FrameSystemInputs) (*motionRequest,
 
 // addMotion records the motion build builds in the open chunk, or plans and
 // runs it as a chunk of its own, named name. op carries how the move runs: its
-// pause. Outside a run or inside a sync region, it is planned
+// pause, join and recover. Outside a run or inside a sync region, it is planned
 // from the arm read now and run straight away.
 func (s *beanjaminCoffee) addMotion(ctx, cancelCtx context.Context, name string, op chunkOp, build motionBuilder) error {
 	r := s.run
@@ -271,21 +278,39 @@ func (s *beanjaminCoffee) flushChunk() error {
 
 	from := start[s.cfg.ArmName]
 	planned := 0
+	var joined [][][]referenceframe.Input // trajectories of the motions joined so far
+	var joinedFrom []referenceframe.Input
 	for _, op := range ops {
 		m := op.act
 		if op.motion != nil {
 			positions := trajectories[planned]
 			planned++
+			if len(joined) == 0 {
+				joinedFrom = from
+			}
+			joined = append(joined, positions)
+			from = positions[len(positions)-1]
+			if op.join {
+				continue
+			}
+			var all [][]referenceframe.Input
+			for _, seg := range joined {
+				all = append(all, seg...)
+			}
 			m = move{
 				name:      op.motion.name,
-				positions: positions,
-				start:     from,
+				positions: all,
+				start:     joinedFrom,
 				speed:     buildMoveOptions(op.motion.speed),
 				repeatFor: op.motion.repeatFor,
 				sleep:     op.pause,
 				scene:     op.scene,
 			}
-			from = positions[len(positions)-1]
+			if op.recover != nil {
+				segments, recover := joined, op.recover
+				m.recover = func(ctx context.Context) *sceneState { return recover(ctx, segments) }
+			}
+			joined = nil
 		}
 		if err := s.dispatch(r, m); err != nil {
 			return err
@@ -306,6 +331,7 @@ func (s *beanjaminCoffee) dispatch(r *armRun, m move) error {
 		return nil
 	}
 	if err := s.runMoveRecovered(r.ctx, m); err != nil {
+		r.recoverFrom(r.ctx, m)
 		r.planned = r.executed.Load().withInputs(nil)
 		return err
 	}

@@ -454,6 +454,34 @@ func TestAttachingInAChunkKeepsItWhole(t *testing.T) {
 	requireVecEqual(t, local.Pose().Point(), r3.Vector{Z: 100}, 1e-6)
 }
 
+// Joined motions run as one arm move.
+func TestJoinedMotionsRunAsOneMove(t *testing.T) {
+	s, f, end := chunkCoffee(t)
+	fs := s.scene().fs
+	ctx := context.Background()
+	if err := s.inChunk("test", func() error {
+		for i, joints := range [][]referenceframe.Input{chunkArmA, chunkArmB} {
+			pd := &poseData{pose: clawsPose(t, fs, joints), refFrame: referenceframe.World, componentName: componentClaws}
+			op := chunkOp{join: i == 0}
+			if err := s.addMotion(ctx, ctx, "hop", op, func(start referenceframe.FrameSystemInputs) (*motionRequest, error) {
+				return s.rawMotion("hop", pd, nil, 0, nil, nil, start)
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := end(); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.moves) != 1 {
+		t.Fatalf("ran %d trajectories, want 1", len(f.moves))
+	}
+	requireClawsAt(t, s, f.at, chunkArmB)
+}
+
 // A run that doesn't plan ahead runs its chunk as the chunk flushes.
 func TestDirectRunRunsItsChunkWhenItFlushes(t *testing.T) {
 	s, f, endOrder := chunkCoffee(t)

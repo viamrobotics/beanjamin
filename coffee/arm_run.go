@@ -52,6 +52,10 @@ type move struct {
 	run   func(ctx context.Context) error
 	sleep time.Duration
 
+	// recover, when set, returns the scene the cell is left in when the move
+	// fails partway, in place of the one it ran from.
+	recover func(ctx context.Context) *sceneState
+
 	// scene is the scene the move leaves the cell in, the run's executed scene
 	// once the move has run. handOff sets it.
 	scene *sceneState
@@ -173,6 +177,7 @@ func (s *beanjaminCoffee) handOff(ctx context.Context, m move) error {
 	}
 	if s.aheadRun() == nil {
 		if err := s.runMove(ctx, m); err != nil {
+			r.recoverFrom(ctx, m)
 			return err
 		}
 		r.ran(m)
@@ -217,6 +222,17 @@ func (r *armRun) ran(m move) {
 	}
 }
 
+// recoverFrom makes the scene a failed m left the cell in the executed one,
+// when m knows it.
+func (r *armRun) recoverFrom(ctx context.Context, m move) {
+	if m.recover == nil {
+		return
+	}
+	if sc := m.recover(context.WithoutCancel(ctx)); sc != nil {
+		r.executed.Store(sc)
+	}
+}
+
 // startExecution runs moves in order, skipping the rest after a failure.
 func (r *armRun) startExecution(s *beanjaminCoffee) {
 	moves := make(chan move, runQueueSize)
@@ -230,6 +246,7 @@ func (r *armRun) startExecution(s *beanjaminCoffee) {
 			}
 			if err := s.runMoveRecovered(r.ctx, m); err != nil {
 				first = err
+				r.recoverFrom(r.ctx, m)
 				r.failed.Store(true)
 				continue
 			}
