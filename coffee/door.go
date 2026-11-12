@@ -216,7 +216,8 @@ func nearestTheta(actual []referenceframe.Input, positions [][]referenceframe.In
 // directions share this body — only the target differs, so an open is
 // (current → open angle) and a close is (current → 0).
 //
-// The whole arc is planned before the arm moves and executed as one trajectory:
+// The approach, the grasp, the sweep and the retract are one chunk, planned
+// together. The sweep is one motion per angle, joined into one arm move:
 // per-waypoint execution made the swing visibly clunky, since each waypoint hop
 // was its own MoveThroughJointPositions and the arm accelerated and stopped ~9
 // times across a 90° sweep.
@@ -233,15 +234,15 @@ func nearestTheta(actual []referenceframe.Input, positions [][]referenceframe.In
 // Runs behind executeAction, which takes the running gate, captures cancelCtx,
 // and refreshes the frame system before this runs.
 func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, stepLabel string, toDeg float64) error {
-	logger := s.logger
-
-	// Merge both contexts so cancellation from either stops planning/execution.
-	ctx, done := mergedCancelContext(ctx, cancelCtx)
-	defer done()
-
 	if s.cfg.DoorApproachRelativePose == nil {
 		return fmt.Errorf("%s requires door_approach_relative_pose", action)
 	}
+	return s.inChunk(action, func() error { return s.recordDoorSweep(ctx, cancelCtx, action, stepLabel, toDeg) })
+}
+
+// recordDoorSweep is sweepDoor's arm work.
+func (s *beanjaminCoffee) recordDoorSweep(ctx, cancelCtx context.Context, action, stepLabel string, toDeg float64) error {
+	logger := s.logger
 	s.setStep(stepLabel)
 
 	// 1. Resolve the grasp frame's pose where the door currently stands, then
@@ -250,21 +251,15 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	//    analog of cup_approach_relative_pose onto a detected cup, via
 	//    geom.PoseRelativeTo, but resolved against a live frame). Its orientation is
 	//    the base grasp orientation, yawed by doorGraspYawRatio as the door swings.
-	_, fsInputs, err := s.currentInputs(ctx)
-	if err != nil {
-		return err
-	}
-	// The sweep plans against the door re-placed at each angle, on a copy of the
-	// scene that is published only once the arm has moved the real door.
-	work, err := s.scene().clone()
-	if err != nil {
-		return err
-	}
-	fs := work.fs
+	//    The handle is on the door, not the arm, so it is placed without knowing
+	//    where the arm will be.
+	before := s.scene()
+	fs := before.fs
+	doorInputs := placement{inputs: before.inputs}.fullInputs(fs).ToLinearInputs()
 	// The frame already carries doorOpenDegs, so back that rotation out to recover
 	// the authored shut transform. Every setDoorTheta composes against that
 	// absolute reference, so a sweep cannot accumulate rotation.
-	fromDeg := work.doorOpenDegs
+	fromDeg := before.doorOpenDegs
 	originName := doorOriginFrameName(frameFridgeDoor)
 	originFrame := fs.Frame(originName)
 	if originFrame == nil {
@@ -278,7 +273,7 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 		spatialmath.PoseInverse(spatialmath.NewPoseFromOrientation(
 			&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: fromDeg})))
 
-	ballBase, err := s.ballWorldPose(fs, fsInputs.ToLinearInputs())
+	ballBase, err := s.ballWorldPose(fs, doorInputs)
 	if err != nil {
 		return err
 	}
@@ -318,37 +313,24 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 		}
 	}
 
-	// 2. Plan the whole θ fromDeg→toDeg sweep, then execute the concatenated
-	//    trajectory in one arm call. Each waypoint still gets its own plan against
-	//    the door re-placed at that θ — a PlanRequest carries one frame system, so
-	//    a single multi-goal plan (what executePivot does) could only be
+	// 2. The θ fromDeg→toDeg sweep, one motion per waypoint joined into one arm
+	//    move. Each motion is planned against its own copy of the frame system
+	//    with the door re-placed at that θ — a PlanRequest carries one frame
+	//    system, so a single multi-goal plan (what a pivot does) could only be
 	//    collision-checked against one door angle, and the door is the obstacle
-	//    that moves. Chaining each plan's end configuration into the next start
-	//    state (withArmInputs, the same way cup_pickup chains approach into grab)
-	//    keeps that per-θ honesty while producing one continuous trajectory, so the
-	//    arm no longer decelerates to a stop at every waypoint.
+	//    that moves.
 	sweep := computeDoorSweep(fromDeg, toDeg, s.doorPivotDegreesPerStep())
-	logger.Infof("%s: planning %.0f°→%.0f° in %d steps", action, fromDeg, toDeg, len(sweep)-1)
-
-	// Read the arm once, here: the sweep starts from the grasp configuration, not
-	// the pre-approach one fsInputs holds. From then on planInputs advances through
-	// the plans rather than being re-read, because the arm does not move until the
-	// whole sweep is planned — live joints would be the same start state for every
-	// waypoint and each plan would jump back to the handle's closed position.
-	_, planInputs, err := s.currentInputs(ctx)
-	if err != nil {
-		return err
-	}
-	var positions [][]referenceframe.Input
-	// thetaOf[i] is the door angle positions[i] belongs to, for locating the panel
-	// again if execution aborts partway.
-	var thetaOf []float64
-
-	for _, theta := range sweep[1:] { // skip fromDeg — the door is already there
-		if err := setDoorTheta(fs, frameFridgeDoor, baseOriginPose, theta); err != nil {
+	logger.Infof("%s: recording %.0f°→%.0f° in %d steps", action, fromDeg, toDeg, len(sweep)-1)
+	thetas := sweep[1:] // skip fromDeg — the door is already there
+	for i, theta := range thetas {
+		swung, err := copyFrameSystem(fs)
+		if err != nil {
 			return err
 		}
-		ballNow, err := s.ballWorldPose(fs, planInputs.ToLinearInputs())
+		if err := setDoorTheta(swung, frameFridgeDoor, baseOriginPose, theta); err != nil {
+			return err
+		}
+		ballNow, err := s.ballWorldPose(swung, doorInputs)
 		if err != nil {
 			return err
 		}
@@ -362,53 +344,41 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 			frameGripPoint: referenceframe.NewPoseInFrame(referenceframe.World, goalPose),
 		}, nil)
 
-		req := &armplanning.PlanRequest{
-			FrameSystem: fs,
-			Goals:       []*armplanning.PlanState{goal},
-			StartState:  armplanning.NewPlanState(nil, planInputs),
-			Constraints: buildConstraints(doorSweepConstraint, collisions),
+		op := chunkOp{join: i < len(thetas)-1}
+		if !op.join {
+			// One arm call does not report which waypoint it died on, so a failed
+			// sweep is located from where the arm actually stopped.
+			op.recover = func(ctx context.Context, segments [][][]referenceframe.Input) *sceneState {
+				return s.doorSweptTo(ctx, before, baseOriginPose, fromDeg, thetas, segments)
+			}
 		}
-		plan, err := s.planMotion(ctx, req, action)
-		if err != nil {
-			return fmt.Errorf("plan %s step θ=%.0f: %w", action, theta, err)
+		if err := s.addMotion(ctx, cancelCtx, action, op, func(start referenceframe.FrameSystemInputs) (*motionRequest, error) {
+			return &motionRequest{
+				name:  action,
+				label: action,
+				req: &armplanning.PlanRequest{
+					FrameSystem: swung,
+					Goals:       []*armplanning.PlanState{goal},
+					StartState:  armplanning.NewPlanState(nil, start),
+					Constraints: buildConstraints(doorSweepConstraint, collisions),
+				},
+				speed: s.slowMoveOptions(),
+			}, nil
+		}); err != nil {
+			return fmt.Errorf("%s step θ=%.0f: %w", action, theta, err)
 		}
-		stepPositions, err := plan.Trajectory().GetFrameInputs(s.cfg.ArmName)
-		if err != nil {
-			return fmt.Errorf("frame inputs θ=%.0f: %w", theta, err)
-		}
-		if len(stepPositions) == 0 {
-			return fmt.Errorf("%s step θ=%.0f planned an empty trajectory", action, theta)
-		}
-		positions = append(positions, stepPositions...)
-		for range stepPositions {
-			thetaOf = append(thetaOf, theta)
-		}
-		planInputs = s.withArmInputs(planInputs, stepPositions[len(stepPositions)-1])
 	}
-
-	logger.Infof("%s: executing %d concatenated waypoints", action, len(positions))
-	if err := s.arm.MoveThroughJointPositions(ctx, positions, buildMoveOptions(s.slowMoveOptions()), nil); err != nil {
-		// One arm call no longer reports which waypoint it died on, so recover the
-		// angle from where the arm actually stopped rather than assuming the target.
-		// Both fs and doorOpenDegs have to land on it: fs is the frame system every
-		// later plan is checked against, and doorOpenDegs is what a rebuild
-		// re-applies.
-		reached := s.doorThetaFromArm(ctx, positions, thetaOf, fromDeg)
-		work.doorOpenDegs = reached
-		if serr := setDoorTheta(fs, frameFridgeDoor, baseOriginPose, reached); serr != nil {
-			logger.Errorf("could not re-place the door model at θ=%.0f after a failed sweep; "+
-				"run reset_world before moving again: %v", reached, serr)
-		}
-		s.publishScene(work)
-		return fmt.Errorf("execute %s sweep: %w", action, err)
+	if err := s.editScene(func(sc *sceneState) error {
+		sc.doorOpenDegs = toDeg
+		return setDoorTheta(sc.fs, frameFridgeDoor, baseOriginPose, toDeg)
+	}); err != nil {
+		return err
 	}
-	work.doorOpenDegs = toDeg
-	s.publishScene(work)
 
 	// 3. Release, retract to a standoff from the handle where the sweep left it
-	//    (the same approach offset resolved against the ball's pose at toDeg — fs
-	//    still holds the door at the final θ — so the exit backs off exactly as the
-	//    approach came in), then close the jaws for whatever moves next.
+	//    (the same approach offset resolved against the ball's pose at toDeg — the
+	//    scene now holds the door at the final θ — so the exit backs off exactly
+	//    as the approach came in), then close the jaws for whatever moves next.
 	if s.gripper != nil {
 		// The jaws have to clear the handle before the retract pulls away, or the
 		// arm backs off still clamped and wrenches the door against its hinge.
@@ -416,11 +386,7 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 			return fmt.Errorf("release handle: %w", err)
 		}
 	}
-	_, retractInputs, err := s.currentInputs(ctx)
-	if err != nil {
-		return err
-	}
-	ballEnd, err := s.ballWorldPose(fs, retractInputs.ToLinearInputs())
+	ballEnd, err := s.ballWorldPose(s.scene().fs, doorInputs)
 	if err != nil {
 		return err
 	}
@@ -445,6 +411,36 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 		}
 	}
 	return nil
+}
+
+// doorSweptTo returns before with the door where a failed sweep left it: at
+// the angle whose waypoints the arm stopped nearest. segments[i] is the
+// trajectory to thetas[i]. Both the frame system and doorOpenDegs land on that
+// angle: the frame system is what every later plan is checked against, and
+// doorOpenDegs is what a rebuild re-applies.
+func (s *beanjaminCoffee) doorSweptTo(
+	ctx context.Context, before *sceneState, baseOriginPose spatialmath.Pose, fromDeg float64, thetas []float64, segments [][][]referenceframe.Input,
+) *sceneState {
+	var positions [][]referenceframe.Input
+	var thetaOf []float64
+	for i, seg := range segments {
+		positions = append(positions, seg...)
+		for range seg {
+			thetaOf = append(thetaOf, thetas[i])
+		}
+	}
+	reached := s.doorThetaFromArm(ctx, positions, thetaOf, fromDeg)
+	swept, err := before.clone()
+	if err != nil {
+		s.logger.Errorf("could not copy the scene to re-place the door at θ=%.0f after a failed sweep; run reset_world before moving again: %v", reached, err)
+		return nil
+	}
+	swept.doorOpenDegs = reached
+	if err := setDoorTheta(swept.fs, frameFridgeDoor, baseOriginPose, reached); err != nil {
+		s.logger.Errorf("could not re-place the door model at θ=%.0f after a failed sweep; "+
+			"run reset_world before moving again: %v", reached, err)
+	}
+	return swept
 }
 
 // doorSweepConstraint keeps each hop of the door sweep within 9mm/9° of the
