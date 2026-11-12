@@ -428,7 +428,8 @@ func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
 // held-item frame, and any cached grasp no longer corresponds to reality, so
 // none is carried over and a stale geometry can't be re-attached after a reset.
 // It also has the filter frame back in the arm subtree and no staged-glass
-// obstacle. On failure the scene is left as it was.
+// obstacle. The frames with degrees of freedom stand where they stood. On
+// failure the scene is left as it was.
 func (s *beanjaminCoffee) rebuildScene(ctx context.Context, doorOpenDegs float64) error {
 	logger := s.activeOrderLogger()
 	fs, err := framesystem.NewFromService(ctx, s.fsSvc, nil)
@@ -448,7 +449,7 @@ func (s *beanjaminCoffee) rebuildScene(ctx context.Context, doorOpenDegs float64
 		}
 		logger.Infof("frame system rebuilt with fridge door held open at %.1f°", doorOpenDegs)
 	}
-	s.publishScene(&sceneState{fs: fs, doorOpenDegs: doorOpenDegs})
+	s.publishScene(&sceneState{fs: fs, inputs: s.scene().inputs, doorOpenDegs: doorOpenDegs})
 	return nil
 }
 
@@ -578,9 +579,6 @@ func (sc *sceneState) reattachFilter(removed []descendantEntry) error {
 // unlockFilterFrame rebuilds the scene from the service,
 // restoring the filter frame to its original position in the arm subtree.
 func (s *beanjaminCoffee) unlockFilterFrame(ctx context.Context) error {
-	if err := s.settle(); err != nil {
-		return err
-	}
 	logger := s.activeOrderLogger()
 	if err := s.resetFrameSystem(ctx); err != nil {
 		return err
