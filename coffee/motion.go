@@ -299,7 +299,7 @@ func (s *beanjaminCoffee) expectedInputs(ctx context.Context) (referenceframe.Fr
 // portafilter, so all subsequent planning calls see the filter at its locked
 // position.
 func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
-	fsInputs, err := s.expectedInputs(ctx)
+	at, err := s.expectedPlacement(ctx)
 	if err != nil {
 		return err
 	}
@@ -307,7 +307,7 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 	var descendants int
 	if err := s.editScene(func(sc *sceneState) error {
 		var err error
-		worldPose, descendants, err = sc.lockFilter(fsInputs)
+		worldPose, descendants, err = sc.lockFilter(at)
 		return err
 	}); err != nil {
 		return err
@@ -317,9 +317,9 @@ func (s *beanjaminCoffee) lockFilterFrame(ctx context.Context) error {
 }
 
 // lockFilter re-parents the "filter" frame from the arm subtree to the world at
-// the pose it has with the frames standing at fsInputs. Returns that pose and
+// the pose it has with the frames placed by at. Returns that pose and
 // how many descendant frames moved with it.
-func (sc *sceneState) lockFilter(fsInputs referenceframe.FrameSystemInputs) (spatialmath.Pose, int, error) {
+func (sc *sceneState) lockFilter(at placement) (spatialmath.Pose, int, error) {
 	const filterFrameName = componentFilter
 
 	filterFrame := sc.fs.Frame(filterFrameName)
@@ -327,9 +327,9 @@ func (sc *sceneState) lockFilter(fsInputs referenceframe.FrameSystemInputs) (spa
 		return nil, 0, fmt.Errorf("frame %q not found in frame system", filterFrameName)
 	}
 
-	// 1. Compute filter's world pose at fsInputs.
+	// 1. Compute filter's world pose, placed by at.
 	filterPIF := referenceframe.NewPoseInFrame(filterFrameName, spatialmath.NewZeroPose())
-	tf, err := sc.fs.Transform(fsInputs.ToLinearInputs(), filterPIF, referenceframe.World)
+	tf, err := at.transform(sc.fs, filterPIF, referenceframe.World)
 	if err != nil {
 		return nil, 0, fmt.Errorf("transform filter to world: %w", err)
 	}
@@ -359,9 +359,7 @@ func (sc *sceneState) lockFilter(fsInputs referenceframe.FrameSystemInputs) (spa
 	// geom.Transform(worldPose) because Geometries() on a tailGeometryStaticFrame
 	// already pre-applies the origin offset — composing worldPose on top would
 	// double-count it.
-	worldGeoTF, err := sc.fs.Transform(
-		fsInputs.ToLinearInputs(),
-		referenceframe.NewGeometriesInFrame(filterOriginFrameName, geos),
+	worldGeoTF, err := at.transform(sc.fs, referenceframe.NewGeometriesInFrame(filterOriginFrameName, geos),
 		referenceframe.World,
 	)
 	if err != nil {

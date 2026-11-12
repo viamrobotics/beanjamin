@@ -338,7 +338,7 @@ func TestConfiguredContainerBox(t *testing.T) {
 			fs := gripPointStaticFS(t, spatialmath.NewPoseFromPoint(tc.gripPoint))
 			s := heldGeomService(t, fs)
 
-			box, err := s.scene().containerBox(referenceframe.NewZeroInputs(fs), tc.label, tc.dims, tc.grab)
+			box, err := s.scene().containerBox(placement{inputs: referenceframe.NewZeroInputs(fs)}, tc.label, tc.dims, tc.grab)
 			if err != nil {
 				t.Fatalf("containerBox: %v", err)
 			}
@@ -592,7 +592,7 @@ func addHeldItem(t *testing.T, s *beanjaminCoffee, gripperLocal spatialmath.Geom
 // standing at fsInputs.
 func stageHeldGlassAt(s *beanjaminCoffee, fsInputs referenceframe.FrameSystemInputs) error {
 	return s.editScene(func(sc *sceneState) error {
-		_, err := sc.stageHeldGlass(fsInputs)
+		_, err := sc.stageHeldGlass(placement{inputs: fsInputs})
 		return err
 	})
 }
