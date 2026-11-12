@@ -81,46 +81,50 @@ func (p placement) transform(
 	if p.goal == nil {
 		return fs.Transform(p.inputs.ToLinearInputs(), tf, dst)
 	}
+	// The arm is at zero in these inputs. That leaves the frames on it where the
+	// arm's joints would not put them, but rigid to one another, so a transform
+	// that stays on one side of the arm's end is right as it is.
 	in := p.fullInputs(fs).ToLinearInputs()
-	// With the arm at zero, every frame on it is off by the same rigid motion:
-	// the one that takes goalFrame from where it stands to where the goal puts it.
-	goalWorld, err := fs.Transform(in, p.goal, referenceframe.World)
+	srcOnArm, dstOnArm := onArm(fs, p.arm, tf.Parent()), onArm(fs, p.arm, dst)
+	if srcOnArm == dstOnArm {
+		return fs.Transform(in, tf, dst)
+	}
+	goalTF, err := fs.Transform(in, p.goal, referenceframe.World)
 	if err != nil {
 		return nil, fmt.Errorf("locate the goal for %q: %w", p.goalFrame, err)
 	}
-	zeroWorld, err := fs.Transform(in, referenceframe.NewPoseInFrame(p.goalFrame, spatialmath.NewZeroPose()), referenceframe.World)
-	if err != nil {
-		return nil, fmt.Errorf("locate %q: %w", p.goalFrame, err)
-	}
-	fix := spatialmath.Compose(goalWorld.(*referenceframe.PoseInFrame).Pose(),
-		spatialmath.PoseInverse(zeroWorld.(*referenceframe.PoseInFrame).Pose()))
+	goalWorld := goalTF.(*referenceframe.PoseInFrame).Pose()
 
+	if srcOnArm {
+		rel, err := fs.Transform(in, tf, p.goalFrame)
+		if err != nil {
+			return nil, err
+		}
+		return fs.Transform(in, inFrame(moved(rel, goalWorld), referenceframe.World), dst)
+	}
+	// Geometries can't be handed to fs.Transform from a frame on the arm: it
+	// would skip that frame's own transform. Move them into dst by hand.
 	world, err := fs.Transform(in, tf, referenceframe.World)
 	if err != nil {
 		return nil, err
 	}
-	if onArm(fs, p.arm, tf.Parent()) {
-		world = moved(world, fix)
-	}
-	if dst == referenceframe.World {
-		return world, nil
-	}
-	dstWorld, err := fs.Transform(in, referenceframe.NewPoseInFrame(dst, spatialmath.NewZeroPose()), referenceframe.World)
+	dstRel, err := fs.Transform(in, referenceframe.NewPoseInFrame(dst, spatialmath.NewZeroPose()), p.goalFrame)
 	if err != nil {
 		return nil, err
 	}
-	dstPose := dstWorld.(*referenceframe.PoseInFrame).Pose()
-	if onArm(fs, p.arm, dst) {
-		dstPose = spatialmath.Compose(fix, dstPose)
-	}
-	out := moved(world, spatialmath.PoseInverse(dstPose))
-	switch t := out.(type) {
+	dstWorld := spatialmath.Compose(goalWorld, dstRel.(*referenceframe.PoseInFrame).Pose())
+	return inFrame(moved(world, spatialmath.PoseInverse(dstWorld)), dst), nil
+}
+
+// inFrame returns tf, unchanged, as expressed in frame.
+func inFrame(tf referenceframe.Transformable, frame string) referenceframe.Transformable {
+	switch t := tf.(type) {
 	case *referenceframe.PoseInFrame:
-		return referenceframe.NewPoseInFrame(dst, t.Pose()), nil
+		return referenceframe.NewPoseInFrame(frame, t.Pose())
 	case *referenceframe.GeometriesInFrame:
-		return referenceframe.NewGeometriesInFrame(dst, t.Geometries()), nil
+		return referenceframe.NewGeometriesInFrame(frame, t.Geometries())
 	}
-	return out, nil
+	return tf
 }
 
 // worldPose returns where frame stands in the world, at p.
