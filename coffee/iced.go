@@ -67,12 +67,15 @@ func (s *beanjaminCoffee) prepIcedGlass(ctx, cancelCtx context.Context, withMilk
 	}
 	// A glass was pulled off the shelf; count it now so a later fault still credits real use.
 	s.incrementSensorReading(ctx, s.usageSensor, "latte glasses", "latte_glasses_used", 1)
-	// 2. Carry the glass to the ice machine and dispense ice.
-	if err := s.dispenseIce(ctx, cancelCtx); err != nil {
-		return err
-	}
-	// 3. Set the glass down in the staging area to free the gripper.
-	return s.stageGlass(ctx, cancelCtx)
+	// 2-3. Carry the glass to the ice machine, dispense ice, and set the glass
+	//      down in the staging area to free the gripper — one chunk, planned
+	//      together.
+	return s.inChunk("ice and stage glass", func() error {
+		if err := s.dispenseIce(ctx, cancelCtx); err != nil {
+			return err
+		}
+		return s.stageGlass(ctx, cancelCtx)
+	})
 }
 
 // finishIced runs the rest of the iced flow (steps 4-9) once the pour is done
@@ -92,18 +95,21 @@ func (s *beanjaminCoffee) finishIced(ctx, cancelCtx context.Context, milk string
 		// order's step back to serving for the placement that follows.
 		s.setStep(stepServing)
 	}
-	// 5. Retrieve the brewed espresso cup from the machine.
-	if err := s.grabBrewedCupFromMachine(ctx, cancelCtx); err != nil {
-		return -1, err
-	}
-	// 6. Pour the espresso over the ice in the staged glass.
-	if err := s.pourEspresso(ctx, cancelCtx); err != nil {
+	// 5-6. Retrieve the brewed espresso cup from the machine and pour it over the
+	//      ice in the staged glass — one chunk, so the grasp leaves the wrist
+	//      room for the pour tilt.
+	if err := s.inChunk("collect and pour espresso", func() error {
+		if err := s.grabBrewedCupFromMachine(ctx, cancelCtx); err != nil {
+			return err
+		}
+		return s.pourEspresso(ctx, cancelCtx)
+	}); err != nil {
 		return -1, err
 	}
 	// 7. Place the now-empty espresso cup in the serving area (round-robin). The
 	//    pour left it empty, so it skips the no-spill level carry — there is
 	//    nothing left in it to slosh.
-	if _, err := s.placeHeldInServingArea(ctx, cancelCtx, heldEmpty); err != nil {
+	if _, err := s.placeHeldInServingArea(ctx, cancelCtx, nil, heldEmpty); err != nil {
 		return -1, err
 	}
 

@@ -80,6 +80,8 @@ type armRun struct {
 	// chunk records moves instead of handing them off while one is open
 	// (inChunk); owned by the planning goroutine.
 	chunk *chunk
+	// flushes counts the chunks planned and handed off.
+	flushes int
 
 	moves  chan move // nil when execution is idle
 	done   chan error

@@ -160,6 +160,19 @@ func (s *beanjaminCoffee) inChunk(name string, record func() error) error {
 	return s.flushChunk()
 }
 
+// handsOff runs record and reports whether any of the work it did was handed
+// off: run outside a chunk, or flushed partway through one. What a chunk still
+// holds when record returns can be dropped if the chunk fails to plan.
+func (s *beanjaminCoffee) handsOff(record func() error) (bool, error) {
+	r := s.run
+	if r == nil || r.synced || r.chunk == nil {
+		return true, record()
+	}
+	flushes := r.flushes
+	err := record()
+	return r.flushes != flushes, err
+}
+
 // motionBuilder builds a motion's request from where the frames stand as it
 // starts. A start without the arm means the motions before it are not planned
 // yet; a builder that needs the arm returns an error, and is called again once
@@ -276,6 +289,7 @@ func (s *beanjaminCoffee) flushChunk() error {
 		return err
 	}
 
+	r.flushes++
 	from := start[s.cfg.ArmName]
 	planned := 0
 	var joined [][][]referenceframe.Input // trajectories of the motions joined so far
