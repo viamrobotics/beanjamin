@@ -47,7 +47,10 @@ type move struct {
 	repeatFor time.Duration
 
 	gripper gripperAction
-	sleep   time.Duration
+	// run is work the execution thread does after the gripper action and before
+	// the sleep, such as waiting for the jaws to read open.
+	run   func(ctx context.Context) error
+	sleep time.Duration
 
 	// scene is the scene the move leaves the cell in, the run's executed scene
 	// once the move has run. handOff sets it.
@@ -247,7 +250,7 @@ func (s *beanjaminCoffee) runMoveRecovered(ctx context.Context, m move) (err err
 	return s.runMove(ctx, m)
 }
 
-// runMove executes a move: bookkeeping, trajectory, gripper, then sleep.
+// runMove executes a move: bookkeeping, trajectory, gripper, run, then sleep.
 func (s *beanjaminCoffee) runMove(ctx context.Context, m move) error {
 	if m.bookkeep != nil {
 		m.bookkeep()
@@ -267,6 +270,11 @@ func (s *beanjaminCoffee) runMove(ctx context.Context, m move) error {
 			return fmt.Errorf("close gripper: %w", err)
 		}
 	case noGripperAction:
+	}
+	if m.run != nil {
+		if err := m.run(ctx); err != nil {
+			return err
+		}
 	}
 	return sleepCtx(ctx, m.sleep, m.name)
 }

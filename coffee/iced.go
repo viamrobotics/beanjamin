@@ -320,15 +320,17 @@ func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 	if err := s.moveToIceDispense(ctx, cancelCtx); err != nil {
 		return err
 	}
-	// The glass has to be under the chute before the pin opens.
-	if err := s.settle(); err != nil {
+	// Handed off after the move under the chute, so the pin opens only once the
+	// glass is there.
+	if err := s.handOff(ctx, move{name: "dispense ice", run: func(ctx context.Context) error {
+		if err := s.pulseIcePin(ctx, cancelCtx); err != nil {
+			return fmt.Errorf("dispense_ice: %w", err)
+		}
+		s.incrementSensorReading(ctx, s.usageSensor, "ice machine", "ice_dispenses", 1)
+		return nil
+	}}); err != nil {
 		return fmt.Errorf("dispense_ice: %w", err)
 	}
-
-	if err := s.pulseIcePin(ctx, cancelCtx); err != nil {
-		return fmt.Errorf("dispense_ice: %w", err)
-	}
-	s.incrementSensorReading(ctx, s.usageSensor, "ice machine", "ice_dispenses", 1)
 
 	retreatStep := Step{PoseName: clawPoseIceMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
 		MoveOptions: s.slowMoveOptions()}

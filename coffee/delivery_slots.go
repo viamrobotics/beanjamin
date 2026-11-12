@@ -356,9 +356,6 @@ func (s *beanjaminCoffee) dropHeldInDeliverySlot(ctx context.Context, slot deliv
 	if err := s.openGripper(ctx); err != nil {
 		return false, fmt.Errorf("open gripper to release drink: %v", err)
 	}
-	if err := s.settle(); err != nil {
-		return false, fmt.Errorf("open gripper to release drink: %v", err)
-	}
 	s.detachHeldGeometry()
 
 	// The gripper is empty: the arm's default speed.
