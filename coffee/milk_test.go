@@ -138,7 +138,7 @@ func TestMilkBottleBoxRestsOnSurface(t *testing.T) {
 	for _, gripZ := range []float64{240, 325, 430} {
 		fs := fridgeFloorFS(t, gripZ)
 		s := heldGeomService(t, fs)
-		box, _, err := s.scene().milkBottleBox(referenceframe.NewZeroInputs(fs), dims)
+		box, _, err := s.scene().milkBottleBox(placement{inputs: referenceframe.NewZeroInputs(fs)}, dims)
 		if err != nil {
 			t.Fatalf("grip Z=%.0f: milkBottleBox: %v", gripZ, err)
 		}
@@ -155,7 +155,7 @@ func TestMilkBottleBoxRejectsUnseatableBottle(t *testing.T) {
 		"grab above the bottle": fridgeFloorFS(t, 470),
 	} {
 		s := heldGeomService(t, fs)
-		if _, _, err := s.scene().milkBottleBox(referenceframe.NewZeroInputs(fs), dims); err == nil {
+		if _, _, err := s.scene().milkBottleBox(placement{inputs: referenceframe.NewZeroInputs(fs)}, dims); err == nil {
 			t.Errorf("%s: milkBottleBox succeeded, want an error", name)
 		}
 	}

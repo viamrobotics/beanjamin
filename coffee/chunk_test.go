@@ -252,6 +252,25 @@ func TestExpectedInputsFlushesTheChunk(t *testing.T) {
 	}
 }
 
+// A pivot recorded after a motion starts where that motion's goal puts the
+// pivoting frame, since the arm is left out of the start until it is planned.
+func TestPivotStartsAtTheRecordedGoal(t *testing.T) {
+	s, _, end := chunkCoffee(t)
+	defer func() { _ = end() }()
+	if err := s.inChunk("test", func() error {
+		recordStepNamed(t, s, "a")
+		pd := &poseData{refFrame: referenceframe.World, componentName: componentClaws}
+		got, err := s.pivotStartPose(s.scene().fs, referenceframe.FrameSystemInputs{}, pd)
+		if err != nil {
+			return err
+		}
+		requireVecEqual(t, got.Point(), clawsPose(t, s.scene().fs, chunkArmA).Point(), 1e-6)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A goal no motion can reach fails the chunk as a planning error, with nothing
 // handed off, and saves every request of the chunk as one sequence.
 func TestUnplannableChunkRunsNothing(t *testing.T) {
@@ -363,6 +382,76 @@ func TestOrderStepsOutsideAChunkPlanAhead(t *testing.T) {
 	if len(f.moves) != 2 {
 		t.Fatalf("ran %d trajectories, want 2", len(f.moves))
 	}
+}
+
+// Inside a chunk, where the frames on the arm will be is read off the last
+// recorded goal, without planning what the chunk holds.
+func TestPlacementReadsTheRecordedGoal(t *testing.T) {
+	s, _, end := chunkCoffee(t)
+	defer func() { _ = end() }()
+	if err := s.inChunk("test", func() error {
+		recordStepNamed(t, s, "a")
+		at, err := s.expectedPlacement(context.Background())
+		if err != nil {
+			return err
+		}
+		if !s.run.chunk.hasMotions() {
+			t.Error("placing the arm planned the chunk")
+		}
+		fs := s.scene().fs
+		got, err := at.worldPose(fs, gripPoint)
+		if err != nil {
+			return err
+		}
+		want, err := toWorld(fs, referenceframe.FrameSystemInputs{"arm": chunkArmA}, gripPoint, spatialmath.NewZeroPose())
+		if err != nil {
+			return err
+		}
+		requireVecEqual(t, got.Point(), want.Point(), 1e-6)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A held item attached inside a chunk is placed where the recorded grasp leaves
+// the gripper, without planning the chunk.
+func TestAttachingInAChunkKeepsItWhole(t *testing.T) {
+	s, f, end := chunkCoffee(t)
+	fs := s.scene().fs
+	gripAtA, err := toWorld(fs, referenceframe.FrameSystemInputs{"arm": chunkArmA}, gripPoint, spatialmath.NewZeroPose())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Out along the tool axis, clear of the arm's last link.
+	cupAt := spatialmath.Compose(gripAtA, spatialmath.NewPoseFromPoint(r3.Vector{Z: 100}))
+	cup, err := spatialmath.NewBox(cupAt, r3.Vector{X: 10, Y: 10, Z: 10}, "cup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.inChunk("test", func() error {
+		recordStepNamed(t, s, "a")
+		if err := s.attachDetectedGeometry(context.Background(), pickupLabelCup, cup); err != nil {
+			return err
+		}
+		if len(f.moves) != 0 || !s.run.chunk.hasMotions() {
+			t.Error("attaching the cup planned the chunk")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := end(); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.moves) != 1 {
+		t.Fatalf("ran %d trajectories, want 1", len(f.moves))
+	}
+	local := s.settledScene.cachedHeldGeometry(pickupLabelCup)
+	if local == nil {
+		t.Fatal("no cup geometry cached")
+	}
+	requireVecEqual(t, local.Pose().Point(), r3.Vector{Z: 100}, 1e-6)
 }
 
 // A run that doesn't plan ahead runs its chunk as the chunk flushes.

@@ -134,10 +134,10 @@ func (st *servingSlotStore) set(logger logging.Logger, next uint64) {
 // an error.
 func (s *beanjaminCoffee) shelfTopGeometry(ctx context.Context) (spatialmath.Pose, r3.Vector, error) {
 	logger := s.activeOrderLogger()
-	fs, fsInputs, err := s.currentInputs(ctx)
-	if err != nil {
-		return nil, r3.Vector{}, err
-	}
+	// The serving area is off the arm, so placing it needs no arm joints.
+	sc := s.scene()
+	fs := sc.fs
+	fsInputs := placement{inputs: sc.inputs}.fullInputs(fs)
 
 	var (
 		frameName string

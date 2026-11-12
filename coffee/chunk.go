@@ -15,11 +15,12 @@ package coffee
 // each motion of a run is planned as a chunk of its own. Each request is built
 // from the scene's inputs. Once a motion is recorded, the arm is left out of
 // them: where it will stand is only known once the recorded motions are
-// planned. Whatever needs to know it flushes the chunk first — plans what is
-// recorded so far and hands it off — so the arm is never guessed: a request
-// built from where the arm stands (a pivot's start, a goal hanging off the
-// arm), a scene edit (expectedInputs), and any stopping point (settle). The
-// chunk flushes whatever is left when it closes.
+// planned. What only needs to know where the frames on the arm will be — a
+// pivot's start, a scene edit — reads it off the last recorded motion's goal
+// (placement). What needs the arm's joints flushes the chunk first — plans what
+// is recorded so far and hands it off: a request whose goal hangs off the arm,
+// a goal that cannot place the arm, and any stopping point (settle). The chunk
+// flushes whatever is left when it closes.
 //
 // An order's chunk hands its moves to the execution goroutine; any other run
 // runs them as the chunk flushes.
@@ -96,6 +97,27 @@ func (c *chunk) hasMotions() bool {
 		}
 	}
 	return false
+}
+
+// lastGoal returns the frame the last recorded motion's final goal moves and
+// where it puts it, or nil when c holds no motion or that goal moves more than
+// one frame.
+func (c *chunk) lastGoal() (string, *referenceframe.PoseInFrame) {
+	if c == nil {
+		return "", nil
+	}
+	for i := len(c.ops) - 1; i >= 0; i-- {
+		if m := c.ops[i].motion; m != nil {
+			poses := m.req.Goals[len(m.req.Goals)-1].Poses()
+			if len(poses) != 1 {
+				return "", nil
+			}
+			for frame, goal := range poses {
+				return frame, goal
+			}
+		}
+	}
+	return "", nil
 }
 
 // armlessStart returns c's start without the arm named arm.

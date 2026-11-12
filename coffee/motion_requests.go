@@ -185,13 +185,10 @@ func (s *beanjaminCoffee) pivotMotion(ctx context.Context, step Step, start refe
 	// and with a portafilter engaged in the bayonet while it happens. The
 	// position is snapped onto the authored start→end line so the pivot stays on
 	// it even if the arm has drifted a fraction of a mm.
-	curTF, err := fs.Transform(start.ToLinearInputs(),
-		referenceframe.NewPoseInFrame(startPD.componentName, spatialmath.NewZeroPose()),
-		startPD.refFrame)
+	actual, err := s.pivotStartPose(fs, start, startPD)
 	if err != nil {
 		return nil, fmt.Errorf("pivot %q: current pose of %q: %w", step.PivotFromPose, startPD.componentName, err)
 	}
-	actual := curTF.(*referenceframe.PoseInFrame).Pose()
 	seed, dist := pivotSeedPoint(startPD.pose.Point(), endPD.pose.Point(), actual.Point())
 	if dist > pivotStartToleranceMm {
 		return nil, fmt.Errorf("pivot %q → %q: arm is %.2f mm off the pivot line (max %.1f mm) — refusing to pivot about the wrong point",
@@ -239,6 +236,28 @@ func (s *beanjaminCoffee) pivotMotion(ctx context.Context, step Step, start refe
 		},
 		speed: step.MoveOptions,
 	}, nil
+}
+
+// pivotStartPose returns where pd's component stands, in pd's reference frame,
+// as a pivot begins: read off start, or, when start leaves the arm out because
+// the motions recorded ahead of the pivot in a chunk are not planned yet, placed
+// by the goal the last of them reaches (goalPlacement).
+func (s *beanjaminCoffee) pivotStartPose(
+	fs *referenceframe.FrameSystem, start referenceframe.FrameSystemInputs, pd *poseData,
+) (spatialmath.Pose, error) {
+	at := placement{inputs: start}
+	if _, known := start[s.cfg.ArmName]; !known {
+		goalAt, ok := s.goalPlacement(start)
+		if !ok {
+			return nil, errUnplaceable
+		}
+		at = goalAt
+	}
+	tf, err := at.transform(fs, referenceframe.NewPoseInFrame(pd.componentName, spatialmath.NewZeroPose()), pd.refFrame)
+	if err != nil {
+		return nil, err
+	}
+	return tf.(*referenceframe.PoseInFrame).Pose(), nil
 }
 
 // circularMotion builds one revolution of circular waypoints around
