@@ -129,12 +129,18 @@ func (s *beanjaminCoffee) editScene(edit func(sc *sceneState) error) error {
 }
 
 // publishScene makes next the scene planning works against. In a run it also
-// becomes the executed scene once every move handed off before it has run, so
-// a failure in one of those moves leaves the executed scene without it.
+// becomes the executed scene once every move handed off or recorded before it
+// has run, so a failure in one of those moves leaves the executed scene without
+// it.
 func (s *beanjaminCoffee) publishScene(next *sceneState) {
 	r := s.run
 	if r == nil {
 		s.settledScene = next
+		return
+	}
+	if c := r.chunk; c != nil && len(c.ops) > 0 {
+		c.add(&chunkOp{act: move{name: "scene"}, scene: next}, r.planned)
+		r.planned = next
 		return
 	}
 	r.planned = next

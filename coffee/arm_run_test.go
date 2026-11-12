@@ -207,20 +207,3 @@ func TestArmNear(t *testing.T) {
 		t.Error("a different joint count should not be near")
 	}
 }
-
-func TestIsDirectMove(t *testing.T) {
-	for _, tc := range []struct {
-		step Step
-		want bool
-	}{
-		{Step{PoseName: "a"}, true},
-		{Step{PoseName: "a", LinearConstraint: defaultApproachConstraint}, true},
-		{Step{PoseName: "a", CircularRadiusMm: 3}, false},
-		{Step{PoseName: "a", PivotFromPose: "b"}, false},
-		{Step{PoseName: "a", NoSpill: true}, false},
-	} {
-		if got := isDirectMove(tc.step); got != tc.want {
-			t.Errorf("isDirectMove(%+v) = %v, want %v", tc.step, got, tc.want)
-		}
-	}
-}

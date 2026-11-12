@@ -82,7 +82,7 @@ func TestFailedMoveRewindsThePlannedScene(t *testing.T) {
 // executed scene keeps up with the planned one.
 func TestDirectRunExecutesAsItHandsOff(t *testing.T) {
 	s := sceneCoffee(t)
-	end := s.startDirectRun("execute_action")
+	end := s.startDirectRun(context.Background(), context.Background(), "execute_action")
 	var r recorder
 	if err := s.handOff(context.Background(), r.move("a")); err != nil {
 		t.Fatal(err)

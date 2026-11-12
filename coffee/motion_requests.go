@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/motionplan/armplanning"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
@@ -227,21 +228,14 @@ func (s *beanjaminCoffee) pivotMotion(ctx context.Context, step Step, start refe
 		return nil, err
 	}
 
-	var plannerOpts *armplanning.PlannerOptions
-	if step.AcceptPartialPlan {
-		plannerOpts = armplanning.NewBasicPlannerOptions()
-		plannerOpts.ReturnPartialPlan = true
-	}
-
 	return &motionRequest{
 		name:  step.PoseName,
 		label: "pivot",
 		req: &armplanning.PlanRequest{
-			FrameSystem:    fs,
-			Goals:          goals,
-			StartState:     armplanning.NewPlanState(nil, start),
-			Constraints:    buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.scene().appendHeldItemCollisions(step.AllowedCollisions))),
-			PlannerOptions: plannerOpts,
+			FrameSystem: fs,
+			Goals:       goals,
+			StartState:  armplanning.NewPlanState(nil, start),
+			Constraints: buildConstraints(step.LinearConstraint, s.filterFakeModeCollisions(s.scene().appendHeldItemCollisions(step.AllowedCollisions))),
 		},
 		speed: step.MoveOptions,
 	}, nil
@@ -312,18 +306,13 @@ func (s *beanjaminCoffee) carryMotion(
 		moveFrame = heldItemFrameName
 	}
 
-	startPose, err := toWorld(fs, start, moveFrame, spatialmath.NewZeroPose())
-	if err != nil {
-		return nil, fmt.Errorf("transform held-container start pose to world: %w", err)
-	}
 	destPose, err := carryGoalForMoveFrame(fs, start, dest, moveFrame)
 	if err != nil {
 		return nil, err
 	}
 
-	logger.Infof("no-spill carry: moving %q over %.0fmm (path±%.0f°, buffer: %.1fmm)",
-		moveFrame, destPose.Point().Sub(startPose.Point()).Norm(),
-		noSpillOrientationToleranceDegs, freeMoveCollisionBufferMM)
+	logger.Infof("no-spill carry: moving %q to %q (path±%.0f°, buffer: %.1fmm)",
+		moveFrame, name, noSpillOrientationToleranceDegs, freeMoveCollisionBufferMM)
 
 	return &motionRequest{
 		name:  name,
@@ -380,16 +369,16 @@ func (s *beanjaminCoffee) runMotion(ctx context.Context, m *motionRequest) error
 	if err != nil {
 		return err
 	}
-	return s.runPositions(ctx, m.name, positions, m.speed, m.repeatFor)
+	return s.runPositions(ctx, m.name, positions, buildMoveOptions(m.speed), m.repeatFor)
 }
 
 // runPositions moves the arm through positions, replaying them until repeatFor
 // has passed when it is positive.
 func (s *beanjaminCoffee) runPositions(
-	ctx context.Context, name string, positions [][]referenceframe.Input, speed *StepMoveOptions, repeatFor time.Duration,
+	ctx context.Context, name string, positions [][]referenceframe.Input, speed *arm.MoveOptions, repeatFor time.Duration,
 ) error {
 	if repeatFor <= 0 {
-		return s.arm.MoveThroughJointPositions(ctx, positions, buildMoveOptions(speed), nil)
+		return s.arm.MoveThroughJointPositions(ctx, positions, speed, nil)
 	}
 	deadline := time.Now().Add(repeatFor)
 	for rev := 0; time.Now().Before(deadline); rev++ {
@@ -399,7 +388,7 @@ func (s *beanjaminCoffee) runPositions(
 		default:
 		}
 		s.activeOrderLogger().Debugf("circular revolution %d around %q", rev+1, name)
-		if err := s.arm.MoveThroughJointPositions(ctx, positions, buildMoveOptions(speed), nil); err != nil {
+		if err := s.arm.MoveThroughJointPositions(ctx, positions, speed, nil); err != nil {
 			return fmt.Errorf("execute circular revolution %d around %q: %w", rev+1, name, err)
 		}
 	}

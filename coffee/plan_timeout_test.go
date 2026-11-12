@@ -1,7 +1,6 @@
 package coffee
 
 import (
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -52,12 +51,6 @@ func TestIncompletePlanErr(t *testing.T) {
 		{name: "nil meta", meta: nil, goals: 3},
 		{name: "prefix of a multi-goal plan", meta: &armplanning.PlanMeta{GoalsProcessed: 2}, goals: 5, wantErr: true},
 		{name: "nothing solved", meta: &armplanning.PlanMeta{}, goals: 1, wantErr: true},
-		{
-			name:    "partial plan returned on a goal failure",
-			meta:    &armplanning.PlanMeta{Partial: true, PartialError: errors.New("no direct solution"), GoalsProcessed: 4},
-			goals:   9,
-			wantErr: true,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

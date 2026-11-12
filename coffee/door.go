@@ -13,7 +13,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"time"
 
 	"go.viam.com/rdk/motionplan/armplanning"
 	"go.viam.com/rdk/referenceframe"
@@ -304,10 +303,9 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 		return fmt.Errorf("approach handle: %w", err)
 	}
 	if s.gripper != nil {
-		if err := s.gripper.Open(ctx, nil); err != nil {
+		if err := s.openGripper(ctx); err != nil {
 			return fmt.Errorf("open gripper for handle grab: %w", err)
 		}
-		time.Sleep(gripperPause)
 	}
 	if err := s.moveToRawPose(ctx,
 		&poseData{pose: graspWorld, refFrame: referenceframe.World, componentName: frameGripPoint},
@@ -315,10 +313,9 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 		return fmt.Errorf("move to grasp (ball center): %w", err)
 	}
 	if s.gripper != nil {
-		if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		if err := s.closeGripper(ctx); err != nil {
 			return fmt.Errorf("grab handle: %w", err)
 		}
-		time.Sleep(gripperPause)
 	}
 
 	// 2. Plan the whole θ fromDeg→toDeg sweep, then execute the concatenated
@@ -413,12 +410,11 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	//    still holds the door at the final θ — so the exit backs off exactly as the
 	//    approach came in), then close the jaws for whatever moves next.
 	if s.gripper != nil {
-		if err := s.gripper.Open(ctx, nil); err != nil {
-			return fmt.Errorf("release handle: %w", err)
-		}
 		// The jaws have to clear the handle before the retract pulls away, or the
 		// arm backs off still clamped and wrenches the door against its hinge.
-		time.Sleep(gripperPause)
+		if err := s.openGripper(ctx); err != nil {
+			return fmt.Errorf("release handle: %w", err)
+		}
 	}
 	_, retractInputs, err := s.currentInputs(ctx)
 	if err != nil {
@@ -444,10 +440,9 @@ func (s *beanjaminCoffee) sweepDoor(ctx, cancelCtx context.Context, action, step
 	// jaws open here also defeats step 1's own standoff rule on the next sweep:
 	// close_door would traverse to the fridge wide open.
 	if s.gripper != nil {
-		if _, err := s.gripper.Grab(ctx, nil); err != nil {
+		if err := s.closeGripper(ctx); err != nil {
 			return fmt.Errorf("close gripper after releasing handle: %w", err)
 		}
-		time.Sleep(gripperPause)
 	}
 	return nil
 }

@@ -86,7 +86,7 @@ func TestPivotSeedPoint(t *testing.T) {
 		wantDist float64
 	}{
 		{"on start", start, end, start, start, 0},
-		{"partway up after a partial tilt", end, start, r3.Vector{X: 0, Y: 0, Z: 125}, r3.Vector{X: 0, Y: 0, Z: 125}, 0},
+		{"partway along the line", end, start, r3.Vector{X: 0, Y: 0, Z: 125}, r3.Vector{X: 0, Y: 0, Z: 125}, 0},
 		{"beside the line", start, end, r3.Vector{X: 1.5, Y: 0, Z: 110}, r3.Vector{X: 0, Y: 0, Z: 110}, 1.5},
 		{"before start clamps to start", start, end, r3.Vector{X: 0, Y: 0, Z: 97}, start, 3},
 		{"past end clamps to end", start, end, r3.Vector{X: 0, Y: 0, Z: 150}, end, 10},

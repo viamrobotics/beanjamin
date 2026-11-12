@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/referenceframe"
@@ -236,10 +235,9 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, tileW
 	// 3. Release the cup. Past this point the cup is committed to this slot;
 	// the steps below strip any errMotionPlanning chain (%v) so the caller does
 	// not retry another slot with an empty gripper.
-	if err := s.gripper.Open(ctx, nil); err != nil {
+	if err := s.openGripper(ctx); err != nil {
 		return fmt.Errorf("open gripper to release cup: %w", err)
 	}
-	time.Sleep(gripperPause)
 	// Cup is released onto the shelf; it no longer travels with the gripper.
 	s.detachHeldGeometry()
 
@@ -253,9 +251,8 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, tileW
 	}
 
 	// 5. Close the gripper for the next move.
-	if _, err := s.gripper.Grab(ctx, nil); err != nil {
+	if err := s.closeGripper(ctx); err != nil {
 		return fmt.Errorf("close gripper after release: %w", err)
 	}
-	time.Sleep(gripperPause)
 	return nil
 }

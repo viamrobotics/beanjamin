@@ -30,7 +30,7 @@ func (s *beanjaminCoffee) detectDeliverySlotCommand(ctx context.Context) (map[st
 		return nil, err
 	}
 	defer s.lease.release()
-	defer s.startDirectRun("detect_delivery_slot")()
+	defer s.startDirectRun(ctx, cancelCtx, "detect_delivery_slot")()
 	if err := s.refreshFrameSystemIfClean(ctx); err != nil {
 		return nil, fmt.Errorf("detect_delivery_slot: refresh frame system: %w", err)
 	}
@@ -60,7 +60,7 @@ func (s *beanjaminCoffee) placeInDeliveryCartCommand(ctx context.Context) (map[s
 		return nil, err
 	}
 	defer s.lease.release()
-	defer s.startDirectRun("place_in_delivery_cart")()
+	defer s.startDirectRun(ctx, cancelCtx, "place_in_delivery_cart")()
 	if err := s.refreshFrameSystemIfClean(ctx); err != nil {
 		return nil, fmt.Errorf("place_in_delivery_cart: refresh frame system: %w", err)
 	}
