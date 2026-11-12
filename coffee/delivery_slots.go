@@ -121,7 +121,22 @@ func (s *beanjaminCoffee) placeHeldInCart(ctx, cancelCtx context.Context, slot d
 	ctx, done := mergedCancelContext(ctx, cancelCtx)
 	defer done()
 
-	released, err := s.dropHeldInDeliverySlot(ctx, slot)
+	// The drop is one chunk, planned together. A chunk that cannot be planned
+	// runs nothing, so unless part of it was handed off before planning failed,
+	// the drink is still held.
+	var released, handed bool
+	err = s.inChunk("place in delivery cart", func() error {
+		var dropErr error
+		handed, dropErr = s.handsOff(func() error {
+			var err error
+			released, err = s.dropHeldInDeliverySlot(ctx, slot)
+			return err
+		})
+		return dropErr
+	})
+	if !handed && errors.Is(err, errMotionPlanning) {
+		released = false
+	}
 	if released {
 		if err != nil {
 			return true, fmt.Errorf("place_in_cart: %w", err)

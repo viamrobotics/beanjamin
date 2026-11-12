@@ -78,13 +78,17 @@ func (s *beanjaminCoffee) addMilk(ctx, cancelCtx context.Context, milk string) e
 		return s.milkStepErr(milk, err)
 	}
 	s.setStep(stepAddingMilk)
-	if err := s.fetchMilkBottle(ctx, cancelCtx, milk); err != nil {
-		return s.milkStepErr(milk, err)
-	}
-	if err := s.pourMilk(ctx, cancelCtx); err != nil {
-		return s.milkStepErr(milk, err)
-	}
-	if err := s.returnMilkBottle(ctx, cancelCtx); err != nil {
+	// Fetching, pouring and returning the bottle is one chunk, so the grasp in
+	// the fridge leaves the wrist room for the pour tilt.
+	if err := s.inChunk("fetch, pour and return milk", func() error {
+		if err := s.fetchMilkBottle(ctx, cancelCtx, milk); err != nil {
+			return err
+		}
+		if err := s.pourMilk(ctx, cancelCtx); err != nil {
+			return err
+		}
+		return s.returnMilkBottle(ctx, cancelCtx)
+	}); err != nil {
 		return s.milkStepErr(milk, err)
 	}
 	if err := s.closeDoor(ctx, cancelCtx); err != nil {
@@ -308,8 +312,8 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 	}
 	// heldMilk is empty only for a hand-run pour_milk with no fetch_milk before
 	// it, where there's no telling which bottle was poured.
-	if s.scene().heldMilk != "" {
-		s.incrementSensorReading(ctx, s.usageSensor, s.scene().heldMilk+"_milk", milkPourCounter(s.scene().heldMilk), 1)
+	if milk := s.scene().heldMilk; milk != "" {
+		s.countUsage(ctx, milk+"_milk", milkPourCounter(milk), 1)
 	}
 	return nil
 }

@@ -80,19 +80,13 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 // drops it on the serving-area shelf at the next round-robin slot, returning
 // the 0-based slot it was placed in.
 func (s *beanjaminCoffee) placeFullCupOnShelf(ctx, cancelCtx context.Context) (int, error) {
-	if err := s.grabBrewedCupFromMachine(ctx, cancelCtx); err != nil {
-		return -1, err
-	}
-	return s.placeHeldInServingArea(ctx, cancelCtx, heldFilled)
+	return s.placeHeldInServingArea(ctx, cancelCtx, s.grabBrewedCupFromMachine, heldFilled)
 }
 
 // grabAndShelve grabs the filled drink and drops it in the next reachable
 // serving-area slot.
 func (s *beanjaminCoffee) grabAndShelve(ctx, cancelCtx context.Context, grab grabDrink) (int, error) {
-	if err := grab(ctx, cancelCtx); err != nil {
-		return -1, err
-	}
-	return s.placeHeldInServingArea(ctx, cancelCtx, heldFilled)
+	return s.placeHeldInServingArea(ctx, cancelCtx, grab, heldFilled)
 }
 
 // heldContents says whether the container being placed still holds liquid. It
@@ -112,10 +106,16 @@ const (
 // from servingSlot and drops the item in the first slot it can reach
 // (tryDropCupInSlot), skipping any whose approach or descent cannot be planned.
 // On success it returns the 0-based slot the item was placed in and advances the
-// counter to the slot after it, so the next placement starts there. The caller
-// must already be holding the item; shared by placeFullCupOnShelf (cups) and
-// serveIcedCoffee (the empty espresso cup and the iced glass).
-func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context, contents heldContents) (int, error) {
+// counter to the slot after it, so the next placement starts there. Shared by
+// placeFullCupOnShelf (cups) and serveIcedCoffee (the empty espresso cup and the
+// iced glass).
+//
+// grab, when set, takes hold of the item first; nil means it is already held.
+// Each slot is tried as one chunk with the grab, so the grab is planned to
+// leave the arm room for the drop, and a slot that cannot be planned runs
+// nothing — the next slot's chunk records the grab again. Once any of the grab
+// has been handed off, it is not repeated.
+func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context, grab grabDrink, contents heldContents) (int, error) {
 	logger := s.activeOrderLogger()
 	if s.gripper == nil {
 		return -1, fmt.Errorf("place_in_serving_area: no gripper configured")
@@ -132,7 +132,18 @@ func (s *beanjaminCoffee) placeHeldInServingArea(ctx, cancelCtx context.Context,
 	for off := 0; off < n; off++ {
 		idx := geom.SlotIndex(start+uint64(off), n)
 		logger.Infof("place_in_serving_area: trying slot %d/%d", idx+1, n)
-		err := s.tryDropCupInSlot(ctx, cancelCtx, slots[idx], shelfTopZ, contents)
+		err := s.inChunk(fmt.Sprintf("place in slot %d", idx+1), func() error {
+			if grab != nil {
+				grabbed, err := s.handsOff(func() error { return grab(ctx, cancelCtx) })
+				if grabbed {
+					grab = nil
+				}
+				if err != nil {
+					return err
+				}
+			}
+			return s.tryDropCupInSlot(ctx, cancelCtx, slots[idx], shelfTopZ, contents)
+		})
 		if err == nil {
 			// Next placement starts at the slot after the one just used.
 			s.servingSlot.set(logger, start+uint64(off)+1)
