@@ -86,7 +86,7 @@ func (s *beanjaminCoffee) placeInDeliveryCartCommand(ctx context.Context) (map[s
 	if !found {
 		return deliverySlotResponse(slot, false), nil
 	}
-	released, err = s.dropHeldInDeliverySlot(ctx, slot)
+	released, err = s.dropHeldInDeliverySlot(ctx, slot, nil)
 	if err != nil {
 		return nil, fmt.Errorf("place_in_delivery_cart (released=%v): %w", released, err)
 	}
