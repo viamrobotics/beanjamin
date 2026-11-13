@@ -105,21 +105,30 @@ func (s *beanjaminCoffee) gripperPos(ctx context.Context) (float64, error) {
 //
 // A confirmed grab logs its jaw position with item: each object settles at its
 // own position, and the holding band can only be tuned from those readings.
+//
+// It is handed off like any move, so during an order the check runs on the
+// execution thread and a miss fails the run there.
 func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context, item string) error {
-	if err := s.settle(); err != nil {
-		return err
-	}
+	return s.handOff(ctx, move{name: "grab " + item, run: func(ctx context.Context) error {
+		return s.grabHolding(ctx, item)
+	}})
+}
+
+// grabHolding is grabAndVerifyHolding's check, run where the move runs.
+func (s *beanjaminCoffee) grabHolding(ctx context.Context, item string) error {
 	if _, err := s.gripper.Grab(ctx, nil); err != nil {
 		return fmt.Errorf("grab: %w", err)
 	}
-	time.Sleep(gripperPause)
+	if err := sleepCtx(ctx, gripperPause, "grab "+item); err != nil {
+		return err
+	}
 	pos, err := s.gripperPos(ctx)
 	if err != nil {
 		return err
 	}
 	if state := s.classifyGripper(pos); state != gripperHolding {
 		missErr := fmt.Errorf("%w (pos=%.0f, state=%s)", errGripMissed, pos, state)
-		if err := s.openAndVerifyOpen(ctx); err != nil {
+		if err := s.openUntilOpen(ctx); err != nil {
 			return fmt.Errorf("%v; reopen: %w", missErr, err)
 		}
 		return missErr
@@ -141,10 +150,15 @@ func (s *beanjaminCoffee) grabAndVerifyHolding(ctx context.Context, item string)
 // closed on the portafilter, which wrenches the filter against the bayonet
 // rather than releasing it. Polling costs nothing when the jaws are quick and
 // fails loudly instead of silently when they are not.
+//
+// It is handed off like any move, so during an order the arm's next move waits
+// for the jaws on the execution thread rather than planning waiting for the arm.
 func (s *beanjaminCoffee) openAndVerifyOpen(ctx context.Context) error {
-	if err := s.settle(); err != nil {
-		return err
-	}
+	return s.handOff(ctx, move{name: "open gripper", run: s.openUntilOpen})
+}
+
+// openUntilOpen is openAndVerifyOpen's check, run where the move runs.
+func (s *beanjaminCoffee) openUntilOpen(ctx context.Context) error {
 	if err := s.gripper.Open(ctx, nil); err != nil {
 		return fmt.Errorf("open: %w", err)
 	}
