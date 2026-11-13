@@ -11,6 +11,7 @@ import (
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/arm/kinematics"
+	"go.viam.com/rdk/motionplan/armplanning"
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
 	"go.viam.com/rdk/testutils/inject"
@@ -340,4 +341,27 @@ func TestDirectRunRunsItsChunkWhenItFlushes(t *testing.T) {
 		t.Fatalf("ran %d trajectories once the chunk closed, want 2", len(f.moves))
 	}
 	requireClawsAt(t, s, f.at, chunkArmB)
+}
+
+// A failed chunk is reported at the motion after the one planned again most
+// often, or at the first unsolved motion when nothing was planned again.
+func TestStuckMotion(t *testing.T) {
+	meta := func(backtracks int) *armplanning.PlanMeta { return &armplanning.PlanMeta{BacktrackCounter: backtracks} }
+	for _, tc := range []struct {
+		name   string
+		metas  []*armplanning.PlanMeta
+		solved int
+		want   int
+	}{
+		{name: "backtracked to the motion before", metas: []*armplanning.PlanMeta{meta(2), meta(1), meta(3), meta(9), meta(0), meta(0)}, solved: 2, want: 4},
+		{name: "no backtracking", metas: []*armplanning.PlanMeta{meta(0), meta(0), nil}, solved: 1, want: 1},
+		{name: "first motion failed", metas: []*armplanning.PlanMeta{meta(0), nil}, solved: 0, want: 0},
+		{name: "every motion solved", metas: []*armplanning.PlanMeta{meta(0), meta(0)}, solved: 2, want: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := stuckMotion(tc.metas, tc.solved); got != tc.want {
+				t.Errorf("stuckMotion = %d, want %d", got, tc.want)
+			}
+		})
+	}
 }

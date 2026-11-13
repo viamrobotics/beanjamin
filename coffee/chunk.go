@@ -307,28 +307,45 @@ func (s *beanjaminCoffee) planChunk(name string, motions []*motionRequest) ([][]
 	ctx, cancel := context.WithTimeout(s.run.ctx, chunkPlanTimeout)
 	plans, metas, planErr := armplanning.PlanMotionSequence(ctx, logger, reqs,
 		&armplanning.SequenceOptions{BacktrackBranchFactor: chunkBacktrackBranchFactor})
+	timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
 	cancel()
 	took := time.Since(began).Round(time.Millisecond)
 
+	// A sequence error means no combination of plans was found; a plan short of
+	// its goal, that the deadline cut a request off.
+	sequenceFailed := planErr != nil
 	solved := 0
-	if planErr == nil {
+	if !sequenceFailed {
 		for ; solved < len(reqs); solved++ {
 			if planErr = planShortOfGoal(reqs[solved], plans[solved]); planErr != nil {
 				break
 			}
 		}
 	}
-	s.saveChunkPlans(motions, plans, metas, solved, planErr)
 	if planErr != nil {
-		at := furthestPlanned(metas, solved)
+		at, err := solved, planErr
+		switch {
+		case timedOut:
+			// Past the deadline the planner hands back a plan that stays where it
+			// starts for every motion it has left, so neither the plans nor the
+			// error say what held the chunk up; the backtracking does.
+			at = stuckMotion(metas, solved)
+			err = fmt.Errorf("ran out of planning time (%d backtracks)", totalBacktracks(metas))
+			if at > 0 && metas[at-1] != nil && metas[at-1].BacktrackCounter > 0 {
+				err = fmt.Errorf("ran out of planning time: it could not be planned from where %q ended (%d backtracks)",
+					motions[at-1].name, totalBacktracks(metas))
+			}
+		case sequenceFailed:
+			at = stuckMotion(metas, solved)
+		}
+		s.saveChunkPlans(motions, plans, solved, at, err)
 		return nil, fmt.Errorf("%w (chunk %q, at %q, motion %d of %d, after %s): %w",
-			errMotionPlanning, name, motions[at].name, at+1, len(motions), took, planErr)
+			errMotionPlanning, name, motions[at].name, at+1, len(motions), took, err)
 	}
+	s.saveChunkPlans(motions, plans, solved, -1, nil)
 
-	backtracks := 0
 	trajectories := make([][][]referenceframe.Input, len(plans))
 	for i, plan := range plans {
-		backtracks += metas[i].BacktrackCounter
 		positions, err := s.armInputs(plan, motions[i].label)
 		if err != nil {
 			return nil, err
@@ -338,7 +355,7 @@ func (s *beanjaminCoffee) planChunk(name string, motions []*motionRequest) ([][]
 		}
 		trajectories[i] = positions
 	}
-	logger.Infof("planned %q: %d motion(s) in %s (%d backtracks)", name, len(motions), took, backtracks)
+	logger.Infof("planned %q: %d motion(s) in %s (%d backtracks)", name, len(motions), took, totalBacktracks(metas))
 	return trajectories, nil
 }
 
@@ -379,31 +396,44 @@ func planShortOfGoal(req *armplanning.PlanRequest, plan motionplan.Plan) error {
 	return nil
 }
 
-// saveChunkPlans persists each request the planner got to, with its plan or,
-// for the one that failed, none.
+// saveChunkPlans persists the first solved motions with their plans and, when
+// failed is a motion's index, that motion's request with planErr and no plan.
 func (s *beanjaminCoffee) saveChunkPlans(
-	motions []*motionRequest, plans []motionplan.Plan, metas []*armplanning.PlanMeta, solved int, planErr error,
+	motions []*motionRequest, plans []motionplan.Plan, solved, failed int, planErr error,
 ) {
-	for i, m := range motions {
-		if i >= len(metas) || metas[i] == nil {
-			return
-		}
-		if i < solved {
-			s.savePlanRequestAndResponse(m.req, plans[i], m.label, nil)
-			continue
-		}
-		s.savePlanRequestAndResponse(m.req, nil, m.label, planErr)
-		return
+	for i := range min(solved, len(plans)) {
+		s.savePlanRequestAndResponse(motions[i].req, plans[i], motions[i].label, nil)
+	}
+	if failed >= 0 && failed < len(motions) {
+		s.savePlanRequestAndResponse(motions[failed].req, nil, motions[failed].label, planErr)
 	}
 }
 
-// furthestPlanned returns the index of the last motion the planner attempted.
-func furthestPlanned(metas []*armplanning.PlanMeta, solved int) int {
-	at := solved
+// stuckMotion returns the index of the motion a failed chunk was stuck on. A
+// motion is planned again when the one after it cannot start from where it
+// ends, so that is the motion after the one planned again most often. Without
+// any backtracking, it is the first motion that did not plan.
+func stuckMotion(metas []*armplanning.PlanMeta, solved int) int {
+	most, at := 0, -1
 	for i, m := range metas {
-		if m != nil && i > at {
-			at = i
+		if m != nil && m.BacktrackCounter > most {
+			most, at = m.BacktrackCounter, i
 		}
 	}
-	return max(min(at, len(metas)-1), 0)
+	if at >= 0 && at+1 < len(metas) {
+		return at + 1
+	}
+	return max(min(solved, len(metas)-1), 0)
+}
+
+// totalBacktracks is how many times the planner went back to an earlier
+// motion, over the whole chunk.
+func totalBacktracks(metas []*armplanning.PlanMeta) int {
+	n := 0
+	for _, m := range metas {
+		if m != nil {
+			n += m.BacktrackCounter
+		}
+	}
+	return n
 }
