@@ -84,25 +84,25 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 	if beans != order.BeansRegular {
 		grindSpan += "_" + beans
 	}
-	if err := runPhase(stepGrinding, grindSpan, "step 1/9: grinding "+order.DrinkLabel("coffee", beans), grind); err != nil {
+	// Grinding through releasing the locked portafilter is one chunk. The lock
+	// pivot is the wrist's biggest rotation of the cycle, and the configuration
+	// the arm reaches the group head in decides how much room it has, so the
+	// approaches are planned to leave it that room.
+	if err := s.inChunk("prepare portafilter", func() error {
+		if err := runPhase(stepGrinding, grindSpan, "step 1/9: grinding "+order.DrinkLabel("coffee", beans), grind); err != nil {
+			return err
+		}
+		s.countUsage(ctx, order.DrinkLabel("grinder", beans), grindCounter(beans), 1)
+		if err := runPhase(stepTamping, "tamping", "step 2/9: tamping ground", s.tampGround); err != nil {
+			return err
+		}
+		if err := runPhase(stepLockingPortafilter, "locking_portafilter", "step 3/9: locking portafilter", s.lockPortaFilter); err != nil {
+			return err
+		}
+		return runPhase(stepReleasingFilter, "releasing_filter", "step 4/9: releasing filter", s.releaseFilter)
+	}); err != nil {
 		return err
 	}
-	s.incrementSensorReading(ctx, s.usageSensor, order.DrinkLabel("grinder", beans), grindCounter(beans), 1)
-
-	if err := runPhase(stepTamping, "tamping", "step 2/9: tamping ground", s.tampGround); err != nil {
-		return err
-	}
-	if err := runPhase(stepLockingPortafilter, "locking_portafilter", "step 3/9: locking portafilter", s.lockPortaFilter); err != nil {
-		return err
-	}
-	if err := runPhase(stepReleasingFilter, "releasing_filter", "step 4/9: releasing filter", s.releaseFilter); err != nil {
-		return err
-	}
-	if err := runPhase(stepPlacingCup, "placing_cup", "step 5/9: placing cup", s.setCupForCoffee); err != nil {
-		return err
-	}
-	// A cup was pulled off the stack; count it now so a later fault still credits real use.
-	s.incrementSensorReading(ctx, s.usageSensor, "espresso cups", "espresso_cups_used", 1)
 
 	// The separate-buttons machine doses itself, leaving the arm free mid-pour.
 	// Put that idle time to use (brewAndPrep): an iced drink stages its glass, and
@@ -143,14 +143,29 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 			return nil
 		}
 	}
-	if err := s.speaker.Say(ctx, speech.AlmostReady()); err != nil {
-		logger.Warnf("failed to say almost-ready: %v", err)
-	}
-	if err := runPhase(stepBrewing, "brewing", brewProgress, brewPhase); err != nil {
+	// Placing the cup through the brew is one chunk. The cup is found by vision,
+	// so its pickup runs before anything is recorded; setting it under the
+	// machine and pressing the button are planned together.
+	if err := s.inChunk("load cup and brew", func() error {
+		if err := runPhase(stepPlacingCup, "placing_cup", "step 5/9: placing cup", s.setCupForCoffee); err != nil {
+			return err
+		}
+		// A cup was pulled off the stack; count it now so a later fault still credits real use.
+		s.countUsage(ctx, "espresso cups", "espresso_cups_used", 1)
+		s.handOffEffect(func() {
+			if err := s.speaker.Say(ctx, speech.AlmostReady()); err != nil {
+				logger.Warnf("failed to say almost-ready: %v", err)
+			}
+		})
+		if err := runPhase(stepBrewing, "brewing", brewProgress, brewPhase); err != nil {
+			return err
+		}
+		s.countUsage(ctx, "water", "usage", waterDelta(drink))
+		s.countUsage(ctx, "drip tray", "drip_tray_brews", 1)
+		return nil
+	}); err != nil {
 		return err
 	}
-	s.incrementSensorReading(ctx, s.usageSensor, "water", "usage", waterDelta(drink))
-	s.incrementSensorReading(ctx, s.usageSensor, "drip tray", "drip_tray_brews", 1)
 
 	var servedSlot int
 	inCart := false
@@ -162,23 +177,26 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 				return -1, err
 			}
 		}
-		if err := grab(ctx, cancelCtx); err != nil {
-			return -1, err
-		}
 		if cartSlotFound {
-			placed, err := s.placeHeldInCart(ctx, cancelCtx, cartSlot)
+			if err := grab(ctx, cancelCtx); err != nil {
+				return -1, err
+			}
+			// The cart learns the drink is in once the gripper has really let go of
+			// it, even if the retreat after fails.
+			tagID := cartSlot.tagID
+			placed, err := s.placeHeldInCart(ctx, cancelCtx, cartSlot, func() { s.delivery.markHandedOver(o.ID, tagID) })
 			if placed {
 				// Recorded before err is looked at: a fault after the release must
 				// not fail a drink that is already in the cart.
 				inCart = true
-				s.delivery.markHandedOver(o.ID, cartSlot.tagID)
 				return cartSlot.tagID, err
 			}
 			if err != nil {
 				return -1, err
 			}
+			return s.placeHeldInServingArea(ctx, cancelCtx, nil, heldFilled)
 		}
-		return s.placeHeldInServingArea(ctx, cancelCtx, heldFilled)
+		return s.placeHeldInServingArea(ctx, cancelCtx, grab, heldFilled)
 	}
 	serve := func(ctx, cancelCtx context.Context) (err error) {
 		switch {
@@ -201,31 +219,39 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 	// Record where the drink physically landed so a delivery order can report it
 	// as the pickup_position: a shelf slot, or the cart slot's tag id.
 	o.PickupPosition = servedSlot
-	if o.Fulfillment == order.FulfillmentDelivery {
-		if !inCart {
-			s.delivery.markReady(o, s.deliveryHeartbeatTimeout())
+	// The serve is planned ahead of the arm, so the drink is only ready once the
+	// arm has set it down and backed off: handed off, not announced from here.
+	served, servedInCart := o, inCart
+	s.handOffEffect(func() {
+		if served.Fulfillment == order.FulfillmentDelivery {
+			if !servedInCart {
+				s.delivery.markReady(served, s.deliveryHeartbeatTimeout())
+			}
+			if err := s.readyForDelivery(ctx, served); err != nil {
+				logger.Warnf("failed to announce ready-for-delivery: %v", err)
+			}
+		} else if err := s.speaker.SayAlways(ctx, speech.DrinkReady(served.Label(), customerName, batchIndex, batchSize)); err != nil {
+			logger.Warnf("failed to say drink-ready: %v", err)
 		}
-		if err := s.readyForDelivery(ctx, o); err != nil {
-			logger.Warnf("failed to announce ready-for-delivery: %v", err)
+	})
+
+	// Retrieving the portafilter through the move home is one chunk, so the
+	// unlock pivot is planned to leave the arm room for the cleaning moves.
+	if err := s.inChunk("retrieve and clean portafilter", func() error {
+		if err := runPhase(stepGrabbingFilter, "grabbing_filter", "step 7/9: grabbing filter", s.grabFilter); err != nil {
+			return err
 		}
-	} else if err := s.speaker.SayAlways(ctx, speech.DrinkReady(o.Label(), customerName, batchIndex, batchSize)); err != nil {
-		logger.Warnf("failed to say drink-ready: %v", err)
-	}
-
-	if err := runPhase(stepGrabbingFilter, "grabbing_filter", "step 7/9: grabbing filter", s.grabFilter); err != nil {
-		return err
-	}
-	if err := runPhase(stepUnlockingPortafilter, "unlocking_portafilter", "step 8/9: unlocking portafilter", s.unlockPortaFilter); err != nil {
-		return err
-	}
-	if err := runPhase(stepCleaning, "cleaning", "post: cleaning portafilter", s.cleanPortafilter); err != nil {
-		return err
-	}
-	s.incrementSensorReading(ctx, s.usageSensor, "cleaner", "cleanings", 1)
-
-	s.setStep(stepFinishingUp)
-	logger.Infof("step 9/9: moving to home pose")
-	if err := s.executeStep(ctx, cancelCtx, Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw}); err != nil {
+		if err := runPhase(stepUnlockingPortafilter, "unlocking_portafilter", "step 8/9: unlocking portafilter", s.unlockPortaFilter); err != nil {
+			return err
+		}
+		if err := runPhase(stepCleaning, "cleaning", "post: cleaning portafilter", s.cleanPortafilter); err != nil {
+			return err
+		}
+		s.countUsage(ctx, "cleaner", "cleanings", 1)
+		s.setStep(stepFinishingUp)
+		logger.Infof("step 9/9: moving to home pose")
+		return s.executeStep(ctx, cancelCtx, Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw})
+	}); err != nil {
 		return err
 	}
 

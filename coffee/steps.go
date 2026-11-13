@@ -86,15 +86,18 @@ type Step struct {
 	CircularPointsPerRev int
 }
 
-// runSteps executes each step in order, wrapping the first failure with label
+// runSteps runs the steps as one chunk, wrapping the first failure with label
 // (e.g. "tamp_ground") so the caller's error identifies the failed phase.
+// Inside an open chunk, the steps join it.
 func (s *beanjaminCoffee) runSteps(ctx, cancelCtx context.Context, label string, steps ...Step) error {
-	for _, step := range steps {
-		if err := s.executeStep(ctx, cancelCtx, step); err != nil {
-			return fmt.Errorf("%s: %w", label, err)
+	return s.inChunk(label, func() error {
+		for _, step := range steps {
+			if err := s.executeStep(ctx, cancelCtx, step); err != nil {
+				return fmt.Errorf("%s: %w", label, err)
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // executeStep moves the arm as step says: recorded in the open chunk, or

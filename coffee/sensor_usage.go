@@ -22,6 +22,13 @@ import (
 // back with DoCommand({"set": <full readings map>}). Writing only the changed
 // key would erase every other counter.
 
+// countUsage adds delta to the usage sensor's field counter once the moves
+// handed off before it have run, so a counter recorded in a chunk ticks only
+// when the arm gets there, and not at all for a chunk that fails to plan.
+func (s *beanjaminCoffee) countUsage(ctx context.Context, label, field string, delta float64) {
+	s.handOffEffect(func() { s.incrementSensorReading(ctx, s.usageSensor, label, field, delta) })
+}
+
 // incrementSensorReading adds delta to the sensor's `field` counter, leaving
 // every other key untouched. A nil sensor (unconfigured) is a no-op. If the
 // readings can't be read, or `field` holds a non-numeric value, the write is
