@@ -181,12 +181,14 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 			if err := grab(ctx, cancelCtx); err != nil {
 				return -1, err
 			}
-			placed, err := s.placeHeldInCart(ctx, cancelCtx, cartSlot)
+			// The cart learns the drink is in once the gripper has really let go of
+			// it, even if the retreat after fails.
+			tagID := cartSlot.tagID
+			placed, err := s.placeHeldInCart(ctx, cancelCtx, cartSlot, func() { s.delivery.markHandedOver(o.ID, tagID) })
 			if placed {
 				// Recorded before err is looked at: a fault after the release must
 				// not fail a drink that is already in the cart.
 				inCart = true
-				s.delivery.markHandedOver(o.ID, cartSlot.tagID)
 				return cartSlot.tagID, err
 			}
 			if err != nil {
@@ -217,16 +219,21 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 	// Record where the drink physically landed so a delivery order can report it
 	// as the pickup_position: a shelf slot, or the cart slot's tag id.
 	o.PickupPosition = servedSlot
-	if o.Fulfillment == order.FulfillmentDelivery {
-		if !inCart {
-			s.delivery.markReady(o, s.deliveryHeartbeatTimeout())
+	// The serve is planned ahead of the arm, so the drink is only ready once the
+	// arm has set it down and backed off: handed off, not announced from here.
+	served, servedInCart := o, inCart
+	s.handOffEffect(func() {
+		if served.Fulfillment == order.FulfillmentDelivery {
+			if !servedInCart {
+				s.delivery.markReady(served, s.deliveryHeartbeatTimeout())
+			}
+			if err := s.readyForDelivery(ctx, served); err != nil {
+				logger.Warnf("failed to announce ready-for-delivery: %v", err)
+			}
+		} else if err := s.speaker.SayAlways(ctx, speech.DrinkReady(served.Label(), customerName, batchIndex, batchSize)); err != nil {
+			logger.Warnf("failed to say drink-ready: %v", err)
 		}
-		if err := s.readyForDelivery(ctx, o); err != nil {
-			logger.Warnf("failed to announce ready-for-delivery: %v", err)
-		}
-	} else if err := s.speaker.SayAlways(ctx, speech.DrinkReady(o.Label(), customerName, batchIndex, batchSize)); err != nil {
-		logger.Warnf("failed to say drink-ready: %v", err)
-	}
+	})
 
 	// Retrieving the portafilter through the move home is one chunk, so the
 	// unlock pivot is planned to leave the arm room for the cleaning moves.

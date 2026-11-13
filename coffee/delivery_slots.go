@@ -116,8 +116,9 @@ func (s *beanjaminCoffee) deliveryAreaCollisions() []AllowedCollision {
 // whether the drink was released into the cart, and may come with an error
 // from the retreat after it. Not placed with a nil error means the drink is
 // still held and should go to the shelf; not placed with an error means the arm
-// cannot safely fall back.
-func (s *beanjaminCoffee) placeHeldInCart(ctx, cancelCtx context.Context, slot deliverySlot) (placed bool, err error) {
+// cannot safely fall back. onRelease runs as the gripper lets go of the drink
+// (dropHeldInDeliverySlot).
+func (s *beanjaminCoffee) placeHeldInCart(ctx, cancelCtx context.Context, slot deliverySlot, onRelease func()) (placed bool, err error) {
 	ctx, done := mergedCancelContext(ctx, cancelCtx)
 	defer done()
 
@@ -129,7 +130,7 @@ func (s *beanjaminCoffee) placeHeldInCart(ctx, cancelCtx context.Context, slot d
 		var dropErr error
 		handed, dropErr = s.handsOff(func() error {
 			var err error
-			released, err = s.dropHeldInDeliverySlot(ctx, slot)
+			released, err = s.dropHeldInDeliverySlot(ctx, slot, onRelease)
 			return err
 		})
 		return dropErr
@@ -344,7 +345,12 @@ func closestDeliverySlot(slots []deliverySlot, gripper r3.Vector) deliverySlot {
 // released reports whether the gripper opened over the slot. Before that, an
 // error wrapping errMotionPlanning leaves the drink held, with the arm where it
 // grabbed the drink or above the slot.
-func (s *beanjaminCoffee) dropHeldInDeliverySlot(ctx context.Context, slot deliverySlot) (released bool, err error) {
+//
+// onRelease, when set, runs once the gripper has opened over the slot: in an
+// order that plans ahead, when the arm gets there, not when the drop is
+// planned. It runs even if the retreat after it fails, since the drink is in
+// the cart by then.
+func (s *beanjaminCoffee) dropHeldInDeliverySlot(ctx context.Context, slot deliverySlot, onRelease func()) (released bool, err error) {
 	logger := s.activeOrderLogger()
 	approach := &poseData{
 		pose:          geom.PoseRelativeTo(slot.point, relativePoseToSpatial(s.cfg.DeliverySlotApproachRelativePose)),
@@ -372,6 +378,9 @@ func (s *beanjaminCoffee) dropHeldInDeliverySlot(ctx context.Context, slot deliv
 		return false, fmt.Errorf("open gripper to release drink: %v", err)
 	}
 	s.detachHeldGeometry()
+	if onRelease != nil {
+		s.handOffEffect(onRelease)
+	}
 
 	// The gripper is empty: the arm's default speed.
 	if err := s.moveToRawPose(ctx, approach, defaultApproachConstraint, s.deliveryAreaCollisions(), nil); err != nil {
