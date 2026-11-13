@@ -58,13 +58,13 @@ func (s *beanjaminCoffee) attachDetectedGeometry(ctx context.Context, label stri
 	if geomWorld == nil {
 		return nil
 	}
-	fsInputs, err := s.expectedInputs(ctx)
+	at, err := s.expectedPlacement(ctx)
 	if err != nil {
 		return err
 	}
 	var gripperLocal spatialmath.Geometry
 	if err := s.editScene(func(sc *sceneState) error {
-		gripperLocal, err = sc.attachHeldItem(fsInputs, label, geomWorld)
+		gripperLocal, err = sc.attachHeldItem(at, label, geomWorld)
 		return err
 	}); err != nil {
 		return err
@@ -74,19 +74,17 @@ func (s *beanjaminCoffee) attachDetectedGeometry(ctx context.Context, label stri
 }
 
 // attachHeldItem adds the held-item frame carrying geomWorld, a world-frame
-// geometry, with the frames standing at fsInputs. The geometry is expressed in
+// geometry, with the frames placed by at. The geometry is expressed in
 // the grip-point frame and cached by label, so a later re-grab of the same item
 // (reattachHeldItem) can restore it without re-detecting. Returns that
 // gripper-local geometry.
 func (sc *sceneState) attachHeldItem(
-	fsInputs referenceframe.FrameSystemInputs, label string, geomWorld spatialmath.Geometry,
+	at placement, label string, geomWorld spatialmath.Geometry,
 ) (spatialmath.Geometry, error) {
 	// Cached in grip-point coordinates, the geometry tracks the gripper as it
 	// moves: FrameSystemGeometries places it at gripPoint_to_world ∘
 	// gripperLocalPose, whatever transform the held-item frame itself carries.
-	tf, err := sc.fs.Transform(
-		fsInputs.ToLinearInputs(),
-		referenceframe.NewGeometriesInFrame(referenceframe.World, []spatialmath.Geometry{geomWorld}),
+	tf, err := at.transform(sc.fs, referenceframe.NewGeometriesInFrame(referenceframe.World, []spatialmath.Geometry{geomWorld}),
 		gripPoint,
 	)
 	if err != nil {
@@ -157,16 +155,16 @@ func (s *beanjaminCoffee) attachConfiguredGlassGeometry(ctx context.Context) err
 func (s *beanjaminCoffee) attachConfiguredGeometry(
 	ctx context.Context, label string, dims *ContainerDimensions, grabRel *RelativePose,
 ) error {
-	fsInputs, err := s.expectedInputs(ctx)
+	at, err := s.expectedPlacement(ctx)
 	if err != nil {
 		return err
 	}
 	if err := s.editScene(func(sc *sceneState) error {
-		box, err := sc.containerBox(fsInputs, label, dims, grabRel)
+		box, err := sc.containerBox(at, label, dims, grabRel)
 		if err != nil {
 			return err
 		}
-		_, err = sc.attachHeldItem(fsInputs, label, box)
+		_, err = sc.attachHeldItem(at, label, box)
 		return err
 	}); err != nil {
 		return err
@@ -177,17 +175,17 @@ func (s *beanjaminCoffee) attachConfiguredGeometry(
 }
 
 // containerBox builds the world-frame box of a container of the given
-// dimensions held by the gripper, with the frames standing at fsInputs. It is
+// dimensions held by the gripper, with the frames placed by at. It is
 // modeled exactly as geom.ContainerBox models it at pickup: an upright box
 // centered on the grasp centroid. The centroid is recovered by inverting the
 // geom.PoseRelativeTo the grab used — the grab sends the grip point to
 // centroid + grabRel, so the centroid is the grip-point world position minus
 // that offset.
 func (sc *sceneState) containerBox(
-	fsInputs referenceframe.FrameSystemInputs, label string, dims *ContainerDimensions, grabRel *RelativePose,
+	at placement, label string, dims *ContainerDimensions, grabRel *RelativePose,
 ) (spatialmath.Geometry, error) {
 	gripPointPIF := referenceframe.NewPoseInFrame(gripPoint, spatialmath.NewZeroPose())
-	tf, err := sc.fs.Transform(fsInputs.ToLinearInputs(), gripPointPIF, referenceframe.World)
+	tf, err := at.transform(sc.fs, gripPointPIF, referenceframe.World)
 	if err != nil {
 		return nil, fmt.Errorf("transform grip point to world: %w", err)
 	}
@@ -388,13 +386,13 @@ func (s *beanjaminCoffee) stageGlassAsObstacle(ctx context.Context) error {
 	if !s.scene().heldItemAttached {
 		return nil
 	}
-	fsInputs, err := s.expectedInputs(ctx)
+	at, err := s.expectedPlacement(ctx)
 	if err != nil {
 		return err
 	}
 	var staged glassStaging
 	if err := s.editScene(func(sc *sceneState) error {
-		staged, err = sc.stageHeldGlass(fsInputs)
+		staged, err = sc.stageHeldGlass(at)
 		return err
 	}); err != nil {
 		return err
@@ -421,7 +419,7 @@ type glassStaging struct {
 }
 
 // stageHeldGlass moves the held glass from the gripper to a static World frame
-// with the frames standing at fsInputs.
+// with the frames placed by at.
 //
 // The released glass is seated on the surface beneath it (geom.SeatOnSurface)
 // rather than left where the gripper held it: the staging pose releases the
@@ -429,7 +427,7 @@ type glassStaging struct {
 // follow — the pours resolve against its rim, and the re-grab models the grasp
 // from where it stands (regrabStagedGlass). When no surface is modeled beneath
 // it, the glass is staged where it was released.
-func (sc *sceneState) stageHeldGlass(fsInputs referenceframe.FrameSystemInputs) (glassStaging, error) {
+func (sc *sceneState) stageHeldGlass(at placement) (glassStaging, error) {
 	heldFrame := sc.fs.Frame(heldItemFrameName)
 	if heldFrame == nil {
 		sc.heldItemAttached = false
@@ -443,14 +441,12 @@ func (sc *sceneState) stageHeldGlass(fsInputs referenceframe.FrameSystemInputs) 
 	if len(geos) == 0 {
 		return glassStaging{}, fmt.Errorf("held-item frame carries no geometry to stage")
 	}
-	// Lift the gripper-local geometry into world coordinates at fsInputs.
+	// Lift the gripper-local geometry into world coordinates, placed by at.
 	// Transforming a GeometriesInFrame resolves through the source frame's parent,
 	// so this composes gripPoint_to_world with the geometry's own gripper-local pose
 	// and rightly ignores the held-item frame's container rotation — the geometry
 	// was never expressed in that frame's coordinates.
-	worldTF, err := sc.fs.Transform(
-		fsInputs.ToLinearInputs(),
-		referenceframe.NewGeometriesInFrame(heldItemFrameName, geos),
+	worldTF, err := at.transform(sc.fs, referenceframe.NewGeometriesInFrame(heldItemFrameName, geos),
 		referenceframe.World,
 	)
 	if err != nil {
@@ -464,7 +460,7 @@ func (sc *sceneState) stageHeldGlass(fsInputs referenceframe.FrameSystemInputs) 
 
 	// Surfaces are enumerated while the glass is still gripper-parented, so the
 	// glass itself is never taken for the surface it stands on.
-	surfaces, err := geom.WorldAnchoredSurfaceBoxes(sc.fs, fsInputs)
+	surfaces, err := geom.WorldAnchoredSurfaceBoxes(sc.fs, at.fullInputs(sc.fs))
 	if err != nil {
 		return glassStaging{}, fmt.Errorf("find the surface under the staged glass: %w", err)
 	}
@@ -497,17 +493,17 @@ func (sc *sceneState) stageHeldGlass(fsInputs referenceframe.FrameSystemInputs) 
 // once the jaws have closed on it (sceneState.regrabStagedGlass), with the arm
 // where the moves handed off so far leave it (expectedInputs).
 func (s *beanjaminCoffee) regrabStagedGlass(ctx context.Context) error {
-	var fsInputs referenceframe.FrameSystemInputs
+	var at placement
 	if s.scene().stagedGlassPlaced {
 		var err error
-		if fsInputs, err = s.expectedInputs(ctx); err != nil {
+		if at, err = s.expectedPlacement(ctx); err != nil {
 			return err
 		}
 	}
 	var fromStaged bool
 	if err := s.editScene(func(sc *sceneState) error {
 		var err error
-		fromStaged, err = sc.regrabStagedGlass(fsInputs)
+		fromStaged, err = sc.regrabStagedGlass(at)
 		return err
 	}); err != nil {
 		return err
@@ -521,13 +517,13 @@ func (s *beanjaminCoffee) regrabStagedGlass(ctx context.Context) error {
 }
 
 // regrabStagedGlass moves the staged glass from the world into the gripper,
-// with the frames standing at fsInputs, and reports whether there was one. The
+// with the frames placed by at, and reports whether there was one. The
 // grasp is modeled from where the glass stands rather than restored from the
 // pickup: seating it on the surface (stageHeldGlass) moved it relative to the
 // grip point, and the glass really is held at that new height now. With no
 // glass staged (e.g. a manually stepped grab_staged_glass) it restores the
-// cached pickup grasp instead, and fsInputs is unused.
-func (sc *sceneState) regrabStagedGlass(fsInputs referenceframe.FrameSystemInputs) (bool, error) {
+// cached pickup grasp instead, and at is unused.
+func (sc *sceneState) regrabStagedGlass(at placement) (bool, error) {
 	glass, err := sc.stagedGlassGeometry()
 	// The obstacle comes out before the held item goes in, so the held glass never
 	// collides with its double.
@@ -536,7 +532,7 @@ func (sc *sceneState) regrabStagedGlass(fsInputs referenceframe.FrameSystemInput
 		_, err := sc.reattachHeldItem(pickupLabelGlass)
 		return false, err
 	}
-	_, err = sc.attachHeldItem(fsInputs, pickupLabelGlass, glass)
+	_, err = sc.attachHeldItem(at, pickupLabelGlass, glass)
 	return true, err
 }
 

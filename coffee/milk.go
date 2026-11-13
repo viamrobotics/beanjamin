@@ -17,7 +17,6 @@ import (
 	"math"
 	"time"
 
-	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
 
 	"beanjamin/coffee/geom"
@@ -109,7 +108,7 @@ func (s *beanjaminCoffee) fridgeLinearStep(pose string, moveOpts *StepMoveOption
 // attachMilkBottleGeometry models the bottle just grabbed and attaches it to the
 // gripper as the held item (see milkBottleBox).
 func (s *beanjaminCoffee) attachMilkBottleGeometry(ctx context.Context) error {
-	fsInputs, err := s.expectedInputs(ctx)
+	at, err := s.expectedPlacement(ctx)
 	if err != nil {
 		return err
 	}
@@ -117,7 +116,7 @@ func (s *beanjaminCoffee) attachMilkBottleGeometry(ctx context.Context) error {
 	var baseBelowGripMm float64
 	if err := s.editScene(func(sc *sceneState) error {
 		var err error
-		baseBelowGripMm, err = sc.attachMilkBottle(fsInputs, dims)
+		baseBelowGripMm, err = sc.attachMilkBottle(at, dims)
 		return err
 	}); err != nil {
 		return err
@@ -128,14 +127,14 @@ func (s *beanjaminCoffee) attachMilkBottleGeometry(ctx context.Context) error {
 }
 
 // attachMilkBottle models the bottle the jaws are closed on with the frames
-// standing at fsInputs (milkBottleBox) and attaches it as the held item.
+// placed by at (milkBottleBox) and attaches it as the held item.
 // Returns how far below the grip point the bottle's base is.
-func (sc *sceneState) attachMilkBottle(fsInputs referenceframe.FrameSystemInputs, dims *ContainerDimensions) (float64, error) {
-	box, baseBelowGripMm, err := sc.milkBottleBox(fsInputs, dims)
+func (sc *sceneState) attachMilkBottle(at placement, dims *ContainerDimensions) (float64, error) {
+	box, baseBelowGripMm, err := sc.milkBottleBox(at, dims)
 	if err != nil {
 		return 0, err
 	}
-	if _, err := sc.attachHeldItem(fsInputs, pickupLabelMilk, box); err != nil {
+	if _, err := sc.attachHeldItem(at, pickupLabelMilk, box); err != nil {
 		return 0, err
 	}
 	return baseBelowGripMm, nil
@@ -155,15 +154,15 @@ func (sc *sceneState) attachMilkBottle(fsInputs referenceframe.FrameSystemInputs
 //
 // Returns the box and how far below the grip point its base is.
 func (sc *sceneState) milkBottleBox(
-	fsInputs referenceframe.FrameSystemInputs, dims *ContainerDimensions,
+	at placement, dims *ContainerDimensions,
 ) (spatialmath.Geometry, float64, error) {
-	box, err := sc.containerBox(fsInputs, pickupLabelMilk, dims, &RelativePose{})
+	box, err := sc.containerBox(at, pickupLabelMilk, dims, &RelativePose{})
 	if err != nil {
 		return nil, 0, err
 	}
 	// Enumerated before the bottle is attached, so it is never taken for the
 	// surface it stands on.
-	surfaces, err := geom.WorldAnchoredSurfaceBoxes(sc.fs, fsInputs)
+	surfaces, err := geom.WorldAnchoredSurfaceBoxes(sc.fs, at.fullInputs(sc.fs))
 	if err != nil {
 		return nil, 0, fmt.Errorf("find the surface under the milk bottle: %w", err)
 	}
