@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 
 	"go.viam.com/rdk/motionplan"
@@ -338,11 +339,11 @@ func (s *beanjaminCoffee) planChunk(name string, motions []*motionRequest) ([][]
 		case sequenceFailed:
 			at = stuckMotion(metas, solved)
 		}
-		s.saveChunkPlans(motions, plans, solved, at, err)
+		s.saveChunkPlans(name, began, motions, plans, solved, err)
 		return nil, fmt.Errorf("%w (chunk %q, at %q, motion %d of %d, after %s): %w",
 			errMotionPlanning, name, motions[at].name, at+1, len(motions), took, err)
 	}
-	s.saveChunkPlans(motions, plans, solved, -1, nil)
+	s.saveChunkPlans(name, began, motions, plans, solved, nil)
 
 	trajectories := make([][][]referenceframe.Input, len(plans))
 	for i, plan := range plans {
@@ -396,17 +397,31 @@ func planShortOfGoal(req *armplanning.PlanRequest, plan motionplan.Plan) error {
 	return nil
 }
 
-// saveChunkPlans persists the first solved motions with their plans and, when
-// failed is a motion's index, that motion's request with planErr and no plan.
+// saveChunkPlans persists every request of the chunk named name, planned
+// together from began: the first solved with their plans, and the rest, which
+// a failure left unplanned, with planErr and no plan. Replaying the whole
+// sequence from the first request's start reproduces the planning, whichever
+// motion it got stuck on.
 func (s *beanjaminCoffee) saveChunkPlans(
-	motions []*motionRequest, plans []motionplan.Plan, solved, failed int, planErr error,
+	name string, began time.Time, motions []*motionRequest, plans []motionplan.Plan, solved int, planErr error,
 ) {
-	for i := range min(solved, len(plans)) {
-		s.savePlanRequestAndResponse(motions[i].req, plans[i], motions[i].label, nil)
+	for i, m := range motions {
+		plan, err := motionplan.Plan(nil), planErr
+		if i < solved {
+			plan, err = plans[i], nil
+		}
+		s.savePlanFile(m.req, plan, m.label, err, chunkPlanFileName(began, name, i, len(motions), m.label))
 	}
-	if failed >= 0 && failed < len(motions) {
-		s.savePlanRequestAndResponse(motions[failed].req, nil, motions[failed].label, planErr)
-	}
+}
+
+// chunkPlanFileName names the file of motion i of the n in the chunk named
+// chunk: the time the chunk started planning, so its files sort together and
+// in order (the motion's place is zero-padded), then the chunk, the motion's
+// place in it, and its label. For example
+// 20261112_183152.082_chunk_fetch_pour_and_return_milk_5of9_move.
+func chunkPlanFileName(began time.Time, chunk string, i, n int, label string) string {
+	width := len(strconv.Itoa(n))
+	return fmt.Sprintf("%s_chunk_%s_%0*dof%d_%s", began.Format(planStampLayout), slugify(chunk), width, i+1, n, label)
 }
 
 // stuckMotion returns the index of the motion a failed chunk was stuck on. A

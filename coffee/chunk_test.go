@@ -4,9 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"beanjamin/coffee/order"
 
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/components/arm"
@@ -247,9 +253,12 @@ func TestExpectedInputsFlushesTheChunk(t *testing.T) {
 }
 
 // A goal no motion can reach fails the chunk as a planning error, with nothing
-// handed off.
+// handed off, and saves every request of the chunk as one sequence.
 func TestUnplannableChunkRunsNothing(t *testing.T) {
 	s, f, end := chunkCoffee(t)
+	saved := t.TempDir()
+	s.cfg.SaveMotionRequestsDir = saved
+	s.queue = order.NewQueue()
 	unreachable := &poseData{
 		pose: spatialmath.NewPoseFromPoint(r3.Vector{X: 5000}), refFrame: referenceframe.World, componentName: componentClaws,
 	}
@@ -270,6 +279,43 @@ func TestUnplannableChunkRunsNothing(t *testing.T) {
 	}
 	if len(f.moves) != 0 {
 		t.Errorf("ran %d trajectories, want none", len(f.moves))
+	}
+
+	var names []string
+	if err := filepath.WalkDir(saved, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			if !strings.Contains(path, "tag="+tagPlanningFailure) {
+				t.Errorf("%s is not tagged as a planning failure", path)
+			}
+			names = append(names, d.Name())
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(names)
+	if len(names) != 2 {
+		t.Fatalf("saved %v, want both requests of the chunk", names)
+	}
+	stamp := names[0][:len(planStampLayout)]
+	for i, name := range names {
+		if want := fmt.Sprintf("%s_chunk_test_%dof2_", stamp, i+1); !strings.HasPrefix(name, want) {
+			t.Errorf("saved %q, want it named %q…", name, want)
+		}
+	}
+}
+
+// A chunk's files share the time it started planning and sort in the order of
+// its motions.
+func TestChunkPlanFileName(t *testing.T) {
+	began := time.Date(2026, 11, 12, 18, 31, 52, 82_000_000, time.UTC)
+	if got, want := chunkPlanFileName(began, "Fetch, pour and return milk", 4, 9, "move"),
+		"20261112_183152.082_chunk_fetch_pour_and_return_milk_5of9_move"; got != want {
+		t.Errorf("chunkPlanFileName = %q, want %q", got, want)
+	}
+	if got, want := chunkPlanFileName(began, "prepare portafilter", 2, 12, "pivot"),
+		"20261112_183152.082_chunk_prepare_portafilter_03of12_pivot"; got != want {
+		t.Errorf("chunkPlanFileName = %q, want %q", got, want)
 	}
 }
 

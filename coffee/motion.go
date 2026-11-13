@@ -705,12 +705,24 @@ const (
 	tagPlanningFailure = "planning_failure"
 )
 
+// planStampLayout starts every saved plan file's name. The web app's
+// motion-plan panel (web-app/app/home/data.ts, PLAN_STAMP) reads the time back
+// out of it and lists an order's plans sorted by file name.
+const planStampLayout = "20060102_150405.000"
+
 // savePlanRequestAndResponse persists a PlanRequest together with the plan it
-// produced — nil on a planning failure — to a single JSON file, using RDK's
+// produced — nil on a planning failure — to a single JSON file named
+// <stamp>_<label>.json (savePlanFile).
+func (s *beanjaminCoffee) savePlanRequestAndResponse(req *armplanning.PlanRequest, plan motionplan.Plan, label string, planErr error) {
+	s.savePlanFile(req, plan, label, planErr, time.Now().Format(planStampLayout)+"_"+label)
+}
+
+// savePlanFile persists a PlanRequest together with the plan it produced — nil
+// on a planning failure — to name.json, using RDK's
 // WriteRequestAndResponseToFile so the pair round-trips through
 // ReadRequestAndResponseFromFile. It is a no-op when SaveMotionRequestsDir is
 // empty.
-func (s *beanjaminCoffee) savePlanRequestAndResponse(req *armplanning.PlanRequest, plan motionplan.Plan, label string, planErr error) {
+func (s *beanjaminCoffee) savePlanFile(req *armplanning.PlanRequest, plan motionplan.Plan, label string, planErr error, name string) {
 	logger := s.activeOrderLogger()
 	dir := s.cfg.SaveMotionRequestsDir
 	if dir == "" {
@@ -727,7 +739,7 @@ func (s *beanjaminCoffee) savePlanRequestAndResponse(req *armplanning.PlanReques
 		logger.Warnf("save plan request: create dir: %v", err)
 		return
 	}
-	filename := filepath.Join(tagDir, fmt.Sprintf("%s_%s.json", time.Now().Format("20060102_150405.000"), label))
+	filename := filepath.Join(tagDir, name+".json")
 	if err := req.WriteRequestAndResponseToFile(filename, plan); err != nil {
 		logger.Warnf("save plan request: %v", err)
 		return
@@ -760,9 +772,19 @@ func planRequestTagDir(baseDir, orderID, step, label, outcome string) string {
 // stepTag slugifies a step label ("Locking portafilter") into a tag-safe token
 // ("step_locking_portafilter"), or "" when there is no active step.
 func stepTag(step string) string {
+	if slug := slugify(step); slug != "" {
+		return "step_" + slug
+	}
+	return ""
+}
+
+// slugify lowercases s and keeps only its letters and digits, with one
+// underscore between each run of them: "Fetch, pour and return milk" becomes
+// "fetch_pour_and_return_milk".
+func slugify(s string) string {
 	var b strings.Builder
 	pendingUnderscore := false
-	for _, r := range strings.ToLower(strings.TrimSpace(step)) {
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 			if pendingUnderscore && b.Len() > 0 {
 				b.WriteByte('_')
@@ -773,10 +795,7 @@ func stepTag(step string) string {
 		}
 		pendingUnderscore = true
 	}
-	if b.Len() == 0 {
-		return ""
-	}
-	return "step_" + b.String()
+	return b.String()
 }
 
 // moveToRawPose moves the arm straight to pd: recorded in the open chunk, or
