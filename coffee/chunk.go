@@ -53,12 +53,9 @@ const (
 type chunkOp struct {
 	motion *motionRequest
 	pause  time.Duration
-	// join runs the motion's trajectory and the next one's as one arm move, so
-	// the arm does not stop between them.
-	join bool
 	// recover, when set on a motion, is the scene the cell is left in when its
 	// move fails partway. It gets the trajectory of each motion joined into the
-	// move, in order.
+	// move (joinsNext), in order. A joined move uses its last motion's.
 	recover func(ctx context.Context, segments [][][]referenceframe.Input) *sceneState
 	// scene is the planned scene as the op was recorded, the executed scene once
 	// it has run.
@@ -181,7 +178,7 @@ type motionBuilder func(start referenceframe.FrameSystemInputs) (*motionRequest,
 
 // addMotion records the motion build builds in the open chunk, or plans and
 // runs it as a chunk of its own, named name. op carries how the move runs: its
-// pause, join and recover. Outside a run or inside a sync region, it is planned
+// pause and recover. Outside a run or inside a sync region, it is planned
 // from the arm read now and run straight away.
 func (s *beanjaminCoffee) addMotion(ctx, cancelCtx context.Context, name string, op chunkOp, build motionBuilder) error {
 	r := s.run
@@ -294,7 +291,7 @@ func (s *beanjaminCoffee) flushChunk() error {
 	planned := 0
 	var joined [][][]referenceframe.Input // trajectories of the motions joined so far
 	var joinedFrom []referenceframe.Input
-	for _, op := range ops {
+	for i, op := range ops {
 		m := op.act
 		if op.motion != nil {
 			positions := trajectories[planned]
@@ -304,7 +301,7 @@ func (s *beanjaminCoffee) flushChunk() error {
 			}
 			joined = append(joined, positions)
 			from = positions[len(positions)-1]
-			if op.join {
+			if joinsNext(ops, i) {
 				continue
 			}
 			var all [][]referenceframe.Input
@@ -334,6 +331,31 @@ func (s *beanjaminCoffee) flushChunk() error {
 		r.planned = r.planned.withArm(s.cfg.ArmName, from)
 	}
 	return nil
+}
+
+// joinsNext reports whether the motion ops[i] runs on into the next op's as one
+// arm move, so the arm does not stop between them. The arm only stops after a
+// motion to wait (pause), to replay it (repeatFor), to change speed, or for an
+// op that is not a motion: a gripper action, a check, a scene edit, a step
+// label.
+func joinsNext(ops []*chunkOp, i int) bool {
+	if i+1 >= len(ops) {
+		return false
+	}
+	cur, next := ops[i], ops[i+1]
+	if cur.motion == nil || next.motion == nil || cur.pause != 0 {
+		return false
+	}
+	return cur.motion.repeatFor == 0 && next.motion.repeatFor == 0 && sameSpeed(cur.motion.speed, next.motion.speed)
+}
+
+// sameSpeed reports whether a and b cap the arm the same way; nil is the arm's
+// default speed.
+func sameSpeed(a, b *StepMoveOptions) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // dispatch hands m to the execution goroutine in a run that plans ahead, and

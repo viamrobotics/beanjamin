@@ -322,7 +322,7 @@ func (s *beanjaminCoffee) recordDoorSweep(ctx, cancelCtx context.Context, action
 	sweep := computeDoorSweep(fromDeg, toDeg, s.doorPivotDegreesPerStep())
 	logger.Infof("%s: recording %.0f°→%.0f° in %d steps", action, fromDeg, toDeg, len(sweep)-1)
 	thetas := sweep[1:] // skip fromDeg — the door is already there
-	for i, theta := range thetas {
+	for _, theta := range thetas {
 		swung, err := copyFrameSystem(fs)
 		if err != nil {
 			return err
@@ -344,14 +344,12 @@ func (s *beanjaminCoffee) recordDoorSweep(ctx, cancelCtx context.Context, action
 			frameGripPoint: referenceframe.NewPoseInFrame(referenceframe.World, goalPose),
 		}, nil)
 
-		op := chunkOp{join: i < len(thetas)-1}
-		if !op.join {
-			// One arm call does not report which waypoint it died on, so a failed
-			// sweep is located from where the arm actually stopped.
-			op.recover = func(ctx context.Context, segments [][][]referenceframe.Input) *sceneState {
-				return s.doorSweptTo(ctx, before, baseOriginPose, fromDeg, thetas, segments)
-			}
-		}
+		// The sweep's motions join into one arm move, which does not report which
+		// waypoint it died on, so a failed sweep is located from where the arm
+		// actually stopped.
+		op := chunkOp{recover: func(ctx context.Context, segments [][][]referenceframe.Input) *sceneState {
+			return s.doorSweptTo(ctx, before, baseOriginPose, fromDeg, thetas, segments)
+		}}
 		if err := s.addMotion(ctx, cancelCtx, action, op, func(start referenceframe.FrameSystemInputs) (*motionRequest, error) {
 			return &motionRequest{
 				name:  action,

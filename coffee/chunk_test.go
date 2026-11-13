@@ -207,7 +207,7 @@ func recordStepNamed(t *testing.T, s *beanjaminCoffee, name string) {
 }
 
 // A chunk's motions are planned together and run back to back, each starting
-// where the one before it ends.
+// where the one before it ends: at one speed, as one arm move through both.
 func TestChunkPlansItsMotionsAsOneSequence(t *testing.T) {
 	s, f, end := chunkCoffee(t)
 	if err := s.inChunk("test", func() error {
@@ -223,12 +223,18 @@ func TestChunkPlansItsMotionsAsOneSequence(t *testing.T) {
 	if err := end(); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.moves) != 2 {
-		t.Fatalf("ran %d trajectories, want 2", len(f.moves))
+	if len(f.moves) != 1 {
+		t.Fatalf("ran %d trajectories, want 1", len(f.moves))
 	}
-	first, second := f.moves[0], f.moves[1]
-	requireClawsAt(t, s, first[len(first)-1], chunkArmA)
-	requireClawsAt(t, s, second[len(second)-1], chunkArmB)
+	positions := f.moves[0]
+	fs := s.scene().fs
+	want := clawsPose(t, fs, chunkArmA).Point()
+	if !slices.ContainsFunc(positions, func(p []referenceframe.Input) bool {
+		return clawsPose(t, fs, p).Point().Sub(want).Norm() <= 1
+	}) {
+		t.Error("the move never brings the claws to a")
+	}
+	requireClawsAt(t, s, positions[len(positions)-1], chunkArmB)
 }
 
 // Asking where the arm will be plans and hands off what the chunk recorded, and
@@ -454,32 +460,50 @@ func TestAttachingInAChunkKeepsItWhole(t *testing.T) {
 	requireVecEqual(t, local.Pose().Point(), r3.Vector{Z: 100}, 1e-6)
 }
 
-// Joined motions run as one arm move.
-func TestJoinedMotionsRunAsOneMove(t *testing.T) {
-	s, f, end := chunkCoffee(t)
-	fs := s.scene().fs
-	ctx := context.Background()
-	if err := s.inChunk("test", func() error {
-		for i, joints := range [][]referenceframe.Input{chunkArmA, chunkArmB} {
-			pd := &poseData{pose: clawsPose(t, fs, joints), refFrame: referenceframe.World, componentName: componentClaws}
-			op := chunkOp{join: i == 0}
-			if err := s.addMotion(ctx, ctx, "hop", op, func(start referenceframe.FrameSystemInputs) (*motionRequest, error) {
-				return s.rawMotion("hop", pd, nil, 0, nil, nil, start)
+// Consecutive motions at one speed run as one arm move; a pause or a change of
+// speed stops the arm between them.
+func TestConsecutiveMotionsJoin(t *testing.T) {
+	slow := &StepMoveOptions{MaxVelDegsPerSec: 10, MaxAccDegsPerSec2: 20}
+	for _, tc := range []struct {
+		name      string
+		firstOp   chunkOp
+		firstSpd  *StepMoveOptions
+		wantMoves int
+	}{
+		{name: "same speed", wantMoves: 1},
+		{name: "change of speed", firstSpd: slow, wantMoves: 2},
+		{name: "pause", firstOp: chunkOp{pause: time.Millisecond}, wantMoves: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f, end := chunkCoffee(t)
+			fs := s.scene().fs
+			ctx := context.Background()
+			if err := s.inChunk("test", func() error {
+				for i, joints := range [][]referenceframe.Input{chunkArmA, chunkArmB} {
+					pd := &poseData{pose: clawsPose(t, fs, joints), refFrame: referenceframe.World, componentName: componentClaws}
+					op, speed := chunkOp{}, (*StepMoveOptions)(nil)
+					if i == 0 {
+						op, speed = tc.firstOp, tc.firstSpd
+					}
+					if err := s.addMotion(ctx, ctx, "hop", op, func(start referenceframe.FrameSystemInputs) (*motionRequest, error) {
+						return s.rawMotion("hop", pd, nil, 0, nil, speed, start)
+					}); err != nil {
+						return err
+					}
+				}
+				return nil
 			}); err != nil {
-				return err
+				t.Fatal(err)
 			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+			if err := end(); err != nil {
+				t.Fatal(err)
+			}
+			if len(f.moves) != tc.wantMoves {
+				t.Fatalf("ran %d trajectories, want %d", len(f.moves), tc.wantMoves)
+			}
+			requireClawsAt(t, s, f.at, chunkArmB)
+		})
 	}
-	if err := end(); err != nil {
-		t.Fatal(err)
-	}
-	if len(f.moves) != 1 {
-		t.Fatalf("ran %d trajectories, want 1", len(f.moves))
-	}
-	requireClawsAt(t, s, f.at, chunkArmB)
 }
 
 // A run that doesn't plan ahead runs its chunk as the chunk flushes.
@@ -500,8 +524,8 @@ func TestDirectRunRunsItsChunkWhenItFlushes(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.moves) != 2 {
-		t.Fatalf("ran %d trajectories once the chunk closed, want 2", len(f.moves))
+	if len(f.moves) != 1 {
+		t.Fatalf("ran %d trajectories once the chunk closed, want 1", len(f.moves))
 	}
 	requireClawsAt(t, s, f.at, chunkArmB)
 }
