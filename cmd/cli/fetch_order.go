@@ -243,8 +243,11 @@ func collectOrderFiles(dataRoot, orderID string) ([]orderFile, error) {
 		return nil, fmt.Errorf("walking %s: %w", dataRoot, err)
 	}
 	// Stamped files first, in execution order; unstamped ones trail behind in a
-	// stable order. rel breaks ties so two plans stamped the same millisecond
-	// don't reorder between runs.
+	// stable order. Every motion of a chunk is stamped with when the chunk
+	// started planning, and its base name goes on with its zero-padded place in
+	// the chunk ("_chunk_<name>_03of12_"), so the base name orders a chunk.
+	// The full path can't: its tag= directories (motion label, outcome) come
+	// first. rel breaks any remaining tie so the order is the same every run.
 	sort.Slice(files, func(i, j int) bool {
 		a, b := files[i], files[j]
 		if (a.stamp == "") != (b.stamp == "") {
@@ -252,6 +255,9 @@ func collectOrderFiles(dataRoot, orderID string) ([]orderFile, error) {
 		}
 		if a.stamp != b.stamp {
 			return a.stamp < b.stamp
+		}
+		if baseA, baseB := filepath.Base(a.rel), filepath.Base(b.rel); baseA != baseB {
+			return baseA < baseB
 		}
 		return a.rel < b.rel
 	})

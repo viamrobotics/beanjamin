@@ -121,6 +121,52 @@ func TestFetchOrderEndToEnd(t *testing.T) {
 	}
 }
 
+// A chunk's files share one stamp, and their tag directories (motion label,
+// outcome) sort differently from their order in the chunk: they come out in
+// the chunk's order, then the next plan by its stamp.
+func TestCollectOrderFilesKeepsAChunkInOrder(t *testing.T) {
+	const orderID = "oid"
+	const chunk = "20261113_114908.035_chunk_fetch_pour_and_return_milk_"
+	rels := []string{
+		"tag=" + orderID + "/tag=step_adding_milk/tag=motion_pivot/tag=planning_failure/" + chunk + "5of9_pivot.json",
+		"tag=" + orderID + "/tag=step_adding_milk/tag=motion_carry/tag=planning_failure/" + chunk + "4of9_carry.json",
+		"tag=" + orderID + "/tag=step_adding_milk/tag=motion_move/tag=planning_failure/" + chunk + "3of9_move.json",
+		"tag=" + orderID + "/tag=step_adding_milk/tag=motion_move/tag=planning_success/" + chunk + "1of9_move.json",
+		"tag=" + orderID + "/tag=step_adding_milk/tag=motion_move/tag=planning_success/" + chunk + "2of9_move.json",
+		"tag=" + orderID + "/tag=step_serving/tag=motion_move/tag=planning_success/20261113_114910.000_move.json",
+	}
+	dataRoot := t.TempDir()
+	for _, rel := range rels {
+		path := filepath.Join(dataRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(rel), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	files, err := collectOrderFiles(dataRoot, orderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range files {
+		got = append(got, filepath.Base(f.rel))
+	}
+	want := []string{
+		chunk + "1of9_move.json",
+		chunk + "2of9_move.json",
+		chunk + "3of9_move.json",
+		chunk + "4of9_carry.json",
+		chunk + "5of9_pivot.json",
+		"20261113_114910.000_move.json",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("order:\ngot:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func TestCollectOrderFilesKeepsNonJSONNames(t *testing.T) {
 	dataRoot := t.TempDir()
 	// A visualization snapshot is not a plan request: its loader keys off the
