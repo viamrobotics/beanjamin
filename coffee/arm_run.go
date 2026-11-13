@@ -4,7 +4,8 @@ package coffee
 // the planning thread: it turns each step into a move (trajectory, gripper
 // action, sleep) and hands it to an execution goroutine, which only ever sees
 // moves. At a stopping point it settles: closes the channel and waits for
-// execution to drain. Every other run executes each move as it is handed off.
+// execution to drain. Every other run executes each move as it is handed off,
+// or, inside a chunk, as the chunk is planned.
 
 import (
 	"context"
@@ -42,6 +43,8 @@ type move struct {
 	positions [][]referenceframe.Input // arm trajectory; nil for no arm motion
 	start     []referenceframe.Input   // where positions starts
 	speed     *arm.MoveOptions
+	// repeatFor replays positions until this long has passed (circular motion).
+	repeatFor time.Duration
 
 	gripper gripperAction
 	sleep   time.Duration
@@ -67,6 +70,9 @@ type armRun struct {
 
 	planned  *sceneState // owned by the planning goroutine
 	executed atomic.Pointer[sceneState]
+	// chunk records moves instead of handing them off while one is open
+	// (inChunk); owned by the planning goroutine.
+	chunk *chunk
 
 	moves  chan move // nil when execution is idle
 	done   chan error
@@ -96,10 +102,12 @@ func (s *beanjaminCoffee) startRun(ctx, cancelCtx context.Context, name string, 
 	}
 }
 
-// startDirectRun opens a run that executes each move as it is handed off, for
+// startDirectRun opens a run that executes each move as it is handed off (or
+// as its chunk is planned), for
 // the troubleshooting commands and the keepalive purge, and returns its end.
-func (s *beanjaminCoffee) startDirectRun(name string) (end func()) {
-	endRun := s.startRun(context.Background(), context.Background(), name, false)
+// Its moves stop when ctx or cancelCtx is done.
+func (s *beanjaminCoffee) startDirectRun(ctx, cancelCtx context.Context, name string) (end func()) {
+	endRun := s.startRun(ctx, cancelCtx, name, false)
 	return func() {
 		if err := endRun(); err != nil {
 			s.activeOrderLogger().Errorf("run %q: %v", name, err)
@@ -125,6 +133,8 @@ func (s *beanjaminCoffee) settle() error {
 		s.activeOrderLogger().Warn("settle: no arm run, nothing to wait for")
 		return nil
 	}
+	// What a chunk has recorded runs before the arm can stop.
+	flushErr := s.flushChunk()
 	if r.moves != nil {
 		close(r.moves)
 		if err := <-r.done; r.err == nil {
@@ -136,11 +146,14 @@ func (s *beanjaminCoffee) settle() error {
 		r.planned = r.executed.Load()
 	}
 	r.planned = r.planned.withInputs(nil)
-	return r.err
+	if r.err != nil {
+		return r.err
+	}
+	return flushErr
 }
 
-// handOff gives m to the execution thread, or runs it now when the run doesn't
-// plan ahead.
+// handOff gives m to the execution thread, records it in the open chunk, or runs
+// it now when the run doesn't plan ahead.
 func (s *beanjaminCoffee) handOff(ctx context.Context, m move) error {
 	r := s.run
 	if r == nil {
@@ -148,6 +161,13 @@ func (s *beanjaminCoffee) handOff(ctx context.Context, m move) error {
 		return s.runMove(ctx, m)
 	}
 	m.scene = r.planned
+	if s.aheadRun() != nil && (r.err != nil || r.failed.Load()) {
+		return s.settle()
+	}
+	if r.chunk != nil && !r.synced {
+		r.chunk.add(&chunkOp{act: m}, r.planned)
+		return nil
+	}
 	if s.aheadRun() == nil {
 		if err := s.runMove(ctx, m); err != nil {
 			return err
@@ -155,14 +175,16 @@ func (s *beanjaminCoffee) handOff(ctx context.Context, m move) error {
 		r.ran(m)
 		return nil
 	}
-	if r.err != nil || r.failed.Load() {
-		return s.settle()
-	}
+	r.queue(s, m)
+	return nil
+}
+
+// queue gives m to the execution thread, starting it if it is idle.
+func (r *armRun) queue(s *beanjaminCoffee, m move) {
 	if r.moves == nil {
 		r.startExecution(s)
 	}
 	r.moves <- m
-	return nil
 }
 
 // handOffEffect applies a step label or state flag in step with the arm.
@@ -246,14 +268,7 @@ func (s *beanjaminCoffee) runMove(ctx context.Context, m move) error {
 		}
 	case noGripperAction:
 	}
-	if m.sleep > 0 {
-		select {
-		case <-time.After(m.sleep):
-		case <-ctx.Done():
-			return fmt.Errorf("cancelled during pause after %q: %w", m.name, ctx.Err())
-		}
-	}
-	return nil
+	return sleepCtx(ctx, m.sleep, m.name)
 }
 
 // runTrajectory moves the arm through m's trajectory, failing if the arm isn't
@@ -270,65 +285,7 @@ func (s *beanjaminCoffee) runTrajectory(ctx context.Context, m move) error {
 		return fmt.Errorf("arm is at %v, not where the plan starts (%v)", now, m.start)
 	}
 	s.activeOrderLogger().Infof("moving to %q", m.name)
-	return s.arm.MoveThroughJointPositions(ctx, m.positions, m.speed, nil)
-}
-
-// handOffStep turns a direct-move step into a move, planned from where the
-// planned scene leaves the arm, and hands it off.
-func (s *beanjaminCoffee) handOffStep(ctx context.Context, r *armRun, step Step) error {
-	from := r.planned.armInputs(s.cfg.ArmName)
-	if from == nil {
-		now, err := s.arm.CurrentInputs(ctx)
-		if err != nil {
-			return fmt.Errorf("get current inputs: %w", err)
-		}
-		from = now
-	}
-	positions, planErr := s.planStep(ctx, step, from)
-	if planErr != nil {
-		if err := s.settle(); err != nil {
-			return err // an earlier failure caused this one
-		}
-		return fmt.Errorf("move to %q failed: %w", step.PoseName, planErr)
-	}
-	r.planned = r.planned.withArm(s.cfg.ArmName, positions[len(positions)-1])
-	return s.handOff(ctx, move{
-		name:      step.PoseName,
-		positions: positions,
-		start:     from,
-		speed:     buildMoveOptions(step.MoveOptions),
-		sleep:     step.Pause,
-	})
-}
-
-// planStep plans a direct-move step from the arm joints from and returns its
-// trajectory.
-func (s *beanjaminCoffee) planStep(ctx context.Context, step Step, from []referenceframe.Input) ([][]referenceframe.Input, error) {
-	pd, err := s.resolvePose(ctx, step.PoseSwitch, step.PoseName)
-	if err != nil {
-		return nil, err
-	}
-	inputs := referenceframe.NewZeroInputs(s.scene().fs)
-	inputs[s.cfg.ArmName] = from
-	plan, err := s.planToRawPose(ctx, inputs, pd, step.LinearConstraint, step.OrientationToleranceDegs, step.AllowedCollisions)
-	if err != nil {
-		return nil, err
-	}
-	positions, err := s.armInputs(plan, "move")
-	if err != nil {
-		return nil, err
-	}
-	if len(positions) == 0 {
-		return nil, fmt.Errorf("plan has an empty trajectory")
-	}
-	return positions, nil
-}
-
-// isDirectMove reports whether a step is handed off. Pivots, circles and no-spill
-// carries plan and run inside their own executors, so for now they're stopping
-// points.
-func isDirectMove(step Step) bool {
-	return step.PivotFromPose == "" && step.CircularRadiusMm == 0 && !step.NoSpill
+	return s.runPositions(ctx, m.name, m.positions, m.speed, m.repeatFor)
 }
 
 // armNear reports whether every joint of got is within tolerance of want.

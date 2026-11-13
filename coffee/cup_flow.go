@@ -23,7 +23,7 @@ func (s *beanjaminCoffee) runCupFlow(ctx context.Context, count int) (map[string
 		return nil, err
 	}
 	defer s.lease.release()
-	defer s.startDirectRun("run_cup_flow")()
+	defer s.startDirectRun(ctx, cancelCtx, "run_cup_flow")()
 
 	// Not tied to a queued order, so there is no order ID to tag — use the
 	// base service logger.

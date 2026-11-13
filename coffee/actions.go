@@ -129,7 +129,7 @@ func (s *beanjaminCoffee) executeAction(ctx context.Context, name string, withGl
 		return nil, err
 	}
 	defer s.lease.release()
-	defer s.startDirectRun("execute_action " + name)()
+	defer s.startDirectRun(ctx, cancelCtx, "execute_action "+name)()
 
 	// Pick up any out-of-band frame-system edits before planning. Guarded so a
 	// held item or locked filter established by a prior action call (manual

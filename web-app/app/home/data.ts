@@ -518,7 +518,10 @@ export async function loadErrorsLast7Days(
  */
 export interface PlanRequestFile {
   binaryDataId: string;
-  /** Basename, e.g. "20260917_094831.007_move.json". */
+  /**
+   * Basename, e.g. "20260917_094831.007_move.json", or for a motion planned in
+   * a chunk "20260917_094831.007_chunk_prepare_portafilter_03of12_move.json".
+   */
   fileName: string;
   /** Full synced path, including the tag= directories the tags came from. */
   path: string;
@@ -544,7 +547,9 @@ const PLANNING_SUCCESS_TAG = "planning_success";
 // `result.last` if that becomes real.
 const PLAN_PAGE_SIZE = 1000;
 
-// savePlanRequestAndResponse names every file "20060102_150405.000_<label>.json".
+// Every saved plan file's name starts with a "20060102_150405.000_" stamp
+// (planStampLayout in coffee/motion.go). A chunk's files share the stamp of
+// when it started planning, followed by "chunk_<name>_<i>of<n>_".
 const PLAN_STAMP = /^\d{8}_(\d{2})(\d{2})(\d{2})\.(\d{3})_/;
 
 export function planTimeLabel(fileName: string): string {

@@ -467,12 +467,11 @@ func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 	// position moves along the straight line between the two authored points,
 	// so the stream stays over the glass instead of spilling. The staged
 	// glass stays a hard obstacle here — the cup must clear it, never drive in.
-	// pourConstraint keeps the planner from detouring the cup off the glass; a
-	// tilt it can't finish is executed as far as it planned, pouring less
-	// rather than spilling. It runs at the pour speed rather than the slow one
-	// so the pour isn't dragged out (tune via pour_vel_degs_per_sec).
+	// pourConstraint keeps the planner from detouring the cup off the glass. It
+	// runs at the pour speed rather than the slow one so the pour isn't dragged
+	// out (tune via pour_vel_degs_per_sec).
 	pourStep := Step{PoseName: clawPosePour, PoseSwitch: s.clawsSw, PivotFromPose: clawPosePourApproach, PivotDegreesPerStep: 5,
-		LinearConstraint: pourConstraint, AcceptPartialPlan: true, MoveOptions: s.pourMoveOptions(), Pause: pourPause}
+		LinearConstraint: pourConstraint, MoveOptions: s.pourMoveOptions(), Pause: pourPause}
 	if err := s.executeStep(ctx, cancelCtx, pourStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}

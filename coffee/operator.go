@@ -36,7 +36,7 @@ func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, err
 	if _, err := s.lease.claimManual("proceed"); err != nil {
 		return nil, fmt.Errorf("proceed: %w — wait for it to stop, or cancel it first", err)
 	}
-	endRun := s.startDirectRun("proceed")
+	endRun := s.startDirectRun(ctx, context.Background(), "proceed")
 	// Warn before the scene is rebuilt: forgetting a held item without opening
 	// the jaws leaves the arm planning through whatever it is still carrying.
 	sc := s.scene()
@@ -155,7 +155,7 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 	// rebuilding with it shut belongs to the commands that say so — this one and
 	// proceed. A rebuild on its own re-applies the recorded angle rather than
 	// pretending a door closed itself.
-	endRun := s.startDirectRun("reset_world")
+	endRun := s.startDirectRun(ctx, context.Background(), "reset_world")
 	err := s.rebuildScene(ctx, 0)
 	endRun()
 	s.lease.release()

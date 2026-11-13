@@ -39,9 +39,8 @@ var defaultApproachConstraint = &StepLinearConstraint{
 // straight line between consecutive waypoints. Beyond bounding the drift, any linear constraint whose tighter
 // tolerance is under 10 (mm or degrees) stops armplanning from falling back to
 // cBiRTT between waypoints, and cBiRTT's free-form detours are what swing a
-// full cup off the glass. A waypoint the planner cannot reach directly then
-// fails instead, which the pour tilt turns into a partial plan
-// (Step.AcceptPartialPlan). The 5° orientation bound is twice the deviation the
+// full cup off the glass: a waypoint the planner cannot reach directly fails
+// the pour instead. The 5° orientation bound is twice the deviation the
 // 5°-per-waypoint slerp ever needs.
 var pourConstraint = &StepLinearConstraint{
 	LineToleranceMm:          5,
@@ -91,14 +90,10 @@ func withPlanTimeout(opts *armplanning.PlannerOptions) *armplanning.PlannerOptio
 // armplanning returns one of those with a *nil* error when its deadline expires
 // between goals, so without this check a timed-out multi-waypoint plan (pivot,
 // circular) would execute as though complete and stop the arm short of the pose
-// the next step assumes it reached. It also returns one, flagged Partial, when
-// ReturnPartialPlan is set and a goal fails to plan.
+// the next step assumes it reached.
 func incompletePlanErr(meta *armplanning.PlanMeta, goals int) error {
 	if meta == nil {
 		return nil
-	}
-	if meta.Partial {
-		return fmt.Errorf("planner solved %d of %d goals: %w", meta.GoalsProcessed, goals, meta.PartialError)
 	}
 	if meta.GoalsProcessed >= goals {
 		return nil
@@ -123,22 +118,13 @@ func planDuration(meta *armplanning.PlanMeta) time.Duration {
 // leaves the arm where it stood, which is what lets callers with a recovery path
 // (dynamic pickup falling back to another candidate, placeHeldInServingArea
 // trying the next slot) tell them apart from execution errors via errors.Is.
-//
-// A request with PlannerOptions.ReturnPartialPlan set instead gets back the
-// solved prefix of an incomplete plan, logged at warn level.
 func (s *beanjaminCoffee) planMotion(ctx context.Context, req *armplanning.PlanRequest, label string) (motionplan.Plan, error) {
 	logger := s.activeOrderLogger()
 	req.PlannerOptions = withPlanTimeout(req.PlannerOptions)
 
 	plan, meta, err := armplanning.PlanMotion(ctx, logger, req)
 	if err == nil {
-		if incomplete := incompletePlanErr(meta, len(req.Goals)); incomplete != nil {
-			if req.PlannerOptions.ReturnPartialPlan {
-				logger.Warnf("executing partial %s plan (%s): %v", label, planDuration(meta), incomplete)
-			} else {
-				err = incomplete
-			}
-		}
+		err = incompletePlanErr(meta, len(req.Goals))
 	}
 	s.savePlanRequestAndResponse(req, plan, label, err)
 	if err != nil {
@@ -293,7 +279,14 @@ func (s *beanjaminCoffee) currentInputs(ctx context.Context) (*referenceframe.Fr
 // not planned where the arm ends up, the arm read now (currentInputs, a
 // stopping point). It is what a scene edit is applied at, so an edit made while
 // moves are still in flight lands where the arm will be when it takes effect.
+// Motions recorded in an open chunk are planned and handed off first, since
+// until then nothing says where they leave the arm.
 func (s *beanjaminCoffee) expectedInputs(ctx context.Context) (referenceframe.FrameSystemInputs, error) {
+	if s.run != nil && s.run.chunk.hasMotions() {
+		if err := s.flushChunk(); err != nil {
+			return nil, err
+		}
+	}
 	if inputs := s.scene().inputs; inputs != nil {
 		return inputs, nil
 	}
@@ -712,12 +705,24 @@ const (
 	tagPlanningFailure = "planning_failure"
 )
 
+// planStampLayout starts every saved plan file's name. The web app's
+// motion-plan panel (web-app/app/home/data.ts, PLAN_STAMP) reads the time back
+// out of it and lists an order's plans sorted by file name.
+const planStampLayout = "20060102_150405.000"
+
 // savePlanRequestAndResponse persists a PlanRequest together with the plan it
-// produced — nil on a planning failure — to a single JSON file, using RDK's
+// produced — nil on a planning failure — to a single JSON file named
+// <stamp>_<label>.json (savePlanFile).
+func (s *beanjaminCoffee) savePlanRequestAndResponse(req *armplanning.PlanRequest, plan motionplan.Plan, label string, planErr error) {
+	s.savePlanFile(req, plan, label, planErr, time.Now().Format(planStampLayout)+"_"+label)
+}
+
+// savePlanFile persists a PlanRequest together with the plan it produced — nil
+// on a planning failure — to name.json, using RDK's
 // WriteRequestAndResponseToFile so the pair round-trips through
 // ReadRequestAndResponseFromFile. It is a no-op when SaveMotionRequestsDir is
 // empty.
-func (s *beanjaminCoffee) savePlanRequestAndResponse(req *armplanning.PlanRequest, plan motionplan.Plan, label string, planErr error) {
+func (s *beanjaminCoffee) savePlanFile(req *armplanning.PlanRequest, plan motionplan.Plan, label string, planErr error, name string) {
 	logger := s.activeOrderLogger()
 	dir := s.cfg.SaveMotionRequestsDir
 	if dir == "" {
@@ -734,7 +739,7 @@ func (s *beanjaminCoffee) savePlanRequestAndResponse(req *armplanning.PlanReques
 		logger.Warnf("save plan request: create dir: %v", err)
 		return
 	}
-	filename := filepath.Join(tagDir, fmt.Sprintf("%s_%s.json", time.Now().Format("20060102_150405.000"), label))
+	filename := filepath.Join(tagDir, name+".json")
 	if err := req.WriteRequestAndResponseToFile(filename, plan); err != nil {
 		logger.Warnf("save plan request: %v", err)
 		return
@@ -767,9 +772,19 @@ func planRequestTagDir(baseDir, orderID, step, label, outcome string) string {
 // stepTag slugifies a step label ("Locking portafilter") into a tag-safe token
 // ("step_locking_portafilter"), or "" when there is no active step.
 func stepTag(step string) string {
+	if slug := slugify(step); slug != "" {
+		return "step_" + slug
+	}
+	return ""
+}
+
+// slugify lowercases s and keeps only its letters and digits, with one
+// underscore between each run of them: "Fetch, pour and return milk" becomes
+// "fetch_pour_and_return_milk".
+func slugify(s string) string {
 	var b strings.Builder
 	pendingUnderscore := false
-	for _, r := range strings.ToLower(strings.TrimSpace(step)) {
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 			if pendingUnderscore && b.Len() > 0 {
 				b.WriteByte('_')
@@ -780,23 +795,16 @@ func stepTag(step string) string {
 		}
 		pendingUnderscore = true
 	}
-	if b.Len() == 0 {
-		return ""
-	}
-	return "step_" + b.String()
+	return b.String()
 }
 
-// moveToRawPose plans a motion using armplanning and executes it on the arm.
+// moveToRawPose moves the arm straight to pd: recorded in the open chunk, or
+// planned and run as a chunk of its own (addMotion).
 func (s *beanjaminCoffee) moveToRawPose(ctx context.Context, pd *poseData, lc *StepLinearConstraint, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
-	_, fsInputs, err := s.currentInputs(ctx)
-	if err != nil {
-		return err
-	}
-	m, err := s.rawMotion("raw pose", pd, lc, 0, allowedCollisions, moveOpts, fsInputs)
-	if err != nil {
-		return err
-	}
-	return s.runMotion(ctx, m)
+	return s.addMotion(ctx, context.Background(), "raw pose", chunkOp{},
+		func(start referenceframe.FrameSystemInputs) (*motionRequest, error) {
+			return s.rawMotion("raw pose", pd, lc, 0, allowedCollisions, moveOpts, start)
+		})
 }
 
 // planToRawPose plans a motion to pd starting from startInputs, without touching
@@ -862,9 +870,8 @@ const pivotMmPerStep = 5.0
 
 // pivotSeedPoint returns the point on the segment from start to end closest to
 // actual, and actual's distance from it. A pivot may begin anywhere along that
-// segment rather than only at start: a pour tilt that ran as a partial plan
-// (Step.AcceptPartialPlan) leaves the container partway along its lift, and the
-// return upright must still start from there.
+// segment rather than only at start, so the check measures drift off the
+// pivot line rather than progress along it.
 func pivotSeedPoint(start, end, actual r3.Vector) (r3.Vector, float64) {
 	seg := end.Sub(start)
 	seed := start
@@ -918,18 +925,14 @@ func withNoSpillOrientationConstraint(constraints *motionplan.Constraints) *moti
 	return constraints
 }
 
-// carryHeldLevel carries the held container from where the arm stands to dest,
-// level (carryMotion), and runs it.
+// carryHeldLevel carries the held container to dest, level (carryMotion):
+// recorded in the open chunk, or planned and run as a chunk of its own
+// (addMotion).
 func (s *beanjaminCoffee) carryHeldLevel(ctx context.Context, dest *poseData, allowedCollisions []AllowedCollision, moveOpts *StepMoveOptions) error {
-	_, fsInputs, err := s.currentInputs(ctx)
-	if err != nil {
-		return err
-	}
-	m, err := s.carryMotion("carry", dest, allowedCollisions, moveOpts, fsInputs)
-	if err != nil {
-		return err
-	}
-	return s.runMotion(ctx, m)
+	return s.addMotion(ctx, context.Background(), "carry", chunkOp{},
+		func(start referenceframe.FrameSystemInputs) (*motionRequest, error) {
+			return s.carryMotion("carry", dest, allowedCollisions, moveOpts, start)
+		})
 }
 
 // minPivotThetaRads is the smallest authored rotation an overshoot direction

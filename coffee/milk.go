@@ -291,9 +291,9 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("pour_milk: %w", err)
 	}
 	// Held to pourConstraint so the planner can't detour the open bottle off
-	// the glass; a tilt it can't finish is executed as far as it planned.
+	// the glass.
 	pourStep := Step{PoseName: clawPoseMilkPour, PoseSwitch: s.clawsSw, PivotFromPose: clawPoseMilkPourApproach, PivotDegreesPerStep: 5,
-		LinearConstraint: pourConstraint, AcceptPartialPlan: true, MoveOptions: s.pourMoveOptions(), Pause: s.milkPourDwell()}
+		LinearConstraint: pourConstraint, MoveOptions: s.pourMoveOptions(), Pause: s.milkPourDwell()}
 	if err := s.executeStep(ctx, cancelCtx, pourStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}

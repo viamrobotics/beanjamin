@@ -10,7 +10,7 @@ import (
 	"time"
 
 	toggleswitch "go.viam.com/rdk/components/switch"
-	"go.viam.com/rdk/module/trace"
+	"go.viam.com/rdk/referenceframe"
 )
 
 const (
@@ -66,12 +66,6 @@ type Step struct {
 	// the handle slides back through them.
 	PivotExtraDegrees float64
 
-	// AcceptPartialPlan lets a pivot execute the waypoints the planner solved
-	// when a later one fails, stopping the arm short of PoseName rather than
-	// failing the step. Only for moves where falling short is harmless, like a
-	// pour that tilts less far.
-	AcceptPartialPlan bool
-
 	// NoSpill routes this step's move through the level carry (carryHeldLevel)
 	// rather than a direct plan.
 	NoSpill bool
@@ -103,18 +97,9 @@ func (s *beanjaminCoffee) runSteps(ctx, cancelCtx context.Context, label string,
 	return nil
 }
 
+// executeStep moves the arm as step says: recorded in the open chunk, or
+// planned and run as a chunk of its own (addMotion).
 func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step) error {
-	// During an order, direct moves are handed off; anything else is a stopping point.
-	if r := s.aheadRun(); r != nil && isDirectMove(step) {
-		return s.handOffStep(ctx, r, step)
-	}
-	if err := s.settle(); err != nil {
-		return err
-	}
-	logger := s.activeOrderLogger()
-	ctx, span := trace.StartSpan(ctx, "beanjamin::executeStep::"+step.PoseName)
-	defer span.End()
-
 	select {
 	case <-ctx.Done():
 		return fmt.Errorf("cancelled before %q: %w", step.PoseName, ctx.Err())
@@ -122,55 +107,10 @@ func (s *beanjaminCoffee) executeStep(ctx, cancelCtx context.Context, step Step)
 		return fmt.Errorf("cancelled before %q", step.PoseName)
 	default:
 	}
-
-	switch {
-	case step.PivotFromPose != "":
-		logger.Infof("pivoting from %q to %q", step.PivotFromPose, step.PoseName)
-	case step.CircularRadiusMm > 0:
-		logger.Infof("circular motion around %q", step.PoseName)
-	default:
-		logger.Infof("moving to %q", step.PoseName)
-	}
-	if err := s.runStepMotion(ctx, cancelCtx, step); err != nil {
-		return err
-	}
-
-	if step.Pause > 0 {
-		logger.Infof("pausing %s after %q", step.Pause, step.PoseName)
-		select {
-		case <-time.After(step.Pause):
-		case <-ctx.Done():
-			return fmt.Errorf("cancelled during pause after %q: %w", step.PoseName, ctx.Err())
-		case <-cancelCtx.Done():
-			return fmt.Errorf("cancelled during pause after %q", step.PoseName)
-		}
-	}
-	return nil
-}
-
-// runStepMotion plans step's arm motion from where the arm stands and runs it.
-func (s *beanjaminCoffee) runStepMotion(ctx, cancelCtx context.Context, step Step) error {
-	ctx, done := mergedCancelContext(ctx, cancelCtx)
-	defer done()
-	_, fsInputs, err := s.currentInputs(ctx)
-	if err != nil {
-		return err
-	}
-	m, err := s.stepMotion(ctx, step, fsInputs)
-	if err != nil {
-		return err
-	}
-	if err := s.runMotion(ctx, m); err != nil {
-		switch {
-		case step.PivotFromPose != "" || step.CircularRadiusMm > 0:
-			return err
-		case step.NoSpill:
-			return fmt.Errorf("no-spill carry to %q failed: %w", step.PoseName, err)
-		default:
-			return fmt.Errorf("move to %q failed: %w", step.PoseName, err)
-		}
-	}
-	return nil
+	return s.addMotion(ctx, cancelCtx, step.PoseName, chunkOp{pause: step.Pause},
+		func(start referenceframe.FrameSystemInputs) (*motionRequest, error) {
+			return s.stepMotion(ctx, step, start)
+		})
 }
 
 // Step labels surfaced through setStep -> get_queue, the order sensor's
