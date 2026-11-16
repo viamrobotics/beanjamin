@@ -255,9 +255,9 @@ func (s *beanjaminCoffee) brewButtonSteps(approachPose, pressPose string) []Step
 	return []Step{
 		{PoseName: approachPose, PoseSwitch: s.clawsSw},
 		{PoseName: pressPose, PoseSwitch: s.clawsSw, Pause: s.buttonPressHold(),
-			LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions, MoveOptions: s.slowMoveOptions()},
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
 		{PoseName: approachPose, PoseSwitch: s.clawsSw,
-			LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions, MoveOptions: s.slowMoveOptions()},
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: clawCoffeeButtonCollisions},
 	}
 }
 

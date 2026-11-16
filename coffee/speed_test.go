@@ -27,14 +27,13 @@ func TestPickupRetreatSpeed(t *testing.T) {
 	}
 }
 
-// The contact moves of the grind, the brew-button poke and the purge press
-// something, so each names the slow tier.
+// The contact moves of the grind and the purge press something, so each names
+// the slow tier.
 func TestContactStepsAreSlow(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
 	for label, seq := range map[string][]Step{
-		"grind":  s.grindSteps(grinderPoses("regular"), grinderButtonCollisions("regular")),
-		"button": s.brewButtonSteps(clawPoseEspressoButtonApproach, clawPoseEspressoButtonPress),
-		"purge":  s.purgeSteps(),
+		"grind": s.grindSteps(grinderPoses("regular"), grinderButtonCollisions("regular")),
+		"purge": s.purgeSteps(),
 	} {
 		for _, st := range seq {
 			if st.LinearConstraint != nil && st.MoveOptions == nil {
