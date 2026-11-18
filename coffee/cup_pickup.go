@@ -54,7 +54,7 @@ const (
 // system (like serving-area-shield): it stays a hard obstacle on the free
 // approach so the arm steers clear of the neighbouring clean items, and only the
 // linear descent onto the grasp and the retreat back out are allowed to pass
-// through it (pickupAreaShieldCollisions).
+// through it (areaShieldCollisions).
 const (
 	cleanCupAreaShieldFrameName   = "clean-cup-area-shield"
 	cleanGlassAreaShieldFrameName = "clean-glass-area-shield"
@@ -118,7 +118,7 @@ type pickupTarget struct {
 	noItemSpeak      string               // spoken on "nothing detected" before a retry wait
 	unreachableSpeak string               // spoken when items were seen but none could be grabbed, before a retry wait
 	graspZFromGeom   bool                 // grab at the geometry centroid's Z (keep detected X/Y); for the tall glass whose detected Z can sit high on the rim
-	shieldFrame      string               // clean-area shield obstacle opened up on the grasp descent/retreat (pickupAreaShieldCollisions); "" disables
+	shieldFrame      string               // clean-area shield obstacle opened up on the grasp descent/retreat (areaShieldCollisions); "" disables
 	retreatSpeed     *StepMoveOptions     // speed of the retreat with the item in hand; nil is the arm default
 }
 
@@ -327,15 +327,20 @@ func (s *beanjaminCoffee) observeAtPose(ctx, cancelCtx context.Context, t *picku
 	return candidates, nil
 }
 
-// pickupAreaShieldCollisions allows the claws, gripper sub-frames, and — once an
-// item is in hand — the held item to pass through the named clean-area shield
-// obstacle. Mirrors servingAreaShieldCollisions on the serving side: the shield
-// is a hard obstacle on the free approach so the arm avoids the neighbouring
-// clean cups/glasses, and this set is applied only on the linear grasp descent
-// and the retreat back out. The held-item pair is gated by
-// heldItemSurfaceCollisions so it is present only on the retreat (once grabbed),
-// not on the descent. Returns nil when the target has no shield configured.
-func (s *beanjaminCoffee) pickupAreaShieldCollisions(shieldFrame string) []AllowedCollision {
+// areaShieldCollisions allows the claws, gripper sub-frames, and — while an
+// item is in hand — the held item to pass through the named area shield
+// obstacle (a clean-cup/glass pickup area, the fridge, or a placement area).
+// The shield is a hard obstacle on the free approach so the arm avoids the
+// neighbouring cups/glasses, and this set is applied only on the linear
+// descent into the area and the retreat back out. The held-item pair is gated
+// by heldItemSurfaceCollisions so it is present only while something is held:
+// on a pickup's retreat, on a placement's descent. Returns nil when no shield
+// is named.
+//
+// The gripper sub-frames (gripper:claws, gripper:case-gripper) only exist on the
+// real gripper; filterFakeModeCollisions (applied in moveToRawPose) drops them
+// under FakeMode.
+func (s *beanjaminCoffee) areaShieldCollisions(shieldFrame string) []AllowedCollision {
 	if shieldFrame == "" {
 		return nil
 	}
@@ -405,7 +410,7 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	if err != nil {
 		return fmt.Errorf("approach plan to centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
-	grabPlan, err := s.planToRawPose(ctx, s.withArmInputs(fsInputs, approachEnd), grabPD, defaultApproachConstraint, 0, s.pickupAreaShieldCollisions(t.shieldFrame))
+	grabPlan, err := s.planToRawPose(ctx, s.withArmInputs(fsInputs, approachEnd), grabPD, defaultApproachConstraint, 0, s.areaShieldCollisions(t.shieldFrame))
 	if err != nil {
 		return fmt.Errorf("plan grab of centroid (x=%.1f, y=%.1f, z=%.1f): %w", centroid.X, centroid.Y, centroid.Z, err)
 	}
@@ -447,7 +452,7 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	// can't drop the item safely by recovering to observe. Strip the
 	// errMotionPlanning chain (%v, not %w) so the caller does not treat this
 	// as a try-another-candidate planning failure.
-	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, s.pickupAreaShieldCollisions(t.shieldFrame), t.retreatSpeed); err != nil {
+	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, s.areaShieldCollisions(t.shieldFrame), t.retreatSpeed); err != nil {
 		return fmt.Errorf("retreat with %s grabbed (centroid x=%.1f, y=%.1f, z=%.1f): %v", t.label, centroid.X, centroid.Y, centroid.Z, err)
 	}
 	return nil

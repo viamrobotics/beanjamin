@@ -116,7 +116,7 @@ func planDuration(meta *armplanning.PlanMeta) time.Duration {
 //
 // Planning failures are wrapped in errMotionPlanning: a plan that never ran
 // leaves the arm where it stood, which is what lets callers with a recovery path
-// (dynamic pickup falling back to another candidate, placeHeldInServingArea
+// (dynamic pickup falling back to another candidate, placeHeldInArea
 // trying the next slot) tell them apart from execution errors via errors.Is.
 func (s *beanjaminCoffee) planMotion(ctx context.Context, req *armplanning.PlanRequest, label string) (motionplan.Plan, error) {
 	logger := s.activeOrderLogger()

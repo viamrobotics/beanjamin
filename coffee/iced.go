@@ -106,10 +106,11 @@ func (s *beanjaminCoffee) finishIced(ctx, cancelCtx context.Context, milk string
 	}); err != nil {
 		return -1, err
 	}
-	// 7. Place the now-empty espresso cup in the serving area (round-robin). The
-	//    pour left it empty, so it skips the no-spill level carry — there is
-	//    nothing left in it to slosh.
-	if _, err := s.placeHeldInServingArea(ctx, cancelCtx, nil, heldEmpty); err != nil {
+	// 7. Set the now-empty espresso cup down in the dirty-container area, or the
+	//    serving area when there is none (round-robin). The pour left it empty,
+	//    so it skips the no-spill level carry — there is nothing left in it to
+	//    slosh.
+	if _, err := s.placeHeldInArea(ctx, cancelCtx, s.emptyCupArea(), nil, heldEmpty); err != nil {
 		return -1, err
 	}
 

@@ -129,9 +129,11 @@ type beanjaminCoffee struct {
 	iceVision      *icevision.Detector
 	glassVision    vision.Service // optional; nil unless CanServeIced
 	glassObserveSw toggleswitch.Switch
-	// servingSlot is the round-robin counter for serving-area placement
-	// (serving_slots.go), persisted across rebuilds.
-	servingSlot *servingSlotStore
+	// servingSlot and dirtyContainerSlot are the round-robin counters for the
+	// serving-area and dirty-container-area placements (serving_slots.go), persisted
+	// across rebuilds.
+	servingSlot        *servingSlotStore
+	dirtyContainerSlot *servingSlotStore
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -353,38 +355,39 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 
 	s := &beanjaminCoffee{
-		name:             name,
-		logger:           logger,
-		cfg:              conf,
-		filterSw:         filterSw,
-		clawsSw:          clawSw,
-		cameraObserveSw:  cameraObserveSw,
-		arm:              armComp,
-		fsSvc:            fsSvc,
-		settledScene:     &sceneState{fs: frameSystem},
-		speaker:          speaker,
-		faultAlarm:       speech.NewFaultAlarm(speaker, logger),
-		iceBoard:         iceBoard,
-		slackNotifier:    report.NewNotifier(slackNotifier),
-		customerDetector: customerDetector,
-		delivery:         newDeliveryCart(),
-		servingSlot:      newServingSlotStore(logger),
-		crm:              crmSvc,
-		machineLogsURL:   report.MachineLogsURL(os.Getenv("VIAM_MACHINE_ID"), os.Getenv("VIAM_PRIMARY_ORG_ID")),
-		dataLocationID:   os.Getenv("VIAM_LOCATION_ID"),
-		primaryOrgID:     os.Getenv("VIAM_PRIMARY_ORG_ID"),
-		clips:            clips.NewSaver(camStorage, pendingOrderClipsDir, logger),
-		gripper:          gripperComp,
-		lease:            armLease{cancelCtx: cancelCtx, cancelFunc: cancelFunc},
-		queue:            order.NewQueue(),
-		queueStop:        make(chan struct{}),
-		orderSensorSink:  sink,
-		usageSensor:      usageSensor,
-		cupVision:        cupVision,
-		cupCameraName:    conf.SrcCameraName,
-		iceVision:        icevision.NewDetector(srcCamera, iceVisionParams(conf)),
-		glassVision:      glassVision,
-		glassObserveSw:   glassObserveSw,
+		name:               name,
+		logger:             logger,
+		cfg:                conf,
+		filterSw:           filterSw,
+		clawsSw:            clawSw,
+		cameraObserveSw:    cameraObserveSw,
+		arm:                armComp,
+		fsSvc:              fsSvc,
+		settledScene:       &sceneState{fs: frameSystem},
+		speaker:            speaker,
+		faultAlarm:         speech.NewFaultAlarm(speaker, logger),
+		iceBoard:           iceBoard,
+		slackNotifier:      report.NewNotifier(slackNotifier),
+		customerDetector:   customerDetector,
+		delivery:           newDeliveryCart(),
+		servingSlot:        newServingSlotStore(logger, servingAreaFrameName, servingSlotFile),
+		dirtyContainerSlot: newServingSlotStore(logger, dirtyContainerAreaFrameName, dirtyContainerSlotFile),
+		crm:                crmSvc,
+		machineLogsURL:     report.MachineLogsURL(os.Getenv("VIAM_MACHINE_ID"), os.Getenv("VIAM_PRIMARY_ORG_ID")),
+		dataLocationID:     os.Getenv("VIAM_LOCATION_ID"),
+		primaryOrgID:       os.Getenv("VIAM_PRIMARY_ORG_ID"),
+		clips:              clips.NewSaver(camStorage, pendingOrderClipsDir, logger),
+		gripper:            gripperComp,
+		lease:              armLease{cancelCtx: cancelCtx, cancelFunc: cancelFunc},
+		queue:              order.NewQueue(),
+		queueStop:          make(chan struct{}),
+		orderSensorSink:    sink,
+		usageSensor:        usageSensor,
+		cupVision:          cupVision,
+		cupCameraName:      conf.SrcCameraName,
+		iceVision:          icevision.NewDetector(srcCamera, iceVisionParams(conf)),
+		glassVision:        glassVision,
+		glassObserveSw:     glassObserveSw,
 
 		deliverySlotsVision:   deliverySlotsVision,
 		deliveryCartObserveSw: deliveryCartObserveSw,

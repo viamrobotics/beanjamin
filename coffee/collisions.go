@@ -65,6 +65,10 @@ var heldItemServingAreaCollisions = []AllowedCollision{
 	{Frame1: heldItemFrameName, Frame2: "shelf-top"},
 }
 
+var heldItemDirtyContainerAreaCollisions = []AllowedCollision{
+	{Frame1: heldItemFrameName, Frame2: dirtyContainerAreaFrameName},
+}
+
 // heldItemStagingCollisions allows the held glass to approach the table surface
 // it legitimately gets close to while being set down in the staging area.
 var heldItemStagingCollisions = []AllowedCollision{

@@ -218,7 +218,7 @@ func containerYaw(grabRel *RelativePose) float64 {
 // hanging a stand-in where the real glass is about to be grasped puts a phantom
 // in the free approach plan — inside the clean-area shield, which is hard
 // there — so every candidate fails to plan. It would also hand the grasp descent
-// the held-item shield exemption that pickupAreaShieldCollisions withholds until
+// the held-item shield exemption that areaShieldCollisions withholds until
 // after the grab. Use lock_portafilter + release_filter to reach empty jaws.
 var withGlassActions = map[string]bool{
 	"move_to_ice_dispense": true,

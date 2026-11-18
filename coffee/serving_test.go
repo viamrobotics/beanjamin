@@ -75,7 +75,7 @@ func TestTryDropCupInSlotHonorsCancelCtx(t *testing.T) {
 				cancelCtx, cancel := context.WithCancel(context.Background())
 				cancel()
 
-				err := rig.s.tryDropCupInSlot(context.Background(), cancelCtx, r3.Vector{X: 300, Y: 200}, 50, tc.contents)
+				err := rig.s.tryDropCupInSlot(context.Background(), cancelCtx, rig.s.servingArea(), r3.Vector{X: 300, Y: 200}, 50, tc.contents)
 				if !errors.Is(err, context.Canceled) {
 					t.Fatalf("err = %v, want context.Canceled", err)
 				}
@@ -101,7 +101,7 @@ func TestTryDropCupInSlotHonorsCancelCtx(t *testing.T) {
 					}
 				})
 
-				err := rig.s.tryDropCupInSlot(context.Background(), cancelCtx, r3.Vector{X: 300, Y: 200}, 50, tc.contents)
+				err := rig.s.tryDropCupInSlot(context.Background(), cancelCtx, rig.s.servingArea(), r3.Vector{X: 300, Y: 200}, 50, tc.contents)
 				if !errors.Is(err, context.Canceled) {
 					t.Fatalf("err = %v, want context.Canceled", err)
 				}

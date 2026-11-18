@@ -105,7 +105,7 @@ func (s *beanjaminCoffee) addMilk(ctx, cancelCtx context.Context, milk string) e
 // empty.
 func (s *beanjaminCoffee) fridgeLinearStep(pose string, moveOpts *StepMoveOptions) Step {
 	return Step{PoseName: pose, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
-		Pause: shortPause, AllowedCollisions: s.pickupAreaShieldCollisions(milkAreaShieldFrameName),
+		Pause: shortPause, AllowedCollisions: s.areaShieldCollisions(milkAreaShieldFrameName),
 		MoveOptions: moveOpts}
 }
 

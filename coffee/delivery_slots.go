@@ -96,7 +96,7 @@ func (s *beanjaminCoffee) locateCartSlot(ctx, cancelCtx context.Context, orderID
 
 // deliveryAreaCollisions lets the claws, the gripper bodies, and the held drink
 // pass through the delivery-area obstacle on the linear descent into a cart
-// slot and the retreat back out. Like servingAreaShieldCollisions, the gripper
+// slot and the retreat back out. Like areaShieldCollisions, the gripper
 // sub-frames are dropped under FakeMode by filterFakeModeCollisions, and the
 // held-item pair is gated by heldItemSurfaceCollisions, so it is omitted on the
 // retreat once the drink is released.

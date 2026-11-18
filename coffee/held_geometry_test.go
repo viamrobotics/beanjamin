@@ -443,11 +443,11 @@ func TestHeldItemHalfHeightMm(t *testing.T) {
 	}
 }
 
-func TestServingAreaShieldCollisions(t *testing.T) {
+func TestAreaShieldCollisions(t *testing.T) {
 	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{}}
 
 	// Detached (the retreat): gripper + claws pairs only, no held-item pair.
-	got := s.servingAreaShieldCollisions()
+	got := s.areaShieldCollisions(servingAreaShieldFrameName)
 	if len(got) != 3 {
 		t.Fatalf("expected 3 pairs when detached, got %d (%v)", len(got), got)
 	}
@@ -462,7 +462,7 @@ func TestServingAreaShieldCollisions(t *testing.T) {
 
 	// Attached (the descent): adds the held-item↔shield pair.
 	s.scene().heldItemAttached = true
-	got = s.servingAreaShieldCollisions()
+	got = s.areaShieldCollisions(servingAreaShieldFrameName)
 	if len(got) != 4 {
 		t.Fatalf("expected 4 pairs when attached, got %d (%v)", len(got), got)
 	}

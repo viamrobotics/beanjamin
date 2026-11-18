@@ -1,24 +1,25 @@
 package coffee
 
-// Served-drinks shelf placement.
+// Placement-area slots.
 //
-// Helpers for placing finished cups on a dedicated served-drinks shelf. The
-// shelf is modeled as a Box geometry
-// in the framesystem under servingAreaFrameName (with a fallback to
-// servingAreaOriginFrameName for the RDK tail-geometry frame). Tile centers are
-// laid out along the shelf's long axis at fixed spacing on the midline — as
-// many slots as the serving-area length allows; the claws are commanded to land
-// shelfDropZOffsetMm above the serving area top surface.
+// Helpers for setting a held container down in a placement area: the
+// served-drinks shelf (servingAreaFrameName) or, when the frame system defines
+// one, the dirty-container area (dirtyContainerAreaFrameName) where used
+// containers are left. Each area is modeled as a Box geometry in the framesystem under its
+// frame name (with a fallback to the RDK tail-geometry "<name>_origin" frame).
+// Tile centers are laid out along the area's long axis at fixed spacing on the
+// midline — as many slots as the area length allows; the claws are commanded
+// to land the container's bottom on the area's top surface.
 //
 // Slot selection is a simple sequential round-robin (no vision): each
-// placement takes the next slot via a counter (servingSlotStore) modulo the
-// number of tiles, on the assumption that by the time the counter wraps around
-// the earliest-placed cup has been picked up. The counter is mirrored to
-// VIAM_MODULE_DATA so a restart/reconfigure resumes after the last-used slot
-// instead of dropping the next cup on top of one still on the shelf.
+// placement takes the next slot via a per-area counter (servingSlotStore)
+// modulo the number of tiles, on the assumption that by the time the counter
+// wraps around the earliest-placed container has been removed. The counter is
+// mirrored to VIAM_MODULE_DATA so a restart/reconfigure resumes after the
+// last-used slot instead of dropping the next container on top of one still
+// standing there.
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,8 +44,19 @@ const (
 	// above the serving area. It stays a hard obstacle on the lateral carry so
 	// the arm steers clear of cups already on the shelf; only the linearly
 	// constrained descent into a slot and the retreat back out are allowed to
-	// pass through it (servingAreaShieldCollisions).
+	// pass through it (areaShieldCollisions).
 	servingAreaShieldFrameName = "serving-area-shield"
+
+	// dirtyContainerAreaFrameName is the optional area where used containers
+	// (today the espresso cup emptied by the iced pour) are set down, keeping
+	// them off the serving area. When the frame system doesn't define it, they
+	// go to the serving area.
+	dirtyContainerAreaFrameName       = "dirty-container-area"
+	dirtyContainerAreaOriginFrameName = "dirty-container-area_origin"
+	// dirtyContainerAreaShieldFrameName encloses the standing dirty containers
+	// and is opened up on the descent and retreat only, like
+	// servingAreaShieldFrameName.
+	dirtyContainerAreaShieldFrameName = "dirty-container-area-shield"
 
 	shelfTileSpacingMm = 120.0
 	shelfTileMarginMm  = 60.0
@@ -57,50 +69,97 @@ const (
 	// CupGrabRelativePose to derive the world-frame grip-point pose for the drop.
 	shelfDropZOffsetMm = 30.0
 
-	servingSlotFile = "serving-area-slot"
+	servingSlotFile        = "serving-area-slot"
+	dirtyContainerSlotFile = "dirty-container-area-slot"
 )
 
-// servingSlotStore holds the round-robin serving-area counter. Mirrored to
+// placementArea is one area a held container can be set down in.
+type placementArea struct {
+	frame       string
+	originFrame string
+	// shieldFrame is the obstacle enclosing the containers standing in the
+	// area; inert when the frame system doesn't define it.
+	shieldFrame string
+	// surfaceCollisions let the held container touch the area's surfaces on
+	// the descent into a slot.
+	surfaceCollisions []AllowedCollision
+	slots             *servingSlotStore
+}
+
+func (s *beanjaminCoffee) servingArea() placementArea {
+	return placementArea{
+		frame:             servingAreaFrameName,
+		originFrame:       servingAreaOriginFrameName,
+		shieldFrame:       servingAreaShieldFrameName,
+		surfaceCollisions: heldItemServingAreaCollisions,
+		slots:             s.servingSlot,
+	}
+}
+
+func (s *beanjaminCoffee) dirtyContainerArea() placementArea {
+	return placementArea{
+		frame:             dirtyContainerAreaFrameName,
+		originFrame:       dirtyContainerAreaOriginFrameName,
+		shieldFrame:       dirtyContainerAreaShieldFrameName,
+		surfaceCollisions: heldItemDirtyContainerAreaCollisions,
+		slots:             s.dirtyContainerSlot,
+	}
+}
+
+// emptyCupArea is where an emptied espresso cup goes: the dirty-container area when
+// the frame system defines one, else the serving area.
+func (s *beanjaminCoffee) emptyCupArea() placementArea {
+	fs := s.scene().fs
+	if fs.Frame(dirtyContainerAreaFrameName) != nil || fs.Frame(dirtyContainerAreaOriginFrameName) != nil {
+		return s.dirtyContainerArea()
+	}
+	return s.servingArea()
+}
+
+// servingSlotStore holds one placement area's round-robin counter. Mirrored to
 // VIAM_MODULE_DATA because the service is AlwaysRebuild: without persisting,
 // every reconfigure would restart at slot 0, which likely still holds a cup.
 // The raw counter is stored rather than a slot index so it stays meaningful if
-// the serving area is resized (the slot is always counter modulo slot count).
+// the area is resized (the slot is always counter modulo slot count).
 type servingSlotStore struct {
 	mu   sync.Mutex
 	next uint64
+	// label names the area in log lines.
+	label string
 	// path is "" when VIAM_MODULE_DATA is unset (tests, a local run): in-memory only.
 	path string
 }
 
-// newServingSlotStore loads any persisted counter. Every read failure degrades
-// to slot 0 — the pre-persistence behavior — rather than failing construction.
-func newServingSlotStore(logger logging.Logger) *servingSlotStore {
-	st := &servingSlotStore{}
+// newServingSlotStore loads any counter persisted under file in
+// VIAM_MODULE_DATA. Every read failure degrades to slot 0 rather than failing
+// construction.
+func newServingSlotStore(logger logging.Logger, label, file string) *servingSlotStore {
+	st := &servingSlotStore{label: label}
 
 	dir := os.Getenv("VIAM_MODULE_DATA")
 	if dir == "" {
-		logger.Warnf("serving area: VIAM_MODULE_DATA is unset — the slot counter will be kept in " +
-			"memory only and restart at slot 1 after a reconfigure")
+		logger.Warnf("%s: VIAM_MODULE_DATA is unset — the slot counter will be kept in "+
+			"memory only and restart at slot 1 after a reconfigure", label)
 		return st
 	}
-	st.path = filepath.Join(dir, servingSlotFile)
+	st.path = filepath.Join(dir, file)
 
 	raw, err := os.ReadFile(st.path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			logger.Warnf("serving area: reading %s: %v — starting at slot 1", st.path, err)
+			logger.Warnf("%s: reading %s: %v — starting at slot 1", label, st.path, err)
 		}
 		return st
 	}
 	n, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
 	if err != nil {
-		logger.Warnf("serving area: %s holds %q, which is not a slot counter: %v — starting at slot 1",
-			st.path, string(raw), err)
+		logger.Warnf("%s: %s holds %q, which is not a slot counter: %v — starting at slot 1",
+			label, st.path, string(raw), err)
 		return st
 	}
 
 	st.next = n
-	logger.Infof("serving area: resuming slot counter at %d (loaded from %s)", n, st.path)
+	logger.Infof("%s: resuming slot counter at %d (loaded from %s)", label, n, st.path)
 	return st
 }
 
@@ -122,19 +181,18 @@ func (st *servingSlotStore) set(logger logging.Logger, next uint64) {
 		return
 	}
 	if err := os.WriteFile(path, []byte(strconv.FormatUint(next, 10)), 0o644); err != nil {
-		logger.Warnf("serving area: persisting slot counter to %s: %v", path, err)
+		logger.Warnf("%s: persisting slot counter to %s: %v", st.label, path, err)
 	}
 }
 
-// shelfTopGeometry returns the world-frame center pose and box dimensions of
-// the served-drinks serving-area obstacle. Looks for a Box geometry under
-// servingAreaFrameName first, then under servingAreaOriginFrameName (RDK creates
-// both frames for any part with a collision body — only one of them
-// typically carries the geometry, so we try each). Non-Box geometries return
-// an error.
-func (s *beanjaminCoffee) shelfTopGeometry(ctx context.Context) (spatialmath.Pose, r3.Vector, error) {
+// areaGeometry returns the world-frame center pose and box dimensions of the
+// area's obstacle. Looks for a Box geometry under area.frame first, then under
+// area.originFrame (RDK creates both frames for any part with a collision body
+// — only one of them typically carries the geometry, so we try each). Non-Box
+// geometries return an error.
+func (s *beanjaminCoffee) areaGeometry(area placementArea) (spatialmath.Pose, r3.Vector, error) {
 	logger := s.activeOrderLogger()
-	// The serving area is off the arm, so placing it needs no arm joints.
+	// The area is off the arm, so placing it needs no arm joints.
 	sc := s.scene()
 	fs := sc.fs
 	fsInputs := placement{inputs: sc.inputs}.fullInputs(fs)
@@ -144,7 +202,7 @@ func (s *beanjaminCoffee) shelfTopGeometry(ctx context.Context) (spatialmath.Pos
 		geos      []spatialmath.Geometry
 		anyFound  bool
 	)
-	for _, name := range []string{servingAreaFrameName, servingAreaOriginFrameName} {
+	for _, name := range []string{area.frame, area.originFrame} {
 		frame := fs.Frame(name)
 		if frame == nil {
 			continue
@@ -163,10 +221,10 @@ func (s *beanjaminCoffee) shelfTopGeometry(ctx context.Context) (spatialmath.Pos
 		logger.Debugf("shelf placement: frame %q exists but carries no geometry; trying next", name)
 	}
 	if !anyFound {
-		return nil, r3.Vector{}, fmt.Errorf("serving-area frame %q (or %q) not found in framesystem", servingAreaFrameName, servingAreaOriginFrameName)
+		return nil, r3.Vector{}, fmt.Errorf("frame %q (or %q) not found in framesystem", area.frame, area.originFrame)
 	}
 	if len(geos) == 0 {
-		return nil, r3.Vector{}, fmt.Errorf("neither frame %q nor %q carries a geometry", servingAreaFrameName, servingAreaOriginFrameName)
+		return nil, r3.Vector{}, fmt.Errorf("neither frame %q nor %q carries a geometry", area.frame, area.originFrame)
 	}
 
 	// Transform geometry to world coordinates via the framesystem so the
@@ -197,35 +255,34 @@ func (s *beanjaminCoffee) shelfTopGeometry(ctx context.Context) (spatialmath.Pos
 	return worldGeom.Pose(), dims, nil
 }
 
-// servingAreaSlots resolves the serving-area geometry and returns the slot
-// layout (as many slots as the serving area length allows at
-// shelfTileSpacingMm) ordered along the serving area's long axis, plus the
-// world-frame Z of the serving area top surface. The caller picks a slot in
-// round-robin order via servingSlot and skips any it cannot reach.
+// areaSlots resolves the area's geometry and returns the slot layout (as many
+// slots as the area length allows at shelfTileSpacingMm) ordered along its
+// long axis, plus the world-frame Z of its top surface. The caller picks a slot
+// in round-robin order via area.slots and skips any it cannot reach.
 //
-// Returns an error only when the serving-area geometry is missing or too small
-// to hold a single slot.
-func (s *beanjaminCoffee) servingAreaSlots(ctx context.Context) ([]r3.Vector, float64, error) {
+// Returns an error only when the area geometry is missing or too small to hold
+// a single slot.
+func (s *beanjaminCoffee) areaSlots(area placementArea) ([]r3.Vector, float64, error) {
 	logger := s.activeOrderLogger()
-	shelfWorldPose, dimsMm, err := s.shelfTopGeometry(ctx)
+	shelfWorldPose, dimsMm, err := s.areaGeometry(area)
 	if err != nil {
 		return nil, 0, fmt.Errorf("shelf placement: %w", err)
 	}
 
 	tiles := geom.ShelfTileCenters(shelfWorldPose, dimsMm, shelfTileSpacingMm, shelfTileMarginMm)
 	if len(tiles) == 0 {
-		return nil, 0, fmt.Errorf("shelf placement: serving-area dimensions %v leave no room for slots (margin=%.0fmm, spacing=%.0fmm)",
-			dimsMm, shelfTileMarginMm, shelfTileSpacingMm)
+		return nil, 0, fmt.Errorf("shelf placement: %s dimensions %v leave no room for slots (margin=%.0fmm, spacing=%.0fmm)",
+			area.frame, dimsMm, shelfTileMarginMm, shelfTileSpacingMm)
 	}
 
 	shelfTopZ := shelfWorldPose.Point().Z + dimsMm.Z/2
-	logger.Infof("shelf placement: serving area at %v, dims %v, %d slot(s) (shelf top Z=%.1fmm)",
-		shelfWorldPose.Point(), dimsMm, len(tiles), shelfTopZ)
+	logger.Infof("shelf placement: %s at %v, dims %v, %d slot(s) (top Z=%.1fmm)",
+		area.frame, shelfWorldPose.Point(), dimsMm, len(tiles), shelfTopZ)
 	return tiles, shelfTopZ, nil
 }
 
-// servingAreaDropZOffset returns the Z height of the placement anchor above the
-// serving-area top surface. With a held-item geometry tracked it is half the
+// servingAreaDropZOffset returns the Z height of the placement anchor above a
+// placement area's top surface. With a held-item geometry tracked it is half the
 // container's height: the held-item box is modeled upright and centered on the
 // grasp anchor, so its bottom sits halfHeight below the anchor — placing the
 // container's bottom on the shelf regardless of its height (so a taller iced
