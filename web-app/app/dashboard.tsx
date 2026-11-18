@@ -25,8 +25,17 @@ import {
   loadOrdersForDay,
   loadErrorsLast7Days,
   loadRobotTotalsLastNDays,
+  loadOrderOutcomes,
   startOfToday,
 } from "./home/data";
+import {
+  type MachineReliability,
+  RELIABILITY_HISTORY_DAYS,
+  RELIABILITY_WINDOW_DAYS,
+  computeReliability,
+  groupByRobot,
+} from "./home/reliability";
+import { ReliabilityPanel } from "./home/reliability-panel";
 import { OrdersChart } from "./home/chart";
 import { OrdersPanel } from "./home/orders-panel";
 import { Leaderboard } from "./home/leaderboard";
@@ -48,6 +57,9 @@ export function Dashboard() {
   const [machines, setMachines] = useState<Machine[]>([]);
   const [orderCounts, setOrderCounts] = useState<DailyOrderCount[] | null>(null);
   const [totals14d, setTotals14d] = useState<RobotTotal[]>([]);
+  const [reliability, setReliability] = useState<MachineReliability[] | null>(
+    null
+  );
   const [customerLeaderboard, setCustomerLeaderboard] = useState<
     LeaderboardEntry[] | null
   >(null);
@@ -184,6 +196,21 @@ export function Dashboard() {
         .catch((e) =>
           console.error("failed to load 14-day robot totals:", e)
         );
+      loadOrderOutcomes(currentClient, currentMachines, RELIABILITY_HISTORY_DAYS)
+        .then((outcomes) => {
+          if (cancelled) return;
+          const windowStart = new Date(
+            Date.now() - RELIABILITY_WINDOW_DAYS * 24 * 60 * 60 * 1000
+          );
+          setReliability(
+            [...groupByRobot(outcomes).entries()]
+              .map(([robotId, list]) =>
+                computeReliability(robotId, list, windowStart)
+              )
+              .sort((a, b) => b.drinks - a.drinks)
+          );
+        })
+        .catch((e) => console.error("failed to load reliability:", e));
       loadLeaderboard(currentClient, "data.readings.customer_name")
         .then((d) => !cancelled && setCustomerLeaderboard(d))
         .catch((e) =>
@@ -354,6 +381,11 @@ export function Dashboard() {
             <MachineRow key={m.id} m={m} queue={machineQueues.get(m.id)} />
           ))}
       </ul>
+
+      <ReliabilityPanel
+        reliability={reliability}
+        machineNameById={machineNameById}
+      />
 
       {/* Chart and leaderboard share a row: the leaderboard is two short lists
           and was costing a full screen of height on its own. */}
