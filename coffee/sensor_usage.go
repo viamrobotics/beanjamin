@@ -12,8 +12,8 @@ import (
 // The usage sensor tracks physical consumables and service health by mirroring
 // several counters — one per key (<beans>_grinds for each grinder, e.g.
 // regular_grinds and decaf_grinds; <milk>_milk_pours for each milk, e.g.
-// whole_milk_pours and oat_milk_pours; usage,
-// cleanings, ice_dispenses, ice_dispense_timeouts,
+// whole_milk_pours and oat_milk_pours; water_used,
+// cleaner_pucks, ice_dispenses, ice_dispense_timeouts,
 // ice_shadow_disagreements, drip_tray_brews, espresso_cups_used,
 // latte_glasses_used, successful_consecutive_orders) — into a single external
 // sensor resource. The sensor replaces its whole readings map on `set`, so every

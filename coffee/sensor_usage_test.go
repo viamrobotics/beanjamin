@@ -145,16 +145,16 @@ func TestIncrementSensorReading_DistinctKeysOnOneSensor(t *testing.T) {
 	sen := newFakeUsageSensor(map[string]any{
 		"regular_grinds":                float64(2),
 		"decaf_grinds":                  float64(5),
-		"usage":                         float64(10),
-		"cleanings":                     float64(1),
+		"water_used":                    float64(10),
+		"cleaner_pucks":                 float64(1),
 		"successful_consecutive_orders": float64(3),
 	})
 	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
 	if got := sen.lastSet(t, "regular_grinds"); got != 3 {
 		t.Fatalf("regular_grinds = %v, want 3", got)
 	}
-	s.incrementSensorReading(context.Background(), sen, "water", "usage", 1.5)
-	if got := sen.lastSet(t, "usage"); got != 11.5 {
+	s.incrementSensorReading(context.Background(), sen, "water", "water_used", 1.5)
+	if got := sen.lastSet(t, "water_used"); got != 11.5 {
 		t.Fatalf("usage = %v, want 11.5", got)
 	}
 	s.incrementSensorReading(context.Background(), sen, "decaf grinder", "decaf_grinds", 1)
@@ -170,8 +170,8 @@ func TestIncrementSensorReading_PreservesOtherKeys(t *testing.T) {
 	sen := newFakeUsageSensor(map[string]any{
 		"regular_grinds":                float64(2),
 		"decaf_grinds":                  float64(5),
-		"usage":                         float64(10),
-		"cleanings":                     float64(1),
+		"water_used":                    float64(10),
+		"cleaner_pucks":                 float64(1),
 		"successful_consecutive_orders": float64(3),
 	})
 	s.incrementSensorReading(context.Background(), sen, "grinder", "regular_grinds", 1)
@@ -179,8 +179,8 @@ func TestIncrementSensorReading_PreservesOtherKeys(t *testing.T) {
 	want := map[string]float64{
 		"regular_grinds":                3, // the only key that changed
 		"decaf_grinds":                  5,
-		"usage":                         10,
-		"cleanings":                     1,
+		"water_used":                    10,
+		"cleaner_pucks":                 1,
 		"successful_consecutive_orders": 3,
 	}
 	if len(set) != len(want) {
@@ -199,14 +199,14 @@ func TestSetSensorReading_PreservesOtherKeys(t *testing.T) {
 	// counters must survive the write.
 	sen := newFakeUsageSensor(map[string]any{
 		"regular_grinds":                float64(2),
-		"cleanings":                     float64(4),
+		"cleaner_pucks":                 float64(4),
 		"successful_consecutive_orders": float64(7),
 	})
 	s.setSensorReading(context.Background(), sen, "consecutive orders", "successful_consecutive_orders", 0)
 	set := sen.lastSetMap(t)
 	want := map[string]float64{
 		"regular_grinds":                2,
-		"cleanings":                     4,
+		"cleaner_pucks":                 4,
 		"successful_consecutive_orders": 0, // the only key that changed
 	}
 	if len(set) != len(want) {

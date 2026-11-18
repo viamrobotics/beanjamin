@@ -160,7 +160,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 		if err := runPhase(stepBrewing, "brewing", brewProgress, brewPhase); err != nil {
 			return err
 		}
-		s.countUsage(ctx, "water", "usage", waterDelta(drink))
+		s.countUsage(ctx, "water", "water_used", waterDelta(drink))
 		s.countUsage(ctx, "drip tray", "drip_tray_brews", 1)
 		return nil
 	}); err != nil {
@@ -247,7 +247,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 		if err := runPhase(stepCleaning, "cleaning", "post: cleaning portafilter", s.cleanPortafilter); err != nil {
 			return err
 		}
-		s.countUsage(ctx, "cleaner", "cleanings", 1)
+		s.countUsage(ctx, "cleaner", "cleaner_pucks", 1)
 		s.setStep(stepFinishingUp)
 		logger.Infof("step 9/9: moving to home pose")
 		return s.executeStep(ctx, cancelCtx, Step{PoseName: filterPoseHome, PoseSwitch: s.filterSw})

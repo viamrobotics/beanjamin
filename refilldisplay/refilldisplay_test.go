@@ -121,7 +121,7 @@ func newTestDisplay(t *testing.T, mon sensor.Sensor, deck resource.Resource, pag
 		deck:    deck,
 		page:    page,
 		buttons: []Button{
-			{Name: "water", Reading: "usage", Label: "Water", Threshold: 25},
+			{Name: "water", Reading: "water_used", Label: "Water", Threshold: 25},
 			{Name: "beans", Reading: "regular_grinds", Label: "Beans", Threshold: 20, Text: "{label}: {value} uses"},
 		},
 		colors: Colors{}.withDefaults(),
@@ -155,24 +155,24 @@ func TestStateOf(t *testing.T) {
 
 func TestRender(t *testing.T) {
 	colors := Colors{}.withDefaults()
-	b := Button{Name: "water", Reading: "usage", Label: "Water", Threshold: 25}
+	b := Button{Name: "water", Reading: "water_used", Label: "Water", Threshold: 25}
 
-	p, ok := render(b, map[string]any{"usage": 0.0, "usage_triggered": false}, colors, 0)
+	p, ok := render(b, map[string]any{"water_used": 0.0, "water_used_triggered": false}, colors, 0)
 	if !ok || p.Color != "green" || p.Text != "Water 0/25" || p.State != stateFresh {
 		t.Errorf("fresh: got %+v ok=%v", p, ok)
 	}
-	p, _ = render(b, map[string]any{"usage": 4.5, "usage_triggered": false}, colors, 0)
+	p, _ = render(b, map[string]any{"water_used": 4.5, "water_used_triggered": false}, colors, 0)
 	if p.Color != "teal" || p.Text != "Water 4.5/25" {
 		t.Errorf("ok: got %+v", p)
 	}
-	p, _ = render(b, map[string]any{"usage": 25.0, "usage_triggered": true}, colors, 0)
+	p, _ = render(b, map[string]any{"water_used": 25.0, "water_used_triggered": true}, colors, 0)
 	if p.Color != "red" || p.State != stateDue {
 		t.Errorf("due: got %+v", p)
 	}
 
 	// No rule for the reading means no _triggered flag, so it can never be due,
 	// and with no threshold the text shows just the count.
-	p, ok = render(Button{Name: "water", Reading: "usage", Label: "Water"}, map[string]any{"usage": 99.0}, colors, 0)
+	p, ok = render(Button{Name: "water", Reading: "water_used", Label: "Water"}, map[string]any{"water_used": 99.0}, colors, 0)
 	if !ok || p.Color != "teal" || p.Text != "Water 99" {
 		t.Errorf("no rule: got %+v ok=%v", p, ok)
 	}
@@ -190,7 +190,7 @@ func TestRender(t *testing.T) {
 	}
 
 	for _, bad := range []any{nil, "12", true} {
-		if _, ok := render(b, map[string]any{"usage": bad}, colors, 0); ok {
+		if _, ok := render(b, map[string]any{"water_used": bad}, colors, 0); ok {
 			t.Errorf("reading %#v should not render", bad)
 		}
 	}
@@ -203,34 +203,34 @@ func TestRender(t *testing.T) {
 // display must judge by the count, not the stale flag.
 func TestRenderWhenMonitorIsSnoozed(t *testing.T) {
 	colors := Colors{}.withDefaults()
-	b := Button{Name: "water", Reading: "usage", Label: "Water", Threshold: 25}
+	b := Button{Name: "water", Reading: "water_used", Label: "Water", Threshold: 25}
 
 	// Refilled on a weekend: the flag is still true from Friday, the count is 0.
-	p, _ := render(b, map[string]any{"usage": 0.0, "usage_triggered": true, "usage_snoozed": true}, colors, 0)
+	p, _ := render(b, map[string]any{"water_used": 0.0, "water_used_triggered": true, "water_used_snoozed": true}, colors, 0)
 	if p.State != stateFresh || p.Color != "green" {
 		t.Errorf("stale flag after a refill: got %+v, want fresh/green", p)
 	}
 
 	// Ran down overnight: the flag is still false, the count is past the limit.
-	p, _ = render(b, map[string]any{"usage": 26.0, "usage_triggered": false, "usage_snoozed": true}, colors, 0)
+	p, _ = render(b, map[string]any{"water_used": 26.0, "water_used_triggered": false, "water_used_snoozed": true}, colors, 0)
 	if p.State != stateDue || p.Color != "red" {
 		t.Errorf("past the limit while snoozed: got %+v, want due/red", p)
 	}
 
 	// Within the limit while snoozed.
-	p, _ = render(b, map[string]any{"usage": 10.0, "usage_triggered": true, "usage_snoozed": true}, colors, 0)
+	p, _ = render(b, map[string]any{"water_used": 10.0, "water_used_triggered": true, "water_used_snoozed": true}, colors, 0)
 	if p.State != stateOK {
 		t.Errorf("within the limit while snoozed: got %+v, want ok", p)
 	}
 
 	// Snoozed with no threshold known: nothing better than the flag.
-	p, _ = render(Button{Name: "water", Reading: "usage", Label: "Water"}, map[string]any{"usage": 0.0, "usage_triggered": true, "usage_snoozed": true}, colors, 0)
+	p, _ = render(Button{Name: "water", Reading: "water_used", Label: "Water"}, map[string]any{"water_used": 0.0, "water_used_triggered": true, "water_used_snoozed": true}, colors, 0)
 	if p.State != stateDue {
 		t.Errorf("snoozed without a threshold keeps the flag: got %+v", p)
 	}
 
 	// Not snoozed: the monitor's flag is the authority, as before.
-	p, _ = render(b, map[string]any{"usage": 10.0, "usage_triggered": true, "usage_snoozed": false}, colors, 0)
+	p, _ = render(b, map[string]any{"water_used": 10.0, "water_used_triggered": true, "water_used_snoozed": false}, colors, 0)
 	if p.State != stateDue {
 		t.Errorf("not snoozed: got %+v, want the flag to win", p)
 	}
@@ -261,9 +261,9 @@ func TestIsNear(t *testing.T) {
 
 func TestRenderNearBand(t *testing.T) {
 	colors := Colors{Near: "lightsalmon"}.withDefaults()
-	b := Button{Name: "water", Reading: "usage", Label: "Water", Threshold: 25}
+	b := Button{Name: "water", Reading: "water_used", Label: "Water", Threshold: 25}
 	reading := func(v float64, triggered bool) map[string]any {
-		return map[string]any{"usage": v, "usage_triggered": triggered}
+		return map[string]any{"water_used": v, "water_used_triggered": triggered}
 	}
 
 	p, _ := render(b, reading(20, false), colors, 20)
@@ -291,13 +291,13 @@ func TestRenderNearBand(t *testing.T) {
 	}
 
 	// No threshold, no warning.
-	p, _ = render(Button{Name: "water", Reading: "usage", Label: "Water"}, map[string]any{"usage": 24.0}, colors, 20)
+	p, _ = render(Button{Name: "water", Reading: "water_used", Label: "Water"}, map[string]any{"water_used": 24.0}, colors, 20)
 	if p.State != stateOK {
 		t.Errorf("no threshold: got %+v, want ok", p)
 	}
 
 	// While snoozed the count decides, and the band still applies.
-	p, _ = render(b, map[string]any{"usage": 21.0, "usage_triggered": true, "usage_snoozed": true}, colors, 20)
+	p, _ = render(b, map[string]any{"water_used": 21.0, "water_used_triggered": true, "water_used_snoozed": true}, colors, 20)
 	if p.State != stateNear {
 		t.Errorf("snoozed within the band with a stale flag: got %+v, want near", p)
 	}
@@ -314,7 +314,7 @@ func TestValidate(t *testing.T) {
 		MonitorSensorName: "monitor-sensor",
 		UsageSensorName:   "usage-sensor",
 		StreamDeckName:    "stream-deck",
-		Buttons:           []Button{{Name: "water", Reading: "usage"}},
+		Buttons:           []Button{{Name: "water", Reading: "water_used"}},
 	}
 	deps, _, err := good.Validate("p")
 	if err != nil {
@@ -350,7 +350,7 @@ func TestValidate(t *testing.T) {
 
 func TestSyncPushesOnlyChanges(t *testing.T) {
 	mon := newFakeMonitor(map[string]any{
-		"usage": 3.0, "usage_triggered": false,
+		"water_used": 3.0, "water_used_triggered": false,
 		"regular_grinds": 0.0, "regular_grinds_triggered": false,
 	})
 	deck := newFakeDeck()
@@ -389,7 +389,7 @@ func TestSyncPushesOnlyChanges(t *testing.T) {
 
 	// One counter crosses its threshold: only that button is sent.
 	mon.set(map[string]any{
-		"usage": 25.0, "usage_triggered": true,
+		"water_used": 25.0, "water_used_triggered": true,
 		"regular_grinds": 0.0, "regular_grinds_triggered": false,
 	})
 	if err := r.sync(ctx, false); err != nil {
@@ -409,7 +409,7 @@ func TestSyncPushesOnlyChanges(t *testing.T) {
 
 	// A refill resets it to fresh/green.
 	mon.set(map[string]any{
-		"usage": 0.0, "usage_triggered": false,
+		"water_used": 0.0, "water_used_triggered": false,
 		"regular_grinds": 0.0, "regular_grinds_triggered": false,
 	})
 	if err := r.sync(ctx, false); err != nil {
@@ -422,7 +422,7 @@ func TestSyncPushesOnlyChanges(t *testing.T) {
 }
 
 func TestSyncWithoutPageOmitsIt(t *testing.T) {
-	mon := newFakeMonitor(map[string]any{"usage": 1.0, "regular_grinds": 1.0})
+	mon := newFakeMonitor(map[string]any{"water_used": 1.0, "regular_grinds": 1.0})
 	deck := newFakeDeck()
 	r, _ := newTestDisplay(t, mon, deck, "")
 	if err := r.sync(context.Background(), false); err != nil {
@@ -435,7 +435,7 @@ func TestSyncWithoutPageOmitsIt(t *testing.T) {
 }
 
 func TestSyncRepaintsEverythingPeriodically(t *testing.T) {
-	mon := newFakeMonitor(map[string]any{"usage": 3.0, "regular_grinds": 1.0})
+	mon := newFakeMonitor(map[string]any{"water_used": 3.0, "regular_grinds": 1.0})
 	deck := newFakeDeck()
 	r, clock := newTestDisplay(t, mon, deck, "Refill")
 	ctx := context.Background()
@@ -455,7 +455,7 @@ func TestSyncRepaintsEverythingPeriodically(t *testing.T) {
 }
 
 func TestSyncRetriesWhenDeckIsDown(t *testing.T) {
-	mon := newFakeMonitor(map[string]any{"usage": 3.0, "regular_grinds": 1.0})
+	mon := newFakeMonitor(map[string]any{"water_used": 3.0, "regular_grinds": 1.0})
 	deck := newFakeDeck()
 	deck.err = errors.New("no streamdeck found")
 	r, _ := newTestDisplay(t, mon, deck, "Refill")
@@ -481,7 +481,7 @@ func TestSyncRetriesWhenDeckIsDown(t *testing.T) {
 }
 
 func TestSyncMonitorErrorAndMissingReading(t *testing.T) {
-	mon := newFakeMonitor(map[string]any{"usage": 3.0}) // regular_grinds is missing
+	mon := newFakeMonitor(map[string]any{"water_used": 3.0}) // regular_grinds is missing
 	deck := newFakeDeck()
 	r, _ := newTestDisplay(t, mon, deck, "Refill")
 	ctx := context.Background()
@@ -507,7 +507,7 @@ func TestSyncMonitorErrorAndMissingReading(t *testing.T) {
 }
 
 func TestDoCommandRefresh(t *testing.T) {
-	mon := newFakeMonitor(map[string]any{"usage": 3.0, "regular_grinds": 0.0})
+	mon := newFakeMonitor(map[string]any{"water_used": 3.0, "regular_grinds": 0.0})
 	deck := newFakeDeck()
 	r, _ := newTestDisplay(t, mon, deck, "Refill")
 	ctx := context.Background()
@@ -536,7 +536,7 @@ func TestDoCommandRefresh(t *testing.T) {
 
 func TestRefillResetsCounterAndRepaints(t *testing.T) {
 	mon := newFakeMonitor(map[string]any{
-		"usage": 25.0, "usage_triggered": true,
+		"water_used": 25.0, "water_used_triggered": true,
 		"regular_grinds": 4.0, "regular_grinds_triggered": false,
 	})
 	deck := newFakeDeck()
@@ -547,14 +547,14 @@ func TestRefillResetsCounterAndRepaints(t *testing.T) {
 
 	// The monitor re-checks and sees the reset counter once asked to.
 	mon.set(map[string]any{
-		"usage": 0.0, "usage_triggered": false,
+		"water_used": 0.0, "water_used_triggered": false,
 		"regular_grinds": 4.0, "regular_grinds_triggered": false,
 	})
 	res, err := r.DoCommand(ctx, map[string]any{"refill": "water"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res["refill"] != "water" || res["reading"] != "usage" || res["refreshed"] != true {
+	if res["refill"] != "water" || res["reading"] != "water_used" || res["refreshed"] != true {
 		t.Errorf("result = %v", res)
 	}
 
@@ -564,7 +564,7 @@ func TestRefillResetsCounterAndRepaints(t *testing.T) {
 		t.Fatalf("usage commands = %v, want 1", cmds)
 	}
 	merge, _ := cmds[0]["merge"].(map[string]any)
-	if len(merge) != 1 || merge["usage"] != 0.0 {
+	if len(merge) != 1 || merge["water_used"] != 0.0 {
 		t.Errorf("merge = %v, want only usage: 0", cmds[0])
 	}
 
@@ -580,7 +580,7 @@ func TestRefillResetsCounterAndRepaints(t *testing.T) {
 }
 
 func TestRefillRejectsBadInput(t *testing.T) {
-	mon := newFakeMonitor(map[string]any{"usage": 1.0})
+	mon := newFakeMonitor(map[string]any{"water_used": 1.0})
 	r, _ := newTestDisplay(t, mon, newFakeDeck(), "Refill")
 	usage := r.usage.(*fakeMonitor)
 	ctx := context.Background()
@@ -596,7 +596,7 @@ func TestRefillRejectsBadInput(t *testing.T) {
 }
 
 func TestRefillResetFailureIsAnError(t *testing.T) {
-	mon := newFakeMonitor(map[string]any{"usage": 5.0})
+	mon := newFakeMonitor(map[string]any{"water_used": 5.0})
 	r, _ := newTestDisplay(t, mon, newFakeDeck(), "Refill")
 	r.usage.(*fakeMonitor).failCommands(errors.New("sensor down"))
 
@@ -611,7 +611,7 @@ func TestRefillResetFailureIsAnError(t *testing.T) {
 // The counter is the part that matters: if only the follow-up fails it is still
 // reset, so the call succeeds and reports that the buttons will catch up later.
 func TestRefillSucceedsWhenRecheckFails(t *testing.T) {
-	mon := newFakeMonitor(map[string]any{"usage": 5.0, "regular_grinds": 1.0})
+	mon := newFakeMonitor(map[string]any{"water_used": 5.0, "regular_grinds": 1.0})
 	mon.failCommands(errors.New("monitor busy"))
 	r, _ := newTestDisplay(t, mon, newFakeDeck(), "Refill")
 	usage := r.usage.(*fakeMonitor)
