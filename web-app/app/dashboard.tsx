@@ -382,11 +382,6 @@ export function Dashboard() {
           ))}
       </ul>
 
-      <ReliabilityPanel
-        reliability={reliability}
-        machineNameById={machineNameById}
-      />
-
       {/* Chart and leaderboard share a row: the leaderboard is two short lists
           and was costing a full screen of height on its own. */}
       <div className="flex flex-col lg:flex-row gap-6 mb-6">
@@ -477,6 +472,11 @@ export function Dashboard() {
           machineNameById={machineNameById}
         />
       )}
+
+      <ReliabilityPanel
+        reliability={reliability}
+        machineNameById={machineNameById}
+      />
     </div>
   );
 }
