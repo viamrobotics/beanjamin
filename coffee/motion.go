@@ -184,25 +184,39 @@ const (
 	defaultSlowMovementAccDegsPerSec2 = 25.0
 )
 
-// Arm moves fall into three speeds, and a move runs at the one it names: nil
+// Arm moves fall into four speeds, and a move runs at the one it names: nil
 // MoveOptions is the arm's own DEFAULT speed, whatever the move's shape. SLOW
-// (slowMoveOptions, below) is for the careful moves — contact (pressing a
-// button, seating the portafilter, tamping, cleaning), the spill- or
-// scatter-prone carries (a filled cup or glass, the milk bottle, loose grounds),
-// and the pivots and circles that do either. POUR (pourMoveOptions) is the fast
-// tilt of a filled container over the cup/glass. A linear constraint only keeps
-// the path straight and does not slow the move, so a straight move with neither
-// contact nor a load, such as a retreat with an empty gripper, stays at default.
+// (slowMoveOptions, below) is for the careful moves that carry nothing loose —
+// contact (pressing a button, seating the portafilter, tamping, cleaning, the
+// descent onto a cup or glass), carrying an empty container, and the pivots and
+// circles that do either. SPILLAGE PREVENTION (spillagePreventionMoveOptions) is
+// for the moves carrying something that can spill or scatter: a filled cup or
+// glass, the milk bottle, loose grounds, and the return upright after a pour.
+// POUR (pourMoveOptions) is the fast tilt of a filled container over the
+// cup/glass. A linear constraint only keeps the path straight and does not slow
+// the move, so a straight move with neither contact nor a load, such as a
+// retreat with an empty gripper, stays at default.
 //
 // slowMoveOptions is the config-facing StepMoveOptions (degrees) for the slow
 // tier, attached to a Step or converted with buildMoveOptions at an execution
-// site. Velocity and acceleration fall back to their defaults when unset — the
-// acceleration to a gentle value below the arm's own, since a hard acceleration
-// can slosh a full cup even at a low top speed.
+// site. Velocity and acceleration fall back to their defaults when unset.
 func (s *beanjaminCoffee) slowMoveOptions() *StepMoveOptions {
 	return &StepMoveOptions{
 		MaxVelDegsPerSec:  orDefault(s.cfg.SlowMovementVelDegsPerSec, defaultSlowMovementVelDegsPerSec),
 		MaxAccDegsPerSec2: orDefault(s.cfg.SlowMovementAccDegsPerSec2, defaultSlowMovementAccDegsPerSec2),
+	}
+}
+
+// spillagePreventionMoveOptions is the StepMoveOptions for the spillage
+// prevention tier. Acceleration matters more than top speed here: a hard start
+// or stop sloshes a full cup even at a low top speed. Each limit falls back to
+// the slow tier's, so the slow tier can be sped up without touching the carries
+// once these are pinned in config.
+func (s *beanjaminCoffee) spillagePreventionMoveOptions() *StepMoveOptions {
+	slow := s.slowMoveOptions()
+	return &StepMoveOptions{
+		MaxVelDegsPerSec:  orDefault(s.cfg.SpillagePreventionVelDegsPerSec, slow.MaxVelDegsPerSec),
+		MaxAccDegsPerSec2: orDefault(s.cfg.SpillagePreventionAccDegsPerSec2, slow.MaxAccDegsPerSec2),
 	}
 }
 

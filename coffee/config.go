@@ -58,7 +58,12 @@ type Config struct {
 	GripperOpenTimeoutSec      float64 `json:"gripper_open_timeout_sec,omitempty"`
 	SlowMovementVelDegsPerSec  float64 `json:"slow_movement_vel_degs_per_sec,omitempty"`
 	SlowMovementAccDegsPerSec2 float64 `json:"slow_movement_acc_degs_per_sec2,omitempty"`
-	PortafilterShakeSec        float64 `json:"portafilter_shake_sec,omitempty"`
+	// SpillagePreventionVelDegsPerSec / SpillagePreventionAccDegsPerSec2 cap the
+	// moves that carry something that can spill or scatter (spillagePreventionMoveOptions).
+	// Each falls back to its slow-movement counterpart when unset.
+	SpillagePreventionVelDegsPerSec  float64 `json:"spillage_prevention_vel_degs_per_sec,omitempty"`
+	SpillagePreventionAccDegsPerSec2 float64 `json:"spillage_prevention_acc_degs_per_sec2,omitempty"`
+	PortafilterShakeSec              float64 `json:"portafilter_shake_sec,omitempty"`
 	// LockOvershootDegs over-rotates the portafilter lock pivot so the filter
 	// still reaches the authored angle after the claws slip on its handle under
 	// bayonet load, then unwinds back onto it (Step.PivotExtraDegrees).

@@ -57,7 +57,7 @@ func (s *beanjaminCoffee) grindBeans(ctx, cancelCtx context.Context, beans strin
 // whole plan, so granting it on the free-planned approach would let the
 // planner route the traverse through the button shield.
 func (s *beanjaminCoffee) grindSteps(p grinderPoseNames, buttonCollisions []AllowedCollision) []Step {
-	slow := s.slowMoveOptions()
+	slow, spill := s.slowMoveOptions(), s.spillagePreventionMoveOptions()
 	return []Step{
 		{PoseName: p.approach, PoseSwitch: s.filterSw},
 		{PoseName: p.activate, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint,
@@ -66,9 +66,9 @@ func (s *beanjaminCoffee) grindSteps(p grinderPoseNames, buttonCollisions []Allo
 			AllowedCollisions: buttonCollisions, MoveOptions: slow},
 		{PoseName: p.collect, PoseSwitch: s.filterSw,
 			CircularRadiusMm: 8, CircularDurationSec: s.grindDurationSec(), CircularPointsPerRev: 8,
-			LinearConstraint: defaultApproachConstraint, AllowedCollisions: buttonCollisions, MoveOptions: slow},
+			LinearConstraint: defaultApproachConstraint, AllowedCollisions: buttonCollisions, MoveOptions: spill},
 		{PoseName: p.approach, PoseSwitch: s.filterSw, LinearConstraint: defaultApproachConstraint,
-			AllowedCollisions: buttonCollisions, MoveOptions: slow},
+			AllowedCollisions: buttonCollisions, MoveOptions: spill},
 	}
 }
 
@@ -79,10 +79,10 @@ const tamperCarryOrientationToleranceDegs = 10.0
 
 func (s *beanjaminCoffee) tampGround(ctx, cancelCtx context.Context) error {
 	return s.runSteps(ctx, cancelCtx, "tamp_ground",
-		// Carries loose, un-tamped grounds to the tamper: slow it and keep the
+		// Carries loose, un-tamped grounds to the tamper: ease it and keep the
 		// basket near level so they don't scatter. Once tamped, the puck is
 		// compact, so the retreat runs at the arm's default speed.
-		Step{PoseName: filterPoseTamperApproach, PoseSwitch: s.filterSw, MoveOptions: s.slowMoveOptions(),
+		Step{PoseName: filterPoseTamperApproach, PoseSwitch: s.filterSw, MoveOptions: s.spillagePreventionMoveOptions(),
 			OrientationToleranceDegs: tamperCarryOrientationToleranceDegs},
 		Step{PoseName: filterPoseTamperActivate, PoseSwitch: s.filterSw, Pause: 3000 * time.Millisecond, LinearConstraint: defaultApproachConstraint,
 			MoveOptions: s.slowMoveOptions()},

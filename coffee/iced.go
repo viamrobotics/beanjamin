@@ -247,7 +247,7 @@ func (s *beanjaminCoffee) graspBrewedCup(ctx, cancelCtx context.Context) error {
 		}
 	}
 	retreatStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, AllowedCollisions: s.scene().heldItemSurfaceCollisions(heldItemMachineCollisions),
-		MoveOptions: s.slowMoveOptions()}
+		MoveOptions: s.spillagePreventionMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("grasp_brewed_cup: %w", err)
 	}
@@ -293,7 +293,7 @@ func (s *beanjaminCoffee) grabStagedGlass(ctx, cancelCtx context.Context) error 
 		s.activeOrderLogger().Warnf("grab_staged_glass: reattach glass geometry failed, continuing untracked: %v", err)
 	}
 	retreatStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
-		MoveOptions: s.slowMoveOptions()}
+		MoveOptions: s.spillagePreventionMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("grab_staged_glass: %w", err)
 	}
@@ -347,7 +347,7 @@ func (s *beanjaminCoffee) dispenseIce(ctx, cancelCtx context.Context) error {
 	}
 
 	retreatStep := Step{PoseName: clawPoseIceMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
-		MoveOptions: s.slowMoveOptions()}
+		MoveOptions: s.spillagePreventionMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, retreatStep); err != nil {
 		return fmt.Errorf("dispense_ice: %w", err)
 	}
@@ -439,12 +439,12 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 	// The glass is full of ice here — carry it level to staging so nothing bounces
 	// out on the traverse from the ice machine (NoSpill).
 	approachStep := Step{PoseName: clawPoseStagingApproach, PoseSwitch: s.clawsSw, Pause: shortPause, NoSpill: true,
-		MoveOptions: s.slowMoveOptions()}
+		MoveOptions: s.spillagePreventionMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
 	placeStep := Step{PoseName: clawPoseStaging, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.scene().heldItemSurfaceCollisions(heldItemStagingCollisions),
-		MoveOptions: s.slowMoveOptions()}
+		MoveOptions: s.spillagePreventionMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, placeStep); err != nil {
 		return fmt.Errorf("stage_glass: %w", err)
 	}
@@ -471,9 +471,9 @@ func (s *beanjaminCoffee) stageGlass(ctx, cancelCtx context.Context) error {
 // dwells so the cup drains, then returns it upright before moving away.
 func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 	// The cup is full of espresso here — carry it level to the pour position so it
-	// doesn't slosh before the pour tilt (NoSpill), and slow.
+	// doesn't slosh before the pour tilt (NoSpill), and eased.
 	approachStep := Step{PoseName: clawPosePourApproach, PoseSwitch: s.clawsSw, Pause: shortPause, NoSpill: true,
-		MoveOptions: s.slowMoveOptions()}
+		MoveOptions: s.spillagePreventionMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
@@ -484,7 +484,7 @@ func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 	// so the stream stays over the glass instead of spilling. The staged
 	// glass stays a hard obstacle here — the cup must clear it, never drive in.
 	// pourConstraint keeps the planner from detouring the cup off the glass. It
-	// runs at the pour speed rather than the slow one so the pour isn't dragged
+	// runs at the pour speed rather than the spillage-prevention one so the pour isn't dragged
 	// out (tune via pour_vel_degs_per_sec).
 	pourStep := Step{PoseName: clawPosePour, PoseSwitch: s.clawsSw, PivotFromPose: clawPosePourApproach, PivotDegreesPerStep: 5,
 		LinearConstraint: pourConstraint, MoveOptions: s.pourMoveOptions(), Pause: pourPause}
@@ -492,11 +492,11 @@ func (s *beanjaminCoffee) pourEspresso(ctx, cancelCtx context.Context) error {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
 	// Return upright along the same pivot so any residual drip stays over the
-	// glass, at the slow speed: a fast return flicks the dregs left in the cup
+	// glass, at the spillage-prevention speed: a fast return flicks the dregs left in the cup
 	// over the rim. Constrained like the tilt, but it must complete: the cup is
 	// carried away next, and a still-tilted one drips the whole way.
 	uprightStep := Step{PoseName: clawPosePourApproach, PoseSwitch: s.clawsSw, PivotFromPose: clawPosePour, PivotDegreesPerStep: 5,
-		LinearConstraint: pourConstraint, Pause: shortPause, MoveOptions: s.slowMoveOptions()}
+		LinearConstraint: pourConstraint, Pause: shortPause, MoveOptions: s.spillagePreventionMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {
 		return fmt.Errorf("pour_espresso: %w", err)
 	}
@@ -514,8 +514,8 @@ const defaultPourVelDegsPerSec = 60.0
 
 // pourMoveOptions returns the per-step MoveOptions applied to the pour tilt,
 // using the configured pour velocity or the default. We want the speed and acceleration to be higher
-// so it tilts faster and reduces spills. The return upright runs at the slow
-// speed, since a fast return spills what is left in the container.
+// so it tilts faster and reduces spills. The return upright runs at the
+// spillage-prevention speed, since a fast return spills what is left in the container.
 func (s *beanjaminCoffee) pourMoveOptions() *StepMoveOptions {
 	return &StepMoveOptions{
 		MaxVelDegsPerSec:  orDefault(s.cfg.PourVelDegsPerSec, defaultPourVelDegsPerSec),

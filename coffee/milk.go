@@ -101,8 +101,8 @@ func (s *beanjaminCoffee) addMilk(ctx, cancelCtx context.Context, milk string) e
 // poses — in to grab or set down, out to retreat. Only these moves pass through
 // the interior shield that keeps the free traverse off the shelves; the
 // held-item pair is included only while the bottle is in hand. moveOpts is
-// s.slowMoveOptions() while the full bottle is held, nil when the gripper is
-// empty.
+// s.spillagePreventionMoveOptions() while the full bottle is held, nil when the
+// gripper is empty.
 func (s *beanjaminCoffee) fridgeLinearStep(pose string, moveOpts *StepMoveOptions) Step {
 	return Step{PoseName: pose, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint,
 		Pause: shortPause, AllowedCollisions: s.areaShieldCollisions(milkAreaShieldFrameName),
@@ -268,7 +268,7 @@ func (s *beanjaminCoffee) fetchMilkBottle(ctx, cancelCtx context.Context, milk s
 	if err := s.attachMilkBottleGeometry(ctx); err != nil {
 		return fmt.Errorf("fetch_milk: model the %s milk bottle: %w", milk, err)
 	}
-	if err := s.executeStep(ctx, cancelCtx, s.fridgeLinearStep(milkApproachPose(spot), s.slowMoveOptions())); err != nil {
+	if err := s.executeStep(ctx, cancelCtx, s.fridgeLinearStep(milkApproachPose(spot), s.spillagePreventionMoveOptions())); err != nil {
 		return fmt.Errorf("fetch_milk: retreat with the %s milk: %w", milk, err)
 	}
 	s.activeOrderLogger().Infof("fetch_milk: %s milk in hand", milk)
@@ -287,9 +287,9 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 	if err := s.requireMilk("pour_milk"); err != nil {
 		return err
 	}
-	// The bottle is full and open here, so carry it level (NoSpill) and slow.
+	// The bottle is full and open here, so carry it level (NoSpill) and eased.
 	approachStep := Step{PoseName: clawPoseMilkPourApproach, PoseSwitch: s.clawsSw, Pause: shortPause, NoSpill: true,
-		MoveOptions: s.slowMoveOptions()}
+		MoveOptions: s.spillagePreventionMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}
@@ -302,11 +302,11 @@ func (s *beanjaminCoffee) pourMilk(ctx, cancelCtx context.Context) error {
 	}
 	// Return upright along the same pivot (lowering the bottle as it rights,
 	// mirroring the pour) so any residual drip stays over the glass, at the
-	// slow speed so the milk left in the bottle doesn't slosh out. The return is
+	// spillage-prevention speed so the milk left in the bottle doesn't slosh out. The return is
 	// constrained the same way but must complete: carrying a still-tilted bottle
 	// away would pour milk along the whole carry.
 	uprightStep := Step{PoseName: clawPoseMilkPourApproach, PoseSwitch: s.clawsSw, PivotFromPose: clawPoseMilkPour, PivotDegreesPerStep: 5,
-		LinearConstraint: pourConstraint, Pause: shortPause, MoveOptions: s.slowMoveOptions()}
+		LinearConstraint: pourConstraint, Pause: shortPause, MoveOptions: s.spillagePreventionMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {
 		return fmt.Errorf("pour_milk: %w", err)
 	}
@@ -346,13 +346,13 @@ func (s *beanjaminCoffee) returnMilkBottle(ctx, cancelCtx context.Context) error
 	}
 	s.activeOrderLogger().Infof("return_milk: putting the %s milk back at the %s spot", milk, spot)
 
-	// The bottle still holds milk, so carry it level and slow back to the fridge.
+	// The bottle still holds milk, so carry it level and eased back to the fridge.
 	approachStep := Step{PoseName: milkApproachPose(spot), PoseSwitch: s.clawsSw, Pause: shortPause, NoSpill: true,
-		MoveOptions: s.slowMoveOptions()}
+		MoveOptions: s.spillagePreventionMoveOptions()}
 	if err := s.executeStep(ctx, cancelCtx, approachStep); err != nil {
 		return fmt.Errorf("return_milk: approach the shelf: %w", err)
 	}
-	if err := s.executeStep(ctx, cancelCtx, s.fridgeLinearStep(milkGrabPose(spot), s.slowMoveOptions())); err != nil {
+	if err := s.executeStep(ctx, cancelCtx, s.fridgeLinearStep(milkGrabPose(spot), s.spillagePreventionMoveOptions())); err != nil {
 		return fmt.Errorf("return_milk: set the bottle on the shelf: %w", err)
 	}
 	// Verified open before backing out: jaws still on the bottle would drag it off

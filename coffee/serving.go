@@ -201,7 +201,7 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, area 
 	// moved and the cup is still held — the caller can try the next slot.
 	carry := func() error { return s.moveToRawPose(ctx, approachPD, nil, nil, nil) }
 	if contents == heldFilled {
-		carry = func() error { return s.carryHeldLevel(ctx, approachPD, nil, s.slowMoveOptions()) }
+		carry = func() error { return s.carryHeldLevel(ctx, approachPD, nil, s.spillagePreventionMoveOptions()) }
 	}
 	if err := carry(); err != nil {
 		return fmt.Errorf("approach slot (x=%.1f, y=%.1f): %w", tileWorld.X, tileWorld.Y, err)
@@ -219,7 +219,13 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, area 
 
 	// 2. Linear descent to the drop pose. A planning failure leaves the arm at
 	// the approach pose still holding the cup — caller can try the next slot.
-	if err := s.moveToRawPose(ctx, dropPD, defaultApproachConstraint, descentCollisions, s.slowMoveOptions()); err != nil {
+	// The descent is a contact move either way; a filled container also needs
+	// the spillage-prevention easing.
+	descentSpeed := s.slowMoveOptions()
+	if contents == heldFilled {
+		descentSpeed = s.spillagePreventionMoveOptions()
+	}
+	if err := s.moveToRawPose(ctx, dropPD, defaultApproachConstraint, descentCollisions, descentSpeed); err != nil {
 		return fmt.Errorf("descend into slot (x=%.1f, y=%.1f): %w", tileWorld.X, tileWorld.Y, err)
 	}
 

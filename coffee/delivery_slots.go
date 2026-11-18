@@ -392,10 +392,10 @@ func (s *beanjaminCoffee) dropHeldInDeliverySlot(ctx context.Context, slot deliv
 		return false, err
 	}
 
-	if err := s.carryHeldLevel(ctx, approach, nil, s.slowMoveOptions()); err != nil {
+	if err := s.carryHeldLevel(ctx, approach, nil, s.spillagePreventionMoveOptions()); err != nil {
 		return false, fmt.Errorf("approach slot: %w", err)
 	}
-	if err := s.moveToRawPose(ctx, release, defaultApproachConstraint, s.deliveryAreaCollisions(), s.slowMoveOptions()); err != nil {
+	if err := s.moveToRawPose(ctx, release, defaultApproachConstraint, s.deliveryAreaCollisions(), s.spillagePreventionMoveOptions()); err != nil {
 		return false, fmt.Errorf("descend into slot: %w", err)
 	}
 
