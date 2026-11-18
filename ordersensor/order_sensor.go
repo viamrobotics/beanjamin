@@ -108,6 +108,8 @@ func (s *orderSensor) PushOrderReading(r order.Reading) {
 		"order_id":      r.Order.ID,
 		"drink":         r.Order.WireDrink(),
 		"customer_name": r.Order.CustomerName,
+		// Empty for anonymous walk-ups.
+		"customer_email": r.Order.CustomerEmail,
 		// The iced latte's milk; empty for a drink without milk.
 		"milk": r.Order.Milk,
 		// What the customer was actually shown.

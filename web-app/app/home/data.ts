@@ -45,6 +45,8 @@ export interface OrderRecord {
   orderId: string;
   robotId: string;
   customerName: string;
+  // Empty for anonymous orders and readings from before emails were recorded.
+  customerEmail: string;
   drink: string;
   startTime: Date;
   endTime: Date;
@@ -82,6 +84,7 @@ interface RawOrderRow {
     readings?: {
       order_id?: string;
       customer_name?: string;
+      customer_email?: string;
       drink?: string;
       start_time?: Date | string;
       end_time?: Date | string;
@@ -135,6 +138,7 @@ function parseOrderResults(rows: RawOrderRow[]): OrderRecord[] {
       orderId: x.order_id ?? "",
       robotId: r.robot_id ?? "",
       customerName: x.customer_name ?? "",
+      customerEmail: x.customer_email ?? "",
       // Decaf espresso and lungo are still recorded under the legacy ids.
       ...splitDrink(x.drink ?? "", x.beans || (x.decaf ? "decaf" : undefined)),
       startTime: toDate(x.start_time),

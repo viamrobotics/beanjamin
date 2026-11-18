@@ -354,7 +354,18 @@ function OrderTable({
                   <td className="px-2 py-1.5">
                     {machineNameById.get(o.robotId) ?? "—"}
                   </td>
-                  <td className="px-2 py-1.5">{o.customerName || "—"}</td>
+                  <td className="px-2 py-1.5">
+                    {o.customerName || "—"}
+                    {o.customerEmail && (
+                      <span
+                        className="ml-1.5 cursor-help"
+                        title={`Loyalty member · ${o.customerEmail}`}
+                        aria-label={`Loyalty member · ${o.customerEmail}`}
+                      >
+                        ⭐
+                      </span>
+                    )}
+                  </td>
                   <td className="px-2 py-1.5">
                     {[
                       drinkLabel(o.drink),
