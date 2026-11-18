@@ -90,6 +90,13 @@ const (
 	// switch (hot_water.go).
 	clawPoseHotWaterApproach = "hot_water_approach"
 
+	// spice shake poses, resolved against the staged glass rather than read from
+	// the switch. The rack poses are per spot (spiceApproachPose /
+	// spiceGrabPose).
+	clawPoseSpiceShakeApproach = "spice_shake_approach" // shaker upright above the staged glass (spice_shake_approach_relative_pose)
+	clawPoseSpiceShake         = "spice_shake"          // shaker tilted over the glass (spice_shake_relative_pose)
+	clawPoseSpiceShakeLift     = "spice_shake_lift"     // spice_shake raised by spice_shake_amplitude_mm: the top of each shake
+
 	// camera pose switches (extra vantages live on
 	// the same switch and are enumerated at runtime).
 	camPoseCupObserve = "cup_observe"
@@ -117,6 +124,15 @@ func milkApproachPose(spot string) string { return "milk_" + spot + "_approach" 
 // milkGrabPose is the claws-switch pose with the gripper around the bottle at a
 // fridge spot: grabbed from here, set back here.
 func milkGrabPose(spot string) string { return "milk_" + spot + "_grab" }
+
+// spiceApproachPose is the claws-switch pose in front of the shaker at a rack
+// spot (SpiceOption.Spot): where the gripper lines up before the straight-in
+// grab, and where it backs out to after setting the shaker down.
+func spiceApproachPose(spot string) string { return "spice_" + spot + "_approach" }
+
+// spiceGrabPose is the claws-switch pose with the gripper around the shaker at
+// a rack spot: grabbed from here, set back here.
+func spiceGrabPose(spot string) string { return "spice_" + spot + "_grab" }
 
 // requiredPose pairs a pose name with the switch it must resolve on. Used by
 // validateConfiguredPoses.
@@ -245,6 +261,15 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 				requiredPose{s.clawsSw, milkGrabPose(m.Spot)},
 			)
 		}
+	}
+
+	// Each spice_options spot's approach and grab; the shake is resolved against
+	// the staged glass.
+	for _, sp := range s.cfg.SpiceOptions {
+		poses = append(poses,
+			requiredPose{s.clawsSw, spiceApproachPose(sp.Spot)},
+			requiredPose{s.clawsSw, spiceGrabPose(sp.Spot)},
+		)
 	}
 
 	return poses

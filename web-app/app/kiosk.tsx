@@ -9,6 +9,7 @@ import {
   REGULAR_BEANS,
   beanOptionsOf,
   hasMilkChoice,
+  hasSpiceChoice,
   spokenOrder,
   splitDrink,
   unavailableDrinksOf,
@@ -159,6 +160,13 @@ export function Kiosk() {
   // The machine's expected_wait_sec for a new order; undefined until it sends one.
   const [expectedWaitSec, setExpectedWaitSec] = useState<number | undefined>();
   const waitLabel = waitTimeLabel(expectedWaitSec);
+  // The machine's spice_options; empty when it offers no spice, which hides
+  // the choice.
+  const [spiceOptions, setSpiceOptions] = useState<string[]>([]);
+  // The customer's pick; "" for no spice, the default. A pick the machine no
+  // longer offers falls back to none.
+  const [spice, setSpice] = useState("");
+  const chosenSpice = spiceOptions.includes(spice) ? spice : "";
   const [misspelled, setMisspelled] = useState("");
   const [loading, setLoading] = useState(false);
   const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
@@ -239,6 +247,10 @@ export function Kiosk() {
         setMilkOptions((prev) => (prev.join() === milks.join() ? prev : milks));
         setExpectedWaitSec(q.expected_wait_sec);
         setUnavailableDrinks(unavailableDrinksOf(q));
+        const spices = q.spice_options ?? [];
+        setSpiceOptions((prev) =>
+          prev.join() === spices.join() ? prev : spices,
+        );
         if (q.orders.length > 0) {
           setTrackerMode((m) => (m === "hidden" ? "auto" : m));
         }
@@ -371,7 +383,7 @@ export function Kiosk() {
       await prepareOrder(viamConn, {
         drink: drink!,
         beans,
-        drinkLabel: spokenOrder(drink!, beans, chosenMilk),
+        drinkLabel: spokenOrder(drink!, beans, chosenMilk, chosenSpice),
         customerName: name.trim(),
         modifiedName: misspelledName,
         // Credits the drink to this customer's history; empty = anonymous
@@ -381,6 +393,7 @@ export function Kiosk() {
         // Passed in by a usual, whose fulfillment state hasn't rendered yet.
         fulfillment: fulfillmentOverride ?? fulfillment,
         ...(hasMilkChoice(drink!) && chosenMilk && { milk: chosenMilk }),
+        ...(hasSpiceChoice(drink!) && chosenSpice && { spice: chosenSpice }),
       });
       setStep("confirmation");
       setTrackerMode("auto");
@@ -488,6 +501,7 @@ export function Kiosk() {
     setSelectedBeans(REGULAR_BEANS);
     setFulfillment("pickup");
     setMilk("");
+    setSpice("");
     setWelcomeBack(null);
     setUsuals([]);
     setAppError(null);
@@ -562,6 +576,7 @@ export function Kiosk() {
           drink={selectedDrink ?? ""}
           beans={chosenBeans}
           milk={chosenMilk}
+          spice={hasSpiceChoice(selectedDrink ?? "") ? chosenSpice : ""}
           onDismiss={handleConfirmationDismiss}
           showBack={!kioskMode}
         />
@@ -602,11 +617,14 @@ export function Kiosk() {
           milkOptions={milkOptions}
           waitLabel={waitLabel}
           unavailableDrinks={unavailableDrinks}
+          spice={chosenSpice}
+          spiceOptions={spiceOptions}
           connected={connected}
           onSelect={setSelectedDrink}
           onBeansChange={setSelectedBeans}
           onFulfillmentChange={setFulfillment}
           onMilkChange={setMilk}
+          onSpiceChange={setSpice}
           onBack={() => setStep("welcome")}
           onNext={handleDrinkNext}
         />
@@ -749,6 +767,7 @@ export function Kiosk() {
             setSelectedBeans(REGULAR_BEANS);
             setFulfillment("pickup");
             setMilk("");
+            setSpice("");
             setStep("drink");
           }}
           disabled={!connected}

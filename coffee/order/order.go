@@ -52,7 +52,10 @@ type Order struct {
 	Fulfillment string `json:"fulfillment"`
 	// Milk is the milk a milk drink is made with (one of the configured
 	// milk_options), resolved at enqueue time; empty for a drink without milk.
-	Milk       string    `json:"milk,omitempty"`
+	Milk string `json:"milk,omitempty"`
+	// Spice is the spice dashed over the finished drink (one of the configured
+	// spice_options), resolved at enqueue time; empty for no spice.
+	Spice      string    `json:"spice,omitempty"`
 	EnqueuedAt time.Time `json:"enqueued_at"`
 	// PickupPosition is the 0-based serving-area slot the finished drink was
 	// placed in, returned by the serving step (placeFullCupOnShelf /

@@ -271,6 +271,28 @@ type Config struct {
 	// can_serve_iced_latte is set.
 	MilkOptions []MilkOption `json:"milk_options,omitempty"`
 
+	// SpiceOptions lists the spice shakers on the spice rack and the spot each
+	// stands at; an iced latte may be ordered with a dash of one, shaken over
+	// the finished drink (coffee/spice.go). Optional: with none listed, no
+	// spice is offered. Requires can_serve_iced_latte.
+	SpiceOptions []SpiceOption `json:"spice_options,omitempty"`
+	// SpiceShakerDimensions is the known shaker diameter/height the held shaker
+	// is modeled from, standing on the surface beneath the grip point. Shared by
+	// every spice. Required when spice_options is set.
+	SpiceShakerDimensions *ContainerDimensions `json:"spice_shaker_dimensions,omitempty"`
+	// SpiceShakeApproachRelativePose (the shaker upright above the glass) and
+	// SpiceShakeRelativePose (tilted, holes down over the glass) are offsets
+	// from the center of the staged glass's rim, like the milk pour pair.
+	// Required when spice_options is set.
+	SpiceShakeApproachRelativePose *RelativePose `json:"spice_shake_approach_relative_pose,omitempty"`
+	SpiceShakeRelativePose         *RelativePose `json:"spice_shake_relative_pose,omitempty"`
+	// SpiceShakeCount is how many times the tilted shaker is jerked up and back
+	// down over the glass: the knob that sets how big the dash is. Defaults to 3.
+	SpiceShakeCount int `json:"spice_shake_count,omitempty"`
+	// SpiceShakeAmplitudeMm is how far each shake lifts the tilted shaker.
+	// Defaults to 20.
+	SpiceShakeAmplitudeMm float64 `json:"spice_shake_amplitude_mm,omitempty"`
+
 	// Serving placement offsets are composed onto the serving-area slot anchor
 	// when releasing a finished drink onto the served shelf. The same offsets
 	// are used for both the hot cup and the iced glass. The approach and grab
@@ -431,55 +453,74 @@ func (d *ContainerDimensions) validate(path, field string) error {
 	return nil
 }
 
-// MilkOption is one milk in the fridge (an entry in milk_options).
-type MilkOption struct {
-	// Name is what prepare_order's "milk" asks for it by, e.g. "oat".
+// SpotOption is one container the arm fetches from a fixed spot by name: a milk
+// bottle in the fridge (milk_options) or a spice shaker on the rack
+// (spice_options).
+type SpotOption struct {
+	// Name is what prepare_order asks for it by, e.g. "oat" or "cinnamon".
 	Name string `json:"name"`
-	// Spot is where in the fridge the bottle stands, e.g. "left". Its poses on
-	// the claws switch are named after the spot, not the milk —
-	// milk_<spot>_approach and milk_<spot>_grab — so renaming a milk or moving it
-	// to another spot is a config change, with no poses to re-teach.
+	// Spot is where the container stands, e.g. "left". Its poses on the claws
+	// switch are named after the spot, not the content — milk_<spot>_approach
+	// and milk_<spot>_grab, or spice_<spot>_approach and spice_<spot>_grab — so
+	// renaming a milk or spice or moving it to another spot is a config change,
+	// with no poses to re-teach.
 	Spot string `json:"spot"`
 }
 
-// milkNames returns the names in milk_options, the default first.
-func (c *Config) milkNames() []string {
-	names := make([]string, len(c.MilkOptions))
-	for i, m := range c.MilkOptions {
-		names[i] = m.Name
+// MilkOption is one milk in the fridge (an entry in milk_options).
+type MilkOption = SpotOption
+
+// SpiceOption is one spice shaker on the rack (an entry in spice_options).
+type SpiceOption = SpotOption
+
+// spotOptionNames returns the names in opts, in config order.
+func spotOptionNames(opts []SpotOption) []string {
+	names := make([]string, len(opts))
+	for i, o := range opts {
+		names[i] = o.Name
 	}
 	return names
 }
 
-// validateMilkOptions checks milk_options: at least one milk, and every name
-// and spot given once, in lowercase letters, digits and underscores — the spot
-// is spliced into pose names (milk_<spot>_approach) and the name is sent by
-// clients. Two milks can't share a spot.
+// milkNames returns the names in milk_options, the default first.
+func (c *Config) milkNames() []string { return spotOptionNames(c.MilkOptions) }
+
+// spiceNames returns the names in spice_options, in config order.
+func (c *Config) spiceNames() []string { return spotOptionNames(c.SpiceOptions) }
+
+// validateMilkOptions checks milk_options: at least one milk, each a valid
+// spot option (validateSpotOptions).
 func validateMilkOptions(path string, milks []MilkOption) error {
 	if len(milks) == 0 {
 		return resource.NewConfigValidationFieldRequiredError(path, "milk_options")
 	}
-	names := make(map[string]bool, len(milks))
-	spots := make(map[string]bool, len(milks))
-	for _, m := range milks {
+	return validateSpotOptions(path, "milk_options", milks, milkApproachPose, clawPoseMilkPourApproach, clawPoseMilkPour)
+}
+
+// validateSpotOptions checks a list of spot options: every name and spot given
+// once, in lowercase letters, digits and underscores — the spot is spliced
+// into pose names (approachPose) and the name is sent by clients. Two
+// containers can't share a spot, and no spot may name its approach pose after
+// one of the reserved glass-relative poses (e.g. a milk spot "pour" would send
+// the fetch to milk_pour_approach, over the glass, instead of the fridge).
+func validateSpotOptions(path, field string, opts []SpotOption, approachPose func(spot string) string, reserved ...string) error {
+	names := make(map[string]bool, len(opts))
+	spots := make(map[string]bool, len(opts))
+	for _, o := range opts {
 		for _, f := range []struct {
-			field, value string
-			seen         map[string]bool
-		}{{"name", m.Name, names}, {"spot", m.Spot, spots}} {
+			key, value string
+			seen       map[string]bool
+		}{{"name", o.Name, names}, {"spot", o.Spot, spots}} {
 			if !milkIDPattern.MatchString(f.value) {
-				return fmt.Errorf("%s: milk_options %s %q must be lowercase letters, digits and underscores", path, f.field, f.value)
+				return fmt.Errorf("%s: %s %s %q must be lowercase letters, digits and underscores", path, field, f.key, f.value)
 			}
 			if f.seen[f.value] {
-				return fmt.Errorf("%s: milk_options lists %s %q twice", path, f.field, f.value)
+				return fmt.Errorf("%s: %s lists %s %q twice", path, field, f.key, f.value)
 			}
 			f.seen[f.value] = true
 		}
-	}
-	for _, m := range milks {
-		// milk_pour_approach is the glass-relative pour pose, so a spot named
-		// "pour" would send the fetch to the glass instead of the fridge.
-		if p := milkApproachPose(m.Spot); p == clawPoseMilkPourApproach || p == clawPoseMilkPour {
-			return fmt.Errorf("%s: milk_options spot %q is reserved: its pose %q is the milk pour pose", path, m.Spot, p)
+		if p := approachPose(o.Spot); slices.Contains(reserved, p) {
+			return fmt.Errorf("%s: %s spot %q is reserved: its pose %q is a pose over the glass", path, field, o.Spot, p)
 		}
 	}
 	return nil
@@ -723,6 +764,30 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		}
 		if err := validateMilkOptions(path, cfg.MilkOptions); err != nil {
 			return nil, nil, err
+		}
+	}
+
+	if len(cfg.SpiceOptions) > 0 {
+		// The dash is shaken over the iced latte's staged glass, the only drink
+		// that takes one.
+		if !cfg.CanServeIcedLatte {
+			return nil, nil, fmt.Errorf("%s: spice_options requires can_serve_iced_latte (a dash of spice is only offered on the iced latte)", path)
+		}
+		if err := cfg.SpiceShakerDimensions.validate(path, "spice_shaker_dimensions"); err != nil {
+			return nil, nil, err
+		}
+		if err := validatePourPair(path, "spice_shake", cfg.SpiceShakeApproachRelativePose, cfg.SpiceShakeRelativePose); err != nil {
+			return nil, nil, err
+		}
+		if err := validateSpotOptions(path, "spice_options", cfg.SpiceOptions, spiceApproachPose,
+			clawPoseSpiceShakeApproach, clawPoseSpiceShake, clawPoseSpiceShakeLift); err != nil {
+			return nil, nil, err
+		}
+		if cfg.SpiceShakeCount < 0 {
+			return nil, nil, fmt.Errorf("%s: spice_shake_count must be >= 0", path)
+		}
+		if cfg.SpiceShakeAmplitudeMm < 0 {
+			return nil, nil, fmt.Errorf("%s: spice_shake_amplitude_mm must be >= 0", path)
 		}
 	}
 

@@ -7,7 +7,9 @@ import {
   GRID_DRINKS,
   beansLabel,
   hasMilkChoice,
+  hasSpiceChoice,
   milkLabel,
+  spiceLabel,
 } from "./drinks";
 import type { Fulfillment } from "../lib/viamClient";
 
@@ -20,11 +22,14 @@ export function ChooseDrink({
   milkOptions,
   waitLabel,
   unavailableDrinks,
+  spice,
+  spiceOptions,
   connected,
   onSelect,
   onBeansChange,
   onFulfillmentChange,
   onMilkChange,
+  onSpiceChange,
   onBack,
   onNext,
 }: {
@@ -40,11 +45,16 @@ export function ChooseDrink({
   waitLabel: string | null;
   /** Menu drinks the machine can't make right now; shown greyed out in place. */
   unavailableDrinks: readonly string[];
+  /** The chosen spice; "" for none. */
+  spice: string;
+  /** The machine's spice_options; the choice is hidden when it is empty. */
+  spiceOptions: string[];
   connected: boolean;
   onSelect: (id: string) => void;
   onBeansChange: (beans: string) => void;
   onFulfillmentChange: (f: Fulfillment) => void;
   onMilkChange: (milk: string) => void;
+  onSpiceChange: (spice: string) => void;
   onBack: () => void;
   onNext: () => void;
 }) {
@@ -56,10 +66,13 @@ export function ChooseDrink({
       return renderPausedCard(drink, i);
     }
     const isSelected = selectedDrink === drink.id;
-    // The milk choice sits on the card itself once it's picked. It's a sibling
-    // of the card button, not inside it, since buttons can't nest.
+    // The milk and spice choices sit on the card itself once it's picked.
+    // They're siblings of the card button, not inside it, since buttons can't
+    // nest.
     const showMilk =
       isSelected && hasMilkChoice(drink.id) && milkOptions.length > 1;
+    const showSpice =
+      isSelected && hasSpiceChoice(drink.id) && spiceOptions.length > 0;
     return (
       <div
         key={drink.id}
@@ -92,28 +105,33 @@ export function ChooseDrink({
             </p>
           </div>
         </button>
-        {showMilk && (
-          <div
-            role="radiogroup"
-            aria-label="Which milk would you like?"
-            className="anim-in absolute top-1/2 -translate-y-1/2 inset-x-2 flex rounded-full bg-white p-1 shadow-sm"
-          >
-            {milkOptions.map((m) => (
-              <button
-                key={m}
-                type="button"
-                role="radio"
-                aria-checked={milk === m}
-                onClick={() => onMilkChange(m)}
-                className={`flex-1 py-1.5 rounded-full font-mono font-semibold text-xs uppercase tracking-wider transition-colors duration-150 ${
-                  milk === m
-                    ? "bg-black text-white"
-                    : "text-neutral-500 hover:text-neutral-900"
-                }`}
-              >
-                {milkLabel(m)}
-              </button>
-            ))}
+        {(showMilk || showSpice) && (
+          <div className="absolute top-1/2 -translate-y-1/2 inset-x-2 flex flex-col gap-1.5">
+            {showMilk && (
+              <OptionPills
+                label="Which milk would you like?"
+                options={milkOptions.map((m) => ({
+                  value: m,
+                  label: milkLabel(m),
+                }))}
+                selected={milk}
+                onChange={onMilkChange}
+              />
+            )}
+            {showSpice && (
+              <OptionPills
+                label="Would you like a dash of spice?"
+                options={[
+                  { value: "", label: "No spice" },
+                  ...spiceOptions.map((s) => ({
+                    value: s,
+                    label: spiceLabel(s),
+                  })),
+                ]}
+                selected={spice}
+                onChange={onSpiceChange}
+              />
+            )}
           </div>
         )}
       </div>
@@ -328,5 +346,44 @@ export function ChooseDrink({
         </div>
       </div>
     </main>
+  );
+}
+
+// OptionPills is the row of radio pills a drink card shows for a choice that
+// belongs to the drink (its milk, its spice).
+function OptionPills({
+  label,
+  options,
+  selected,
+  onChange,
+}: {
+  label: string;
+  options: { value: string; label: string }[];
+  selected: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label={label}
+      className="anim-in flex rounded-full bg-white p-1 shadow-sm"
+    >
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={selected === o.value}
+          onClick={() => onChange(o.value)}
+          className={`flex-1 py-1.5 rounded-full font-mono font-semibold text-xs uppercase tracking-wider whitespace-nowrap transition-colors duration-150 ${
+            selected === o.value
+              ? "bg-black text-white"
+              : "text-neutral-500 hover:text-neutral-900"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
   );
 }

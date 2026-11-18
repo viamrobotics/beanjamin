@@ -131,55 +131,64 @@ func (s *beanjaminCoffee) attachMilkBottleGeometry(ctx context.Context) error {
 }
 
 // attachMilkBottle models the bottle the jaws are closed on with the frames
-// placed by at (milkBottleBox) and attaches it as the held item.
+// placed by at (seatedContainerBox) and attaches it as the held item.
 // Returns how far below the grip point the bottle's base is.
 func (sc *sceneState) attachMilkBottle(at placement, dims *ContainerDimensions) (float64, error) {
-	box, baseBelowGripMm, err := sc.milkBottleBox(at, dims)
+	return sc.attachSeatedContainer(at, pickupLabelMilk, "milk bottle", "milk_bottle_dimensions", dims)
+}
+
+// attachSeatedContainer models the container the jaws are closed on
+// (seatedContainerBox) and attaches it as the held item under label. Returns
+// how far below the grip point the container's base is.
+func (sc *sceneState) attachSeatedContainer(at placement, label, what, dimsField string, dims *ContainerDimensions) (float64, error) {
+	box, baseBelowGripMm, err := sc.seatedContainerBox(at, label, what, dimsField, dims)
 	if err != nil {
 		return 0, err
 	}
-	if _, err := sc.attachHeldItem(at, pickupLabelMilk, []spatialmath.Geometry{box}); err != nil {
+	if _, err := sc.attachHeldItem(at, label, []spatialmath.Geometry{box}); err != nil {
 		return 0, err
 	}
 	return baseBelowGripMm, nil
 }
 
-// milkBottleBox builds the world-frame box of a bottle the jaws are closed on:
-// milk_bottle_dimensions, under the grip point, with its base resting on the
-// highest static surface beneath it (the fridge floor or the shelf the spot is
-// on). Seating it rather than centering it on the grip point keeps the model
-// independent of how high up the bottle the milk_<spot>_grab pose was taught.
+// seatedContainerBox builds the world-frame box of a container the jaws are
+// closed on at a fixed spot (a milk bottle in the fridge, a spice shaker on the
+// rack): dims, under the grip point, with its base resting on the highest
+// static surface beneath it. Seating it rather than centering it on the grip
+// point keeps the model independent of how high up the container the spot's
+// grab pose was taught. what names the container and dimsField its config key,
+// for error messages.
 //
-// The jaws are around the bottle, so the grip point must fall within its
-// height. A seated box that misses the grip point means the surface the bottle
-// stands on isn't modeled (the box landed on something lower, like the table
-// under the fridge) or the grab pose is above the bottle, and both are errors
-// rather than a model that is silently wrong.
+// The jaws are around the container, so the grip point must fall within its
+// height. A seated box that misses the grip point means the surface the
+// container stands on isn't modeled (the box landed on something lower) or the
+// grab pose is above the container, and both are errors rather than a model
+// that is silently wrong.
 //
 // Returns the box and how far below the grip point its base is.
-func (sc *sceneState) milkBottleBox(
-	at placement, dims *ContainerDimensions,
+func (sc *sceneState) seatedContainerBox(
+	at placement, label, what, dimsField string, dims *ContainerDimensions,
 ) (spatialmath.Geometry, float64, error) {
-	box, err := sc.containerBox(at, pickupLabelMilk, dims, &RelativePose{})
+	box, err := sc.containerBox(at, label, dims, &RelativePose{})
 	if err != nil {
 		return nil, 0, err
 	}
-	// Enumerated before the bottle is attached, so it is never taken for the
+	// Enumerated before the container is attached, so it is never taken for the
 	// surface it stands on.
 	surfaces, err := geom.WorldAnchoredSurfaceBoxes(sc.fs, at.fullInputs(sc.fs))
 	if err != nil {
-		return nil, 0, fmt.Errorf("find the surface under the milk bottle: %w", err)
+		return nil, 0, fmt.Errorf("find the surface under the %s: %w", what, err)
 	}
 	grip := box.Pose().Point()
 	seated, dz, ok := geom.SeatOnSurface(surfaces, box, surfaceRestClearanceMm)
 	if !ok {
-		return nil, 0, fmt.Errorf("no surface modeled beneath the milk bottle at (x=%.1f, y=%.1f): add the fridge floor to the frame system", grip.X, grip.Y)
+		return nil, 0, fmt.Errorf("no surface modeled beneath the %s at (x=%.1f, y=%.1f): add the surface it stands on to the frame system", what, grip.X, grip.Y)
 	}
 	// box was centered on the grip point, so after the shift the grip point sits
-	// -dz from the bottle's center.
+	// -dz from the container's center.
 	if math.Abs(dz) > dims.HeightMm/2 {
-		return nil, 0, fmt.Errorf("the milk bottle seated on the surface beneath it (shifted %.1fmm) does not reach the grip point at Z=%.1f: "+
-			"check that the surface it stands on is modeled and that the grab pose is within milk_bottle_dimensions' height_mm", dz, grip.Z)
+		return nil, 0, fmt.Errorf("the %s seated on the surface beneath it (shifted %.1fmm) does not reach the grip point at Z=%.1f: "+
+			"check that the surface it stands on is modeled and that the grab pose is within %s' height_mm", what, dz, grip.Z, dimsField)
 	}
 	return seated, dims.HeightMm/2 - dz, nil
 }

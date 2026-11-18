@@ -17,6 +17,7 @@ func (s *beanjaminCoffee) menu() order.Menu {
 		IcedLatte: s.cfg.CanServeIcedLatte,
 		Milks:     s.cfg.milkNames(),
 		MugDrinks: s.cfg.CanServeMugDrinks,
+		Spices:    s.cfg.spiceNames(),
 	}
 }
 
@@ -45,7 +46,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		drink, req.Beans = base, beans
 	}
 	customerName := strings.TrimSpace(req.CustomerName)
-	s.logger.Infof("order request: drink=%q beans=%q milk=%q customer=%q", drink, req.Beans, req.Milk, customerName)
+	s.logger.Infof("order request: drink=%q beans=%q milk=%q spice=%q customer=%q", drink, req.Beans, req.Milk, req.Spice, customerName)
 
 	if ok, reason := s.menu().Supports(drink); !ok {
 		s.logger.Infof("rejected order for drink %q from %s (%s)", drink, customerName, reason)
@@ -75,6 +76,12 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 	label := order.DrinkLabel(drink, beans)
 
 	milk, err := s.menu().ResolveMilk(drink, req.Milk)
+	if err != nil {
+		s.logger.Warnf("rejected order: %v", err)
+		return nil, err
+	}
+
+	spice, err := s.menu().ResolveSpice(drink, req.Spice)
 	if err != nil {
 		s.logger.Warnf("rejected order: %v", err)
 		return nil, err
@@ -138,6 +145,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		o.CustomerEmail = req.CustomerEmail
 		o.Fulfillment = fulfillment
 		o.Milk = milk
+		o.Spice = spice
 		s.delivery.track(o)
 		if count > 1 {
 			o.BatchIndex = i + 1

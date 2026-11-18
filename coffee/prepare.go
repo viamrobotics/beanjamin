@@ -222,9 +222,9 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 		switch {
 		case order.IsIced(drink) && armFreeDuringPour:
 			// Glass already iced and staged during the brew; finish the rest.
-			servedSlot, err = s.finishIced(ctx, cancelCtx, o.Milk, placeDrink)
+			servedSlot, err = s.finishIced(ctx, cancelCtx, o.Milk, o.Spice, placeDrink)
 		case order.IsIced(drink):
-			servedSlot, err = s.serveIced(ctx, cancelCtx, o.Milk, placeDrink)
+			servedSlot, err = s.serveIced(ctx, cancelCtx, o.Milk, o.Spice, placeDrink)
 		case order.IsMug(drink):
 			// Americano: top the lungo up at the hot water spout, then serve.
 			servedSlot, err = s.serveAmericano(ctx, cancelCtx, cupApproached, placeDrink, runPhase)
@@ -325,6 +325,9 @@ func (s *beanjaminCoffee) strandedState() []string {
 	}
 	if sc.heldMilk != "" {
 		stranded = append(stranded, fmt.Sprintf("%s milk out of the fridge", sc.heldMilk))
+	}
+	if sc.heldSpice != "" {
+		stranded = append(stranded, fmt.Sprintf("%s shaker off the rack", sc.heldSpice))
 	}
 	if sc.stagedGlassPlaced {
 		stranded = append(stranded, "glass staged")

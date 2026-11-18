@@ -138,9 +138,9 @@ func TestMilkBottleBoxRestsOnSurface(t *testing.T) {
 	for _, gripZ := range []float64{240, 325, 430} {
 		fs := fridgeFloorFS(t, gripZ)
 		s := heldGeomService(t, fs)
-		box, _, err := s.scene().milkBottleBox(placement{inputs: referenceframe.NewZeroInputs(fs)}, dims)
+		box, _, err := s.scene().seatedContainerBox(placement{inputs: referenceframe.NewZeroInputs(fs)}, pickupLabelMilk, "milk bottle", "milk_bottle_dimensions", dims)
 		if err != nil {
-			t.Fatalf("grip Z=%.0f: milkBottleBox: %v", gripZ, err)
+			t.Fatalf("grip Z=%.0f: seatedContainerBox: %v", gripZ, err)
 		}
 		requireVecEqual(t, box.Pose().Point(), wantCenter, 1e-6)
 	}
@@ -155,8 +155,8 @@ func TestMilkBottleBoxRejectsUnseatableBottle(t *testing.T) {
 		"grab above the bottle": fridgeFloorFS(t, 470),
 	} {
 		s := heldGeomService(t, fs)
-		if _, _, err := s.scene().milkBottleBox(placement{inputs: referenceframe.NewZeroInputs(fs)}, dims); err == nil {
-			t.Errorf("%s: milkBottleBox succeeded, want an error", name)
+		if _, _, err := s.scene().seatedContainerBox(placement{inputs: referenceframe.NewZeroInputs(fs)}, pickupLabelMilk, "milk bottle", "milk_bottle_dimensions", dims); err == nil {
+			t.Errorf("%s: seatedContainerBox succeeded, want an error", name)
 		}
 	}
 }

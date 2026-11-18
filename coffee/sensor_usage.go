@@ -134,6 +134,12 @@ func milkPourCounter(milk string) string {
 	return milk + "_milk_pours"
 }
 
+// spiceDashCounter is the usage-sensor field counting the dashes shaken from
+// the named spice's shaker, e.g. "cinnamon_dashes".
+func spiceDashCounter(spice string) string {
+	return spice + "_dashes"
+}
+
 // cupCounter is the usage-sensor counter for the vessel a drink is served in:
 // mugs_used for a mug drink (americano, hot_water), espresso_cups_used for
 // everything else. label names it in the log lines.

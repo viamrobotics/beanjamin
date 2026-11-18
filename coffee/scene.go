@@ -20,15 +20,17 @@ type sceneState struct {
 	// run has not planned it and the arm has to be read.
 	inputs referenceframe.FrameSystemInputs
 
-	// heldCupGeom, heldGlassGeom, heldMugGeom and heldMilkGeom are the
-	// gripper-local geometry of the cup, glass and mug (detected at pickup) and
-	// of the milk bottle (modeled from milk_bottle_dimensions), kept so a re-grab
-	// can restore them. Each is a list, body first: a mug is a body box plus a
+	// heldCupGeom, heldGlassGeom, heldMugGeom, heldMilkGeom and heldSpiceGeom
+	// are the gripper-local geometry of the cup, glass and mug (detected at
+	// pickup) and of the milk bottle and spice shaker (modeled from
+	// milk_bottle_dimensions and spice_shaker_dimensions), kept so a re-grab can
+	// restore them. Each is a list, body first: a mug is a body box plus a
 	// handle box.
 	heldCupGeom   []spatialmath.Geometry
 	heldGlassGeom []spatialmath.Geometry
 	heldMugGeom   []spatialmath.Geometry
 	heldMilkGeom  []spatialmath.Geometry
+	heldSpiceGeom []spatialmath.Geometry
 	// heldItemAttached is whether the held-item frame is in fs.
 	heldItemAttached bool
 
@@ -36,6 +38,11 @@ type sceneState struct {
 	// read by returnMilkBottle to put it back at its own spot (milk.go). Empty
 	// when no bottle is out.
 	heldMilk string
+
+	// heldSpice names the spice shaker off the rack, set by fetchSpiceShaker and
+	// read by returnSpiceShaker to put it back at its own spot (spice.go). Empty
+	// when no shaker is out.
+	heldSpice string
 
 	// filterFrameLocked is whether lockFilterFrame has re-parented the filter
 	// frame to the world in fs.

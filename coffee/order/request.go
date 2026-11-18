@@ -24,6 +24,7 @@ type Request struct {
 	Count                *float64 `json:"count"`
 	Fulfillment          string   `json:"fulfillment"`
 	Milk                 string   `json:"milk"`
+	Spice                string   `json:"spice"`
 }
 
 // requestKeys lists the wire keys of Request in declaration order, for error

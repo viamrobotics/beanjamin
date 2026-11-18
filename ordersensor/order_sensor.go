@@ -112,6 +112,8 @@ func (s *orderSensor) PushOrderReading(r order.Reading) {
 		"customer_email": r.Order.CustomerEmail,
 		// The iced latte's milk; empty for a drink without milk.
 		"milk": r.Order.Milk,
+		// The spice dashed over the drink; empty for none.
+		"spice": r.Order.Spice,
 		// What the customer was actually shown.
 		"modified_customer_name": r.Order.ModifiedCustomerName,
 		"order_ok":               ok,

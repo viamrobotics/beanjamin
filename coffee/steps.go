@@ -133,6 +133,7 @@ const (
 	stepAddingMilk           = "Adding milk"
 	stepPlacingMug           = "Placing mug"
 	stepAddingHotWater       = "Adding hot water"
+	stepAddingSpice          = "Adding spice"
 	stepFinishingUp          = "Finishing up"
 	// stepKeepAlive is published while a keep-alive purge runs. No order is
 	// active, so it surfaces through Status/get_queue only, never on an order.

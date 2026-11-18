@@ -72,11 +72,13 @@ test("order labels put non-regular beans after the drink", () => {
     drink: "Lungo",
     beans: "decaf",
     milk: null,
+    spice: null,
   });
   assert.deepEqual(orderParts("lungo"), {
     drink: "Lungo",
     beans: null,
     milk: null,
+    spice: null,
   });
 });
 
@@ -93,6 +95,18 @@ test("order labels name the milk only for a drink with a milk choice", () => {
   assert.equal(orderLabel("iced_coffee", "regular", "oat"), "Iced Coffee");
 });
 
+test("order labels name the spice only for a drink that takes one", () => {
+  assert.equal(
+    orderLabel("iced_latte", "regular", "oat", "cinnamon"),
+    "Iced Latte, oat milk, cinnamon",
+  );
+  assert.equal(
+    orderLabel("iced_latte", "regular", "oat", ""),
+    "Iced Latte, oat milk",
+  );
+  assert.equal(orderLabel("espresso", "regular", "", "cinnamon"), "Espresso");
+});
+
 test("spoken orders read naturally", () => {
   assert.equal(spokenOrder("lungo", "light_roast"), "light roast lungo");
   assert.equal(spokenOrder("espresso"), "espresso");
@@ -100,5 +114,9 @@ test("spoken orders read naturally", () => {
   assert.equal(
     spokenOrder("iced_latte", "decaf", "oat"),
     "decaf iced latte with oat milk",
+  );
+  assert.equal(
+    spokenOrder("iced_latte", "regular", "oat", "nutmeg"),
+    "iced latte with oat milk and a dash of nutmeg",
   );
 });

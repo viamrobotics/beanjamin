@@ -49,6 +49,7 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 			"modified_customer_name": o.ModifiedCustomerName,
 			"fulfillment":            o.Fulfillment,
 			"milk":                   o.Milk,
+			"spice":                  o.Spice,
 			"enqueued_at":            o.EnqueuedAt.Format(time.RFC3339),
 			"raw_step":               o.RawStep,
 			"step_history":           history,
@@ -99,6 +100,11 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 	// nothing rather than a made-up number.
 	if wait, ok := s.drinkDurations.expectedWait(orders, currentID, time.Now()); ok {
 		resp["expected_wait_sec"] = wait.Round(time.Second).Seconds()
+	}
+	// The spices an iced latte can be dashed with; absent when none are
+	// configured, which is the kiosk's cue to hide the spice choice.
+	if len(s.cfg.SpiceOptions) > 0 {
+		resp["spice_options"] = stringsToAny(s.cfg.spiceNames())
 	}
 	s.logger.Debugw("Status", "response", resp)
 	return resp, nil

@@ -64,6 +64,16 @@ func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.C
 			_, err := s.serveIcedLatte(ctx, cancelCtx)
 			return err
 		},
+		// fetch_spice and add_spice use the first spice in spice_options;
+		// return_spice puts back whichever shaker is out.
+		"fetch_spice": func(ctx, cancelCtx context.Context) error { // take the shaker off its rack spot
+			return s.fetchSpiceShaker(ctx, cancelCtx, s.firstSpice())
+		},
+		"shake_spice":  s.shakeSpice,        // shake the held shaker over the staged glass
+		"return_spice": s.returnSpiceShaker, // set the shaker back on its rack spot
+		"add_spice": func(ctx, cancelCtx context.Context) error { // fetch + shake + return
+			return s.addSpice(ctx, cancelCtx, s.firstSpice())
+		},
 		"open_door":  s.openDoor,  // grip the fridge handle and swing it open
 		"close_door": s.closeDoor, // grip the open door's handle and swing it shut
 	}

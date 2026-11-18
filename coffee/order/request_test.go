@@ -64,6 +64,7 @@ func TestDecodeRequest_FullPayload(t *testing.T) {
 		"count":                  float64(2),
 		"fulfillment":            "delivery",
 		"milk":                   "oat",
+		"spice":                  "cinnamon",
 		"unrecognized":           "ignored",
 	})
 	if err != nil {
@@ -82,6 +83,7 @@ func TestDecodeRequest_FullPayload(t *testing.T) {
 		CompletionStatement:  "bye",
 		Fulfillment:          "delivery",
 		Milk:                 "oat",
+		Spice:                "cinnamon",
 	}
 	if req != want {
 		t.Errorf("decoded %+v, want %+v", req, want)
@@ -95,7 +97,7 @@ func TestDecodeRequest_NonObjectListsEveryKey(t *testing.T) {
 	}
 	for _, key := range []string{
 		"drink", "customer_name", "modified_customer_name", "customer_email",
-		"initial_greeting", "completion_statement", "count", "fulfillment", "milk",
+		"initial_greeting", "completion_statement", "count", "fulfillment", "milk", "spice",
 	} {
 		if !strings.Contains(err.Error(), key) {
 			t.Errorf("error %q should list key %q", err, key)

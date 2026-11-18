@@ -47,6 +47,9 @@ func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, err
 	if sc.heldMilk != "" {
 		s.activeOrderLogger().Warnf("proceed: forgetting that the %s milk is out of the fridge — %s", sc.heldMilk, s.milkPutBackHint(sc.heldMilk))
 	}
+	if sc.heldSpice != "" {
+		s.activeOrderLogger().Warnf("proceed: forgetting that the %s shaker is off the rack — %s", sc.heldSpice, s.spicePutBackHint(sc.heldSpice))
+	}
 	// Rebuilt with the door shut. A failed rebuild leaves the scene, swung door
 	// included, as it was: a failed proceed asserts nothing.
 	doorOpenDegs, hotWaterOpenDegs := sc.doorOpenDegs, sc.hotWaterOpenDegs

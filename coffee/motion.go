@@ -485,9 +485,11 @@ func (s *beanjaminCoffee) rebuildScene(ctx context.Context, doorOpenDegs, hotWat
 // planning against a stale snapshot. Otherwise the scene carries state that must
 // persist across separate DoCommand calls, so it is left untouched.
 func (s *beanjaminCoffee) refreshFrameSystemIfClean(ctx context.Context) error {
-	// heldMilk on its own: the rebuild would clear it, and return_milk would no
-	// longer know which spot the bottle in the gripper goes back on.
-	if s.scene().heldItemAttached || s.scene().heldMilk != "" || s.scene().filterFrameLocked || s.scene().stagedGlassPlaced || s.scene().stagedMugPlaced {
+	// heldMilk and heldSpice on their own: the rebuild would clear them, and
+	// return_milk / return_spice would no longer know which spot the container
+	// in the gripper goes back on.
+	sc := s.scene()
+	if sc.heldItemAttached || sc.heldMilk != "" || sc.heldSpice != "" || sc.filterFrameLocked || sc.stagedGlassPlaced || sc.stagedMugPlaced {
 		return nil
 	}
 	if err := s.resetFrameSystem(ctx); err != nil {

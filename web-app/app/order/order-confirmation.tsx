@@ -19,6 +19,7 @@ interface OrderConfirmationProps {
   drink: string;
   beans?: string;
   milk?: string;
+  spice?: string;
   onDismiss: () => void;
   showBack?: boolean;
 }
@@ -29,6 +30,7 @@ export function OrderConfirmation({
   drink,
   beans,
   milk,
+  spice,
   onDismiss,
   showBack = true,
 }: OrderConfirmationProps) {
@@ -71,6 +73,7 @@ export function OrderConfirmation({
             drink={drink}
             beans={beans}
             milk={milk}
+            spice={spice}
             beansClassName="text-neutral-300"
           />{" "}
           for

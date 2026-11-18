@@ -702,6 +702,8 @@ func (sc *sceneState) cachedHeldGeometry(label string) []spatialmath.Geometry {
 		return sc.heldMilkGeom
 	case pickupLabelMug:
 		return sc.heldMugGeom
+	case pickupLabelSpice:
+		return sc.heldSpiceGeom
 	default:
 		return sc.heldCupGeom
 	}
@@ -716,6 +718,8 @@ func (sc *sceneState) cacheHeldGeometry(label string, gripperLocal []spatialmath
 		sc.heldMilkGeom = gripperLocal
 	case pickupLabelMug:
 		sc.heldMugGeom = gripperLocal
+	case pickupLabelSpice:
+		sc.heldSpiceGeom = gripperLocal
 	default:
 		sc.heldCupGeom = gripperLocal
 	}

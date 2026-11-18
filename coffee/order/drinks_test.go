@@ -140,6 +140,28 @@ func TestLegacyDrinkIDs(t *testing.T) {
 	}
 }
 
+func TestMenuResolveSpice(t *testing.T) {
+	menu := Menu{Iced: true, IcedLatte: true, Milks: []string{"whole"}, Spices: []string{"cinnamon", "nutmeg"}}
+	for _, tt := range []struct {
+		drink, spice, want string
+		wantErr            bool
+	}{
+		{drink: "iced_latte", spice: "", want: ""}, // no spice is the default
+		{drink: "iced_latte", spice: "nutmeg", want: "nutmeg"},
+		{drink: "iced_latte", spice: "paprika", wantErr: true},
+		{drink: "espresso", spice: "", want: ""},
+		{drink: "iced_coffee", spice: "cinnamon", wantErr: true}, // only the latte takes spice
+	} {
+		got, err := menu.ResolveSpice(tt.drink, tt.spice)
+		if got != tt.want || (err != nil) != tt.wantErr {
+			t.Errorf("ResolveSpice(%q, %q) = %q, %v; want %q, err=%v", tt.drink, tt.spice, got, err, tt.want, tt.wantErr)
+		}
+	}
+	if _, err := (Menu{IcedLatte: true}).ResolveSpice("iced_latte", "cinnamon"); err == nil {
+		t.Error("ResolveSpice with no spices configured should fail")
+	}
+}
+
 func TestMenuResolveMilk(t *testing.T) {
 	menu := Menu{Iced: true, IcedLatte: true, Milks: []string{"whole", "oat"}}
 	tests := []struct {

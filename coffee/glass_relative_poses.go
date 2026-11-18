@@ -2,9 +2,10 @@ package coffee
 
 // Pour poses anchored on the staged glass.
 //
-// The four pour poses (pour_approach/pour for the espresso cup,
-// milk_pour_approach/milk_pour for the milk bottle) are not stored on the claws
-// switch: they are configured as the pose of the held container (the held-item
+// The pour poses (pour_approach/pour for the espresso cup,
+// milk_pour_approach/milk_pour for the milk bottle) and the spice shake poses
+// (spice_shake_approach/spice_shake/spice_shake_lift) are not stored on the
+// claws switch: they are configured as the pose of the held container (the held-item
 // frame: on the grip point, +Z along the container's axis) relative to the
 // center of the staged glass's rim, and the rim is read off the staged-glass
 // obstacle in the frame system (its position and its height). The pours
@@ -26,10 +27,13 @@ import (
 // glassRelativePoseField maps each pour pose to the config field holding its
 // rim-relative offset. A claws pose absent from this map is read from the switch.
 var glassRelativePoseField = map[string]string{
-	clawPosePourApproach:     "pour_approach_relative_pose",
-	clawPosePour:             "pour_relative_pose",
-	clawPoseMilkPourApproach: "milk_pour_approach_relative_pose",
-	clawPoseMilkPour:         "milk_pour_relative_pose",
+	clawPosePourApproach:       "pour_approach_relative_pose",
+	clawPosePour:               "pour_relative_pose",
+	clawPoseMilkPourApproach:   "milk_pour_approach_relative_pose",
+	clawPoseMilkPour:           "milk_pour_relative_pose",
+	clawPoseSpiceShakeApproach: "spice_shake_approach_relative_pose",
+	clawPoseSpiceShake:         "spice_shake_relative_pose",
+	clawPoseSpiceShakeLift:     "spice_shake_relative_pose",
 }
 
 // glassRelativePose returns the configured rim-relative offset for a pour pose.
@@ -43,6 +47,19 @@ func (s *beanjaminCoffee) glassRelativePose(poseName string) *RelativePose {
 		return s.cfg.MilkPourApproachRelativePose
 	case clawPoseMilkPour:
 		return s.cfg.MilkPourRelativePose
+	case clawPoseSpiceShakeApproach:
+		return s.cfg.SpiceShakeApproachRelativePose
+	case clawPoseSpiceShake:
+		return s.cfg.SpiceShakeRelativePose
+	case clawPoseSpiceShakeLift:
+		// The rim-relative offset is in world-aligned axes (PoseRelativeTo
+		// anchors it on the rim point, not the glass's orientation), so +Z is
+		// straight up.
+		if rel := s.cfg.SpiceShakeRelativePose; rel != nil {
+			lifted := *rel
+			lifted.Z += s.spiceShakeAmplitudeMm()
+			return &lifted
+		}
 	}
 	return nil
 }

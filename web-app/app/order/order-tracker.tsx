@@ -430,7 +430,7 @@ interface OrderCardProps {
 }
 
 function OrderCard({ order, cardClass, statusKind, label }: OrderCardProps) {
-  const drink = orderLabel(order.drink, order.beans, order.milk);
+  const drink = orderLabel(order.drink, order.beans, order.milk, order.spice);
   return (
     <div className={cardClass}>
       <div className="flex items-baseline justify-between gap-2">
@@ -450,6 +450,7 @@ function OrderCard({ order, cardClass, statusKind, label }: OrderCardProps) {
             drink={order.drink}
             beans={order.beans}
             milk={order.milk}
+            spice={order.spice}
           />
         </p>
       )}

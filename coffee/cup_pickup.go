@@ -48,6 +48,7 @@ const (
 	pickupLabelGlass = "glass"
 	pickupLabelMilk  = "milk"
 	pickupLabelMug   = "mug"
+	pickupLabelSpice = "spice"
 )
 
 // Clean-area shield obstacles enclosing the zone of standing clean cups / glasses

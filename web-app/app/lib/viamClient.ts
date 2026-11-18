@@ -265,6 +265,8 @@ export interface QueueOrder {
   fulfillment?: Fulfillment;
   /** The milk for a milk drink; empty or absent otherwise, and from older modules. */
   milk?: string;
+  /** The spice dashed over the drink; empty or absent for none, and from older modules. */
+  spice?: string;
   enqueued_at: string;
   raw_step: string;
   step_history: StepEntry[];
@@ -312,6 +314,11 @@ export interface QueueStatus {
   iced_available?: boolean;
   /** Why the ice machine is unavailable, for logs; "" while it is available. */
   iced_unavailable_reason?: string;
+  /**
+   * The spices an iced latte can be dashed with (the machine's spice_options).
+   * Absent when the machine offers no spice, and from older modules.
+   */
+  spice_options?: string[];
 }
 
 /**
@@ -393,6 +400,7 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
       // A flat two minutes per queued drink, so the wait label renders.
       expected_wait_sec: devQueue.length * 120,
       iced_available: true,
+      spice_options: ["cinnamon", "nutmeg"],
     };
   }
 
@@ -423,6 +431,9 @@ export async function prepareOrder(
     /** The milk for a milk drink (one of the machine's milk_options). Omitted,
      * the backend uses its first milk. */
     milk?: string;
+    /** The spice to dash over a drink that takes one (one of the machine's
+     * spice_options). Omitted for none. */
+    spice?: string;
   },
 ): Promise<{ status: string; queue_position?: number; order_id?: string }> {
   if (isDevMode()) {
@@ -468,6 +479,7 @@ export async function prepareOrder(
         ...(greeting && { initial_greeting: greeting }),
         ...(opts.fulfillment && { fulfillment: opts.fulfillment }),
         ...(opts.milk && { milk: opts.milk }),
+        ...(opts.spice && { spice: opts.spice }),
       },
     },
   );

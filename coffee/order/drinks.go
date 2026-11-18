@@ -45,6 +45,12 @@ func IsMilk(drink string) bool {
 	return drink == "iced_latte"
 }
 
+// TakesSpice reports whether the drink may be ordered with a dash of spice,
+// shaken over the staged glass before it is served (coffee/spice.go).
+func TakesSpice(drink string) bool {
+	return drink == "iced_latte"
+}
+
 // DrinkLabel names a drink made from the given beans the way a person would
 // say it: "lungo" for the regular beans, "decaf lungo" or "light roast iced
 // latte" otherwise. Used for speech and Slack, never as an identifier.
@@ -130,6 +136,9 @@ type Menu struct {
 	Milks []string
 	// MugDrinks gates the drinks served in a mug (the americano and hot water).
 	MugDrinks bool
+	// Spices are the spices on the rack, by the name an order asks for one with.
+	// Empty when the machine offers no spice.
+	Spices []string
 }
 
 // Supports reports whether a machine serving this menu can make drink and,
@@ -189,4 +198,24 @@ func (m Menu) ResolveMilk(drink, milk string) (string, error) {
 		return "", fmt.Errorf("unknown milk %q, available: %s", milk, strings.Join(m.Milks, ", "))
 	}
 	return milk, nil
+}
+
+// ResolveSpice validates an order's spice choice against the menu. A spice is
+// optional, so "" is always accepted; any other value must be one of the
+// menu's spices on a drink that takes one. As with milk, a spice the drink
+// can't have is an error rather than silently dropped.
+func (m Menu) ResolveSpice(drink, spice string) (string, error) {
+	if spice == "" {
+		return "", nil
+	}
+	if !TakesSpice(drink) {
+		return "", fmt.Errorf("spice %q given for %q, which takes no spice", spice, drink)
+	}
+	if len(m.Spices) == 0 {
+		return "", fmt.Errorf("spice %q given, but this machine offers no spice", spice)
+	}
+	if !slices.Contains(m.Spices, spice) {
+		return "", fmt.Errorf("unknown spice %q, available: %s", spice, strings.Join(m.Spices, ", "))
+	}
+	return spice, nil
 }
