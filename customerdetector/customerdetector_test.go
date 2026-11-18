@@ -2,10 +2,13 @@ package customerdetector
 
 import (
 	"context"
+	"errors"
 	"image"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -415,5 +418,110 @@ func TestUsualKeepsLegacyDecafID(t *testing.T) {
 		usuals[0]["drink"] != "lungo" || usuals[0]["beans"] != "light_roast" || usuals[0]["fulfillment"] != "delivery" ||
 		usuals[1]["drink"] != "decaf" || usuals[1]["beans"] != "decaf" || usuals[1]["fulfillment"] != "pickup" {
 		t.Errorf("usuals = %v, want lungo/light_roast/delivery x2 then decaf/decaf/pickup x1", usuals)
+	}
+}
+
+// blockingStatusSource is a statusSource that counts calls and blocks each
+// one until release is closed or its context ends.
+type blockingStatusSource struct {
+	calls    atomic.Int32
+	release  chan struct{}
+	ctxEnded atomic.Bool
+}
+
+func newBlockingStatusSource() *blockingStatusSource {
+	return &blockingStatusSource{release: make(chan struct{})}
+}
+
+func (b *blockingStatusSource) identify(ctx context.Context) map[string]any {
+	n := b.calls.Add(1)
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+		b.ctxEnded.Store(true)
+		return map[string]any{"recognized": false}
+	}
+	return map[string]any{"recognized": true, "call": n}
+}
+
+func TestStatusRunsOneIdentificationForConcurrentPollers(t *testing.T) {
+	cd := newTestDetector(t)
+	src := newBlockingStatusSource()
+	cd.statusSource = src.identify
+
+	// Pollers that give up after a short timeout, like voice-command's fault
+	// poller, must not each start their own identification.
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			if _, err := cd.Status(ctx); !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("Status err = %v, want deadline exceeded", err)
+			}
+		})
+	}
+	wg.Wait()
+	if got := src.calls.Load(); got != 1 {
+		t.Fatalf("identifications = %d, want 1", got)
+	}
+
+	// The refresh the pollers abandoned is still running; a caller that
+	// waits gets its result instead of starting another.
+	close(src.release)
+	res, err := cd.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["call"] != int32(1) || src.calls.Load() != 1 {
+		t.Fatalf("Status = %v after %d identifications, want call 1 after 1", res, src.calls.Load())
+	}
+	if src.ctxEnded.Load() {
+		t.Fatal("refresh context ended when its callers gave up")
+	}
+}
+
+func TestStatusReusesRecentResult(t *testing.T) {
+	cd := newTestDetector(t)
+	src := newBlockingStatusSource()
+	close(src.release)
+	cd.statusSource = src.identify
+	now := time.Unix(1000, 0)
+	cd.now = func() time.Time { return now }
+
+	ctx := context.Background()
+	if _, err := cd.Status(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(statusMaxAge - time.Millisecond)
+	if res, _ := cd.Status(ctx); res["call"] != int32(1) {
+		t.Fatalf("within max age Status = %v, want the cached call 1", res)
+	}
+	now = now.Add(time.Millisecond)
+	if res, _ := cd.Status(ctx); res["call"] != int32(2) {
+		t.Fatalf("at max age Status = %v, want a fresh call 2", res)
+	}
+}
+
+func TestCloseCancelsStatusRefresh(t *testing.T) {
+	cd := newTestDetector(t)
+	cd.closeCtx, cd.closeCancel = context.WithCancel(context.Background())
+	src := newBlockingStatusSource()
+	cd.statusSource = src.identify
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if _, err := cd.Status(ctx); err == nil {
+		t.Fatal("Status returned before the refresh finished")
+	}
+	if err := cd.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	res, err := cd.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !src.ctxEnded.Load() || res["recognized"] != false {
+		t.Fatalf("after Close: refresh ctx ended = %v, Status = %v; want true, recognized false", src.ctxEnded.Load(), res)
 	}
 }

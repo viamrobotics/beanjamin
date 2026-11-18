@@ -122,7 +122,31 @@ type customerDetector struct {
 	// keyed by email, until finish_registration commits it.
 	pendingNames map[string]string
 	vision       vision.Service // lazily resolved; may be nil at startup
+
+	// closeCtx outlives any one Status caller so a refresh is not cancelled
+	// by the caller that started it; Close cancels it.
+	closeCtx    context.Context
+	closeCancel context.CancelFunc
+
+	// Status cache, guarded by statusMu. statusRefresh is non-nil while a
+	// refresh runs and is closed when it finishes.
+	statusMu      sync.Mutex
+	statusResult  map[string]any
+	statusAt      time.Time
+	statusRefresh chan struct{}
+	// statusSource and now replace identifyStatus and time.Now in tests.
+	statusSource func(context.Context) map[string]any
+	now          func() time.Time
 }
+
+const (
+	// statusMaxAge is how long a Status result is served before the next
+	// call refreshes it. Short enough that a customer who just walked up is
+	// recognized within a voice turn.
+	statusMaxAge = 2 * time.Second
+	// statusRefreshTimeout bounds one identification run for Status.
+	statusRefreshTimeout = 10 * time.Second
+)
 
 func newCustomerDetector(
 	ctx context.Context,
@@ -178,6 +202,7 @@ func newCustomerDetector(
 		customers:           make(map[string]*customerRecord),
 		pendingNames:        make(map[string]string),
 	}
+	cd.closeCtx, cd.closeCancel = context.WithCancel(context.Background())
 
 	if err := cd.loadCustomers(); err != nil {
 		logger.Warnf("failed to load existing customers: %v", err)
@@ -796,17 +821,84 @@ func (cd *customerDetector) saveCustomers() error {
 
 // Status reports who is at the camera and their frequent orders; a miss is
 // {recognized:false}.
+//
+// Callers poll it (voice-command reads it every 500 ms with a 1 s timeout),
+// while one identification is a camera grab plus a face-model pass that can
+// take longer than that. So Status never runs an identification on the
+// caller's context: it returns a result no older than statusMaxAge, and
+// otherwise waits for the single refresh in flight, which runs on its own
+// bounded context. A caller that gives up early leaves the refresh running
+// for the next caller instead of cancelling it and starting another, so
+// polling never queues more than one request on the vision service.
 func (cd *customerDetector) Status(ctx context.Context) (map[string]any, error) {
+	cd.statusMu.Lock()
+	if cd.statusResult != nil && cd.clock().Sub(cd.statusAt) < statusMaxAge {
+		res := cd.statusResult
+		cd.statusMu.Unlock()
+		return res, nil
+	}
+	done := cd.statusRefresh
+	if done == nil {
+		done = make(chan struct{})
+		cd.statusRefresh = done
+		go cd.refreshStatus(done)
+	}
+	cd.statusMu.Unlock()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	cd.statusMu.Lock()
+	defer cd.statusMu.Unlock()
+	return cd.statusResult, nil
+}
+
+// refreshStatus runs one identification for Status, caches its result, and
+// closes done. A failed identification is cached as {recognized:false} too,
+// so a broken camera or vision service is retried once per statusMaxAge rather
+// than on every call.
+func (cd *customerDetector) refreshStatus(done chan struct{}) {
+	parent := cd.closeCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, statusRefreshTimeout)
+	defer cancel()
+
+	identify := cd.identifyStatus
+	if cd.statusSource != nil {
+		identify = cd.statusSource
+	}
+	res := identify(ctx)
+
+	cd.statusMu.Lock()
+	cd.statusResult, cd.statusAt, cd.statusRefresh = res, cd.clock(), nil
+	cd.statusMu.Unlock()
+	close(done)
+}
+
+func (cd *customerDetector) clock() time.Time {
+	if cd.now != nil {
+		return cd.now()
+	}
+	return time.Now()
+}
+
+// identifyStatus identifies whoever is at the camera and shapes the result for
+// Status.
+func (cd *customerDetector) identifyStatus(ctx context.Context) map[string]any {
 	ctx, span := trace.StartSpan(ctx, "customer-detector::Status")
 	defer span.End()
 
 	res, err := cd.identifyCustomer(ctx)
 	if err != nil {
 		cd.logger.Debugf("Status identify failed: %v", err)
-		return map[string]any{"recognized": false}, nil
+		return map[string]any{"recognized": false}
 	}
 	if identified, _ := res["identified"].(bool); !identified {
-		return map[string]any{"recognized": false}, nil
+		return map[string]any{"recognized": false}
 	}
 
 	status := map[string]any{
@@ -835,10 +927,13 @@ func (cd *customerDetector) Status(ctx context.Context) (map[string]any, error) 
 			}
 		}
 	}
-	return status, nil
+	return status
 }
 
 func (cd *customerDetector) Close(context.Context) error {
+	if cd.closeCancel != nil {
+		cd.closeCancel()
+	}
 	return nil
 }
 
