@@ -641,24 +641,58 @@ func (sc *sceneState) heldItemSurfaceCollisions(pairs []AllowedCollision) []Allo
 // when nothing is attached or the geometry is not a Box, so callers fall back to
 // a fixed offset.
 func (sc *sceneState) heldItemHalfHeightMm() (float64, bool) {
-	if !sc.heldItemAttached {
+	_, _, heightMm, ok := sc.heldItemBox()
+	if !ok {
 		return 0, false
 	}
-	frame := sc.fs.Frame(heldItemFrameName)
-	if frame == nil {
+	return heightMm / 2, true
+}
+
+// heldItemBottomDepthMm returns how far the bottom of the held container lies
+// below the held-item frame's origin, measured along the frame's +Z (the
+// container's axis), and true when an item is attached and modeled as a Box.
+// A held-item goal placed this far above a surface, upright, sets the container
+// down on it whatever its height and wherever along it the gripper holds it:
+// the depth is about 36 mm for an espresso cup and 80 mm for an iced glass.
+func (sc *sceneState) heldItemBottomDepthMm() (float64, bool) {
+	frame, box, heightMm, ok := sc.heldItemBox()
+	if !ok {
 		return 0, false
 	}
-	gif, err := frame.Geometries([]referenceframe.Input{})
+	framePose, err := frame.Transform([]referenceframe.Input{})
 	if err != nil {
 		return 0, false
 	}
+	// The box is stored in grip-point coordinates (addHeldItemFrame), so its
+	// center is brought into the held-item frame, whose +Z is the box's own
+	// vertical axis (heldItemFramePose).
+	center := spatialmath.Compose(spatialmath.PoseInverse(framePose), box.Pose()).Point()
+	return heightMm/2 - center.Z, true
+}
+
+// heldItemBox returns the held-item frame, its box geometry (in grip-point
+// coordinates) and the box's vertical extent: its Z dimension, since
+// geom.ContainerBox builds it upright and a Box keeps its dims under transform.
+// False when nothing is attached or the geometry is not a Box.
+func (sc *sceneState) heldItemBox() (referenceframe.Frame, spatialmath.Geometry, float64, bool) {
+	if !sc.heldItemAttached {
+		return nil, nil, 0, false
+	}
+	frame := sc.fs.Frame(heldItemFrameName)
+	if frame == nil {
+		return nil, nil, 0, false
+	}
+	gif, err := frame.Geometries([]referenceframe.Input{})
+	if err != nil {
+		return nil, nil, 0, false
+	}
 	geos := gif.Geometries()
 	if len(geos) == 0 {
-		return 0, false
+		return nil, nil, 0, false
 	}
 	box := geos[0].ToProtobuf().GetBox()
 	if box == nil || box.DimsMm == nil {
-		return 0, false
+		return nil, nil, 0, false
 	}
-	return box.DimsMm.Z / 2, true
+	return frame, geos[0], box.DimsMm.Z, true
 }

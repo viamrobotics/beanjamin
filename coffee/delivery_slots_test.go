@@ -1,10 +1,13 @@
 package coffee
 
 import (
+	"errors"
+	"math"
 	"strings"
 	"testing"
 
 	"github.com/golang/geo/r3"
+	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/spatialmath"
 	"go.viam.com/rdk/vision/classification"
 	"go.viam.com/rdk/vision/detection3d"
@@ -226,4 +229,131 @@ func withCart(cfg Config) Config {
 		cfg.DeliverySlotReleaseRelativePose = &RelativePose{Z: 20, OZ: 1}
 	}
 	return cfg
+}
+
+// heldAtCartGrasp attaches a container of the given height to a gripper held
+// level and pointing along world +Y, as it carries a drink to the cart, with
+// the container's centroid centroidBelowGripMm below the grip point.
+func heldAtCartGrasp(t *testing.T, heightMm, centroidBelowGripMm float64) *beanjaminCoffee {
+	t.Helper()
+	clawsPose := spatialmath.NewPose(r3.Vector{X: 300, Y: -100, Z: 250}, &spatialmath.OrientationVectorDegrees{OY: 1})
+	fs := clawsStaticFS(t, clawsPose)
+	s := heldGeomService(t, fs)
+	gripWorld := spatialmath.Compose(clawsPose, spatialmath.NewPoseFromPoint(r3.Vector{Z: gripPointOffsetMm})).Point()
+	worldBox, err := spatialmath.NewBox(
+		spatialmath.NewPoseFromPoint(gripWorld.Sub(r3.Vector{Z: centroidBelowGripMm})),
+		r3.Vector{X: 70, Y: 70, Z: heightMm}, "held")
+	if err != nil {
+		t.Fatalf("new box: %v", err)
+	}
+	gripperLocal, err := geometryToWorldInverse(fs, referenceframe.NewZeroInputs(fs), worldBox)
+	if err != nil {
+		t.Fatalf("to gripper frame: %v", err)
+	}
+	addHeldItem(t, s, gripperLocal)
+	s.cfg.DeliverySlotApproachRelativePose = &RelativePose{Z: 90, OZ: 1, Theta: 90}
+	s.cfg.DeliverySlotReleaseRelativePose = &RelativePose{Z: -6, OZ: 1, Theta: 90}
+	return s
+}
+
+// heldBottomAt returns the world Z of the bottom of the held container when
+// the held-item frame stands at goal.
+func heldBottomAt(t *testing.T, s *beanjaminCoffee, goal spatialmath.Pose) float64 {
+	t.Helper()
+	frame, box, heightMm, ok := s.scene().heldItemBox()
+	if !ok {
+		t.Fatalf("no held box")
+	}
+	framePose, err := frame.Transform(nil)
+	if err != nil {
+		t.Fatalf("held-item transform: %v", err)
+	}
+	gripAtGoal := spatialmath.Compose(goal, spatialmath.PoseInverse(framePose))
+	return spatialmath.Compose(gripAtGoal, box.Pose()).Point().Z - heightMm/2
+}
+
+// A cup and a glass, held at different heights, both come to rest with their
+// bottoms where the release pose's z puts them, and clear the slot by the
+// approach pose's z on the way over.
+func TestDeliverySlotPoses_SetTheContainerDownByItsBottom(t *testing.T) {
+	slot := deliverySlot{point: r3.Vector{X: 450, Y: 300, Z: 80}, tagID: 2}
+	for _, tc := range []struct {
+		name                    string
+		heightMm, centroidBelow float64
+		wantDepthBelowGripMm    float64
+	}{
+		{name: "espresso cup", heightMm: 60, centroidBelow: 6, wantDepthBelowGripMm: 36},
+		{name: "iced glass", heightMm: 165, centroidBelow: 0, wantDepthBelowGripMm: 82.5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := heldAtCartGrasp(t, tc.heightMm, tc.centroidBelow)
+			depth, ok := s.scene().heldItemBottomDepthMm()
+			if !ok || math.Abs(depth-tc.wantDepthBelowGripMm) > 1e-6 {
+				t.Fatalf("bottom depth = %v (ok=%v), want %v", depth, ok, tc.wantDepthBelowGripMm)
+			}
+
+			approach, release, retreat, err := s.deliverySlotPoses(slot)
+			if err != nil {
+				t.Fatalf("deliverySlotPoses: %v", err)
+			}
+			for _, pd := range []*poseData{approach, release} {
+				if pd.componentName != heldItemFrameName {
+					t.Fatalf("goal moves %q, want the held-item frame", pd.componentName)
+				}
+			}
+			if got := heldBottomAt(t, s, release.pose); math.Abs(got-(slot.point.Z-6)) > 1e-6 {
+				t.Errorf("bottom at release Z = %v, want %v", got, slot.point.Z-6)
+			}
+			if got := heldBottomAt(t, s, approach.pose); math.Abs(got-(slot.point.Z+90)) > 1e-6 {
+				t.Errorf("bottom at approach Z = %v, want %v", got, slot.point.Z+90)
+			}
+			requireVecEqual(t, release.pose.Point(), r3.Vector{X: slot.point.X, Y: slot.point.Y, Z: slot.point.Z - 6 + depth}, 1e-6)
+
+			// The retreat is the gripper pose that held the container at the approach.
+			if retreat.componentName != gripPoint {
+				t.Fatalf("retreat moves %q, want %q", retreat.componentName, gripPoint)
+			}
+			frame, _, _, _ := s.scene().heldItemBox()
+			framePose, err := frame.Transform(nil)
+			if err != nil {
+				t.Fatalf("held-item transform: %v", err)
+			}
+			if !spatialmath.PoseAlmostEqual(spatialmath.Compose(retreat.pose, framePose), approach.pose) {
+				t.Errorf("held item at retreat = %v, want the approach %v", spatialmath.Compose(retreat.pose, framePose), approach.pose)
+			}
+			// theta 90 is the gripper pointing along world +Y, level.
+			toolAxis := spatialmath.Compose(retreat.pose, spatialmath.NewPoseFromPoint(r3.Vector{Z: 1})).Point().Sub(retreat.pose.Point())
+			requireVecEqual(t, toolAxis, r3.Vector{Y: 1}, 1e-6)
+		})
+	}
+}
+
+func TestDeliverySlotPoses_NothingHeldFallsBackToTheShelf(t *testing.T) {
+	s := heldGeomService(t, clawsStaticFS(t, spatialmath.NewZeroPose()))
+	_, _, _, err := s.deliverySlotPoses(deliverySlot{})
+	if !errors.Is(err, errMotionPlanning) {
+		t.Fatalf("err = %v, want it to wrap errMotionPlanning", err)
+	}
+}
+
+func TestDeliveryStandIn(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{}}
+	for _, arg := range []any{true, "cup"} {
+		if _, label, err := s.deliveryStandIn(arg); err != nil || label != pickupLabelCup {
+			t.Errorf("deliveryStandIn(%v) = %q, %v; want the cup", arg, label, err)
+		}
+	}
+	if _, _, err := s.deliveryStandIn("glass"); err == nil || !strings.Contains(err.Error(), "glass_dimensions") {
+		t.Errorf("glass without glass config: err = %v, want it to name glass_dimensions", err)
+	}
+	s.cfg.GlassDimensions = &ContainerDimensions{DiameterMm: 78, HeightMm: 165}
+	s.cfg.GlassGrabRelativePose = &RelativePose{OY: -1, Y: -15}
+	if _, label, err := s.deliveryStandIn("glass"); err != nil || label != pickupLabelGlass {
+		t.Errorf("deliveryStandIn(glass) = %q, %v; want the glass", label, err)
+	}
+	for _, arg := range []any{false, "mug", nil} {
+		if _, _, err := s.deliveryStandIn(arg); err == nil {
+			t.Errorf("deliveryStandIn(%v): want an error", arg)
+		}
+	}
 }

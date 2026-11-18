@@ -335,12 +335,48 @@ func closestDeliverySlot(slots []deliverySlot, gripper r3.Vector) deliverySlot {
 	return best
 }
 
+// deliverySlotPoses resolves where the held container goes over and into a
+// slot. Both are held-item poses: delivery_slot_approach_relative_pose and
+// delivery_slot_release_relative_pose composed onto the slot point, so their z
+// is the height of the container's bottom above the slot point and their
+// orientation is the container's (upright, theta the gripper's heading). The
+// held-item frame sits on the grip point, so the goal is raised by how far
+// the container's bottom hangs below it: a cup and a taller glass both come to
+// rest with their bottoms at the same height.
+//
+// retreat is the grip-point pose that puts the held item at approach. The
+// retreat runs after the release, once the held-item frame is gone, so it
+// cannot command that frame.
+func (s *beanjaminCoffee) deliverySlotPoses(slot deliverySlot) (approach, release, retreat *poseData, err error) {
+	sc := s.scene()
+	depth, ok := sc.heldItemBottomDepthMm()
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("%w: no container is modeled in the gripper to set down by its bottom", errMotionPlanning)
+	}
+	anchor := slot.point.Add(r3.Vector{Z: depth})
+	heldPose := func(rel *RelativePose) *poseData {
+		return &poseData{
+			pose:          geom.PoseRelativeTo(anchor, relativePoseToSpatial(rel)),
+			refFrame:      referenceframe.World,
+			componentName: heldItemFrameName,
+		}
+	}
+	approach = heldPose(s.cfg.DeliverySlotApproachRelativePose)
+	release = heldPose(s.cfg.DeliverySlotReleaseRelativePose)
+	retreatPose, err := carryGoalForMoveFrame(sc.fs, referenceframe.NewZeroInputs(sc.fs), approach, gripPoint)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("grip-point pose over the slot: %w", err)
+	}
+	retreat = &poseData{pose: retreatPose, refFrame: referenceframe.World, componentName: gripPoint}
+	s.activeOrderLogger().Infof("delivery cart: slot %v, container bottom %.1fmm below the grip point: approach_pose=%v release_pose=%v",
+		slot.point, depth, approach.pose, release.pose)
+	return approach, release, retreat, nil
+}
+
 // dropHeldInDeliverySlot carries the held container level to the approach pose
 // over the slot, descends slowly in a straight line to the release pose, opens
-// the gripper, and retreats straight back to the approach pose. Both poses are
-// grip-point poses: delivery_slot_approach_relative_pose and
-// delivery_slot_release_relative_pose composed onto the slot point, so their
-// orientation is the gripper's.
+// the gripper, and retreats straight back up to where it was carried to
+// (deliverySlotPoses).
 //
 // released reports whether the gripper opened over the slot. Before that, an
 // error wrapping errMotionPlanning leaves the drink held, with the arm where it
@@ -351,21 +387,11 @@ func closestDeliverySlot(slots []deliverySlot, gripper r3.Vector) deliverySlot {
 // planned. It runs even if the retreat after it fails, since the drink is in
 // the cart by then.
 func (s *beanjaminCoffee) dropHeldInDeliverySlot(ctx context.Context, slot deliverySlot, onRelease func()) (released bool, err error) {
-	logger := s.activeOrderLogger()
-	approach := &poseData{
-		pose:          geom.PoseRelativeTo(slot.point, relativePoseToSpatial(s.cfg.DeliverySlotApproachRelativePose)),
-		refFrame:      referenceframe.World,
-		componentName: gripPoint,
+	approach, release, retreat, err := s.deliverySlotPoses(slot)
+	if err != nil {
+		return false, err
 	}
-	release := &poseData{
-		pose:          geom.PoseRelativeTo(slot.point, relativePoseToSpatial(s.cfg.DeliverySlotReleaseRelativePose)),
-		refFrame:      referenceframe.World,
-		componentName: gripPoint,
-	}
-	logger.Infof("delivery cart: slot %v approach_pose=%v release_pose=%v", slot.point, approach.pose, release.pose)
 
-	// The carry commands the held-item frame and converts the grip-point goal
-	// into it, so the drink stays level on the way over.
 	if err := s.carryHeldLevel(ctx, approach, nil, s.slowMoveOptions()); err != nil {
 		return false, fmt.Errorf("approach slot: %w", err)
 	}
@@ -383,7 +409,7 @@ func (s *beanjaminCoffee) dropHeldInDeliverySlot(ctx context.Context, slot deliv
 	}
 
 	// The gripper is empty: the arm's default speed.
-	if err := s.moveToRawPose(ctx, approach, defaultApproachConstraint, s.deliveryAreaCollisions(), nil); err != nil {
+	if err := s.moveToRawPose(ctx, retreat, defaultApproachConstraint, s.deliveryAreaCollisions(), nil); err != nil {
 		return true, fmt.Errorf("retreat from slot: %w", err)
 	}
 	if err := s.closeGripper(ctx); err != nil {

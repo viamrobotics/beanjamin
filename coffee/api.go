@@ -207,8 +207,8 @@ var coffeeCommands = []commandDef{
 	{key: "detect_delivery_slot", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.detectDeliverySlotCommand(ctx)
 	}},
-	{key: "place_in_delivery_cart", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
-		return s.placeInDeliveryCartCommand(ctx)
+	{key: "place_in_delivery_cart", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
+		return s.placeInDeliveryCartCommand(ctx, cmd["place_in_delivery_cart"])
 	}},
 	// Normally fired by a cron entry in the machine config's "jobs" block
 	// (see README); safe to invoke by hand to test the digest off-schedule.
