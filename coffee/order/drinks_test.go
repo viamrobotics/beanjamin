@@ -184,3 +184,43 @@ func TestMenuResolveMilk(t *testing.T) {
 		t.Error("ResolveMilk with no milks configured should fail")
 	}
 }
+
+func TestMugDrinkPredicates(t *testing.T) {
+	tests := []struct {
+		drink                   string
+		mug, brewsCoffee, lungo bool
+	}{
+		{"americano", true, true, true},
+		{"hot_water", true, false, false},
+		{"lungo", false, true, true},
+		{"espresso", false, true, false},
+		{"iced_coffee", false, true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.drink, func(t *testing.T) {
+			if got := IsMug(tt.drink); got != tt.mug {
+				t.Errorf("IsMug = %v, want %v", got, tt.mug)
+			}
+			if got := BrewsCoffee(tt.drink); got != tt.brewsCoffee {
+				t.Errorf("BrewsCoffee = %v, want %v", got, tt.brewsCoffee)
+			}
+			if got := IsLungo(tt.drink); got != tt.lungo {
+				t.Errorf("IsLungo = %v, want %v", got, tt.lungo)
+			}
+		})
+	}
+	if got := DrinkLabel("hot_water", ""); got != "hot water" {
+		t.Errorf("DrinkLabel(hot_water) = %q, want %q", got, "hot water")
+	}
+}
+
+func TestSupportsMugDrinks(t *testing.T) {
+	for _, drink := range []string{"americano", "hot_water"} {
+		if ok, reason := (Menu{}).Supports(drink); ok || reason != "can_serve_mug_drinks=false" {
+			t.Errorf("Supports(%q) off = %v, %q", drink, ok, reason)
+		}
+		if ok, _ := (Menu{MugDrinks: true}).Supports(drink); !ok {
+			t.Errorf("Supports(%q) on = false, want true", drink)
+		}
+	}
+}

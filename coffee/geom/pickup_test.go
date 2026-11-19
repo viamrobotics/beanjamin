@@ -376,3 +376,59 @@ func TestContainerBoxFollowsGrasp(t *testing.T) {
 		}
 	}
 }
+
+func TestMugGeometriesHandleOnLeft(t *testing.T) {
+	centroid := r3.Vector{X: 100, Y: 200, Z: 50}
+	body := r3.Vector{X: 80, Y: 80, Z: 97}
+	for _, yaw := range []float64{0, math.Pi / 2, math.Pi, -math.Pi / 4} {
+		geos, err := MugGeometries(centroid, body, 39, 15, yaw, "mug")
+		if err != nil {
+			t.Fatalf("yaw %v: %v", yaw, err)
+		}
+		if len(geos) != 2 {
+			t.Fatalf("yaw %v: got %d geometries, want 2", yaw, len(geos))
+		}
+		if got := geos[0].Pose().Point(); got.Sub(centroid).Norm() > 1e-6 {
+			t.Errorf("yaw %v: body center %v, want %v", yaw, got, centroid)
+		}
+		// The arm's left is the heading turned +90 degrees.
+		want := centroid.Add(r3.Vector{X: -math.Sin(yaw), Y: math.Cos(yaw)}.Mul(40 + 19.5))
+		if got := geos[1].Pose().Point(); got.Sub(want).Norm() > 1e-6 {
+			t.Errorf("yaw %v: handle center %v, want %v", yaw, got, want)
+		}
+		if got := geos[1].Pose().Point().Z; math.Abs(got-50) > 1e-6 {
+			t.Errorf("yaw %v: handle Z %v, want 50", yaw, got)
+		}
+		// Width 15 along the heading, depth 39 out to the left, in the body's frame.
+		dims := geos[1].ToProtobuf().GetBox().GetDimsMm()
+		if dims.X != 15 || dims.Y != 39 || dims.Z != 97 {
+			t.Errorf("yaw %v: handle dims %v, want (15,39,97)", yaw, dims)
+		}
+		if !spatialmath.OrientationAlmostEqual(geos[1].Pose().Orientation(), geos[0].Pose().Orientation()) {
+			t.Errorf("yaw %v: handle orientation %v, want body's %v", yaw, geos[1].Pose().Orientation(), geos[0].Pose().Orientation())
+		}
+		if geos[1].Label() != "mug-handle" {
+			t.Errorf("yaw %v: handle label %q", yaw, geos[1].Label())
+		}
+	}
+	// GraspYaw is the approach heading (tool +Z): yaw 0 approaches along +X,
+	// so the arm's left is +Y.
+	yaw := GraspYaw(&spatialmath.OrientationVector{OX: 1})
+	if yaw != 0 {
+		t.Fatalf("GraspYaw of +X approach = %v, want 0", yaw)
+	}
+	geos, err := MugGeometries(r3.Vector{}, body, 39, 15, yaw, "mug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := geos[1].Pose().Point(); got.Y <= 0 || math.Abs(got.X) > 1e-6 {
+		t.Errorf("handle at yaw 0 should be at +Y, got %v", got)
+	}
+	geos, err = MugGeometries(r3.Vector{}, body, 39, 15, math.Pi/2, "mug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := geos[1].Pose().Point(); got.X >= 0 || math.Abs(got.Y) > 1e-6 {
+		t.Errorf("handle at yaw pi/2 should be at -X, got %v", got)
+	}
+}

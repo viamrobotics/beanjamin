@@ -277,10 +277,29 @@ func TestWaterDelta(t *testing.T) {
 		{"lungo", 1.5},
 		{"iced_coffee", 1.5},
 		{"iced_latte", 1.5},
+		{"americano", 1.5},
+		{"hot_water", 2.0},
 		{"unknown", 1},
 	} {
 		if got := waterDelta(tc.drink); got != tc.want {
 			t.Errorf("waterDelta(%q) = %v, want %v", tc.drink, got, tc.want)
+		}
+	}
+}
+
+func TestCupCounter(t *testing.T) {
+	for _, tc := range []struct {
+		drink, label, key string
+	}{
+		{"americano", "mugs", "mugs_used"},
+		{"hot_water", "mugs", "mugs_used"},
+		{"espresso", "espresso cups", "espresso_cups_used"},
+		{"lungo", "espresso cups", "espresso_cups_used"},
+		{"iced_coffee", "espresso cups", "espresso_cups_used"},
+	} {
+		label, key := cupCounter(tc.drink)
+		if label != tc.label || key != tc.key {
+			t.Errorf("cupCounter(%q) = (%q, %q), want (%q, %q)", tc.drink, label, key, tc.label, tc.key)
 		}
 	}
 }

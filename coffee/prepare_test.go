@@ -92,6 +92,7 @@ func TestStrandedStateNamesEachFlag(t *testing.T) {
 		{name: "filter frame locked", setup: func(s *beanjaminCoffee) { s.scene().filterFrameLocked = true }, want: "filter frame locked"},
 		{name: "item in gripper", setup: func(s *beanjaminCoffee) { s.scene().heldItemAttached = true }, want: "item in gripper"},
 		{name: "glass staged", setup: func(s *beanjaminCoffee) { s.scene().stagedGlassPlaced = true }, want: "glass staged"},
+		{name: "mug at hot water", setup: func(s *beanjaminCoffee) { s.scene().stagedMugPlaced = true }, want: "mug at the hot water dispenser"},
 		{name: "fridge door open", setup: func(s *beanjaminCoffee) { s.scene().doorOpenDegs = 90 }, want: "fridge door open 90°"},
 	}
 	for _, tc := range cases {
