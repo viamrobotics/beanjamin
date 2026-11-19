@@ -59,7 +59,11 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 		return fmt.Errorf("refresh frame system before brew: %w", err)
 	}
 
-	logger.Infof("starting %s preparation (pour_wait=%v)", drink, s.drinkBrewTime(drink))
+	if order.BrewsCoffee(drink) {
+		logger.Infof("starting %s preparation (pour_wait=%v)", drink, s.drinkBrewTime(drink))
+	} else {
+		logger.Infof("starting %s preparation", drink)
+	}
 
 	if err := s.normalizeGripperAtStart(ctx); err != nil {
 		return fmt.Errorf("normalize gripper before brew: %w", err)
@@ -74,6 +78,11 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 		phaseCtx, stepSpan := trace.StartSpan(ctx, "beanjamin::step::"+spanName)
 		defer stepSpan.End()
 		return fn(phaseCtx, cancelCtx)
+	}
+
+	// Hot water brews no coffee: its own eight phases, under the same defers.
+	if !order.BrewsCoffee(drink) {
+		return s.prepareHotWater(ctx, cancelCtx, o, runPhase)
 	}
 
 	beans := o.Beans
@@ -126,7 +135,12 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 		return err
 	}
 	hotPrep := s.approachBrewedCup
-	if toCart {
+	switch {
+	case order.IsMug(drink):
+		hotPrep = func(ctx, cancelCtx context.Context) error {
+			return s.approachBrewedVessel(ctx, cancelCtx, s.mugVessel())
+		}
+	case toCart:
 		hotPrep = locateCart
 	}
 
@@ -147,12 +161,17 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 	// Placing the cup through the brew is one chunk. The cup is found by vision,
 	// so its pickup runs before anything is recorded; setting it under the
 	// machine and pressing the button are planned together.
+	placeStep, placeSpan, placeProgress, placeVessel := stepPlacingCup, "placing_cup", "step 5/9: placing cup", s.setCupForCoffee
+	if order.IsMug(drink) {
+		placeStep, placeSpan, placeProgress, placeVessel = stepPlacingMug, "placing_mug", "step 5/9: placing mug", s.setMugForCoffee
+	}
 	if err := s.inChunk("load cup and brew", func() error {
-		if err := runPhase(stepPlacingCup, "placing_cup", "step 5/9: placing cup", s.setCupForCoffee); err != nil {
+		if err := runPhase(placeStep, placeSpan, placeProgress, placeVessel); err != nil {
 			return err
 		}
-		// A cup was pulled off the stack; count it now so a later fault still credits real use.
-		s.countUsage(ctx, "espresso cups", "espresso_cups_used", 1)
+		// A vessel was pulled off the shelf; count it now so a later fault still credits real use.
+		cupLabel, cupKey := cupCounter(drink)
+		s.countUsage(ctx, cupLabel, cupKey, 1)
 		s.handOffEffect(func() {
 			if err := s.speaker.Say(ctx, speech.AlmostReady()); err != nil {
 				logger.Warnf("failed to say almost-ready: %v", err)
@@ -206,6 +225,9 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 			servedSlot, err = s.finishIced(ctx, cancelCtx, o.Milk, placeDrink)
 		case order.IsIced(drink):
 			servedSlot, err = s.serveIced(ctx, cancelCtx, o.Milk, placeDrink)
+		case order.IsMug(drink):
+			// Americano: top the lungo up at the hot water spout, then serve.
+			servedSlot, err = s.serveAmericano(ctx, cancelCtx, cupApproached, placeDrink, runPhase)
 		case cupApproached:
 			// Hot drink, gripper already poised over the cup: grasp it and serve it.
 			servedSlot, err = placeDrink(ctx, cancelCtx, s.graspBrewedCup)
@@ -214,7 +236,11 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 		}
 		return err
 	}
-	if err := runPhase(stepServing, "serving", "step 6b/9: serving cup", serve); err != nil {
+	serveProgress := "step 6b/9: serving cup"
+	if order.IsMug(drink) {
+		serveProgress = "step 6b/9: serving mug"
+	}
+	if err := runPhase(stepServing, "serving", serveProgress, serve); err != nil {
 		return err
 	}
 	// Record where the drink physically landed so a delivery order can report it
@@ -302,6 +328,9 @@ func (s *beanjaminCoffee) strandedState() []string {
 	}
 	if sc.stagedGlassPlaced {
 		stranded = append(stranded, "glass staged")
+	}
+	if sc.stagedMugPlaced {
+		stranded = append(stranded, "mug at the hot water dispenser")
 	}
 	if sc.doorOpenDegs != 0 {
 		stranded = append(stranded, fmt.Sprintf("fridge door open %.0f°", sc.doorOpenDegs))

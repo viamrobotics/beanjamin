@@ -133,6 +133,8 @@ type beanjaminCoffee struct {
 	iceVision      *icevision.Detector
 	glassVision    vision.Service // optional; nil unless CanServeIced
 	glassObserveSw toggleswitch.Switch
+	mugVision      vision.Service // optional; nil unless CanServeMugDrinks
+	mugObserveSw   toggleswitch.Switch
 	// servingSlot and dirtyContainerSlot are the round-robin counters for the
 	// serving-area and dirty-container-area placements (serving_slots.go), persisted
 	// across rebuilds.
@@ -257,6 +259,18 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	if conf.CanServeIced {
 		if glassVision, glassObserveSw, err = visionPickup(deps, logger, "iced coffee glass",
 			conf.GlassVisionServiceName, conf.GlassObservePoseSwitcherName, conf.SrcCameraName); err != nil {
+			return nil, err
+		}
+	}
+
+	var mugVision vision.Service
+	var mugObserveSw toggleswitch.Switch
+	if conf.CanServeMugDrinks {
+		if !hotWaterRoutineWired {
+			logger.Warn("can_serve_mug_drinks is on but the hot water routine is still a stub: hot_water orders serve an empty mug and americanos are plain lungos, both reported as success")
+		}
+		if mugVision, mugObserveSw, err = visionPickup(deps, logger, "mug",
+			conf.MugVisionServiceName, conf.MugObservePoseSwitcherName, conf.SrcCameraName); err != nil {
 			return nil, err
 		}
 	}
@@ -393,6 +407,8 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		iceVision:          icevision.NewDetector(srcCamera, iceVisionParams(conf)),
 		glassVision:        glassVision,
 		glassObserveSw:     glassObserveSw,
+		mugVision:          mugVision,
+		mugObserveSw:       mugObserveSw,
 
 		deliverySlotsVision:   deliverySlotsVision,
 		deliveryCartObserveSw: deliveryCartObserveSw,

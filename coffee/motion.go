@@ -467,15 +467,15 @@ func (s *beanjaminCoffee) rebuildScene(ctx context.Context, doorOpenDegs float64
 
 // refreshFrameSystemIfClean rebuilds the scene from the service when no in-flight
 // state would be lost — i.e. nothing is held, no milk bottle is out of the
-// fridge, the filter frame is not locked, and no glass is staged as an obstacle
-// — so a manually-invoked action picks up out-of-band config edits (e.g. the
+// fridge, the filter frame is not locked, and no glass or mug is staged as an
+// obstacle — so a manually-invoked action picks up out-of-band config edits (e.g. the
 // portafilter handle geometry being changed during calibration) instead of
 // planning against a stale snapshot. Otherwise the scene carries state that must
 // persist across separate DoCommand calls, so it is left untouched.
 func (s *beanjaminCoffee) refreshFrameSystemIfClean(ctx context.Context) error {
 	// heldMilk on its own: the rebuild would clear it, and return_milk would no
 	// longer know which spot the bottle in the gripper goes back on.
-	if s.scene().heldItemAttached || s.scene().heldMilk != "" || s.scene().filterFrameLocked || s.scene().stagedGlassPlaced {
+	if s.scene().heldItemAttached || s.scene().heldMilk != "" || s.scene().filterFrameLocked || s.scene().stagedGlassPlaced || s.scene().stagedMugPlaced {
 		return nil
 	}
 	if err := s.resetFrameSystem(ctx); err != nil {

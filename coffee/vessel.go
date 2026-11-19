@@ -1,8 +1,8 @@
 package coffee
 
-// The vessel a coffee is brewed into: the cup for an espresso or lungo. Placing
-// it under the group head and taking it back out are one routine,
-// parameterized by vessel.
+// The vessel a coffee is brewed into: a cup for an espresso or lungo, a mug for
+// an Americano. Placing it under the group head and taking it back out are the
+// same routine for both, parameterized by vessel.
 
 import (
 	"context"
@@ -14,8 +14,8 @@ import (
 // front of and under the spout, and how its held geometry is modeled when
 // nothing was cached.
 type vessel struct {
-	label            string                                     // pickupLabelCup
-	pick             func(ctx, cancelCtx context.Context) error // pickCupDynamic
+	label            string                                     // pickupLabelCup / pickupLabelMug
+	pick             func(ctx, cancelCtx context.Context) error // pickCupDynamic / pickMugDynamic
 	underApproach    string                                     // claws pose in front of the group head
 	readyForCoffee   string                                     // claws pose under the group head
 	attachConfigured func(ctx context.Context) error            // fallback when nothing is cached
@@ -32,6 +32,19 @@ func (s *beanjaminCoffee) cupVessel() vessel {
 		readyForCoffee:   clawPoseCupReadyForCoffee,
 		attachConfigured: s.attachConfiguredCupGeometry,
 		dimsField:        "cup_dimensions",
+	}
+}
+
+// mugVessel is the Americano's mug: picked by its own vision pipeline and
+// modeled from mug_dimensions plus its handle (can_serve_mug_drinks).
+func (s *beanjaminCoffee) mugVessel() vessel {
+	return vessel{
+		label:            pickupLabelMug,
+		pick:             s.pickMugDynamic,
+		underApproach:    clawPoseMugUnderMachineApproach,
+		readyForCoffee:   clawPoseMugReadyForCoffee,
+		attachConfigured: s.attachConfiguredMugGeometry,
+		dimsField:        "mug_dimensions",
 	}
 }
 
@@ -86,4 +99,18 @@ func (s *beanjaminCoffee) retreatBrewedVessel(ctx, cancelCtx context.Context, v 
 		return fmt.Errorf("grasp_brewed_%s: %w", v.label, err)
 	}
 	return nil
+}
+
+// grabBrewedMugFromMachine retrieves the brewed mug from under the machine:
+// approach, open, linear descent and grab, then the retreat to
+// mug_under_machine_approach.
+func (s *beanjaminCoffee) grabBrewedMugFromMachine(ctx, cancelCtx context.Context) error {
+	v := s.mugVessel()
+	if err := s.approachBrewedVessel(ctx, cancelCtx, v); err != nil {
+		return err
+	}
+	if err := s.graspBrewedInPlace(ctx, cancelCtx, v); err != nil {
+		return err
+	}
+	return s.retreatBrewedVessel(ctx, cancelCtx, v)
 }

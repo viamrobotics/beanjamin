@@ -16,6 +16,7 @@ func (s *beanjaminCoffee) menu() order.Menu {
 		Iced:      s.cfg.CanServeIced,
 		IcedLatte: s.cfg.CanServeIcedLatte,
 		Milks:     s.cfg.milkNames(),
+		MugDrinks: s.cfg.CanServeMugDrinks,
 	}
 }
 
@@ -52,7 +53,7 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		if err := s.speaker.Say(ctx, msg); err != nil {
 			s.logger.Warnf("failed to say rejection: %v", err)
 		}
-		return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
+		return nil, fmt.Errorf("unsupported drink %q (%s): %s", drink, reason, msg)
 	}
 
 	if err := s.requireIce(ctx, drink); err != nil {
@@ -89,6 +90,13 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 	// (the default) stays open to anonymous walk-ups.
 	if fulfillment == order.FulfillmentDelivery && req.CustomerEmail == "" {
 		err := fmt.Errorf("delivery orders require a customer_email")
+		s.logger.Warnf("rejected order: %v", err)
+		return nil, err
+	}
+	// A mug drink is served on the shelf only for now: the cart's slots are
+	// sized for cups, not mugs.
+	if fulfillment == order.FulfillmentDelivery && order.IsMug(drink) {
+		err := fmt.Errorf("delivery isn't available for %s yet", label)
 		s.logger.Warnf("rejected order: %v", err)
 		return nil, err
 	}

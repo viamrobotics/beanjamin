@@ -14,7 +14,7 @@ import (
 // regular_grinds and decaf_grinds; <milk>_milk_pours for each milk, e.g.
 // whole_milk_pours and oat_milk_pours; water_used,
 // cleaner_pucks, ice_dispenses, ice_dispense_timeouts,
-// ice_shadow_disagreements, drip_tray_brews, espresso_cups_used,
+// ice_shadow_disagreements, drip_tray_brews, espresso_cups_used, mugs_used,
 // latte_glasses_used, successful_consecutive_orders) — into a single external
 // sensor resource. The sensor replaces its whole readings map on `set`, so every
 // update is a best-effort read-modify-write of the *entire* map: read all
@@ -134,9 +134,28 @@ func milkPourCounter(milk string) string {
 	return milk + "_milk_pours"
 }
 
-// waterDelta returns the water-usage increment for a brew: 1.5 for lungo sizes
-// (lungo and the iced drinks), 1 otherwise (espresso).
+// cupCounter is the usage-sensor counter for the vessel a drink is served in:
+// mugs_used for a mug drink (americano, hot_water), espresso_cups_used for
+// everything else. label names it in the log lines.
+func cupCounter(drink string) (label, key string) {
+	if order.IsMug(drink) {
+		return "mugs", "mugs_used"
+	}
+	return "espresso cups", "espresso_cups_used"
+}
+
+// hotWaterWaterDelta is the water-usage increment for a hot_water drink: a full
+// mug from the hot water spout. The counter is relative (an espresso is 1), so
+// this is an estimate against the brew sizes, not a measured volume.
+const hotWaterWaterDelta = 2.0
+
+// waterDelta returns the water-usage increment for a drink: 1.5 for lungo sizes
+// (lungo, americano and the iced drinks), hotWaterWaterDelta for hot_water, 1
+// otherwise (espresso).
 func waterDelta(drink string) float64 {
+	if !order.BrewsCoffee(drink) {
+		return hotWaterWaterDelta
+	}
 	if order.IsLungo(drink) {
 		return 1.5
 	}

@@ -59,6 +59,11 @@ func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error 
 	return s.setVesselForCoffee(ctx, cancelCtx, s.cupVessel())
 }
 
+// setMugForCoffee is setCupForCoffee for a mug (can_serve_mug_drinks).
+func (s *beanjaminCoffee) setMugForCoffee(ctx, cancelCtx context.Context) error {
+	return s.setVesselForCoffee(ctx, cancelCtx, s.mugVessel())
+}
+
 // placeFullCupOnShelf retrieves the brewed cup from cup_ready_for_coffee and
 // drops it on the serving-area shelf at the next round-robin slot, returning
 // the 0-based slot it was placed in.

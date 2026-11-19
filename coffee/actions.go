@@ -75,6 +75,33 @@ func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.C
 		}
 	}
 
+	// Only register the mug actions when this machine serves mug drinks: without
+	// can_serve_mug_drinks the mug vision service and observe switch are nil.
+	if s.cfg.CanServeMugDrinks {
+		actions["pick_mug"] = s.pickMugDynamic                  // vision-grab a mug off the shelf
+		actions["set_mug_for_coffee"] = s.setMugForCoffee       // vision-grab a mug and set it under the group head
+		actions["grab_brewed_mug"] = s.grabBrewedMugFromMachine // retrieve mug from under machine
+		actions["slide_mug_to_water"] = s.slideMugToWater       // carry the held mug from the group head to the spout
+		actions["set_mug_at_water"] = s.setMugAtWater           // set the held mug down at the spout, back away
+		actions["regrab_mug_at_water"] = s.regrabMugAtWater     // pick the staged mug back up
+		actions["place_mug_at_water"] = s.placeMugAtWater       // vision-grab an empty mug and set it at the spout
+
+		// hot water routine (stub for now)
+		actions["dispense_hot_water"] = func(ctx, cancelCtx context.Context) error {
+			return s.dispenseHotWater(ctx, cancelCtx, "americano")
+		}
+		// from a lungo brewed into a mug: grasp, top up with hot water, serve
+		actions["serve_americano"] = func(ctx, cancelCtx context.Context) error {
+			_, err := s.serveAmericano(ctx, cancelCtx, false, s.grabAndShelve, s.actionPhase(ctx, cancelCtx))
+			return err
+		}
+		// place a mug at the spout, add hot water, serve
+		actions["serve_hot_water"] = func(ctx, cancelCtx context.Context) error {
+			_, err := s.serveHotWater(ctx, cancelCtx)
+			return err
+		}
+	}
+
 	// Measurement only — no arm motion, no pin. Reading the rim and surface rows
 	// off a machine is how its stop row gets confirmed before anything is tuned
 	// against it.

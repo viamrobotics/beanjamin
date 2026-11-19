@@ -12,9 +12,22 @@ const BeansRegular = "regular"
 
 // IsLungo reports whether the drink is a lungo-size pour, matching the lungo
 // cases in the coffee service's drinkBrewTime. The iced drinks pour a lungo
-// into the cup before it is tipped over the ice.
+// into the cup before it is tipped over the ice, and an americano is a lungo
+// brewed into a mug and then topped up with hot water.
 func IsLungo(drink string) bool {
-	return drink == "lungo" || IsIced(drink)
+	return drink == "lungo" || drink == "americano" || IsIced(drink)
+}
+
+// IsMug reports whether the drink is served in a mug the arm fetches by vision
+// (gated by can_serve_mug_drinks) rather than the espresso cup or the iced glass.
+func IsMug(drink string) bool {
+	return drink == "americano" || drink == "hot_water"
+}
+
+// BrewsCoffee reports whether the drink runs the grind-and-brew cycle. Hot
+// water is the one drink that doesn't: it is dispensed straight into the mug.
+func BrewsCoffee(drink string) bool {
+	return drink != "hot_water"
 }
 
 // IsIced reports whether the drink uses the iced serving path
@@ -115,6 +128,8 @@ type Menu struct {
 	// Milks are the milks in the fridge, by the name an order asks for one with.
 	// The first is the default for a milk drink that names none.
 	Milks []string
+	// MugDrinks gates the drinks served in a mug (the americano and hot water).
+	MugDrinks bool
 }
 
 // Supports reports whether a machine serving this menu can make drink and,
@@ -128,6 +143,8 @@ func (m Menu) Supports(drink string) (supported bool, reason string) {
 		return m.Iced, "can_serve_iced=false"
 	case "iced_latte":
 		return m.IcedLatte, "can_serve_iced_latte=false"
+	case "americano", "hot_water":
+		return m.MugDrinks, "can_serve_mug_drinks=false"
 	default:
 		return false, "unsupported drink"
 	}

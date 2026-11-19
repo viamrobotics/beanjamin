@@ -6,6 +6,7 @@ package coffee
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/golang/geo/r3"
@@ -75,6 +76,14 @@ const (
 	clawPoseMilkPourApproach = "milk_pour_approach" // milk bottle upright above the staged glass (milk_pour_approach_relative_pose)
 	clawPoseMilkPour         = "milk_pour"          // milk bottle tilted to pour into the glass (milk_pour_relative_pose)
 
+	// mug-drink claw poses (only required when can_serve_mug_drinks is set; the
+	// mug itself is vision-detected via the mug observe switch). The ready poses
+	// are where the mug sits under the coffee spout and the hot-water spout.
+	clawPoseMugUnderMachineApproach = "mug_under_machine_approach"
+	clawPoseMugReadyForCoffee       = "mug_ready_for_coffee"
+	clawPoseMugWaterApproach        = "mug_water_approach"
+	clawPoseMugReadyForWater        = "mug_ready_for_water"
+
 	// camera pose switches (extra vantages live on
 	// the same switch and are enumerated at runtime).
 	camPoseCupObserve = "cup_observe"
@@ -90,6 +99,9 @@ const (
 // glassPoseObserve is the home/recovery observe pose on the glass observe
 // switch (parallel to camPoseCupObserve on the cup observe switch).
 const glassPoseObserve = "glass_observe"
+
+// mugPoseObserve is the home/recovery observe pose on the mug observe switch.
+const mugPoseObserve = "mug_observe"
 
 // milkApproachPose is the claws-switch pose in front of the bottle at a fridge
 // spot (MilkOption.Spot), with the door open: where the gripper lines up before
@@ -203,6 +215,16 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 		)
 	}
 
+	if s.cfg.CanServeMugDrinks {
+		poses = append(poses,
+			requiredPose{s.clawsSw, clawPoseMugUnderMachineApproach},
+			requiredPose{s.clawsSw, clawPoseMugReadyForCoffee},
+			requiredPose{s.clawsSw, clawPoseMugWaterApproach},
+			requiredPose{s.clawsSw, clawPoseMugReadyForWater},
+			requiredPose{s.mugObserveSw, mugPoseObserve},
+		)
+	}
+
 	if s.cfg.CanServeIcedLatte {
 		// Each milk_options spot's approach and grab. The door is tracked through
 		// its hinge arc, and the pour is resolved against the staged glass
@@ -243,7 +265,58 @@ func (s *beanjaminCoffee) validateConfiguredPoses(ctx context.Context) error {
 			return fmt.Errorf("pose validation: %w", err)
 		}
 	}
+	if s.cfg.CanServeMugDrinks {
+		if err := s.validateMugPosesLevel(ctx); err != nil {
+			return fmt.Errorf("pose validation: %w", err)
+		}
+	}
 	s.logger.Infof("pose validation: %d configured pose(s) resolved and non-zero", len(poses))
+	return nil
+}
+
+// mugPoseZToleranceMm is how far a mug approach pose may sit above or below
+// its ready pose: the open jaws move straight between them, and a rise or fall
+// could catch the mug's handle.
+const mugPoseZToleranceMm = 1.0
+
+// mugLevelPairs are the mug approach poses and the ready pose each one must
+// stay level with.
+var mugLevelPairs = [][2]string{
+	{clawPoseMugUnderMachineApproach, clawPoseMugReadyForCoffee},
+	{clawPoseMugWaterApproach, clawPoseMugReadyForWater},
+}
+
+// validateMugPosesLevel checks that each mug approach pose is at the same
+// height as its ready pose (mugLevelPairs).
+func (s *beanjaminCoffee) validateMugPosesLevel(ctx context.Context) error {
+	for _, pair := range mugLevelPairs {
+		approach, err := s.fetchPose(ctx, s.clawsSw, pair[0])
+		if err != nil {
+			return fmt.Errorf("required pose %q: %w", pair[0], err)
+		}
+		ready, err := s.fetchPose(ctx, s.clawsSw, pair[1])
+		if err != nil {
+			return fmt.Errorf("required pose %q: %w", pair[1], err)
+		}
+		if err := mugPosesLevel(pair[0], approach, pair[1], ready); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// mugPosesLevel reports an error when approach and ready differ in Z by more
+// than mugPoseZToleranceMm.
+func mugPosesLevel(approachName string, approach *poseData, readyName string, ready *poseData) error {
+	if approach.refFrame != ready.refFrame {
+		return fmt.Errorf("%q is in frame %q but %q is in %q; they must share a frame to be checked level",
+			approachName, approach.refFrame, readyName, ready.refFrame)
+	}
+	az, rz := approach.pose.Point().Z, ready.pose.Point().Z
+	if d := math.Abs(az - rz); d > mugPoseZToleranceMm {
+		return fmt.Errorf("%q (z=%.1f) and %q (z=%.1f) differ in height by %.1f mm (tolerance %.0f); the open jaws move straight between them and must stay level so they cannot catch the mug's handle",
+			approachName, az, readyName, rz, d, mugPoseZToleranceMm)
+	}
 	return nil
 }
 

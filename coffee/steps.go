@@ -131,6 +131,8 @@ const (
 	stepUnlockingPortafilter = "Unlocking portafilter"
 	stepCleaning             = "Cleaning"
 	stepAddingMilk           = "Adding milk"
+	stepPlacingMug           = "Placing mug"
+	stepAddingHotWater       = "Adding hot water"
 	stepFinishingUp          = "Finishing up"
 	// stepKeepAlive is published while a keep-alive purge runs. No order is
 	// active, so it surfaces through Status/get_queue only, never on an order.

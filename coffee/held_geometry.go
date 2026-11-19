@@ -220,6 +220,44 @@ func (sc *sceneState) graspCentroid(at placement, grabRel *RelativePose) (r3.Vec
 	return gripPointWorld.Sub(grabOffset), nil
 }
 
+// attachConfiguredMugGeometry is attachConfiguredCupGeometry for a mug: the body
+// from mug_dimensions plus the handle box beside it, so a mug re-grabbed with
+// nothing cached is still carried as a tracked held item.
+func (s *beanjaminCoffee) attachConfiguredMugGeometry(ctx context.Context) error {
+	at, err := s.expectedPlacement(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.editScene(func(sc *sceneState) error {
+		geoms, err := sc.configuredMugGeometries(at, s.cfg)
+		if err != nil {
+			return err
+		}
+		_, err = sc.attachHeldItem(at, pickupLabelMug, geoms)
+		return err
+	}); err != nil {
+		return err
+	}
+	s.activeOrderLogger().Infof("modeled the held mug from the configured %.0f×%.0f mm body and handle for held-item tracking",
+		s.cfg.MugDimensions.DiameterMm, s.cfg.MugDimensions.HeightMm)
+	return nil
+}
+
+// configuredMugGeometries builds the world-frame mug body and handle around the
+// grasp centroid recovered with the frames placed by at.
+func (sc *sceneState) configuredMugGeometries(at placement, cfg *Config) ([]spatialmath.Geometry, error) {
+	if cfg.MugDimensions == nil || cfg.MugHandleDimensions == nil || cfg.MugGrabRelativePose == nil {
+		return nil, fmt.Errorf("mug_dimensions, mug_handle_dimensions and mug_grab_relative_pose must be configured")
+	}
+	grabRel := cfg.MugGrabRelativePose
+	centroid, err := sc.graspCentroid(at, grabRel)
+	if err != nil {
+		return nil, err
+	}
+	h := cfg.MugHandleDimensions
+	return geom.MugGeometries(centroid, cfg.MugDimensions.boxDims(), h.DepthMm, h.WidthMm, containerYaw(grabRel), pickupLabelMug)
+}
+
 // containerYaw returns the heading, in radians about world Z, that the box for
 // a container grabbed at grabRel is built at: the grab's approach heading
 // (geom.GraspYaw). geom.PoseRelativeTo composes grabRel onto an identity-oriented
@@ -405,8 +443,8 @@ func (sc *sceneState) detachHeldItem() {
 }
 
 // stagedItem names one kind of item that is set down and kept as a static world
-// obstacle (the staged glass): its obstacle frame and its pickup label (also
-// the noun in messages). Whether it is placed lives in the scene
+// obstacle (the staged glass, the staged mug): its obstacle frame and its pickup
+// label (also the noun in messages). Whether it is placed lives in the scene
 // (sceneState.stagedPlaced). The staging helpers below are shared across kinds
 // through it.
 type stagedItem struct {
@@ -416,15 +454,23 @@ type stagedItem struct {
 
 var (
 	stagedGlass = stagedItem{frame: stagedGlassFrameName, label: pickupLabelGlass}
+	stagedMug   = stagedItem{frame: stagedMugFrameName, label: pickupLabelMug}
 )
 
-// stagedPlaced reports whether it is staged in sc (stagedGlassPlaced).
+// stagedPlaced reports whether it is staged in sc (stagedGlassPlaced,
+// stagedMugPlaced).
 func (sc *sceneState) stagedPlaced(it stagedItem) bool {
+	if it.frame == stagedMugFrameName {
+		return sc.stagedMugPlaced
+	}
 	return it.frame == stagedGlassFrameName && sc.stagedGlassPlaced
 }
 
 // setStagedPlaced records whether it is staged in sc.
 func (sc *sceneState) setStagedPlaced(it stagedItem, placed bool) {
+	if it.frame == stagedMugFrameName {
+		sc.stagedMugPlaced = placed
+	}
 	if it.frame == stagedGlassFrameName {
 		sc.stagedGlassPlaced = placed
 	}
@@ -654,6 +700,8 @@ func (sc *sceneState) cachedHeldGeometry(label string) []spatialmath.Geometry {
 		return sc.heldGlassGeom
 	case pickupLabelMilk:
 		return sc.heldMilkGeom
+	case pickupLabelMug:
+		return sc.heldMugGeom
 	default:
 		return sc.heldCupGeom
 	}
@@ -666,6 +714,8 @@ func (sc *sceneState) cacheHeldGeometry(label string, gripperLocal []spatialmath
 		sc.heldGlassGeom = gripperLocal
 	case pickupLabelMilk:
 		sc.heldMilkGeom = gripperLocal
+	case pickupLabelMug:
+		sc.heldMugGeom = gripperLocal
 	default:
 		sc.heldCupGeom = gripperLocal
 	}
