@@ -18,6 +18,7 @@ Customer-facing kiosk UI for the Beanjamin espresso robot. Built with Next.js an
 - `clearAfterSec` — how long, in seconds, nobody may be recognised on the welcome screen before the "Welcome back" greeting and the prefilled name and email clear. Defaults to 2. It is counted in camera checks (see `identifyIntervalMs`), so it is rounded up to a whole number of them.
 - `identifyIntervalMs` — how often, in milliseconds, the welcome screen asks the machine who is at the camera. Defaults to 1000, minimum 250. Each check captures a frame and runs the face model, so a smaller value means more load on the machine.
 - `mock=1` / `mock=0` — see dev-mode rules below.
+- `ipadcam=1` or `ipadcam=<token>` — use this browser's camera as the machine's [`ipad-cam`](../README.md#model-viambeanjaminipad-camera) component for as long as the kiosk is open, pushing JPEG frames to it (2 fps on the welcome screen, 5 fps on face registration, 1 fps elsewhere). Needs HTTPS or `localhost`. Give the component a `source_token` and pass it as the value (`ipadcam=<token>`) so only this browser can feed it; a browser that is refused because another device holds the camera closes its own and shows a button to take over. `ipadcam_name` names the camera component (default `ipad-cam`) and `ipadcam_facing=environment` selects the rear camera instead of the front one.
 
 ## Running locally
 
