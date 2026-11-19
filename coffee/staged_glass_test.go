@@ -45,7 +45,7 @@ func stagingService(t *testing.T, fs *referenceframe.FrameSystem) *beanjaminCoff
 	}}
 	pickupGrasp := testBox(t, spatialmath.NewZeroPose())
 	addHeldItem(t, s, pickupGrasp)
-	s.scene().cacheHeldGeometry(pickupLabelGlass, pickupGrasp)
+	s.scene().cacheHeldGeometry(pickupLabelGlass, []spatialmath.Geometry{pickupGrasp})
 	return s
 }
 
@@ -77,7 +77,7 @@ func TestStageAndRegrabGlassSeatsOnSurface(t *testing.T) {
 		t.Fatalf("the staged-glass obstacle must be gone once re-grabbed")
 	}
 	requireVecEqual(t, heldItemWorldCenter(t, s.scene().fs, inputs), seatedCenter, 1e-6)
-	requireVecEqual(t, s.scene().cachedHeldGeometry(pickupLabelGlass).Pose().Point(), r3.Vector{Z: seatedCenter.Z - stagingGripZ}, 1e-6)
+	requireVecEqual(t, s.scene().cachedHeldGeometry(pickupLabelGlass)[0].Pose().Point(), r3.Vector{Z: seatedCenter.Z - stagingGripZ}, 1e-6)
 }
 
 // With no surface modeled beneath it, the glass is staged where it was released.

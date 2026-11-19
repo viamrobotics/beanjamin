@@ -138,7 +138,7 @@ func (sc *sceneState) attachMilkBottle(at placement, dims *ContainerDimensions) 
 	if err != nil {
 		return 0, err
 	}
-	if _, err := sc.attachHeldItem(at, pickupLabelMilk, box); err != nil {
+	if _, err := sc.attachHeldItem(at, pickupLabelMilk, []spatialmath.Geometry{box}); err != nil {
 		return 0, err
 	}
 	return baseBelowGripMm, nil

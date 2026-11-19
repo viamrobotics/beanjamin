@@ -280,7 +280,7 @@ func TestReattachUsesCache(t *testing.T) {
 		t.Fatalf("reattach must be a no-op when nothing is cached")
 	}
 
-	s.scene().cacheHeldGeometry(pickupLabelCup, testBox(t, spatialmath.NewZeroPose()))
+	s.scene().cacheHeldGeometry(pickupLabelCup, []spatialmath.Geometry{testBox(t, spatialmath.NewZeroPose())})
 	if err := s.reattachGeometry(pickupLabelCup); err != nil {
 		t.Fatalf("reattach: %v", err)
 	}
@@ -359,12 +359,12 @@ func TestCacheRoutingByLabel(t *testing.T) {
 	s := &beanjaminCoffee{settledScene: &sceneState{}, cfg: &Config{}}
 	cup := testBox(t, spatialmath.NewZeroPose())
 	glass := testBox(t, spatialmath.NewPoseFromPoint(r3.Vector{Z: 10}))
-	s.scene().cacheHeldGeometry(pickupLabelCup, cup)
-	s.scene().cacheHeldGeometry(pickupLabelGlass, glass)
-	if s.scene().cachedHeldGeometry(pickupLabelCup) != cup {
+	s.scene().cacheHeldGeometry(pickupLabelCup, []spatialmath.Geometry{cup})
+	s.scene().cacheHeldGeometry(pickupLabelGlass, []spatialmath.Geometry{glass})
+	if s.scene().cachedHeldGeometry(pickupLabelCup)[0] != cup {
 		t.Fatalf("cup cache mismatch")
 	}
-	if s.scene().cachedHeldGeometry(pickupLabelGlass) != glass {
+	if s.scene().cachedHeldGeometry(pickupLabelGlass)[0] != glass {
 		t.Fatalf("glass cache mismatch")
 	}
 }
@@ -496,7 +496,7 @@ func TestSwapFilterForGlassNeedsGlassConfig(t *testing.T) {
 func TestSwapFilterForGlassKeepsAttachedItem(t *testing.T) {
 	s := heldGeomService(t, filterOnArmFS(t))
 	addHeldItem(t, s, testBox(t, spatialmath.NewZeroPose()))
-	s.scene().cacheHeldGeometry(pickupLabelGlass, testBox(t, spatialmath.NewZeroPose()))
+	s.scene().cacheHeldGeometry(pickupLabelGlass, []spatialmath.Geometry{testBox(t, spatialmath.NewZeroPose())})
 
 	restore, err := s.swapFilterForGlass(context.Background())
 	if err != nil {
@@ -540,13 +540,13 @@ func glassSwapService(t *testing.T) *beanjaminCoffee {
 func TestSwapFilterForGlassKeepsCachedGrasp(t *testing.T) {
 	s := glassSwapService(t)
 	cached := testBox(t, spatialmath.NewZeroPose())
-	s.scene().cacheHeldGeometry(pickupLabelGlass, cached)
+	s.scene().cacheHeldGeometry(pickupLabelGlass, []spatialmath.Geometry{cached})
 
 	restore, err := s.swapFilterForGlass(context.Background())
 	if err != nil {
 		t.Fatalf("swapFilterForGlass: %v", err)
 	}
-	if s.scene().heldGlassGeom != cached {
+	if s.scene().heldGlassGeom[0] != cached {
 		t.Error("the stand-in displaced the cached glass grasp")
 	}
 	if !s.scene().heldItemAttached {
@@ -557,7 +557,7 @@ func TestSwapFilterForGlassKeepsCachedGrasp(t *testing.T) {
 	if s.scene().heldItemAttached {
 		t.Error("the stand-in outlived the action")
 	}
-	if s.scene().heldGlassGeom != cached {
+	if s.scene().heldGlassGeom[0] != cached {
 		t.Error("the restore cleared the cached glass grasp")
 	}
 }
@@ -583,7 +583,7 @@ func TestSwapFilterForGlassKeepsItemAttachedByTheAction(t *testing.T) {
 // addHeldItem publishes a scene with gripperLocal attached as the held item.
 func addHeldItem(t *testing.T, s *beanjaminCoffee, gripperLocal spatialmath.Geometry) {
 	t.Helper()
-	if err := s.editScene(func(sc *sceneState) error { return sc.addHeldItemFrame(gripperLocal) }); err != nil {
+	if err := s.editScene(func(sc *sceneState) error { return sc.addHeldItemFrame([]spatialmath.Geometry{gripperLocal}) }); err != nil {
 		t.Fatalf("addHeldItemFrame: %v", err)
 	}
 }

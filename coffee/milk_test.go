@@ -69,13 +69,13 @@ func TestHeldGeometryCachePerLabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.scene().cacheHeldGeometry(pickupLabelCup, cup)
-	s.scene().cacheHeldGeometry(pickupLabelMilk, milk)
+	s.scene().cacheHeldGeometry(pickupLabelCup, []spatialmath.Geometry{cup})
+	s.scene().cacheHeldGeometry(pickupLabelMilk, []spatialmath.Geometry{milk})
 
-	if got := s.scene().cachedHeldGeometry(pickupLabelCup); got != cup {
+	if got := s.scene().cachedHeldGeometry(pickupLabelCup)[0]; got != cup {
 		t.Error("caching milk geometry clobbered the cup's")
 	}
-	if got := s.scene().cachedHeldGeometry(pickupLabelMilk); got != milk {
+	if got := s.scene().cachedHeldGeometry(pickupLabelMilk)[0]; got != milk {
 		t.Error("milk geometry did not round-trip through the cache")
 	}
 }

@@ -20,12 +20,13 @@ type sceneState struct {
 	// run has not planned it and the arm has to be read.
 	inputs referenceframe.FrameSystemInputs
 
-	// heldCupGeom, heldGlassGeom and heldMilkGeom are the gripper-local geometry
-	// of the cup and glass (detected at pickup) and of the milk bottle (modeled
-	// from milk_bottle_dimensions), kept so a re-grab can restore them.
-	heldCupGeom   spatialmath.Geometry
-	heldGlassGeom spatialmath.Geometry
-	heldMilkGeom  spatialmath.Geometry
+	// heldCupGeom, heldGlassGeom and heldMilkGeom are the gripper-local
+	// geometry of the cup and glass (detected at pickup) and of the milk bottle
+	// (modeled from milk_bottle_dimensions), kept so a re-grab can restore them.
+	// Each is a list, container body first.
+	heldCupGeom   []spatialmath.Geometry
+	heldGlassGeom []spatialmath.Geometry
+	heldMilkGeom  []spatialmath.Geometry
 	// heldItemAttached is whether the held-item frame is in fs.
 	heldItemAttached bool
 

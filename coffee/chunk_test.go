@@ -451,7 +451,7 @@ func TestAttachingInAChunkKeepsItWhole(t *testing.T) {
 	if local == nil {
 		t.Fatal("no cup geometry cached")
 	}
-	requireVecEqual(t, local.Pose().Point(), r3.Vector{Z: 100}, 1e-6)
+	requireVecEqual(t, local[0].Pose().Point(), r3.Vector{Z: 100}, 1e-6)
 }
 
 // Joined motions run as one arm move.
