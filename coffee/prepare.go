@@ -305,5 +305,8 @@ func (s *beanjaminCoffee) strandedState() []string {
 	if sc.doorOpenDegs != 0 {
 		stranded = append(stranded, fmt.Sprintf("fridge door open %.0f°", sc.doorOpenDegs))
 	}
+	if sc.hotWaterOpenDegs != 0 {
+		stranded = append(stranded, fmt.Sprintf("hot water lever open %.0f°", sc.hotWaterOpenDegs))
+	}
 	return stranded
 }

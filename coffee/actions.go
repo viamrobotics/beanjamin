@@ -68,6 +68,11 @@ func (s *beanjaminCoffee) actionFuncs() map[string]func(ctx, cancelCtx context.C
 		"close_door": s.closeDoor, // grip the open door's handle and swing it shut
 	}
 
+	if s.cfg.HotWaterLeverGripRelativePose != nil {
+		actions["open_hot_water"] = s.openHotWater   // grip the lever and turn the valve open
+		actions["close_hot_water"] = s.closeHotWater // grip the lever and turn the valve shut
+	}
+
 	// One grind action per extra grinder, named after its beans (grind_decaf).
 	for _, beans := range s.cfg.beanNames() {
 		actions[grindActionName(beans)] = func(ctx, cancelCtx context.Context) error {

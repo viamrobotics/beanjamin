@@ -75,6 +75,12 @@ const (
 	clawPoseMilkPourApproach = "milk_pour_approach" // milk bottle upright above the staged glass (milk_pour_approach_relative_pose)
 	clawPoseMilkPour         = "milk_pour"          // milk bottle tilted to pour into the glass (milk_pour_relative_pose)
 
+	// clawPoseHotWaterApproach is where the claws go before lining up beyond
+	// the hot water lever (only required when hot_water_lever_grip_relative_pose
+	// is set). The grip itself is resolved against the lever, not read from the
+	// switch (hot_water.go).
+	clawPoseHotWaterApproach = "hot_water_approach"
+
 	// camera pose switches (extra vantages live on
 	// the same switch and are enumerated at runtime).
 	camPoseCupObserve = "cup_observe"
@@ -201,6 +207,10 @@ func (s *beanjaminCoffee) requiredPoses() []requiredPose {
 			requiredPose{s.clawsSw, clawPoseStaging},
 			requiredPose{s.glassObserveSw, glassPoseObserve},
 		)
+	}
+
+	if s.cfg.HotWaterLeverGripRelativePose != nil {
+		poses = append(poses, requiredPose{s.clawsSw, clawPoseHotWaterApproach})
 	}
 
 	if s.cfg.CanServeIcedLatte {

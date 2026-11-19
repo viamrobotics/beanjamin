@@ -25,8 +25,9 @@ import (
 // running. The arm is claimed because the scene may only be replaced
 // while no sequence owns the arm.
 //
-// It clears the recorded fridge-door angle too: proceed is the operator saying
-// the machine has been put right, fridge included. A rebuild cannot shut a real
+// It clears the recorded fridge-door and hot water lever angles too: proceed is
+// the operator saying the machine has been put right, fridge and valve
+// included. A rebuild cannot shut a real
 // door, which is why no rebuild clears the angle on its own — the assertion is
 // the operator's, so the response reports the angle forgotten and a door left
 // standing is visible before the next plan routes through the panel. It also
@@ -48,8 +49,8 @@ func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, err
 	}
 	// Rebuilt with the door shut. A failed rebuild leaves the scene, swung door
 	// included, as it was: a failed proceed asserts nothing.
-	doorOpenDegs := sc.doorOpenDegs
-	err := s.rebuildScene(ctx, 0)
+	doorOpenDegs, hotWaterOpenDegs := sc.doorOpenDegs, sc.hotWaterOpenDegs
+	err := s.rebuildScene(ctx, 0, 0)
 	endRun()
 	s.lease.release()
 	if err != nil {
@@ -62,24 +63,29 @@ func (s *beanjaminCoffee) proceedQueue(ctx context.Context) (map[string]any, err
 		s.logger.Warnf("proceed: forgetting a fridge door recorded open at %.0f° — if it is not actually shut, "+
 			"the next plan will route the arm straight through the panel", doorOpenDegs)
 	}
+	if hotWaterOpenDegs != 0 {
+		s.logger.Warnf("proceed: forgetting a hot water lever recorded open at %.0f° — if the valve is not actually "+
+			"closed, the machine won't heat and the next plan will route the arm through the lever", hotWaterOpenDegs)
+	}
 
 	// Clearing the pause IS the resume: the waiting queue and the keepalive
 	// loop see it on their next check. unpause reports whether there was a
 	// pause, so two proceeds racing cannot both claim to have released it.
 	if !s.lease.unpause() {
 		s.logger.Info("proceed: frame system rebuilt, queue was not paused")
-		return proceedResponse("reset", false, doorOpenDegs), nil
+		return proceedResponse("reset", false, doorOpenDegs, hotWaterOpenDegs), nil
 	}
 
 	s.logger.Info("proceed: frame system rebuilt, queue resumed")
-	return proceedResponse("resumed", true, doorOpenDegs), nil
+	return proceedResponse("resumed", true, doorOpenDegs, hotWaterOpenDegs), nil
 }
 
-// proceedResponse renders a proceed result, reporting the fridge-door angle the
-// rebuild forgot so an operator can see that the model now claims a shut door.
-// Omitted when the door was already shut, so the field's presence alone flags
-// the assertion proceed just made about the physical world.
-func proceedResponse(status string, resumed bool, doorClearedDegs float64) map[string]any {
+// proceedResponse renders a proceed result, reporting the fridge-door and hot
+// water lever angles the rebuild forgot so an operator can see that the model
+// now claims a shut door and a closed valve. Each is omitted when it was
+// already shut, so a field's presence alone flags the assertion proceed just
+// made about the physical world.
+func proceedResponse(status string, resumed bool, doorClearedDegs, hotWaterClearedDegs float64) map[string]any {
 	resp := map[string]any{
 		"status":             status,
 		"resumed":            resumed,
@@ -87,6 +93,9 @@ func proceedResponse(status string, resumed bool, doorClearedDegs float64) map[s
 	}
 	if doorClearedDegs != 0 {
 		resp["fridge_door_cleared_degs"] = doorClearedDegs
+	}
+	if hotWaterClearedDegs != 0 {
+		resp["hot_water_lever_cleared_degs"] = hotWaterClearedDegs
 	}
 	return resp
 }
@@ -114,7 +123,8 @@ func (s *beanjaminCoffee) clearQueue() (map[string]any, error) {
 // running sequence (waiting for it to actually stop), clears any pending and
 // recently-completed orders, rebuilds the scene from the service
 // (discarding mid-cycle mutations like a portafilter frame reparented to world
-// by lockFilterFrame), forgets that the fridge door is standing open, and
+// by lockFilterFrame), forgets that the fridge door is standing open and the
+// hot water lever is turned, and
 // releases the cancel-induced queue pause so processQueue is ready for new
 // orders. Each step is best-effort and skipped when not applicable, so it is
 // safe to call from any state.
@@ -126,8 +136,9 @@ func (s *beanjaminCoffee) clearQueue() (map[string]any, error) {
 // unpause, as in proceed, so the order the resume lets through can claim it.
 //
 // Because it declares the world to be exactly as configured, run it only when
-// that is true — in particular, shut the fridge door by hand first, or the arm
-// will plan straight through a panel the model now believes is closed.
+// that is true — in particular, shut the fridge door and the hot water valve by
+// hand first, or the arm will plan straight through a panel or lever the model
+// now believes is closed.
 func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error) {
 	cancelled := s.signalCancel()
 	if cancelled {
@@ -156,7 +167,7 @@ func (s *beanjaminCoffee) resetWorld(ctx context.Context) (map[string]any, error
 	// proceed. A rebuild on its own re-applies the recorded angle rather than
 	// pretending a door closed itself.
 	endRun := s.startDirectRun(ctx, context.Background(), "reset_world")
-	err := s.rebuildScene(ctx, 0)
+	err := s.rebuildScene(ctx, 0, 0)
 	endRun()
 	s.lease.release()
 	if err != nil {

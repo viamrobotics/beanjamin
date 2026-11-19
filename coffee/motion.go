@@ -430,19 +430,21 @@ func (sc *sceneState) lockFilter(at placement) (spatialmath.Pose, int, error) {
 // shut transform, but rebuilding a model does not close a real door, so the
 // recorded doorOpenDegs is re-applied afterward. Clearing that record is an
 // operator's call, not a rebuild's — reset_world and proceed rebuild with the
-// door shut (rebuildScene), and both say so in their response.
+// door shut (rebuildScene), and both say so in their response. The hot water
+// lever's recorded angle is kept the same way.
 func (s *beanjaminCoffee) resetFrameSystem(ctx context.Context) error {
-	return s.rebuildScene(ctx, s.scene().doorOpenDegs)
+	return s.rebuildScene(ctx, s.scene().doorOpenDegs, s.scene().hotWaterOpenDegs)
 }
 
 // rebuildScene replaces the scene with one built from the service, with the
-// fridge door standing doorOpenDegs open. The rebuilt frame system has no
+// fridge door standing doorOpenDegs open and the hot water lever turned
+// hotWaterOpenDegs. The rebuilt frame system has no
 // held-item frame, and any cached grasp no longer corresponds to reality, so
 // none is carried over and a stale geometry can't be re-attached after a reset.
 // It also has the filter frame back in the arm subtree and no staged-glass
 // obstacle. The frames with degrees of freedom stand where they stood. On
 // failure the scene is left as it was.
-func (s *beanjaminCoffee) rebuildScene(ctx context.Context, doorOpenDegs float64) error {
+func (s *beanjaminCoffee) rebuildScene(ctx context.Context, doorOpenDegs, hotWaterOpenDegs float64) error {
 	logger := s.activeOrderLogger()
 	fs, err := framesystem.NewFromService(ctx, s.fsSvc, nil)
 	if err != nil {
@@ -456,12 +458,22 @@ func (s *beanjaminCoffee) rebuildScene(ctx context.Context, doorOpenDegs float64
 		if berr != nil {
 			return fmt.Errorf("re-apply fridge door angle: %w", berr)
 		}
-		if derr := setDoorTheta(fs, frameFridgeDoor, base, doorOpenDegs); derr != nil {
+		if derr := setHingeTheta(fs, frameFridgeDoor, base, doorOpenDegs); derr != nil {
 			return fmt.Errorf("re-apply fridge door angle: %w", derr)
 		}
 		logger.Infof("frame system rebuilt with fridge door held open at %.1f°", doorOpenDegs)
 	}
-	s.publishScene(&sceneState{fs: fs, inputs: s.scene().inputs, doorOpenDegs: doorOpenDegs})
+	if hotWaterOpenDegs != 0 {
+		base, berr := hingeBasePose(fs, frameHotWaterLever)
+		if berr != nil {
+			return fmt.Errorf("re-apply hot water lever angle: %w", berr)
+		}
+		if lerr := setHingeTheta(fs, frameHotWaterLever, base, hotWaterOpenDegs); lerr != nil {
+			return fmt.Errorf("re-apply hot water lever angle: %w", lerr)
+		}
+		logger.Infof("frame system rebuilt with the hot water lever held open at %.1f°", hotWaterOpenDegs)
+	}
+	s.publishScene(&sceneState{fs: fs, inputs: s.scene().inputs, doorOpenDegs: doorOpenDegs, hotWaterOpenDegs: hotWaterOpenDegs})
 	return nil
 }
 

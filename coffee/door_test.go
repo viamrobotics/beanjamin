@@ -49,7 +49,7 @@ func TestComputeDoorSweep_Reverse(t *testing.T) {
 // where the handle swept but the panel obstacle stayed frozen shut.
 //
 // Returns the frame system and the door origin frame's base transform, which is
-// what setDoorTheta expects as its absolute reference.
+// what setHingeTheta expects as its absolute reference.
 func buildTestDoorFS(t *testing.T) (*referenceframe.FrameSystem, spatialmath.Pose) {
 	t.Helper()
 
@@ -118,7 +118,7 @@ func worldPoint(t *testing.T, fs *referenceframe.FrameSystem, frame string) r3.V
 func TestSetDoorTheta_BallSweepsArc(t *testing.T) {
 	fs, base := buildTestDoorFS(t)
 
-	if err := setDoorTheta(fs, "door", base, 90); err != nil {
+	if err := setHingeTheta(fs, "door", base, 90); err != nil {
 		t.Fatal(err)
 	}
 
@@ -143,7 +143,7 @@ func TestSetDoorTheta_PanelGeometrySweeps(t *testing.T) {
 	fs, base := buildTestDoorFS(t)
 
 	// The RDK puts part geometry on "<name>_origin", never on the model frame.
-	// If this stops holding, setDoorTheta is rotating the wrong frame again.
+	// If this stops holding, setHingeTheta is rotating the wrong frame again.
 	modelGeos, err := fs.Frame("door").Geometries([]referenceframe.Input{})
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +156,7 @@ func TestSetDoorTheta_PanelGeometrySweeps(t *testing.T) {
 		t.Fatalf("closed panel center = %v, want ~(500,-300,0)", before)
 	}
 
-	if err := setDoorTheta(fs, "door", base, 90); err != nil {
+	if err := setHingeTheta(fs, "door", base, 90); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,7 +170,7 @@ func TestSetDoorTheta_PanelGeometrySweeps(t *testing.T) {
 // TestSetDoorTheta_CloseSweepReturnsToClosed walks the whole close sweep the way
 // sweepDoor does — open angle first, then every waypoint down to 0 — and checks
 // the ball lands back where the closed door put it. This is what makes a close
-// safe: each setDoorTheta is absolute against the authored closed transform, so
+// safe: each setHingeTheta is absolute against the authored closed transform, so
 // stepping 90°→0° cannot accumulate residual rotation and leave the world model
 // believing the door is ajar after it has physically shut.
 func TestSetDoorTheta_CloseSweepReturnsToClosed(t *testing.T) {
@@ -180,7 +180,7 @@ func TestSetDoorTheta_CloseSweepReturnsToClosed(t *testing.T) {
 
 	sweep := computeDoorSweep(90, 0, 10)
 	for _, theta := range sweep {
-		if err := setDoorTheta(fs, "door", base, theta); err != nil {
+		if err := setHingeTheta(fs, "door", base, theta); err != nil {
 			t.Fatalf("theta %v: %v", theta, err)
 		}
 	}
@@ -204,7 +204,7 @@ func TestSetDoorTheta_CloseSweepReturnsToClosed(t *testing.T) {
 // TestRecoverBasePoseFromSweptDoor pins the arithmetic sweepDoor uses to start a
 // sweep on a door that is already open. The modeled door is left standing open
 // between actions (a rebuild re-applies doorOpenDegs), so the frame no longer
-// carries the authored shut transform that setDoorTheta needs as its absolute
+// carries the authored shut transform that setHingeTheta needs as its absolute
 // reference — it has to be recovered by backing the known angle out. Get this
 // wrong and every subsequent sweep composes onto a rotated base and the door
 // walks away from the hinge.
@@ -214,7 +214,7 @@ func TestRecoverBasePoseFromSweptDoor(t *testing.T) {
 	closedPanel := panelWorldCenter(t, fs)
 
 	const openDegs = 75
-	if err := setDoorTheta(fs, "door", base, openDegs); err != nil {
+	if err := setHingeTheta(fs, "door", base, openDegs); err != nil {
 		t.Fatal(err)
 	}
 	openBall := worldPoint(t, fs, "ball")
@@ -236,7 +236,7 @@ func TestRecoverBasePoseFromSweptDoor(t *testing.T) {
 
 	// Closing from the open position using the recovered base must land exactly
 	// back on the authored shut pose — panel and handle together.
-	if err := setDoorTheta(fs, "door", recovered, 0); err != nil {
+	if err := setHingeTheta(fs, "door", recovered, 0); err != nil {
 		t.Fatal(err)
 	}
 	if got := worldPoint(t, fs, "ball"); got.Sub(closedBall).Norm() > 0.5 {

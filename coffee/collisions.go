@@ -75,6 +75,20 @@ var heldItemStagingCollisions = []AllowedCollision{
 	{Frame1: heldItemFrameName, Frame2: "table"},
 }
 
+// hotWaterLeverCollisions lets the claws touch the hot water lever and the
+// collar it hangs from while they slide onto the lever, turn it and let go
+// (coffee/hot_water.go).
+func hotWaterLeverCollisions() []AllowedCollision {
+	var acs []AllowedCollision
+	for _, part := range []string{frameHotWaterLever, frameHotWaterCollar} {
+		acs = append(acs,
+			AllowedCollision{Frame1: "gripper:claws", Frame2: part},
+			AllowedCollision{Frame1: componentClaws, Frame2: part},
+		)
+	}
+	return acs
+}
+
 // doorOpenCollisions permits the gripper to contact the grasp frame (the fridge
 // handle ball) while gripping and pulling the door open (openDoor, door.go).
 // Built from the configured frame name. If the sweep also trips on the gripper

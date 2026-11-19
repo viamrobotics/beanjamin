@@ -52,7 +52,7 @@ func computeDoorSweep(closedDeg, openDeg, degPerStep float64) []float64 {
 	return out
 }
 
-// doorOriginFrameName is the frame setDoorTheta actually rotates. The RDK splits
+// originFrameName is the frame setHingeTheta actually rotates. The RDK splits
 // every frame-system part in two: "<name>_origin" carries the part's offset from
 // its parent AND its collision geometry (a tailGeometryStaticFrame), while
 // "<name>" is a child model frame that, for a geometry-only part like the door,
@@ -61,10 +61,11 @@ func computeDoorSweep(closedDeg, openDeg, degPerStep float64) []float64 {
 // closed pose — the world model claims the fridge is shut while the arm pulls it
 // open. Rotating "<name>_origin" moves the panel and the handle chain together.
 // Same convention lockFilterFrame relies on (motion.go).
-func doorOriginFrameName(doorFrameName string) string { return doorFrameName + "_origin" }
+func originFrameName(frameName string) string { return frameName + "_origin" }
 
-// setDoorTheta re-places the door at thetaDeg about the hinge. It composes Rz(θ)
-// onto the door origin frame's original closed transform, then reuses the
+// setHingeTheta re-places a hinged part (the fridge door, the hot water lever)
+// at thetaDeg about its hinge: its origin frame's local Z. It composes Rz(θ)
+// onto the origin frame's original closed transform, then reuses the
 // lockFilterFrame maneuver (motion.go): capture descendants, remove the frame,
 // re-add it rotated, and re-attach the descendants (the model frame and the
 // handle chain below it) with their local transforms unchanged so they ride the
@@ -74,15 +75,15 @@ func doorOriginFrameName(doorFrameName string) string { return doorFrameName + "
 // baseOriginPose MUST be the door origin frame's original closed parent-relative
 // transform, captured once by the caller and passed on every call, so repeated
 // calls stay absolute rather than accumulating rotation.
-func setDoorTheta(fs *referenceframe.FrameSystem, doorFrameName string, baseOriginPose spatialmath.Pose, thetaDeg float64) error {
-	originName := doorOriginFrameName(doorFrameName)
+func setHingeTheta(fs *referenceframe.FrameSystem, frameName string, baseOriginPose spatialmath.Pose, thetaDeg float64) error {
+	originName := originFrameName(frameName)
 	origin := fs.Frame(originName)
 	if origin == nil {
-		return fmt.Errorf("door origin frame %q not found", originName)
+		return fmt.Errorf("hinged origin frame %q not found", originName)
 	}
 	parent, err := fs.Parent(origin)
 	if err != nil {
-		return fmt.Errorf("door origin parent: %w", err)
+		return fmt.Errorf("%s parent: %w", originName, err)
 	}
 
 	rz := spatialmath.NewPoseFromOrientation(&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: thetaDeg})
@@ -103,7 +104,7 @@ func setDoorTheta(fs *referenceframe.FrameSystem, doorFrameName string, baseOrig
 	var geom spatialmath.Geometry
 	current, err := origin.Transform([]referenceframe.Input{})
 	if err != nil {
-		return fmt.Errorf("door origin current transform: %w", err)
+		return fmt.Errorf("%s current transform: %w", originName, err)
 	}
 	if geos, gerr := origin.Geometries([]referenceframe.Input{}); gerr == nil && geos != nil && len(geos.Geometries()) > 0 {
 		local := geos.Geometries()[0].Transform(spatialmath.PoseInverse(current))
@@ -120,10 +121,10 @@ func setDoorTheta(fs *referenceframe.FrameSystem, doorFrameName string, baseOrig
 		newOrigin, err = referenceframe.NewStaticFrame(originName, rotated)
 	}
 	if err != nil {
-		return fmt.Errorf("build rotated door frame: %w", err)
+		return fmt.Errorf("build rotated %s: %w", originName, err)
 	}
 	if err := fs.AddFrame(newOrigin, parent); err != nil {
-		return fmt.Errorf("re-add door frame: %w", err)
+		return fmt.Errorf("re-add %s: %w", originName, err)
 	}
 	for _, d := range descendants {
 		p := fs.Frame(d.parentName)
@@ -155,14 +156,34 @@ func (s *beanjaminCoffee) ballWorldPose(fs *referenceframe.FrameSystem, inputs *
 }
 
 // doorBasePose returns the fridge door's authored shut transform — the absolute
-// reference every setDoorTheta composes against. Valid only on a frame system
+// reference every setHingeTheta composes against. Valid only on a frame system
 // that has not been swung yet (a fresh rebuild); sweepDoor recovers it from the
 // live frame instead, which may already carry an angle.
 func doorBasePose(fs *referenceframe.FrameSystem) (spatialmath.Pose, error) {
-	name := doorOriginFrameName(frameFridgeDoor)
+	return hingeBasePose(fs, frameFridgeDoor)
+}
+
+// hingeClosedOrigin recovers a hinged part's authored closed origin transform
+// from fs, where it stands turned atDeg: the rotation is backed out rather than
+// read off a rebuild, so every setHingeTheta composes against the same absolute
+// reference and a sweep cannot accumulate rotation.
+func hingeClosedOrigin(fs *referenceframe.FrameSystem, frameName string, atDeg float64) (spatialmath.Pose, error) {
+	current, err := hingeBasePose(fs, frameName)
+	if err != nil {
+		return nil, err
+	}
+	return spatialmath.Compose(current,
+		spatialmath.PoseInverse(spatialmath.NewPoseFromOrientation(
+			&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: atDeg}))), nil
+}
+
+// hingeBasePose returns a hinged part's origin transform as it stands in fs:
+// its authored closed transform on a fresh rebuild.
+func hingeBasePose(fs *referenceframe.FrameSystem, frameName string) (spatialmath.Pose, error) {
+	name := originFrameName(frameName)
 	f := fs.Frame(name)
 	if f == nil {
-		return nil, fmt.Errorf("door origin frame %q not found", name)
+		return nil, fmt.Errorf("hinged origin frame %q not found", name)
 	}
 	return f.Transform([]referenceframe.Input{})
 }
@@ -257,21 +278,13 @@ func (s *beanjaminCoffee) recordDoorSweep(ctx, cancelCtx context.Context, action
 	fs := before.fs
 	doorInputs := placement{inputs: before.inputs}.fullInputs(fs).ToLinearInputs()
 	// The frame already carries doorOpenDegs, so back that rotation out to recover
-	// the authored shut transform. Every setDoorTheta composes against that
+	// the authored shut transform. Every setHingeTheta composes against that
 	// absolute reference, so a sweep cannot accumulate rotation.
 	fromDeg := before.doorOpenDegs
-	originName := doorOriginFrameName(frameFridgeDoor)
-	originFrame := fs.Frame(originName)
-	if originFrame == nil {
-		return fmt.Errorf("door origin frame %q not found", originName)
-	}
-	currentOriginPose, err := originFrame.Transform([]referenceframe.Input{})
+	baseOriginPose, err := hingeClosedOrigin(fs, frameFridgeDoor, fromDeg)
 	if err != nil {
-		return fmt.Errorf("door base transform: %w", err)
+		return err
 	}
-	baseOriginPose := spatialmath.Compose(currentOriginPose,
-		spatialmath.PoseInverse(spatialmath.NewPoseFromOrientation(
-			&spatialmath.OrientationVectorDegrees{OZ: 1, Theta: fromDeg})))
 
 	ballBase, err := s.ballWorldPose(fs, doorInputs)
 	if err != nil {
@@ -327,7 +340,7 @@ func (s *beanjaminCoffee) recordDoorSweep(ctx, cancelCtx context.Context, action
 		if err != nil {
 			return err
 		}
-		if err := setDoorTheta(swung, frameFridgeDoor, baseOriginPose, theta); err != nil {
+		if err := setHingeTheta(swung, frameFridgeDoor, baseOriginPose, theta); err != nil {
 			return err
 		}
 		ballNow, err := s.ballWorldPose(swung, doorInputs)
@@ -370,7 +383,7 @@ func (s *beanjaminCoffee) recordDoorSweep(ctx, cancelCtx context.Context, action
 	}
 	if err := s.editScene(func(sc *sceneState) error {
 		sc.doorOpenDegs = toDeg
-		return setDoorTheta(sc.fs, frameFridgeDoor, baseOriginPose, toDeg)
+		return setHingeTheta(sc.fs, frameFridgeDoor, baseOriginPose, toDeg)
 	}); err != nil {
 		return err
 	}
@@ -436,7 +449,7 @@ func (s *beanjaminCoffee) doorSweptTo(
 		return nil
 	}
 	swept.doorOpenDegs = reached
-	if err := setDoorTheta(swept.fs, frameFridgeDoor, baseOriginPose, reached); err != nil {
+	if err := setHingeTheta(swept.fs, frameFridgeDoor, baseOriginPose, reached); err != nil {
 		s.logger.Errorf("could not re-place the door model at θ=%.0f after a failed sweep; "+
 			"run reset_world before moving again: %v", reached, err)
 	}

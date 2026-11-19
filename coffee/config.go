@@ -303,6 +303,16 @@ type Config struct {
 	// theta as the door swings; see defaultDoorGraspYawRatio. A pointer because
 	// 0 and negatives are real settings, not "unset".
 	DoorGraspYawRatio *float64 `json:"door_grasp_yaw_ratio,omitempty"`
+
+	// Hot water lever (coffee/hot_water.go): the grip point's pose relative to
+	// the `hot-water-lever` frame with the lever closed, i.e. where the claws
+	// close on it. That frame's origin sits on the dial axis with its local Z
+	// along the axis, pointing the way that opens the valve. Setting it enables
+	// the open_hot_water and close_hot_water actions.
+	HotWaterLeverGripRelativePose *RelativePose `json:"hot_water_lever_grip_relative_pose,omitempty"`
+	// HotWaterOpenDegs is how far open_hot_water turns the lever. Defaults to
+	// defaultHotWaterOpenDegs.
+	HotWaterOpenDegs float64 `json:"hot_water_open_degs,omitempty"`
 }
 
 // orDefault returns v when it is positive, otherwise def. It backs the
@@ -637,6 +647,10 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 
 	if cfg.IceDispenseBoardName != "" {
 		optDeps = append(optDeps, board.Named(cfg.IceDispenseBoardName).String())
+	}
+
+	if cfg.HotWaterOpenDegs < 0 || cfg.HotWaterOpenDegs > 90 {
+		return nil, nil, fmt.Errorf("%s: hot_water_open_degs must be between 0 and 90", path)
 	}
 
 	if err := validateKeepAlive(cfg, path); err != nil {

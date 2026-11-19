@@ -52,6 +52,13 @@ type sceneState struct {
 	// world is as configured — reset_world and proceed — and never by a rebuild
 	// on its own.
 	doorOpenDegs float64
+
+	// hotWaterOpenDegs is how far the hot water lever stands turned open about
+	// the dial axis, in degrees (0 = closed). Kept for the same reason as
+	// doorOpenDegs, and cleared by the same two commands: a rebuild puts the
+	// modeled lever back at closed, but only an operator can say the real valve
+	// is shut. An open valve also stops the machine heating.
+	hotWaterOpenDegs float64
 }
 
 // clone returns a copy of sc whose frame system can be edited without touching
