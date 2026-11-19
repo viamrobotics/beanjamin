@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { pushCameraFrame, type ViamConnection } from "./viamClient";
+import {
+  claimCamera,
+  pushCameraFrame,
+  type ViamConnection,
+} from "./viamClient";
+import { getSourceId, isLeaseError, isTokenError } from "./ipadCamSource";
 
 export type IpadCameraStatus =
   | "off"
@@ -8,7 +13,12 @@ export type IpadCameraStatus =
   // Permission wasn't granted without a user gesture; call start() from a tap.
   | "needs-tap"
   // The camera track ended or opening failed; the hook keeps retrying.
-  | "lost";
+  | "lost"
+  // Another browser holds the component's lease. The camera is closed and the
+  // hook polls for the lease to free up.
+  | "yielded"
+  // The component refused the token. Retrying can't help; fix the URL.
+  | "rejected";
 
 const JPEG_QUALITY = 0.7;
 const RETRY_MS = 5000;
@@ -17,6 +27,8 @@ interface Options {
   enabled: boolean;
   conn: ViamConnection | null;
   cameraName: string;
+  /** The component's `source_token`, if it has one. */
+  token?: string;
   /** Read each frame, so changing it never restarts the camera. */
   fps: number;
   width: number;
@@ -37,6 +49,11 @@ function blobToBase64(blob: Blob): Promise<string> {
  * frames to a `viam:beanjamin:ipad-camera` component, which serves the latest
  * one as an ordinary camera.
  *
+ * Each push carries a stable per-browser `source_id` and, if given, the
+ * component's token. If the component says another source holds its lease, the
+ * camera closes ("yielded") and the hook polls until the lease frees up; if it
+ * refuses the token ("rejected") the camera closes and stays closed.
+ *
  * Render the returned `videoRef` in a <video playsInline muted> (1px and
  * transparent, not display:none; Safari stops decoding hidden video).
  *
@@ -50,6 +67,7 @@ export function useIpadCamera({
   enabled,
   conn,
   cameraName,
+  token,
   fps,
   width,
   facing,
@@ -59,6 +77,8 @@ export function useIpadCamera({
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const connRef = useRef(conn);
   const fpsRef = useRef(fps);
+  const tokenRef = useRef(token);
+  const sourceIdRef = useRef("");
   const [status, setStatus] = useState<IpadCameraStatus>("off");
   const [error, setError] = useState<string | null>(null);
   const statusRef = useRef(status);
@@ -66,13 +86,22 @@ export function useIpadCamera({
   useEffect(() => {
     connRef.current = conn;
     fpsRef.current = fps;
+    tokenRef.current = token;
     statusRef.current = status;
-  }, [conn, fps, status]);
+  }, [conn, fps, token, status]);
+
+  // Closes the camera and stops pushing, leaving the page to decide what next.
+  const releaseCamera = useCallback(() => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+  }, []);
 
   const requestWakeLock = useCallback(async () => {
     if (wakeLockRef.current && !wakeLockRef.current.released) return;
     try {
-      wakeLockRef.current = (await navigator.wakeLock?.request("screen")) ?? null;
+      wakeLockRef.current =
+        (await navigator.wakeLock?.request("screen")) ?? null;
     } catch {
       // Unsupported or refused; capture works until the screen sleeps.
     }
@@ -112,6 +141,7 @@ export function useIpadCamera({
     if (!enabled) return;
     let cancelled = false;
     const video = videoRef.current;
+    sourceIdRef.current = getSourceId();
 
     // Try without a gesture first; this works once the site's camera
     // permission is set to Allow. Deferred so start()'s state updates don't
@@ -127,9 +157,24 @@ export function useIpadCamera({
     };
     document.addEventListener("visibilitychange", onVisible);
 
-    // Retry a lost camera. A needs-tap state waits for the tap instead.
+    // Retry a lost camera. A needs-tap state waits for the tap instead. A
+    // yielded camera is closed, so ask the component whether the lease is free
+    // before opening it again.
     const retry = setInterval(() => {
-      if (!streamRef.current && statusRef.current === "lost") void start();
+      if (streamRef.current) return;
+      const c = connRef.current;
+      if (statusRef.current === "lost") void start();
+      else if (statusRef.current === "yielded" && c) {
+        claimCamera(c, cameraName, {
+          sourceId: sourceIdRef.current,
+          token: tokenRef.current,
+        }).then(
+          () => {
+            if (!cancelled && statusRef.current === "yielded") void start();
+          },
+          () => {}, // still held by the other browser
+        );
+      }
     }, RETRY_MS);
 
     (async () => {
@@ -149,19 +194,31 @@ export function useIpadCamera({
           try {
             const blob = await new Promise<Blob>((resolve, reject) =>
               canvas.toBlob(
-                (b) => (b ? resolve(b) : reject(new Error("toBlob returned null"))),
+                (b) =>
+                  b ? resolve(b) : reject(new Error("toBlob returned null")),
                 "image/jpeg",
                 JPEG_QUALITY,
               ),
             );
-            await pushCameraFrame(c, cameraName, await blobToBase64(blob));
+            await pushCameraFrame(c, cameraName, await blobToBase64(blob), {
+              sourceId: sourceIdRef.current,
+              token: tokenRef.current,
+            });
             if (lastError !== null) {
               lastError = null;
               if (!cancelled) setError(null);
             }
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
-            if (msg !== lastError) {
+            if (isLeaseError(msg) || isTokenError(msg)) {
+              // Not a hiccup: stop capturing so this browser isn't filming
+              // for a component that won't take the frames.
+              releaseCamera();
+              if (!cancelled) {
+                setError(msg);
+                setStatus(isTokenError(msg) ? "rejected" : "yielded");
+              }
+            } else if (msg !== lastError) {
               lastError = msg;
               if (!cancelled) setError(msg);
             }
@@ -177,14 +234,13 @@ export function useIpadCamera({
       clearTimeout(autoStart);
       clearInterval(retry);
       document.removeEventListener("visibilitychange", onVisible);
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
+      releaseCamera();
       wakeLockRef.current?.release().catch(() => {});
       wakeLockRef.current = null;
       if (video) video.srcObject = null;
       setStatus("off");
     };
-  }, [enabled, cameraName, width, start, requestWakeLock]);
+  }, [enabled, cameraName, width, start, requestWakeLock, releaseCamera]);
 
   return { videoRef, status, error, start };
 }
