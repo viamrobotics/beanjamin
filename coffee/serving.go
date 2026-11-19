@@ -15,43 +15,48 @@ import (
 	"beanjamin/coffee/geom"
 )
 
-func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error {
-	if s.gripper == nil {
-		return fmt.Errorf("set_cup_for_coffee: no gripper configured")
-	}
+// setVesselForCoffee picks the empty vessel off its shelf and sets it under the
+// group head, then backs away and closes the gripper.
+func (s *beanjaminCoffee) setVesselForCoffee(ctx, cancelCtx context.Context, v vessel) error {
+	name := "set_" + v.label + "_for_coffee"
 
-	if err := s.pickCupDynamic(ctx, cancelCtx); err != nil {
+	if err := v.pick(ctx, cancelCtx); err != nil {
 		return err
 	}
 
-	cupPlacementApproach := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw}
-	if err := s.executeStep(ctx, cancelCtx, cupPlacementApproach); err != nil {
-		return fmt.Errorf("set_cup_for_coffee: %w", err)
+	placementApproach := Step{PoseName: v.underApproach, PoseSwitch: s.clawsSw}
+	if err := s.executeStep(ctx, cancelCtx, placementApproach); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
 	}
-	// The cup is empty, so the arm's default speed.
-	readyStep := Step{PoseName: clawPoseCupReadyForCoffee, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.scene().heldItemSurfaceCollisions(heldItemMachineCollisions)}
+	// The vessel is empty, so the arm's default speed.
+	readyStep := Step{PoseName: v.readyForCoffee, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.scene().heldItemSurfaceCollisions(heldItemMachineCollisions)}
 	if err := s.executeStep(ctx, cancelCtx, readyStep); err != nil {
-		return fmt.Errorf("set_cup_for_coffee: %w", err)
+		return fmt.Errorf("%s: %w", name, err)
 	}
 
-	// Release the cup.
+	// Release the vessel.
 	if err := s.openGripper(ctx); err != nil {
-		return fmt.Errorf("set_cup_for_coffee: %w", err)
+		return fmt.Errorf("%s: %w", name, err)
 	}
-	// Cup is released under the machine; it no longer travels with the gripper.
+	// The vessel is released under the machine; it no longer travels with the gripper.
 	s.detachHeldGeometry()
 
-	// Move away from the cup. The gripper is empty, so the arm's default speed.
-	exitStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint}
+	// Move away from the vessel. The gripper is empty, so the arm's default speed.
+	exitStep := Step{PoseName: v.underApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint}
 	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
-		return fmt.Errorf("set_cup_for_coffee: %w", err)
+		return fmt.Errorf("%s: %w", name, err)
 	}
 
 	// Close the gripper after moving away.
 	if err := s.closeGripper(ctx); err != nil {
-		return fmt.Errorf("set_cup_for_coffee: %w", err)
+		return fmt.Errorf("%s: %w", name, err)
 	}
 	return nil
+}
+
+// setCupForCoffee picks an empty cup off the shelf and sets it under the group head.
+func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error {
+	return s.setVesselForCoffee(ctx, cancelCtx, s.cupVessel())
 }
 
 // placeFullCupOnShelf retrieves the brewed cup from cup_ready_for_coffee and

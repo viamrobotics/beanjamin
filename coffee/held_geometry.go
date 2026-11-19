@@ -197,17 +197,27 @@ func (s *beanjaminCoffee) attachConfiguredGeometry(
 func (sc *sceneState) containerBox(
 	at placement, label string, dims *ContainerDimensions, grabRel *RelativePose,
 ) (spatialmath.Geometry, error) {
+	centroid, err := sc.graspCentroid(at, grabRel)
+	if err != nil {
+		return nil, err
+	}
+	return geom.ContainerBox(centroid, dims.boxDims(), containerYaw(grabRel), label)
+}
+
+// graspCentroid recovers the grasp centroid in world coordinates, with the
+// frames placed by at: the grip-point world position minus the grab offset.
+func (sc *sceneState) graspCentroid(at placement, grabRel *RelativePose) (r3.Vector, error) {
 	gripPointPIF := referenceframe.NewPoseInFrame(gripPoint, spatialmath.NewZeroPose())
 	tf, err := at.transform(sc.fs, gripPointPIF, referenceframe.World)
 	if err != nil {
-		return nil, fmt.Errorf("transform grip point to world: %w", err)
+		return r3.Vector{}, fmt.Errorf("transform grip point to world: %w", err)
 	}
 	gripPointWorld := tf.(*referenceframe.PoseInFrame).Pose().Point()
 
 	// The grab poses are required by Validate wherever their pickup is configured,
 	// so they are non-nil on any machine that reaches the matching flow.
 	grabOffset := relativePoseToSpatial(grabRel).Point()
-	return geom.ContainerBox(gripPointWorld.Sub(grabOffset), dims.boxDims(), containerYaw(grabRel), label)
+	return gripPointWorld.Sub(grabOffset), nil
 }
 
 // containerYaw returns the heading, in radians about world Z, that the box for
