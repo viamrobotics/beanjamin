@@ -160,7 +160,7 @@ func (s *beanjaminCoffee) placeHeldInArea(ctx, cancelCtx context.Context, area p
 // approach pose above the slot, descend linearly to the drop pose (placement
 // anchor = shelfTopZ + servingAreaDropZOffset, i.e. the held container's
 // half-height, so its bottom rests on the shelf regardless of its height),
-// release, then retreat linearly and close the gripper.
+// release, then retreat linearly to the retreat pose and close the gripper.
 //
 // ServingGrabRelativePose is the grip-point-to-container offset used at release
 // (composed onto the placement anchor here) — shared by the hot cup and the
@@ -192,11 +192,16 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, area 
 	}
 	dropPose := geom.PoseRelativeTo(dropAnchor, relativePoseToSpatial(s.cfg.ServingGrabRelativePose))
 	approachPose := geom.PoseRelativeTo(dropAnchor, relativePoseToSpatial(s.cfg.ServingApproachRelativePose))
+	retreatPose := approachPose
+	if s.cfg.ServingRetreatRelativePose != nil {
+		retreatPose = geom.PoseRelativeTo(dropAnchor, relativePoseToSpatial(s.cfg.ServingRetreatRelativePose))
+	}
 
 	approachPD := &poseData{pose: approachPose, refFrame: referenceframe.World, componentName: gripPoint}
 	dropPD := &poseData{pose: dropPose, refFrame: referenceframe.World, componentName: gripPoint}
-	logger.Infof("shelf placement: slot (x=%.1f, y=%.1f) drop_pose=%v approach_pose=%v",
-		tileWorld.X, tileWorld.Y, dropPose, approachPose)
+	retreatPD := &poseData{pose: retreatPose, refFrame: referenceframe.World, componentName: gripPoint}
+	logger.Infof("shelf placement: slot (x=%.1f, y=%.1f) drop_pose=%v approach_pose=%v retreat_pose=%v",
+		tileWorld.X, tileWorld.Y, dropPose, approachPose, retreatPose)
 
 	// 1. Carry the held cup to the approach pose above the slot. A *filled*
 	// container is carried with its orientation held near level (carryHeldLevel)
@@ -243,12 +248,12 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, area 
 	// Cup is released onto the shelf; it no longer travels with the gripper.
 	s.detachHeldGeometry()
 
-	// 4. Linear retreat back to the approach pose. The cup is released, but the
+	// 4. Linear retreat to the retreat pose. The cup is released, but the
 	// gripper/claws start inside the area's shield, so the shield must stay
-	// allowed for the straight-up retreat to plan out of the slot (the held-item
-	// pair drops out now that nothing is attached). Nothing is held, so the arm's
-	// default speed.
-	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, s.areaShieldCollisions(area.shieldFrame), nil); err != nil {
+	// allowed for the retreat to plan out of the slot (the held-item pair drops
+	// out now that nothing is attached). Nothing is held, so the arm's default
+	// speed.
+	if err := s.moveToRawPose(ctx, retreatPD, defaultApproachConstraint, s.areaShieldCollisions(area.shieldFrame), nil); err != nil {
 		return fmt.Errorf("retreat after releasing cup (slot x=%.1f, y=%.1f): %v", tileWorld.X, tileWorld.Y, err)
 	}
 

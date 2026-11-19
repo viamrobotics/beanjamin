@@ -259,10 +259,13 @@ type Config struct {
 	MilkOptions []MilkOption `json:"milk_options,omitempty"`
 
 	// Serving placement offsets are composed onto the serving-area slot anchor
-	// when releasing a finished drink onto the served shelf. The same pair is
-	// used for both the hot cup and the iced glass. Both are required.
+	// when releasing a finished drink onto the served shelf. The same offsets
+	// are used for both the hot cup and the iced glass. The approach and grab
+	// are required; the retreat, where the gripper backs out to after the
+	// release, is optional and defaults to the approach pose.
 	ServingApproachRelativePose *RelativePose `json:"serving_approach_relative_pose,omitempty"`
 	ServingGrabRelativePose     *RelativePose `json:"serving_grab_relative_pose,omitempty"`
+	ServingRetreatRelativePose  *RelativePose `json:"serving_retreat_relative_pose,omitempty"`
 
 	InputRangeOverride map[string]map[string]JointLimitDegs `json:"input_range_override,omitempty"`
 
