@@ -14,6 +14,7 @@ import {
   type DrinkChoice,
 } from "./order/drinks";
 import { ChooseDrink } from "./order/choose-drink";
+import { waitTimeLabel } from "./order/wait-time";
 import { DrinkName } from "./order/drink-name";
 import { EnterName } from "./order/enter-name";
 import dynamic from "next/dynamic";
@@ -143,6 +144,9 @@ export function Kiosk() {
   // the machine no longer offers falls back to the default too.
   const [milk, setMilk] = useState("");
   const chosenMilk = milkOptions.includes(milk) ? milk : (milkOptions[0] ?? "");
+  // The machine's expected_wait_sec for a new order; undefined until it sends one.
+  const [expectedWaitSec, setExpectedWaitSec] = useState<number | undefined>();
+  const waitLabel = waitTimeLabel(expectedWaitSec);
   const [misspelled, setMisspelled] = useState("");
   const [loading, setLoading] = useState(false);
   const [welcomeBack, setWelcomeBack] = useState<string | null>(null);
@@ -220,6 +224,7 @@ export function Kiosk() {
         );
         const milks = q.milk_options ?? [];
         setMilkOptions((prev) => (prev.join() === milks.join() ? prev : milks));
+        setExpectedWaitSec(q.expected_wait_sec);
         if (q.orders.length > 0) {
           setTrackerMode((m) => (m === "hidden" ? "auto" : m));
         }
@@ -581,6 +586,7 @@ export function Kiosk() {
           fulfillment={fulfillment}
           milk={chosenMilk}
           milkOptions={milkOptions}
+          waitLabel={waitLabel}
           connected={connected}
           onSelect={setSelectedDrink}
           onBeansChange={setSelectedBeans}
@@ -649,6 +655,15 @@ export function Kiosk() {
         >
           Freshly brewed coffee, questionable spelling
         </p>
+        {waitLabel && (
+          <p
+            className="anim-in-hero -mt-6 mb-10 text-sm font-mono font-semibold uppercase tracking-wider text-neutral-500 text-center"
+            style={{ animationDelay: "900ms" }}
+            aria-live="polite"
+          >
+            {waitLabel}
+          </p>
+        )}
 
         {welcomeBack && (
           <div

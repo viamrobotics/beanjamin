@@ -83,6 +83,7 @@ func (q *Queue) Start() (Order, bool) {
 	}
 	o := q.pending[0]
 	q.pending = append(q.pending[:0], q.pending[1:]...)
+	o.StartedAt = time.Now()
 	q.current = &o
 	return copyOrder(o), true
 }

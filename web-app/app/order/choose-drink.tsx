@@ -18,6 +18,7 @@ export function ChooseDrink({
   fulfillment,
   milk,
   milkOptions,
+  waitLabel,
   connected,
   onSelect,
   onBeansChange,
@@ -34,6 +35,8 @@ export function ChooseDrink({
   milk: string;
   /** The machine's milk_options; the choice shows only when there are two or more. */
   milkOptions: string[];
+  /** The expected wait for a new order, phrased; null hides it. */
+  waitLabel: string | null;
   connected: boolean;
   onSelect: (id: string) => void;
   onBeansChange: (beans: string) => void;
@@ -164,9 +167,16 @@ export function ChooseDrink({
       </header>
       <div className="my-auto flex flex-col gap-6 w-full max-w-[900px] mx-auto px-10">
         <div className="anim-in flex flex-wrap items-center justify-between gap-x-4">
-          <h1 className="text-3xl tracking-tight font-semibold text-[#0a0a0a] whitespace-nowrap">
-            Choose your drink
-          </h1>
+          <div className="flex flex-col gap-1">
+            <h1 className="text-3xl tracking-tight font-semibold text-[#0a0a0a] whitespace-nowrap">
+              Choose your drink
+            </h1>
+            {waitLabel && (
+              <p className="text-neutral-500 text-sm" aria-live="polite">
+                {waitLabel}
+              </p>
+            )}
+          </div>
 
           {beanOptions.length > 1 && (
             <div

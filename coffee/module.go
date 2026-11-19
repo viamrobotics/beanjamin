@@ -121,8 +121,11 @@ type beanjaminCoffee struct {
 	// machineActivity is when water last ran through the espresso machine, driving
 	// the keep-alive loop (keepalive.go). nil when keepalive is unconfigured.
 	machineActivity *machineActivityStore
-	cupVision       vision.Service // vision service for cup pickup (always configured)
-	cupCameraName   string         // SrcCameraName, validated to exist in the frame system
+	// drinkDurations holds recent successful drinks' durations, behind the
+	// expected_wait_sec in Status. nil in tests that build the service by hand.
+	drinkDurations *drinkDurationStore
+	cupVision      vision.Service // vision service for cup pickup (always configured)
+	cupCameraName  string         // SrcCameraName, validated to exist in the frame system
 	// iceVision reads the same camera as cupCameraName, held as a resource so
 	// the ice-level measurement (coffee/icevision) can read frames directly. The
 	// vision pipelines reach it by name through their own services instead.
@@ -380,6 +383,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		gripper:            gripperComp,
 		lease:              armLease{cancelCtx: cancelCtx, cancelFunc: cancelFunc},
 		queue:              order.NewQueue(),
+		drinkDurations:     newDrinkDurationStore(logger),
 		queueStop:          make(chan struct{}),
 		orderSensorSink:    sink,
 		usageSensor:        usageSensor,

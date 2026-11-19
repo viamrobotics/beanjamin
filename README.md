@@ -514,9 +514,12 @@ Returns:
   "arm_holder": "order queue",
   "bean_options": ["regular", "decaf"],
   "can_serve_decaf": true,
-  "milk_options": ["whole", "oat"]
+  "milk_options": ["whole", "oat"],
+  "expected_wait_sec": 310
 }
 ```
+
+`expected_wait_sec` estimates how long a new order would wait before the arm starts on it: the remaining time of the order on the arm plus the full time of each pending order. Each drink's time is the average of that drink among the last 50 successful orders (or of all 50 for a drink not among them), measured from the order leaving the queue to its routine finishing. The window is kept in `VIAM_MODULE_DATA/drink-durations.json` so it survives reconfigures; the field is absent until a drink has been made. It does not account for the queue being paused.
 
 `bean_options` lists the beans an order may name, `regular` first, so a client can offer the choice. `can_serve_decaf` (whether `decaf` is among them) and the legacy `drink` ids are kept for older clients; see "Legacy decaf ids" under `prepare_order`.
 

@@ -87,6 +87,12 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		}
 		resp["milk_options"] = milkOptions
 	}
+	// How long a new order would wait for the drinks ahead of it, from recent
+	// drinks' durations. Absent until a drink has been made, so a client shows
+	// nothing rather than a made-up number.
+	if wait, ok := s.drinkDurations.expectedWait(orders, currentID, time.Now()); ok {
+		resp["expected_wait_sec"] = wait.Round(time.Second).Seconds()
+	}
 	s.logger.Debugw("Status", "response", resp)
 	return resp, nil
 }

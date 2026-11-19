@@ -299,6 +299,12 @@ export interface QueueStatus {
    * the default first. Absent from older modules.
    */
   milk_options?: string[];
+  /**
+   * Seconds a new order would wait for the drinks ahead of it, estimated from
+   * recent drinks' durations. Absent until the machine has made a drink, and
+   * from older modules.
+   */
+  expected_wait_sec?: number;
 }
 
 /**
@@ -377,6 +383,8 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
       // Stand-in for a machine's milk_options so the kiosk's milk choice
       // renders in dev mode.
       milk_options: ["whole", "oat"],
+      // A flat two minutes per queued drink, so the wait label renders.
+      expected_wait_sec: devQueue.length * 120,
     };
   }
 

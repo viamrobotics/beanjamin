@@ -67,6 +67,9 @@ type Order struct {
 	BatchIndex int `json:"batch_index,omitempty"`
 	BatchSize  int `json:"batch_size,omitempty"`
 
+	// StartedAt is set by Queue.Start when the order leaves the backlog for
+	// the arm. Zero while the order is still pending.
+	StartedAt   time.Time   `json:"started_at"`
 	RawStep     string      `json:"raw_step"`
 	StepHistory []StepEntry `json:"step_history"`
 	// CompletedAt is set by Complete() when the espresso routine finishes.

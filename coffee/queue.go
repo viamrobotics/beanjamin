@@ -174,6 +174,7 @@ func (s *beanjaminCoffee) safeExecuteOrder(cancelCtx context.Context, o order.Or
 			// a no-op when the order carries no email or no customer-detector
 			// is wired in. Recording only here (not on faults/cancels) keeps
 			// history to drinks the machine actually made.
+			s.drinkDurations.record(logger, o.Drink, time.Since(startedAt))
 			s.recordOrderHistory(ctx, o)
 			s.creditLoyaltyPoint(ctx, o)
 		} else {
