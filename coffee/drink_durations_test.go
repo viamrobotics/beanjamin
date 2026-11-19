@@ -44,7 +44,7 @@ func TestExpectedWaitSumsOrdersAhead(t *testing.T) {
 		{ID: "done", Drink: "iced_latte", CompletedAt: now.Add(-time.Second)},
 		{ID: "cur", Drink: "espresso", StartedAt: now.Add(-20 * time.Second)},
 		{ID: "p1", Drink: "iced_latte"},
-		// No lungo in the window: falls back to the overall average, 180s.
+		// No lungo made yet: falls back to the overall average, 180s.
 		{ID: "p2", Drink: "lungo"},
 	}
 	wait, ok := d.expectedWait(orders, "cur", now)
@@ -78,7 +78,24 @@ func TestDrinkDurationWindowKeepsLatest(t *testing.T) {
 	}
 	perDrink, _, _ := d.estimates()
 	if got := perDrink["espresso"]; got != 30*time.Second {
-		t.Errorf("espresso estimate = %v, want 30s (only the latest %d drinks)", got, drinkDurationWindow)
+		t.Errorf("espresso estimate = %v, want 30s (only the latest %d espressos)", got, drinkDurationWindow)
+	}
+}
+
+func TestDrinkDurationWindowIsPerDrink(t *testing.T) {
+	d := storeWith(t)
+	logger := logging.NewTestLogger(t)
+	d.record(logger, "iced_latte", 300*time.Second)
+	// Many espressos after it must not push the one iced latte out.
+	for range 5 * drinkDurationWindow {
+		d.record(logger, "espresso", 60*time.Second)
+	}
+	perDrink, _, _ := d.estimates()
+	if got := perDrink["iced_latte"]; got != 300*time.Second {
+		t.Errorf("iced_latte estimate = %v, want 300s", got)
+	}
+	if got := len(d.entries); got != drinkDurationWindow+1 {
+		t.Errorf("stored %d entries, want %d", got, drinkDurationWindow+1)
 	}
 }
 

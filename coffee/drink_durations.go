@@ -17,10 +17,11 @@ import (
 
 const (
 	drinkDurationsFile = "drink-durations.json"
-	// drinkDurationWindow is how many of the latest successful drinks the
-	// estimates average over: enough to smooth out one slow replan, few enough
-	// to follow a change in the routine within a day or two of orders.
-	drinkDurationWindow = 50
+	// drinkDurationWindow is how many of each drink's latest successful orders
+	// its estimate averages over. Kept per drink so a newly added or rarely
+	// ordered drink still has its own history instead of being crowded out by
+	// the popular ones; small enough to follow a change in the routine quickly.
+	drinkDurationWindow = 10
 )
 
 // drinkDuration is how long one successful order held the arm, from the queue
@@ -30,8 +31,8 @@ type drinkDuration struct {
 	Seconds float64 `json:"seconds"`
 }
 
-// drinkDurationStore keeps the last drinkDurationWindow successful drinks'
-// durations, oldest first. Mirrored to VIAM_MODULE_DATA because the service is
+// drinkDurationStore keeps the durations of the last drinkDurationWindow
+// successful orders of each drink, oldest first. Mirrored to VIAM_MODULE_DATA because the service is
 // AlwaysRebuild: without persisting, every reconfigure would forget the
 // estimates and the kiosk would show no wait time until new drinks were made.
 type drinkDurationStore struct {
@@ -69,14 +70,29 @@ func newDrinkDurationStore(logger logging.Logger) *drinkDurationStore {
 	return d
 }
 
+// trimToWindow drops every entry older than its drink's latest
+// drinkDurationWindow, keeping the rest in order.
 func trimToWindow(entries []drinkDuration) []drinkDuration {
-	if len(entries) > drinkDurationWindow {
-		return entries[len(entries)-drinkDurationWindow:]
+	seen := map[string]int{}
+	keep := make([]bool, len(entries))
+	n := 0
+	for i := len(entries) - 1; i >= 0; i-- {
+		seen[entries[i].Drink]++
+		if seen[entries[i].Drink] <= drinkDurationWindow {
+			keep[i] = true
+			n++
+		}
 	}
-	return entries
+	out := make([]drinkDuration, 0, n)
+	for i, e := range entries {
+		if keep[i] {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
-// record adds one successful drink, dropping the oldest past the window, and
+// record adds one successful drink, dropping that drink's oldest past the window, and
 // persists best-effort: a write failure leaves the in-memory window correct.
 func (d *drinkDurationStore) record(logger logging.Logger, drink string, took time.Duration) {
 	if d == nil {
@@ -103,9 +119,9 @@ func (d *drinkDurationStore) record(logger logging.Logger, drink string, took ti
 	}
 }
 
-// estimates returns the average duration of each drink in the window, plus the
-// average over every drink in it for a drink the window holds none of. ok is
-// false when the window is empty and nothing can be estimated.
+// estimates returns the average duration of each drink over its window, plus
+// the average over every stored entry for a drink that has never been made. ok
+// is false when nothing has been made yet and nothing can be estimated.
 func (d *drinkDurationStore) estimates() (perDrink map[string]time.Duration, overall time.Duration, ok bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
