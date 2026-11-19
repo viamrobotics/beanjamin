@@ -55,6 +55,14 @@ func (s *beanjaminCoffee) enqueueOrder(ctx context.Context, orderRaw any) (map[s
 		return nil, fmt.Errorf("unsupported drink %q: %s", drink, msg)
 	}
 
+	if err := s.requireIce(ctx, drink); err != nil {
+		s.logger.Warnf("rejected order for %q from %s: %v", drink, customerName, err)
+		if sayErr := s.speaker.Say(ctx, speech.IceUnavailable(drink)); sayErr != nil {
+			s.logger.Warnf("failed to say rejection: %v", sayErr)
+		}
+		return nil, err
+	}
+
 	beans, err := s.menu().ResolveBeans(req.Beans)
 	if err != nil {
 		s.logger.Infof("rejected order for %q beans from %s", req.Beans, customerName)

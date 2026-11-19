@@ -198,6 +198,15 @@ func (s *beanjaminCoffee) executeQueuedOrder(ctx, cancelCtx context.Context, ord
 	logger.Infof("starting order for %s (%s) — waited %s in queue",
 		order.CustomerName, order.Drink, waitTime)
 
+	// The ice machine can drop while an iced order waits in the queue. Refused
+	// here, before the arm moves, the order fails without stranding anything, so
+	// the queue carries on with the next one.
+	if err := s.requireIce(ctx, order.Drink); err != nil {
+		logger.Errorf("order for %s refused before starting: %v", order.CustomerName, err)
+		s.delivery.failIfMaking(order.ID, err.Error())
+		return err
+	}
+
 	if order.Greeting != "" {
 		if err := s.speaker.Say(ctx, order.Greeting); err != nil {
 			logger.Warnf("failed to say greeting: %v", err)

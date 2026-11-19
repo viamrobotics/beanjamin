@@ -9,6 +9,7 @@ package coffee
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -247,7 +248,7 @@ func (r *armRun) startExecution(s *beanjaminCoffee) {
 				continue // drain so the planner never blocks
 			}
 			if err := s.runMoveRecovered(r.ctx, m); err != nil {
-				first = err
+				first = &executionError{err: err}
 				r.recoverFrom(r.ctx, m)
 				r.failed.Store(true)
 				continue
@@ -256,6 +257,26 @@ func (r *armRun) startExecution(s *beanjaminCoffee) {
 		}
 		done <- first
 	}()
+}
+
+// executionError is a move that failed on the execution thread. The planner
+// only learns of it at its next hand-off or settle, by which time it is
+// planning a later step, so whatever context the planner wraps around it names
+// that later step rather than the move that failed.
+type executionError struct{ err error }
+
+func (e *executionError) Error() string { return e.err.Error() }
+func (e *executionError) Unwrap() error { return e.err }
+
+// executionCause returns the move failure inside err, without the planner's
+// context wrapped around it, or err itself when the failure was not on the
+// execution thread.
+func executionCause(err error) error {
+	var ee *executionError
+	if errors.As(err, &ee) {
+		return ee.err
+	}
+	return err
 }
 
 // runMoveRecovered runs m, turning a panic into an error. The queue's recover

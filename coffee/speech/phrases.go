@@ -194,6 +194,12 @@ func UnsupportedBeans(beans string) string {
 	return fmt.Sprintf("Sorry, I don't have %s beans at the moment.", SpeakableDrink(beans))
 }
 
+// IceUnavailable is the line spoken when an iced order is refused because the
+// ice machine cannot be reached.
+func IceUnavailable(drink string) string {
+	return fmt.Sprintf("Sorry, my ice machine is taking a break, so no %s for now. Anything hot I can make you?", SpeakableDrink(drink))
+}
+
 // UnsupportedDrink picks the line spoken when an order asks for a drink the
 // machine cannot make.
 func UnsupportedDrink(drink string) string {

@@ -515,11 +515,15 @@ Returns:
   "bean_options": ["regular", "decaf"],
   "can_serve_decaf": true,
   "milk_options": ["whole", "oat"],
-  "expected_wait_sec": 310
+  "expected_wait_sec": 310,
+  "iced_available": true,
+  "iced_unavailable_reason": ""
 }
 ```
 
 `expected_wait_sec` estimates how long a new order would wait before the arm starts on it: the remaining time of the order on the arm plus the full time of each pending order. Each drink's time is the average of its last 10 successful orders (or of every stored order, for a drink never made yet), measured from the order leaving the queue to its routine finishing. The history is kept in `VIAM_MODULE_DATA/drink-durations.json` so it survives reconfigures; the field is absent until a drink has been made. It does not account for the queue being paused.
+
+When `can_serve_iced` is set, `iced_available` says whether the ice machine answered the service's last probe, and `iced_unavailable_reason` says why it didn't. Every 5 seconds the service reads the level of the `ice_pin_name` pin on `ice_board_name`. The read never drives the pin. It reports `false` until the first probe answers. While the ice machine is unreachable, which usually means its remote is offline, the kiosk greys out the iced drinks and `prepare_order` refuses them. An iced order already in the queue is refused before its brew starts, so nothing is left stranded and the queue isn't paused.
 
 `bean_options` lists the beans an order may name, `regular` first, so a client can offer the choice. `can_serve_decaf` (whether `decaf` is among them) and the legacy `drink` ids are kept for older clients; see "Legacy decaf ids" under `prepare_order`.
 

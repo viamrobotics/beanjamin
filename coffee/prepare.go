@@ -49,6 +49,7 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 		if runErr := endRun(); err == nil {
 			err = runErr
 		}
+		err = executionCause(err)
 	}()
 
 	// Pick up any out-of-band frame-system edits (e.g. portafilter handle geometry

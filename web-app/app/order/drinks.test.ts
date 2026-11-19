@@ -6,7 +6,23 @@ import {
   orderParts,
   splitDrink,
   spokenOrder,
+  unavailableDrinksOf,
 } from "./drinks";
+
+test("iced drinks are unavailable only while the ice machine is reported down", () => {
+  assert.deepEqual(unavailableDrinksOf({ iced_available: false }), [
+    "iced_coffee",
+    "iced_latte",
+  ]);
+  assert.deepEqual(unavailableDrinksOf({ iced_available: true }), []);
+  // Older modules, and machines without iced drinks, don't report it.
+  assert.deepEqual(unavailableDrinksOf({}), []);
+  // The same array each poll, so the drink screen doesn't re-render.
+  assert.equal(
+    unavailableDrinksOf({ iced_available: false }),
+    unavailableDrinksOf({ iced_available: false }),
+  );
+});
 
 test("bean options put regular first and fall back to can_serve_decaf", () => {
   assert.deepEqual(

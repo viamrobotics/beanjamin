@@ -68,6 +68,7 @@ type beanjaminCoffee struct {
 	gripper          gripper.Gripper
 	clips            *clips.Saver     // saves order clips via cam_storage_mux_name; records pending clips under data_dir
 	iceBoard         board.Board      // optional; drives the ice-machine GPIO pin; nil if ice_board_name unset
+	iceHealth        iceHealth        // whether iceBoard answered its last probe (ice_health.go)
 	slackNotifier    *report.Notifier // optional; viam:notifications:slack; nil if slack_notifier_name unset
 	customerDetector generic.Service  // optional; viam:beanjamin:customer-detector; nil if customer_detector_name unset
 	delivery         *deliveryCart    // cart heartbeat, docked order, and handover state
@@ -416,6 +417,9 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		go s.keepAliveLoop(window)
 	}
 
+	if conf.CanServeIced {
+		go s.iceHealthLoop()
+	}
 	go s.processQueue()
 	return s, nil
 }
