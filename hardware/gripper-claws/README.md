@@ -1,16 +1,16 @@
 # Gripper claws
 
-The printed claw fitted to the arm's uFactory gripper. It holds the portafilter by its printed handle (`../portafilter-handle/`): the claw's pegs seat in the handle's two dimples, which keeps the grip from slipping while the arm locks and unlocks the portafilter.
+The printed finger fitted to the arm's uFactory gripper. The claw is two of these, so print the STL twice. It holds the portafilter by its printed handle (`../portafilter-handle/`): the claw's pegs seat in the handle's two dimples, which keeps the grip from slipping while the arm locks and unlocks the portafilter.
 
-| File | Extent (mm) | Volume |
-| --- | --- | --- |
-| `barista-gripper.stl` | 31 × 32 × 115 | 51 cm³ |
+| File | Extent (mm) | Volume | Print |
+| --- | --- | --- | --- |
+| `barista-gripper.stl` | 31 × 32 × 115 | 51 cm³ | ×2, one per jaw |
 
 The STL is exported from SolidWorks in millimetres. There is no STEP source, so changes mean remodelling rather than editing this file.
 
 ## What depends on it
 
-The coffee service's motion planning models the claws, not this mesh. If a reprint changes the claw's shape or length, update these to match:
+The coffee service's motion planning models the claws, not this mesh. If a reprint changes the finger's shape or length, update these to match:
 
 - **`gripper:claws` geometry:** reported by the gripper component.
 - **`coffee-claws-middle` frame:** the claws' obstacle.
