@@ -118,6 +118,29 @@ func ContainerBox(centroid, dims r3.Vector, yawRad float64, label string) (spati
 	return box, nil
 }
 
+// MugGeometries models a mug as two upright boxes for collision checks: the
+// body, built by ContainerBox from bodyDims, and the handle, as tall as the
+// body, handleWidthMm along the grab heading and handleDepthMm out to the
+// left. The robot grips a mug with its left jaw through the handle's loop, so
+// the handle sticks out to the arm's left: the grab heading (yawRad, the
+// grab's GraspYaw) turned 90 degrees counter-clockwise seen from above. It sits
+// flush against the body's left side. Returns [body, handle]; the handle's
+// label is label + "-handle".
+func MugGeometries(centroid, bodyDims r3.Vector, handleDepthMm, handleWidthMm, yawRad float64, label string) ([]spatialmath.Geometry, error) {
+	body, err := ContainerBox(centroid, bodyDims, yawRad, label)
+	if err != nil {
+		return nil, err
+	}
+	offset := bodyDims.Y/2 + handleDepthMm/2
+	handleCenter := centroid.Add(r3.Vector{X: -math.Sin(yawRad) * offset, Y: math.Cos(yawRad) * offset})
+	handleDims := r3.Vector{X: handleWidthMm, Y: handleDepthMm, Z: bodyDims.Z}
+	handle, err := ContainerBox(handleCenter, handleDims, yawRad, label+"-handle")
+	if err != nil {
+		return nil, err
+	}
+	return []spatialmath.Geometry{body, handle}, nil
+}
+
 // graspHeadingMinHorizontal is the smallest horizontal component of the unit
 // tool axis GraspYaw reads a heading from. Closer to vertical than that (about
 // 6°), the projection's direction is mostly noise.

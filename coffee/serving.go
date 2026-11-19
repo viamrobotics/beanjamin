@@ -15,43 +15,53 @@ import (
 	"beanjamin/coffee/geom"
 )
 
-func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error {
-	if s.gripper == nil {
-		return fmt.Errorf("set_cup_for_coffee: no gripper configured")
-	}
+// setVesselForCoffee picks the empty vessel off its shelf and sets it under the
+// group head, then backs away and closes the gripper.
+func (s *beanjaminCoffee) setVesselForCoffee(ctx, cancelCtx context.Context, v vessel) error {
+	name := "set_" + v.label + "_for_coffee"
 
-	if err := s.pickCupDynamic(ctx, cancelCtx); err != nil {
+	if err := v.pick(ctx, cancelCtx); err != nil {
 		return err
 	}
 
-	cupPlacementApproach := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw}
-	if err := s.executeStep(ctx, cancelCtx, cupPlacementApproach); err != nil {
-		return fmt.Errorf("set_cup_for_coffee: %w", err)
+	placementApproach := Step{PoseName: v.underApproach, PoseSwitch: s.clawsSw}
+	if err := s.executeStep(ctx, cancelCtx, placementApproach); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
 	}
-	// The cup is empty, so the arm's default speed.
-	readyStep := Step{PoseName: clawPoseCupReadyForCoffee, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.scene().heldItemSurfaceCollisions(heldItemMachineCollisions)}
+	// The vessel is empty, so the arm's default speed.
+	readyStep := Step{PoseName: v.readyForCoffee, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint, Pause: shortPause, AllowedCollisions: s.scene().heldItemSurfaceCollisions(heldItemMachineCollisions)}
 	if err := s.executeStep(ctx, cancelCtx, readyStep); err != nil {
-		return fmt.Errorf("set_cup_for_coffee: %w", err)
+		return fmt.Errorf("%s: %w", name, err)
 	}
 
-	// Release the cup.
+	// Release the vessel.
 	if err := s.openGripper(ctx); err != nil {
-		return fmt.Errorf("set_cup_for_coffee: %w", err)
+		return fmt.Errorf("%s: %w", name, err)
 	}
-	// Cup is released under the machine; it no longer travels with the gripper.
+	// The vessel is released under the machine; it no longer travels with the gripper.
 	s.detachHeldGeometry()
 
-	// Move away from the cup. The gripper is empty, so the arm's default speed.
-	exitStep := Step{PoseName: clawPoseCupUnderMachineApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint}
+	// Move away from the vessel. The gripper is empty, so the arm's default speed.
+	exitStep := Step{PoseName: v.underApproach, PoseSwitch: s.clawsSw, LinearConstraint: defaultApproachConstraint}
 	if err := s.executeStep(ctx, cancelCtx, exitStep); err != nil {
-		return fmt.Errorf("set_cup_for_coffee: %w", err)
+		return fmt.Errorf("%s: %w", name, err)
 	}
 
 	// Close the gripper after moving away.
 	if err := s.closeGripper(ctx); err != nil {
-		return fmt.Errorf("set_cup_for_coffee: %w", err)
+		return fmt.Errorf("%s: %w", name, err)
 	}
 	return nil
+}
+
+// setCupForCoffee picks an empty cup off the shelf and sets it under the group head.
+func (s *beanjaminCoffee) setCupForCoffee(ctx, cancelCtx context.Context) error {
+	return s.setVesselForCoffee(ctx, cancelCtx, s.cupVessel())
+}
+
+// setMugForCoffee is setCupForCoffee for a mug (can_serve_mug_drinks).
+func (s *beanjaminCoffee) setMugForCoffee(ctx, cancelCtx context.Context) error {
+	return s.setVesselForCoffee(ctx, cancelCtx, s.mugVessel())
 }
 
 // placeFullCupOnShelf retrieves the brewed cup from cup_ready_for_coffee and
@@ -155,7 +165,7 @@ func (s *beanjaminCoffee) placeHeldInArea(ctx, cancelCtx context.Context, area p
 // approach pose above the slot, descend linearly to the drop pose (placement
 // anchor = shelfTopZ + servingAreaDropZOffset, i.e. the held container's
 // half-height, so its bottom rests on the shelf regardless of its height),
-// release, then retreat linearly and close the gripper.
+// release, then retreat linearly to the retreat pose and close the gripper.
 //
 // ServingGrabRelativePose is the grip-point-to-container offset used at release
 // (composed onto the placement anchor here) — shared by the hot cup and the
@@ -187,11 +197,16 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, area 
 	}
 	dropPose := geom.PoseRelativeTo(dropAnchor, relativePoseToSpatial(s.cfg.ServingGrabRelativePose))
 	approachPose := geom.PoseRelativeTo(dropAnchor, relativePoseToSpatial(s.cfg.ServingApproachRelativePose))
+	retreatPose := approachPose
+	if s.cfg.ServingRetreatRelativePose != nil {
+		retreatPose = geom.PoseRelativeTo(dropAnchor, relativePoseToSpatial(s.cfg.ServingRetreatRelativePose))
+	}
 
 	approachPD := &poseData{pose: approachPose, refFrame: referenceframe.World, componentName: gripPoint}
 	dropPD := &poseData{pose: dropPose, refFrame: referenceframe.World, componentName: gripPoint}
-	logger.Infof("shelf placement: slot (x=%.1f, y=%.1f) drop_pose=%v approach_pose=%v",
-		tileWorld.X, tileWorld.Y, dropPose, approachPose)
+	retreatPD := &poseData{pose: retreatPose, refFrame: referenceframe.World, componentName: gripPoint}
+	logger.Infof("shelf placement: slot (x=%.1f, y=%.1f) drop_pose=%v approach_pose=%v retreat_pose=%v",
+		tileWorld.X, tileWorld.Y, dropPose, approachPose, retreatPose)
 
 	// 1. Carry the held cup to the approach pose above the slot. A *filled*
 	// container is carried with its orientation held near level (carryHeldLevel)
@@ -238,12 +253,12 @@ func (s *beanjaminCoffee) tryDropCupInSlot(ctx, cancelCtx context.Context, area 
 	// Cup is released onto the shelf; it no longer travels with the gripper.
 	s.detachHeldGeometry()
 
-	// 4. Linear retreat back to the approach pose. The cup is released, but the
+	// 4. Linear retreat to the retreat pose. The cup is released, but the
 	// gripper/claws start inside the area's shield, so the shield must stay
-	// allowed for the straight-up retreat to plan out of the slot (the held-item
-	// pair drops out now that nothing is attached). Nothing is held, so the arm's
-	// default speed.
-	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, s.areaShieldCollisions(area.shieldFrame), nil); err != nil {
+	// allowed for the retreat to plan out of the slot (the held-item pair drops
+	// out now that nothing is attached). Nothing is held, so the arm's default
+	// speed.
+	if err := s.moveToRawPose(ctx, retreatPD, defaultApproachConstraint, s.areaShieldCollisions(area.shieldFrame), nil); err != nil {
 		return fmt.Errorf("retreat after releasing cup (slot x=%.1f, y=%.1f): %v", tileWorld.X, tileWorld.Y, err)
 	}
 

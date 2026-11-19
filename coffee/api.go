@@ -76,6 +76,13 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		"fault_active":    s.faultAlarm.Active(),
 		"accept_delivery": s.deliveryAccepting(),
 	}
+	// Whether the ice machine answered its last probe, for the kiosk to grey out
+	// the iced drinks. Only on a machine serving them.
+	if s.cfg.CanServeIced {
+		ok, reason := s.iceAvailability()
+		resp["iced_available"] = ok
+		resp["iced_unavailable_reason"] = reason
+	}
 	// The milks an iced latte can be ordered with, the default first; the kiosk
 	// builds its milk choice from these. Only on a machine serving the latte,
 	// the only one whose milk_options are validated.

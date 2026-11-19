@@ -59,6 +59,7 @@ func newTestCoffee(t *testing.T, cfg *Config) (*beanjaminCoffee, *fakeSpeech) {
 		queue:    order.NewQueue(),
 		speaker:  speech.NewSpeaker(sp, cfg.Conversational),
 		delivery: newDeliveryCart(),
+		iceBoard: iceBoardAnswering(nil),
 
 		settledScene: &sceneState{},
 	}, sp

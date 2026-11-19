@@ -19,6 +19,7 @@ export function ChooseDrink({
   milk,
   milkOptions,
   waitLabel,
+  unavailableDrinks,
   connected,
   onSelect,
   onBeansChange,
@@ -37,6 +38,8 @@ export function ChooseDrink({
   milkOptions: string[];
   /** The expected wait for a new order, phrased; null hides it. */
   waitLabel: string | null;
+  /** Menu drinks the machine can't make right now; shown greyed out in place. */
+  unavailableDrinks: readonly string[];
   connected: boolean;
   onSelect: (id: string) => void;
   onBeansChange: (beans: string) => void;
@@ -49,6 +52,9 @@ export function ChooseDrink({
     null,
   );
   const renderDrinkCard = (drink: (typeof GRID_DRINKS)[number], i: number) => {
+    if (unavailableDrinks.includes(drink.id)) {
+      return renderPausedCard(drink, i);
+    }
     const isSelected = selectedDrink === drink.id;
     // The milk choice sits on the card itself once it's picked. It's a sibling
     // of the card button, not inside it, since buttons can't nest.
@@ -113,6 +119,38 @@ export function ChooseDrink({
       </div>
     );
   };
+
+  // A menu drink the machine can't make right now. It keeps its place in the
+  // grid so the layout doesn't jump when the ice machine drops or comes back.
+  const renderPausedCard = (
+    drink: (typeof GRID_DRINKS)[number],
+    i: number,
+  ) => (
+    <button
+      key={drink.id}
+      type="button"
+      aria-disabled="true"
+      aria-label={`${drink.label}, temporarily unavailable`}
+      style={{ animationDelay: `${150 + i * 100}ms` }}
+      className="anim-in relative w-full h-full flex flex-col items-center justify-center gap-1 py-4 rounded-2xl bg-neutral-50 border-2 border-transparent cursor-not-allowed"
+    >
+      <div className="flex flex-col items-center gap-1 -translate-y-2">
+        <Image
+          src={drink.image}
+          alt=""
+          width={140}
+          height={140}
+          className="object-contain h-[min(140px,14vh)] w-auto opacity-40 grayscale"
+        />
+        <p className="font-sans font-medium text-base text-neutral-400 leading-tight">
+          {drink.label}
+        </p>
+        <p className="font-mono font-semibold text-[11px] uppercase tracking-wider text-neutral-500">
+          Temporarily unavailable
+        </p>
+      </div>
+    </button>
+  );
 
   const renderComingSoonCard = (
     drink: (typeof COMING_SOON_DRINKS)[number],
@@ -203,6 +241,16 @@ export function ChooseDrink({
             </div>
           )}
         </div>
+
+        {GRID_DRINKS.some((d) => unavailableDrinks.includes(d.id)) && (
+          <p
+            className="anim-in -mt-3 text-neutral-500 text-sm"
+            aria-live="polite"
+          >
+            Our ice machine is taking a break, so iced drinks are temporarily
+            unavailable.
+          </p>
+        )}
 
         <div className="grid gap-3 grid-cols-2 @md:grid-cols-3 @lg:grid-cols-4">
           {GRID_DRINKS.map((drink, i) => renderDrinkCard(drink, i))}

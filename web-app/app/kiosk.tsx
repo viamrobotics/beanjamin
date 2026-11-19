@@ -11,6 +11,7 @@ import {
   hasMilkChoice,
   spokenOrder,
   splitDrink,
+  unavailableDrinksOf,
   type DrinkChoice,
 } from "./order/drinks";
 import { ChooseDrink } from "./order/choose-drink";
@@ -126,7 +127,18 @@ export function Kiosk() {
   const [step, setStep] = useState<Step>("welcome");
   const [name, setName] = useState(prefillName);
   const [email, setEmail] = useState(prefillEmail);
+  // Menu drinks the machine can't make right now (the iced ones while its ice
+  // machine is unreachable), from the queue poll.
+  const [unavailableDrinks, setUnavailableDrinks] = useState<
+    readonly string[]
+  >(unavailableDrinksOf({}));
   const [selectedDrink, setSelectedDrink] = useState<string | null>(null);
+  // On the drink screen a pick that became unavailable reads as no pick, so
+  // Next can't carry it on. Past that screen the backend refuses it instead.
+  const drinkScreenPick =
+    selectedDrink && !unavailableDrinks.includes(selectedDrink)
+      ? selectedDrink
+      : null;
   const [selectedBeans, setSelectedBeans] = useState(REGULAR_BEANS);
   // The beans this machine grinds, from the queue poll; regular only until
   // the first poll answers.
@@ -158,6 +170,7 @@ export function Kiosk() {
   const orderableUsuals = usuals.filter(
     (u) =>
       (DRINKS.find((d) => d.id === u.drink)?.available ?? true) &&
+      !unavailableDrinks.includes(u.drink) &&
       beanOptions.includes(u.beans),
   );
   const [machineName, setMachineName] = useState<string | null>(null);
@@ -225,6 +238,7 @@ export function Kiosk() {
         const milks = q.milk_options ?? [];
         setMilkOptions((prev) => (prev.join() === milks.join() ? prev : milks));
         setExpectedWaitSec(q.expected_wait_sec);
+        setUnavailableDrinks(unavailableDrinksOf(q));
         if (q.orders.length > 0) {
           setTrackerMode((m) => (m === "hidden" ? "auto" : m));
         }
@@ -323,7 +337,7 @@ export function Kiosk() {
   }, [step, connected, viamConn, prefillEmail]);
 
   function handleDrinkNext() {
-    if (!selectedDrink) return;
+    if (!drinkScreenPick) return;
     setStep("name");
   }
 
@@ -580,13 +594,14 @@ export function Kiosk() {
     if (step === "drink") {
       return (
         <ChooseDrink
-          selectedDrink={selectedDrink}
+          selectedDrink={drinkScreenPick}
           beanOptions={beanOptions}
           selectedBeans={chosenBeans}
           fulfillment={fulfillment}
           milk={chosenMilk}
           milkOptions={milkOptions}
           waitLabel={waitLabel}
+          unavailableDrinks={unavailableDrinks}
           connected={connected}
           onSelect={setSelectedDrink}
           onBeansChange={setSelectedBeans}

@@ -305,6 +305,13 @@ export interface QueueStatus {
    * from older modules.
    */
   expected_wait_sec?: number;
+  /**
+   * Whether the ice machine answered the coffee service's last probe. Only on
+   * a machine serving iced drinks; absent from older modules.
+   */
+  iced_available?: boolean;
+  /** Why the ice machine is unavailable, for logs; "" while it is available. */
+  iced_unavailable_reason?: string;
 }
 
 /**
@@ -385,6 +392,7 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
       milk_options: ["whole", "oat"],
       // A flat two minutes per queued drink, so the wait label renders.
       expected_wait_sec: devQueue.length * 120,
+      iced_available: true,
     };
   }
 

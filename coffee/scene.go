@@ -20,12 +20,14 @@ type sceneState struct {
 	// run has not planned it and the arm has to be read.
 	inputs referenceframe.FrameSystemInputs
 
-	// heldCupGeom, heldGlassGeom and heldMilkGeom are the gripper-local
-	// geometry of the cup and glass (detected at pickup) and of the milk bottle
-	// (modeled from milk_bottle_dimensions), kept so a re-grab can restore them.
-	// Each is a list, container body first.
+	// heldCupGeom, heldGlassGeom, heldMugGeom and heldMilkGeom are the
+	// gripper-local geometry of the cup, glass and mug (detected at pickup) and
+	// of the milk bottle (modeled from milk_bottle_dimensions), kept so a re-grab
+	// can restore them. Each is a list, body first: a mug is a body box plus a
+	// handle box.
 	heldCupGeom   []spatialmath.Geometry
 	heldGlassGeom []spatialmath.Geometry
+	heldMugGeom   []spatialmath.Geometry
 	heldMilkGeom  []spatialmath.Geometry
 	// heldItemAttached is whether the held-item frame is in fs.
 	heldItemAttached bool
@@ -42,6 +44,9 @@ type sceneState struct {
 	// stagedGlassPlaced is whether stageGlassAsObstacle has added the released
 	// glass to the world in fs.
 	stagedGlassPlaced bool
+	// stagedMugPlaced is stagedGlassPlaced for a mug set down at the hot water
+	// spout (the staged-mug frame).
+	stagedMugPlaced bool
 
 	// doorOpenDegs is how far the fridge door physically stands open, in degrees
 	// about its hinge (0 = shut). The frame system always rebuilds with the door

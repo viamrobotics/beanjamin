@@ -47,6 +47,7 @@ const (
 	pickupLabelCup   = "cup"
 	pickupLabelGlass = "glass"
 	pickupLabelMilk  = "milk"
+	pickupLabelMug   = "mug"
 )
 
 // Clean-area shield obstacles enclosing the zone of standing clean cups / glasses
@@ -58,6 +59,7 @@ const (
 const (
 	cleanCupAreaShieldFrameName   = "clean-cup-area-shield"
 	cleanGlassAreaShieldFrameName = "clean-glass-area-shield"
+	cleanMugAreaShieldFrameName   = "clean-mug-area-shield"
 )
 
 // errNoItemsDetected marks the "vision saw nothing at any observe pose" outcome.
@@ -120,6 +122,7 @@ type pickupTarget struct {
 	graspZFromGeom   bool                 // grab at the geometry centroid's Z (keep detected X/Y); for the tall glass whose detected Z can sit high on the rim
 	shieldFrame      string               // clean-area shield obstacle opened up on the grasp descent/retreat (areaShieldCollisions); "" disables
 	retreatSpeed     *StepMoveOptions     // speed of the retreat with the item in hand; nil is the arm default
+	handle           *HandleDimensions    // handle box modeled beside the body (mug); nil for cups and glasses
 }
 
 // cupPickupTarget describes dynamic cup pickup.
@@ -162,6 +165,38 @@ func (s *beanjaminCoffee) glassPickupTarget() *pickupTarget {
 		shieldFrame:      cleanGlassAreaShieldFrameName,
 		retreatSpeed:     s.slowMoveOptions(),
 	}
+}
+
+// mugPickupTarget describes dynamic mug pickup: its own vision service and
+// observe switch, the shared camera, and grasp offsets that put the jaws
+// through the handle loop. The held geometry adds a handle box to the body.
+func (s *beanjaminCoffee) mugPickupTarget() *pickupTarget {
+	return &pickupTarget{
+		label:            pickupLabelMug,
+		vision:           s.mugVision,
+		cameraName:       s.cupCameraName,
+		observeSw:        s.mugObserveSw,
+		observeHomePose:  mugPoseObserve,
+		approachRel:      s.cfg.MugApproachRelativePose,
+		grabRel:          s.cfg.MugGrabRelativePose,
+		maxAttempts:      pickupMaxAttempts(s.cfg.CupPickupMaxAttempts),
+		dims:             s.cfg.MugDimensions,
+		handle:           s.cfg.MugHandleDimensions,
+		noItemSpeak:      "I don't see a mug yet — please place one on the mug shelf. Trying again in 15 seconds.",
+		unreachableSpeak: "I can see a mug but I'm having trouble grabbing it — could you nudge it a little? Trying again in 15 seconds.",
+		shieldFrame:      cleanMugAreaShieldFrameName,
+		retreatSpeed:     nil, // the mug is empty, so the arm's default speed
+	}
+}
+
+// heldGeometries returns the world-frame geometries to attach once the
+// candidate is grabbed: the detected box alone, or for a mug the body plus its
+// handle box beside it.
+func (t *pickupTarget) heldGeometries(cand geom.Candidate) ([]spatialmath.Geometry, error) {
+	if t.handle == nil {
+		return []spatialmath.Geometry{cand.Geom}, nil
+	}
+	return geom.MugGeometries(cand.Geom.Pose().Point(), t.dims.boxDims(), t.handle.DepthMm, t.handle.WidthMm, containerYaw(t.grabRel), t.label)
 }
 
 // observeVantage captures one vision frame at the arm's current pose and lifts
@@ -444,7 +479,11 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 	// pose, so the retreat (and everything until release) plans around the held
 	// item. Best-effort: a tracking-attach hiccup degrades to untracked motion
 	// (the prior behavior) rather than aborting a physical order mid-grab.
-	if err := s.attachDetectedGeometry(ctx, t.label, cand.Geom); err != nil {
+	geoms, err := t.heldGeometries(cand)
+	if err == nil {
+		err = s.attachDetectedGeometries(ctx, t.label, geoms)
+	}
+	if err != nil {
 		s.activeOrderLogger().Warnf("dynamic %s pickup: attach geometry failed, continuing untracked: %v", t.label, err)
 	}
 
@@ -492,6 +531,12 @@ func (s *beanjaminCoffee) pickCupDynamic(ctx, cancelCtx context.Context) error {
 // vision service + observe switch). Called by fetchGlass (can_serve_iced).
 func (s *beanjaminCoffee) pickGlassDynamic(ctx, cancelCtx context.Context) error {
 	return s.pickDynamic(ctx, cancelCtx, s.glassPickupTarget())
+}
+
+// pickMugDynamic picks a mug via the vision pipeline (its own vision service +
+// observe switch). Called by the mug drink sequence and pick_mug.
+func (s *beanjaminCoffee) pickMugDynamic(ctx, cancelCtx context.Context) error {
+	return s.pickDynamic(ctx, cancelCtx, s.mugPickupTarget())
 }
 
 // announceAndWaitForRetry recovers the arm to the observe home pose, speaks the

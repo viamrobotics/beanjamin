@@ -71,6 +71,20 @@ export function beanOptionsOf(q: {
   return q.can_serve_decaf ? [REGULAR_BEANS, "decaf"] : [REGULAR_BEANS];
 }
 
+// The drinks made with ice (see IsIced in coffee/order/drinks.go).
+const ICED_DRINK_IDS: readonly string[] = ["iced_coffee", "iced_latte"];
+const NO_DRINKS: readonly string[] = [];
+
+// The menu drinks the machine can't make right now: the iced ones while its
+// ice machine is unreachable. A machine that doesn't report iced_available
+// (older module, or no iced drinks) restricts nothing. The arrays are shared
+// constants so the queue poll doesn't re-render the drink screen.
+export function unavailableDrinksOf(q: {
+  iced_available?: boolean;
+}): readonly string[] {
+  return q.iced_available === false ? ICED_DRINK_IDS : NO_DRINKS;
+}
+
 // Decaf used to be its own drink. The backend still reports decaf espresso and
 // lungo under those legacy ids (get_queue, get_usual), next to beans.
 const LEGACY_DECAF: Record<string, string> = {
