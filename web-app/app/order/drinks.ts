@@ -43,6 +43,7 @@ export const GRID_DRINK_IDS = [
   "espresso",
   "lungo",
   "americano",
+  "hot_water",
   "iced_coffee",
   "iced_latte",
   "latte",
@@ -50,6 +51,12 @@ export const GRID_DRINK_IDS = [
 ] as const;
 
 export const REGULAR_BEANS = "regular";
+
+// brewsCoffee reports whether the drink is made from beans (see BrewsCoffee in
+// coffee/order/drinks.go). Hot water has no beans to choose.
+export function brewsCoffee(drinkId: string): boolean {
+  return drinkId !== "hot_water";
+}
 
 // Display names for the beans a machine can grind (its get_queue bean_options).
 // Unknown names fall back to a title-cased version, so a new grinder only
@@ -84,17 +91,31 @@ export function beanOptionsOf(q: {
 }
 
 // The drinks made with ice (see IsIced in coffee/order/drinks.go).
-const ICED_DRINK_IDS: readonly string[] = ["iced_coffee", "iced_latte"];
+export const ICED_DRINK_IDS: readonly string[] = ["iced_coffee", "iced_latte"];
+// The drinks served in a mug (see IsMug in coffee/order/drinks.go).
+const MUG_DRINK_IDS: readonly string[] = ["americano", "hot_water"];
+const ICED_AND_MUG_DRINK_IDS: readonly string[] = [
+  ...ICED_DRINK_IDS,
+  ...MUG_DRINK_IDS,
+];
 const NO_DRINKS: readonly string[] = [];
 
 // The menu drinks the machine can't make right now: the iced ones while its
-// ice machine is unreachable. A machine that doesn't report iced_available
-// (older module, or no iced drinks) restricts nothing. The arrays are shared
-// constants so the queue poll doesn't re-render the drink screen.
+// ice machine is unreachable, and the mug drinks unless it reports
+// mug_drinks_available. A machine that doesn't report iced_available (older
+// module, or no iced drinks) keeps its iced drinks; one that doesn't report
+// mug_drinks_available has no mug drinks. The arrays are shared constants so
+// the queue poll doesn't re-render the drink screen.
 export function unavailableDrinksOf(q: {
   iced_available?: boolean;
+  mug_drinks_available?: boolean;
 }): readonly string[] {
-  return q.iced_available === false ? ICED_DRINK_IDS : NO_DRINKS;
+  const iced = q.iced_available === false;
+  const mug = q.mug_drinks_available !== true;
+  if (iced && mug) return ICED_AND_MUG_DRINK_IDS;
+  if (iced) return ICED_DRINK_IDS;
+  if (mug) return MUG_DRINK_IDS;
+  return NO_DRINKS;
 }
 
 // Decaf used to be its own drink. The backend still reports decaf espresso and
@@ -118,7 +139,7 @@ export function splitDrink(drink: string, beans?: string): DrinkChoice {
 }
 
 // orderParts splits an order's display name into the drink and its
-// lowercase qualifiers: the beans for anything but regular, the milk for a
+// lowercase qualifiers: the beans for a coffee from anything but regular, the milk for a
 // drink with a milk choice, and the spice for a drink that takes one:
 // "Iced Latte" + "light roast" + "oat milk" + "cinnamon".
 // DrinkName renders them with the qualifiers set apart.
@@ -136,7 +157,10 @@ export function orderParts(
   const c = splitDrink(drink, beans);
   return {
     drink: drinkLabel(c.drink),
-    beans: c.beans === REGULAR_BEANS ? null : beansLabel(c.beans).toLowerCase(),
+    beans:
+      c.beans === REGULAR_BEANS || !brewsCoffee(c.drink)
+        ? null
+        : beansLabel(c.beans).toLowerCase(),
     milk:
       milk && hasMilkChoice(c.drink)
         ? `${milkLabel(milk).toLowerCase()} milk`
@@ -218,7 +242,14 @@ export const DRINKS: Drink[] = [
     label: "Americano",
     description: "Espresso + hot water",
     image: "./americano.png",
-    available: false,
+    available: true,
+  },
+  {
+    id: "hot_water",
+    label: "Hot Water",
+    description: "Hot water in a mug",
+    image: "./hot-water.png",
+    available: true,
   },
   {
     id: "latte",

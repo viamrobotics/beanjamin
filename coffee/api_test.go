@@ -94,6 +94,19 @@ func TestStatusOmitsMilkOptionsWithoutIcedLatte(t *testing.T) {
 	}
 }
 
+func TestStatusReportsMugDrinksAvailable(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		s := newStatusService(t, &Config{CanServeMugDrinks: want})
+		st, err := s.Status(context.Background())
+		if err != nil {
+			t.Fatalf("Status error: %v", err)
+		}
+		if got, ok := st["mug_drinks_available"].(bool); !ok || got != want {
+			t.Errorf("mug_drinks_available = %v, want %v", st["mug_drinks_available"], want)
+		}
+	}
+}
+
 func TestStatusReportsFaultActive(t *testing.T) {
 	s := newStatusService(t, &Config{})
 	s.faultAlarm = speech.NewFaultAlarm(nil, s.logger)

@@ -10,18 +10,34 @@ import {
 } from "./drinks";
 
 test("iced drinks are unavailable only while the ice machine is reported down", () => {
-  assert.deepEqual(unavailableDrinksOf({ iced_available: false }), [
+  const mug = { mug_drinks_available: true };
+  assert.deepEqual(unavailableDrinksOf({ ...mug, iced_available: false }), [
     "iced_coffee",
     "iced_latte",
   ]);
-  assert.deepEqual(unavailableDrinksOf({ iced_available: true }), []);
+  assert.deepEqual(unavailableDrinksOf({ ...mug, iced_available: true }), []);
   // Older modules, and machines without iced drinks, don't report it.
-  assert.deepEqual(unavailableDrinksOf({}), []);
+  assert.deepEqual(unavailableDrinksOf(mug), []);
   // The same array each poll, so the drink screen doesn't re-render.
   assert.equal(
     unavailableDrinksOf({ iced_available: false }),
     unavailableDrinksOf({ iced_available: false }),
   );
+});
+
+test("mug drinks are unavailable unless the machine reports them", () => {
+  assert.deepEqual(unavailableDrinksOf({}), ["americano", "hot_water"]);
+  assert.deepEqual(unavailableDrinksOf({ mug_drinks_available: false }), [
+    "americano",
+    "hot_water",
+  ]);
+  assert.deepEqual(unavailableDrinksOf({ iced_available: false }), [
+    "iced_coffee",
+    "iced_latte",
+    "americano",
+    "hot_water",
+  ]);
+  assert.equal(unavailableDrinksOf({}), unavailableDrinksOf({}));
 });
 
 test("bean options put regular first and fall back to can_serve_decaf", () => {
@@ -105,6 +121,12 @@ test("order labels name the spice only for a drink that takes one", () => {
     "Iced Latte, oat milk",
   );
   assert.equal(orderLabel("espresso", "regular", "", "cinnamon"), "Espresso");
+});
+
+test("hot water is labeled without beans", () => {
+  assert.equal(orderLabel("hot_water", "decaf"), "Hot Water");
+  assert.equal(spokenOrder("hot_water", "decaf"), "hot water");
+  assert.equal(orderLabel("americano", "decaf"), "Americano, decaf");
 });
 
 test("spoken orders read naturally", () => {

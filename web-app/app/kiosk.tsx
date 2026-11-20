@@ -8,6 +8,7 @@ import {
   DRINKS,
   REGULAR_BEANS,
   beanOptionsOf,
+  brewsCoffee,
   hasMilkChoice,
   hasSpiceChoice,
   spokenOrder,
@@ -382,7 +383,8 @@ export function Kiosk() {
     try {
       await prepareOrder(viamConn, {
         drink: drink!,
-        beans,
+        // Hot water has no beans; the hidden picker may still hold decaf.
+        beans: brewsCoffee(drink!) ? beans : REGULAR_BEANS,
         drinkLabel: spokenOrder(drink!, beans, chosenMilk, chosenSpice),
         customerName: name.trim(),
         modifiedName: misspelledName,
