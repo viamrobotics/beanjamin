@@ -432,3 +432,61 @@ func TestMugGeometriesHandleOnLeft(t *testing.T) {
 		t.Errorf("handle at yaw pi/2 should be at -X, got %v", got)
 	}
 }
+
+func TestApproachDirection(t *testing.T) {
+	// The mug's approach sits 160 mm back along -X from its grab.
+	dir, ok := ApproachDirection(r3.Vector{X: -145, Y: -14}, r3.Vector{X: 15, Y: -14})
+	if !ok || dir != (r3.Vector{X: 1}) {
+		t.Errorf("ApproachDirection = %v, %v; want +X", dir, ok)
+	}
+	// A straight-down grab has no level direction.
+	if _, ok := ApproachDirection(r3.Vector{Z: 100}, r3.Vector{}); ok {
+		t.Error("straight-down approach reported a direction")
+	}
+}
+
+// TestRankFrontRowFirst uses two rows of mugs on Cappuccina's shelf, seen from
+// the mug observe pose: by distance alone, the middle of the back row comes
+// before the front row's ends.
+func TestRankFrontRowFirst(t *testing.T) {
+	gripper := r3.Vector{X: 620, Y: 248, Z: 123}
+	frontNear := r3.Vector{X: 760, Y: 165, Z: 42}
+	frontEnd := r3.Vector{X: 760, Y: 0, Z: 42}
+	frontFar := r3.Vector{X: 765, Y: 410, Z: 42}
+	backMid := r3.Vector{X: 870, Y: 248, Z: 42}
+	backEnd := r3.Vector{X: 875, Y: 40, Z: 42}
+	in := []r3.Vector{backEnd, frontEnd, backMid, frontFar, frontNear}
+
+	if byDistance := RankCentroidsByProximity(in, gripper); byDistance[2] != backMid {
+		t.Fatalf("setup: expected the back row's middle third by distance, got %v", byDistance)
+	}
+	got := RankFrontRowFirst(in, gripper, r3.Vector{X: 1}, 40)
+	want := []r3.Vector{frontNear, frontFar, frontEnd, backMid, backEnd}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("rank = %v, want %v", got, want)
+		}
+	}
+	if in[0] != backEnd {
+		t.Error("input was mutated")
+	}
+}
+
+func TestInApproachLane(t *testing.T) {
+	dir := r3.Vector{X: 1}
+	back := r3.Vector{X: 870, Y: 248}
+	for _, tc := range []struct {
+		name  string
+		other r3.Vector
+		want  bool
+	}{
+		{"straight in front", r3.Vector{X: 760, Y: 248}, true},
+		{"in front, partly across the lane", r3.Vector{X: 760, Y: 180}, true},
+		{"in front, clear to the side", r3.Vector{X: 760, Y: 125}, false},
+		{"behind", r3.Vector{X: 980, Y: 248}, false},
+	} {
+		if got := InApproachLane(back, tc.other, dir, 80); got != tc.want {
+			t.Errorf("%s: InApproachLane = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

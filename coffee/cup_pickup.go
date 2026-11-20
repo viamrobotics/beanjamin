@@ -309,10 +309,39 @@ func (s *beanjaminCoffee) observationPoseNames(ctx context.Context, sw toggleswi
 	return names, nil
 }
 
+// approachDirection is the level direction the gripper moves in from the
+// approach pose to the grab pose. ok is false for a straight-down grab.
+func (t *pickupTarget) approachDirection() (r3.Vector, bool) {
+	if t.approachRel == nil || t.grabRel == nil {
+		return r3.Vector{}, false
+	}
+	return geom.ApproachDirection(
+		r3.Vector{X: t.approachRel.X, Y: t.approachRel.Y},
+		r3.Vector{X: t.grabRel.X, Y: t.grabRel.Y})
+}
+
+// blockedBy returns another detected item standing in cand's approach lane, if
+// any. The gripper would run into it on the way in, so cand waits until that
+// item is gone. The lane is one container wide.
+func (t *pickupTarget) blockedBy(cand geom.Candidate, candidates []geom.Candidate) (r3.Vector, bool) {
+	dir, ok := t.approachDirection()
+	if !ok {
+		return r3.Vector{}, false
+	}
+	for _, other := range candidates {
+		if other.Centroid != cand.Centroid && geom.InApproachLane(cand.Centroid, other.Centroid, dir, t.dims.DiameterMm) {
+			return other.Centroid, true
+		}
+	}
+	return r3.Vector{}, false
+}
+
 // observeAtPose moves the camera to a single observe pose, captures detections
-// there, and returns them ranked by proximity to the gripper (closest first) so
-// the item nearest the gripper is grabbed first. Near-duplicate detections
-// (across the several photos taken at the pose) are merged before ranking.
+// there, and returns them ranked front row first (the row nearest along the
+// approach direction), and within a row by proximity to the gripper. A
+// straight-down grab has no rows, so its items are ranked by proximity alone.
+// Near-duplicate detections (across the several photos taken at the pose) are
+// merged before ranking.
 //
 // Returns an empty slice with no error when the pose is unreachable or sees
 // nothing, so the sweep in sweepAndGrab can move on to the next observe pose. A
@@ -339,8 +368,8 @@ func (s *beanjaminCoffee) observeAtPose(ctx, cancelCtx context.Context, t *picku
 		return nil, nil
 	}
 
-	// Rank by proximity to the gripperPosition so the item nearest the gripperPosition at
-	// this observe pose is attempted first.
+	// Within a row, the item nearest the gripper at this observe pose is
+	// attempted first.
 	gripperPosition, err := s.gripperWorldPoint(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, pass, err)
@@ -352,12 +381,17 @@ func (s *beanjaminCoffee) observeAtPose(ctx, cancelCtx context.Context, t *picku
 	// held item off the grasp point by an amount that varies from grab to grab.
 	centroids := geom.Centroids(detected)
 	merged := geom.MergeNearbyCentroids(centroids, observeDedupMm)
-	ranked := geom.RankCentroidsByProximity(merged, gripperPosition)
+	var ranked []r3.Vector
+	if dir, ok := t.approachDirection(); ok {
+		ranked = geom.RankFrontRowFirst(merged, gripperPosition, dir, t.dims.DiameterMm/2)
+	} else {
+		ranked = geom.RankCentroidsByProximity(merged, gripperPosition)
+	}
 	candidates, err := geom.ContainerCandidates(ranked, t.dims.boxDims(), containerYaw(t.grabRel), t.label)
 	if err != nil {
 		return nil, fmt.Errorf("dynamic_%s_pickup: pass %d: %w", t.label, pass, err)
 	}
-	logger.Infof("dynamic %s pickup: pass %d/%d — gripper=(x=%.1f, y=%.1f, z=%.1f) — %d candidate(s) (%d before merge), closest first:",
+	logger.Infof("dynamic %s pickup: pass %d/%d — gripper=(x=%.1f, y=%.1f, z=%.1f) — %d candidate(s) (%d before merge), front row first, closest first:",
 		t.label, pass, passes, gripperPosition.X, gripperPosition.Y, gripperPosition.Z, len(candidates), len(detected))
 	for j, c := range candidates {
 		logger.Infof("  rank[%d] world=(x=%.1f, y=%.1f, z=%.1f) distance=%.1fmm",
@@ -576,7 +610,8 @@ type sweepResult struct {
 }
 
 // sweepAndGrab visits every observe pose in order and, at each pose that sees
-// items, attempts to grab them closest-first. It returns as soon as one is in
+// items, attempts to grab them in observeAtPose's order, skipping any with
+// another item in its approach lane. It returns as soon as one is in
 // hand. When a vantage's items are all unreachable — every candidate failed with
 // a recoverable planning or grip-miss error — it continues to the remaining
 // poses, so an item reachable only from a later vantage is still found before we
@@ -602,6 +637,11 @@ func (s *beanjaminCoffee) sweepAndGrab(ctx, cancelCtx context.Context, t *pickup
 
 		logger.Infof("dynamic %s pickup: pass %d/%d — %d candidate(s) to try", t.label, i+1, passes, len(candidates))
 		for j, cand := range candidates {
+			if blocker, ok := t.blockedBy(cand, candidates); ok {
+				logger.Infof("dynamic %s pickup: pass %d/%d candidate %d/%d skipped — the item at (x=%.1f, y=%.1f) is in its way",
+					t.label, i+1, passes, j+1, len(candidates), blocker.X, blocker.Y)
+				continue
+			}
 			grabErr := s.tryGrab(ctx, cancelCtx, t, cand)
 			if grabErr == nil {
 				res.grabbed = true
