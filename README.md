@@ -1679,6 +1679,76 @@ The service sends only the buttons that changed, and everything again every 30 s
 
 ---
 
+## Model: `viam:beanjamin:ipad-camera`
+
+**API:** `rdk:component:camera`
+
+A camera whose frames come from a browser instead of hardware. The web app's kiosk opens its device's camera (for example the kiosk iPad) and pushes JPEG frames here through `DoCommand`; the component keeps only the latest one and serves it from `GetImages` as a single image from source `ipad`. Point anything that takes a camera at it, such as `customer-detector`'s `camera_name`.
+
+Frames older than `max_frame_age_ms` are refused, so a locked or backgrounded device produces an error instead of a stale image reaching face recognition. Point clouds are not supported.
+
+### Configuration
+
+```json
+{
+  "max_frame_age_ms": <int>,
+  "source_token": "<string>",
+  "claim_timeout_ms": <int>
+}
+```
+
+| Name               | Type   | Required | Description |
+| ------------------ | ------ | -------- | ----------- |
+| `max_frame_age_ms` | int    | No       | How old the latest frame may be before `GetImages` returns an error. Defaults to `5000`. Keep it above the slowest rate the browser pushes at. |
+| `source_token`     | string | No       | A shared secret every `push_frame` and `claim` must carry as `token`. Unset means anyone who can reach the machine can push. It can't be `"1"`, which `?ipadcam=1` uses to mean no token. |
+| `claim_timeout_ms` | int    | No       | How long the source holding the lease can go quiet before another source can take over. Defaults to `10000`. |
+
+### Pinning the camera to one device
+
+Any browser that can reach the machine and opens the kiosk with `ipadcam` set will push frames, and the last frame wins. Two guards keep that from happening by accident:
+
+- **Token.** Set `source_token` on the component and open the kiosk with `?ipadcam=<that token>`. Pushes without the matching token are refused. This is a shared secret in a URL, so it stops stray browsers rather than a determined attacker.
+- **Lease.** Each browser sends a `source_id` it keeps in `localStorage`. The first one to push holds the lease, and pushes from any other `source_id` are refused until the holder has gone quiet for `claim_timeout_ms`. A reloaded kiosk keeps its `source_id`, so it takes its own lease straight back. A browser that is refused closes its camera and checks every few seconds whether the lease has freed up.
+
+Use both. The token decides who may ever feed the camera, and the lease keeps a second authorized browser from fighting the first.
+
+### Example Configuration
+
+```json
+{
+  "name": "ipad-cam",
+  "api": "rdk:component:camera",
+  "model": "viam:beanjamin:ipad-camera",
+  "attributes": {}
+}
+```
+
+### DoCommand
+
+```json
+{ "push_frame": "<base64 JPEG>", "source_id": "<string>", "token": "<string>" }
+```
+
+Stores a new frame and renews the caller's lease. A `data:image/jpeg;base64,` prefix is accepted. Anything that isn't a decodable JPEG, or is larger than 8 MiB, is rejected. `source_id` and `token` are described above; `token` is only checked when `source_token` is set. A refused push returns `ipad-camera: invalid token` or `ipad-camera: in use by another source`.
+
+```json
+{ "claim": true, "source_id": "<string>", "token": "<string>" }
+```
+
+Takes or renews the lease without sending a frame. A browser that gave way to another uses it to find out when it can take over again, without opening its camera.
+
+```json
+{ "status": true }
+```
+
+Returns `frames_received`, `width`, `height`, and `age_ms` (milliseconds since the last frame, absent before the first).
+
+### Using it from the kiosk
+
+Open the kiosk with `ipadcam=1` (or `ipadcam=<token>` if the component has a `source_token`) and the page keeps its camera open for as long as it is up, pushing frames to this component. Browsers only allow camera access on HTTPS or `localhost`, and the first load may need a tap on "Tap to start camera" unless the site's camera permission is already set to Allow. See the web app's [README](web-app/README.md) for the query parameters.
+
+---
+
 ## Development
 
 When iterating on poses, we recommend using the built-in `viam` CLI motion commands to query and test arm positions on a running machine.
