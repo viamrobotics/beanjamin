@@ -140,6 +140,9 @@ type beanjaminCoffee struct {
 	// across rebuilds.
 	servingSlot        *servingSlotStore
 	dirtyContainerSlot *servingSlotStore
+	// slotDisplays shows who each serving-area slot's drink is for; nil unless
+	// serving_slot_displays is set.
+	slotDisplays *slotDisplays
 }
 
 func newBeanjaminCoffee(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -436,6 +439,9 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	if conf.CanServeIced {
 		go s.iceHealthLoop()
 	}
+	// Built last: it blanks the displays in the background, which a construction
+	// failure above would leave running.
+	s.slotDisplays = newSlotDisplays(deps, conf.ServingSlotDisplays, logger)
 	go s.processQueue()
 	return s, nil
 }
@@ -460,5 +466,6 @@ func (s *beanjaminCoffee) Close(context.Context) error {
 	// rebuild or a crash mid-dispense would otherwise leave the ice machine
 	// running until somebody notices.
 	s.closeIcePin()
+	s.slotDisplays.close()
 	return nil
 }

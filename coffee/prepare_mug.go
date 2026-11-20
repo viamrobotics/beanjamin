@@ -61,8 +61,9 @@ func (s *beanjaminCoffee) prepareHotWater(ctx, cancelCtx context.Context, o orde
 	}
 	s.countUsage(ctx, "water", "water_used", waterDelta(drink))
 
-	serve := func(ctx, cancelCtx context.Context) error {
-		_, err := s.grabAndShelve(ctx, cancelCtx, s.regrabMugAtWater)
+	servedSlot := -1
+	serve := func(ctx, cancelCtx context.Context) (err error) {
+		servedSlot, err = s.grabAndShelve(ctx, cancelCtx, s.regrabMugAtWater)
 		return err
 	}
 	if err := runPhase(stepServing, "serving", "step 5/8: serving mug", serve); err != nil {
@@ -71,6 +72,7 @@ func (s *beanjaminCoffee) prepareHotWater(ctx, cancelCtx context.Context, o orde
 	// Mug drinks are pickup-only. The serve is planned ahead of the arm, so the
 	// drink is only ready once the arm has set it down and backed off.
 	s.handOffEffect(func() {
+		s.slotDisplays.show(servedSlot, o.DisplayName(), o.Label())
 		if err := s.speaker.SayAlways(ctx, speech.DrinkReady(o.Label(), o.DisplayName(), o.BatchIndex, o.BatchSize)); err != nil {
 			logger.Warnf("failed to say drink-ready: %v", err)
 		}

@@ -250,6 +250,9 @@ func (s *beanjaminCoffee) prepareDrink(ctx, cancelCtx context.Context, o order.O
 	// arm has set it down and backed off: handed off, not announced from here.
 	served, servedInCart := o, inCart
 	s.handOffEffect(func() {
+		if !servedInCart {
+			s.slotDisplays.show(served.PickupPosition, customerName, served.Label())
+		}
 		if served.Fulfillment == order.FulfillmentDelivery {
 			if !servedInCart {
 				s.delivery.markReady(served, s.deliveryHeartbeatTimeout())
