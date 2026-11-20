@@ -266,9 +266,6 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 	var mugVision vision.Service
 	var mugObserveSw toggleswitch.Switch
 	if conf.CanServeMugDrinks {
-		if !hotWaterRoutineWired {
-			logger.Warn("can_serve_mug_drinks is on but the hot water routine is still a stub: hot_water orders serve an empty mug and americanos are plain lungos, both reported as success")
-		}
 		if mugVision, mugObserveSw, err = visionPickup(deps, logger, "mug",
 			conf.MugVisionServiceName, conf.MugObservePoseSwitcherName, conf.SrcCameraName); err != nil {
 			return nil, err

@@ -348,6 +348,12 @@ type Config struct {
 	// HotWaterOpenDegs is how far open_hot_water turns the lever. Defaults to
 	// defaultHotWaterOpenDegs.
 	HotWaterOpenDegs float64 `json:"hot_water_open_degs,omitempty"`
+	// HotWaterPourSec is how long a hot_water order holds the valve open.
+	// Defaults to defaultHotWaterPourSec.
+	HotWaterPourSec float64 `json:"hot_water_pour_sec,omitempty"`
+	// AmericanoHotWaterPourSec is how long an americano's top-up holds the valve
+	// open. Defaults to defaultAmericanoHotWaterPourSec.
+	AmericanoHotWaterPourSec float64 `json:"americano_hot_water_pour_sec,omitempty"`
 }
 
 // orDefault returns v when it is positive, otherwise def. It backs the
@@ -711,6 +717,8 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 			"mug_observe_pose_switcher_name", cfg.MugObservePoseSwitcherName,
 			"mug_approach_relative_pose", cfg.MugApproachRelativePose,
 			"mug_grab_relative_pose", cfg.MugGrabRelativePose,
+			// The arm adds the hot water by turning the valve's lever.
+			"hot_water_lever_grip_relative_pose", cfg.HotWaterLeverGripRelativePose,
 		); err != nil {
 			return nil, nil, err
 		}
@@ -789,6 +797,10 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		optDeps = append(optDeps, board.Named(cfg.IceDispenseBoardName).String())
 	}
 
+	if cfg.HotWaterPourSec < 0 || cfg.HotWaterPourSec > maxHotWaterPourSec ||
+		cfg.AmericanoHotWaterPourSec < 0 || cfg.AmericanoHotWaterPourSec > maxHotWaterPourSec {
+		return nil, nil, fmt.Errorf("%s: hot_water_pour_sec and americano_hot_water_pour_sec must be between 0 and %v (the machine stops the pour itself after about 30 s)", path, maxHotWaterPourSec)
+	}
 	if cfg.HotWaterOpenDegs < 0 || cfg.HotWaterOpenDegs > 90 {
 		return nil, nil, fmt.Errorf("%s: hot_water_open_degs must be between 0 and 90", path)
 	}

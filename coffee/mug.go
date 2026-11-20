@@ -49,38 +49,17 @@ func (s *beanjaminCoffee) setMugAtWater(ctx, cancelCtx context.Context) error {
 	return nil
 }
 
-// hotWaterRoutineWired says whether dispenseHotWater is the real routine. While
-// it is false, a hot_water order serves an empty mug and an americano is just a
-// lungo, both reported as success, so can_serve_mug_drinks must stay off for
-// customers. Flip it when the real routine replaces the stub.
-const hotWaterRoutineWired = false
-
-// dispenseHotWater is the hot water routine: a stub until the real one is wired.
+// dispenseHotWater pours hot water into the mug staged at the spout: the arm
+// grips the valve's lever, turns it open, holds it for the drink's pour time,
+// turns it shut and lets go (pourHotWater, hot_water.go). An americano tops up
+// a lungo already in the mug; hot water fills an empty one.
 //
-// The contract for the real routine. It runs while the order's moves are being
-// recorded, not executed: the arm is still somewhere behind, working through
-// what was handed off before. So:
-//   - its arm moves must be ordinary steps (executeStep and friends), which
-//     queue in order behind everything already handed off;
-//   - any wait (the pour time) must be a queued move, handOff(ctx, move{name:
-//     ..., sleep: d}), like the brew wait in brew_steps.go, never a sleep here;
-//   - any direct I/O (a board pin, a DoCommand) must go through handOff (as a
-//     move's run) or handOffEffect, so it happens when the arm reaches that
-//     point, not when the planner does;
-//   - or, if it needs each step's result right away, it runs inside
-//     syncRegion(), which waits for the arm to catch up first, at the cost of
-//     planning ahead.
-//
-// It must start and end with the arm clear of the mug, since the mug stands
-// staged at the spout throughout. It receives the drink id so it can tell a
-// top-off (americano, the mug already holds espresso) from a full mug (hot
-// water alone).
+// It runs while the order's moves are being recorded, not executed, so the pour
+// wait is a queued move, and it starts and ends with the arm clear of the mug.
 func (s *beanjaminCoffee) dispenseHotWater(ctx, cancelCtx context.Context, drink string) error {
-	logger := s.activeOrderLogger()
-	// Handed off so the warning lands when the arm gets here, once.
-	s.handOffEffect(func() {
-		logger.Warnf("dispense_hot_water: no hot water routine wired yet (drink %s); skipping", drink)
-	})
+	if err := s.pourHotWater(ctx, cancelCtx, s.hotWaterPourTime(drink)); err != nil {
+		return fmt.Errorf("dispense_hot_water: %w", err)
+	}
 	return nil
 }
 

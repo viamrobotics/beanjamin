@@ -10,28 +10,35 @@ import (
 	"go.viam.com/rdk/spatialmath"
 )
 
-// Cappuccina's lever as configured: origin on the dial axis with local Z along
-// world +Y (the direction that opens the valve), and the grip the arm was
-// taught there, 72 mm out along the lever.
+// Cappuccina's collar and lever as configured: the collar's origin on the dial
+// axis with local Z along world +Y (the direction that opens the valve), the
+// lever its child, and the grip the arm was taught on the re-clamped lever.
 var (
-	testLeverOrigin = spatialmath.NewPose(r3.Vector{X: 872.5, Y: -1.8, Z: 322.8}, &spatialmath.OrientationVectorDegrees{OY: 1})
-	testLeverGrip   = &RelativePose{X: 2.63, Y: 60.33, Z: -10.98, OX: -0.0366, OY: -0.8379, OZ: -0.5446}
+	testHingeOrigin = spatialmath.NewPose(r3.Vector{X: 872.5, Y: -21, Z: 322.8}, &spatialmath.OrientationVectorDegrees{OY: 1})
+	testLeverGrip   = &RelativePose{X: 10, Y: 63.9, Z: 13.2, OX: -0.1384, OY: -0.8272, OZ: -0.5446, Theta: -0.01}
 )
 
-// buildTestLeverFS builds the lever through the RDK's real frame-system
-// construction, so it gets the same "<name>_origin" split as on the machine.
+// buildTestLeverFS builds the collar and lever through the RDK's real
+// frame-system construction, so they get the same "<name>_origin" split as on
+// the machine.
 func buildTestLeverFS(t *testing.T) (*referenceframe.FrameSystem, spatialmath.Pose) {
 	t.Helper()
-	box, err := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{Y: 94}), r3.Vector{X: 150, Y: 50, Z: 44}, frameHotWaterLever)
+	collarBox, err := spatialmath.NewBox(spatialmath.NewPoseFromPoint(r3.Vector{X: 9.4}), r3.Vector{X: 74, Y: 74, Z: 40}, frameHotWaterCollar)
 	if err != nil {
 		t.Fatal(err)
 	}
-	link := referenceframe.NewLinkInFrame(referenceframe.World, testLeverOrigin, frameHotWaterLever, box)
-	fs, err := referenceframe.NewFrameSystem("test", []*referenceframe.FrameSystemPart{{FrameConfig: link}}, nil)
+	leverBox, err := spatialmath.NewBox(spatialmath.NewZeroPose(), r3.Vector{X: 150, Y: 50, Z: 44}, frameHotWaterLever)
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, err := hingeBasePose(fs, frameHotWaterLever)
+	collar := referenceframe.NewLinkInFrame(referenceframe.World, testHingeOrigin, frameHotWaterCollar, collarBox)
+	lever := referenceframe.NewLinkInFrame(frameHotWaterCollar, spatialmath.NewPose(r3.Vector{X: 11.3, Y: 93.3, Z: 19.2},
+		&spatialmath.OrientationVectorDegrees{OX: -0.9882, OY: 0.1522, OZ: 0.0201, Theta: -123.18}), frameHotWaterLever, leverBox)
+	fs, err := referenceframe.NewFrameSystem("test", []*referenceframe.FrameSystemPart{{FrameConfig: collar}, {FrameConfig: lever}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := hingeBasePose(fs, frameHotWaterHinge)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,38 +57,39 @@ func gripAt(t *testing.T, fs *referenceframe.FrameSystem) spatialmath.Pose {
 func near(a, b r3.Vector) bool { return a.Distance(b) < 0.1 }
 
 // TestHotWaterGripFollowsTheLever checks the grip against the poses measured on
-// the robot: closed, the taught grip; turned 37.5°, where dialsim's turn ended
-// with the valve pouring.
+// the robot: closed, the taught grip; turned 45°, where dialsim's turn ended
+// with the valve pouring fully. The lever turns with the collar.
 func TestHotWaterGripFollowsTheLever(t *testing.T) {
 	fs, base := buildTestLeverFS(t)
-	if got, want := gripAt(t, fs).Point(), (r3.Vector{X: 812.17, Y: -12.78, Z: 320.17}); !near(got, want) {
-		t.Errorf("closed grip at %v, want %v", got, want)
+	closed := r3.Vector{X: 808.6, Y: -7.8, Z: 312.8}
+	if got := gripAt(t, fs).Point(); !near(got, closed) {
+		t.Errorf("closed grip at %v, want %v", got, closed)
 	}
-	if err := setHingeTheta(fs, frameHotWaterLever, base, defaultHotWaterOpenDegs); err != nil {
+	leverBefore := worldPoint(t, fs, frameHotWaterLever)
+	if err := setHingeTheta(fs, frameHotWaterHinge, base, defaultHotWaterOpenDegs); err != nil {
 		t.Fatal(err)
 	}
 	open := gripAt(t, fs)
-	if got, want := open.Point(), (r3.Vector{X: 823.04, Y: -12.78, Z: 357.44}); !near(got, want) {
+	if got, want := open.Point(), (r3.Vector{X: 820.24, Y: -7.8, Z: 360.91}); !near(got, want) {
 		t.Errorf("open grip at %v, want %v — the lever turns up about world +Y", got, want)
 	}
-	ov := open.Orientation().OrientationVectorDegrees()
-	if want := (r3.Vector{X: 0.6870, Y: -0.5446, Z: -0.4810}); !near(r3.Vector{X: ov.OX, Y: ov.OY, Z: ov.OZ}.Mul(100), want.Mul(100)) {
-		t.Errorf("open grip points %v, want %v — the claws turn with the lever", ov, want)
+	if got := worldPoint(t, fs, frameHotWaterLever); got.Z <= leverBefore.Z+20 {
+		t.Errorf("the lever obstacle stayed at %v after the turn (was %v): it must turn with the collar", got, leverBefore)
 	}
 
 	// Turning back shut lands on the closed grip, recovered from the turned frame.
-	closedBase, err := hingeClosedOrigin(fs, frameHotWaterLever, defaultHotWaterOpenDegs)
+	closedBase, err := hingeClosedOrigin(fs, frameHotWaterHinge, defaultHotWaterOpenDegs)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !spatialmath.PoseAlmostEqual(closedBase, base) {
 		t.Errorf("recovered closed origin %v, want %v", closedBase, base)
 	}
-	if err := setHingeTheta(fs, frameHotWaterLever, closedBase, 0); err != nil {
+	if err := setHingeTheta(fs, frameHotWaterHinge, closedBase, 0); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := gripAt(t, fs).Point(), (r3.Vector{X: 812.17, Y: -12.78, Z: 320.17}); !near(got, want) {
-		t.Errorf("grip after closing at %v, want %v", got, want)
+	if got := gripAt(t, fs).Point(); !near(got, closed) {
+		t.Errorf("grip after closing at %v, want %v", got, closed)
 	}
 }
 
@@ -91,7 +99,8 @@ func TestHotWaterStandoffIsOutAlongTheLever(t *testing.T) {
 	fs, _ := buildTestLeverFS(t)
 	grip := gripAt(t, fs)
 	got := hotWaterStandoff(grip)
-	if want := (r3.Vector{X: 686.49, Y: 68.92, Z: 314.68}); !near(got.Point(), want) {
+	ov := grip.Orientation().OrientationVectorDegrees()
+	if want := grip.Point().Sub(r3.Vector{X: ov.OX, Y: ov.OY, Z: ov.OZ}.Normalize().Mul(hotWaterApproachMm)); !near(got.Point(), want) {
 		t.Errorf("standoff at %v, want %v", got.Point(), want)
 	}
 	if !spatialmath.OrientationAlmostEqual(got.Orientation(), grip.Orientation()) {

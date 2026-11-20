@@ -2,7 +2,7 @@
 
 A two-piece collar that clamps over the machine's smooth hot water dial, with a lever the
 claws grip end-on, like the portafilter handle. The coffee service's `open_hot_water` action
-turns the lever 37.5° counter-clockwise (seen from the left of the machine) to open the
+turns the lever 45° counter-clockwise (seen from the left of the machine) to open the
 valve, and `close_hot_water` turns it back.
 
 ![lever on the dial](out/lever.png)
@@ -69,11 +69,13 @@ uv venv -p 3.12 .venv && VIRTUAL_ENV=.venv uv pip install build123d
 ## Robot config
 
 The lever and collar are obstacles in the machine config (`erh:vmodutils:obstacle`
-components `hot-water-lever` and `hot-water-collar`), fitted to the arm camera's point cloud.
-`hot-water-lever`'s frame origin sits on the dial axis with its local Z along the axis (world
-+Y on Cappuccina, the direction that opens the valve), and the box is offset from it inside
-the geometry: the coffee service turns the lever about that origin. The coffee service also
-needs `hot_water_lever_grip_relative_pose` (the taught grip, in the lever's frame) and a
+components `hot-water-collar` and `hot-water-lever`), fitted to the arm camera's point cloud.
+The collar turns with the dial, so it is the hinge: its frame's origin sits on the dial axis
+with its local Z along the axis (world +Y on Cappuccina, the direction that opens the valve),
+and `hot-water-lever` is its child, so turning the collar carries the lever. Put each box's
+rotation on its component's own frame, never inside `geometry`: the app's config editor drops a
+geometry's orientation when anyone saves the config there. The coffee service also needs
+`hot_water_lever_grip_relative_pose` (the taught grip, in the collar's frame) and a
 `hot_water_approach` pose on the claws switch; see the main README.
 
 ## `dialsim`
