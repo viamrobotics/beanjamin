@@ -14,6 +14,7 @@ import (
 	"go.viam.com/rdk/components/arm"
 	"go.viam.com/rdk/components/board"
 	"go.viam.com/rdk/components/camera"
+	genericcomponent "go.viam.com/rdk/components/generic"
 	"go.viam.com/rdk/components/gripper"
 	"go.viam.com/rdk/components/sensor"
 	"go.viam.com/rdk/resource"
@@ -167,6 +168,11 @@ type Config struct {
 	// CRMName: viam:beanjamin:crm service credited a loyalty point for every
 	// completed drink whose order carries a customer_email. Unset disables it.
 	CRMName string `json:"crm_name,omitempty"`
+
+	// ServingSlotDisplays names one viam:character-lcd display (generic
+	// component) per serving-area slot, in slot order: entry i shows the
+	// customer and drink placed in slot i (slot_displays.go). Unset disables it.
+	ServingSlotDisplays []string `json:"serving_slot_displays,omitempty"`
 
 	// DeliveryHeartbeatTimeoutSec is how long the latest delivery-cart
 	// heartbeat stays valid. A delivery prepare_order is refused when no
@@ -665,6 +671,12 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		if dep.name != "" {
 			optDeps = append(optDeps, dep.named(dep.name).String())
 		}
+	}
+	for i, name := range cfg.ServingSlotDisplays {
+		if name == "" {
+			return nil, nil, fmt.Errorf("%s: serving_slot_displays[%d] is empty", path, i)
+		}
+		optDeps = append(optDeps, genericcomponent.Named(name).String())
 	}
 	reqDeps = append(reqDeps,
 		vision.Named(cfg.CupVisionServiceName).String(),
