@@ -2,14 +2,16 @@ package coffee
 
 // Hot water: the arm opens and closes the espresso machine's hot water valve by
 // turning a 3D-printed lever clamped onto the valve's dial
-// (hardware/hot-water-knob). The lever is a hinged obstacle like the fridge
-// door: its frame's origin sits on the dial axis, and a turn re-places it about
-// that axis as the claws carry it round.
+// (hardware/hot-water-knob). The collar round the dial is a hinged obstacle like
+// the fridge door: its frame's origin sits on the dial axis, the lever obstacle
+// is its child, and a turn re-places the collar (and with it the lever) about
+// that axis as the claws carry the lever round.
 
 import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/motionplan/armplanning"
@@ -18,16 +20,18 @@ import (
 )
 
 const (
-	// frameHotWaterLever is the lever obstacle. Its origin is on the dial axis
-	// with local Z along it, pointing the way that opens the valve.
+	// frameHotWaterLever is the lever obstacle, a child of the collar.
 	frameHotWaterLever = "hot-water-lever"
-	// frameHotWaterCollar is the clamp round the dial that carries the lever.
+	// frameHotWaterCollar is the clamp round the dial that carries the lever. It
+	// turns with the dial, so it is the hinge: its origin is on the dial axis
+	// with local Z along it, pointing the way that opens the valve.
 	frameHotWaterCollar = "hot-water-collar"
+	frameHotWaterHinge  = frameHotWaterCollar
 
-	// defaultHotWaterOpenDegs is how far open_hot_water turns the lever from
-	// closed. On the Breville BES920 the valve hisses at ~15°, drips at ~18°
-	// and pours a full stream from ~33° of a 90° travel.
-	defaultHotWaterOpenDegs = 37.5
+	// defaultHotWaterOpenDegs is how far the arm turns the lever from closed. On
+	// Cappuccina's BES920 the stream starts ~28° in and runs fully by ~45° of the
+	// valve's 90° travel.
+	defaultHotWaterOpenDegs = 45
 
 	// hotWaterTurnDegsPerStep is the sweep's waypoint spacing. At the ~72 mm
 	// grip radius a 5° hop's chord sags 0.07 mm off the arc.
@@ -37,6 +41,12 @@ const (
 	// pointing direction (out along the lever, past its tip), the claws open
 	// before sliding on, and where they back out to after letting go.
 	hotWaterApproachMm = 150
+
+	// Pour times. The machine stops a pour on its own after about 30 s, which
+	// fills ~3/4 of a mug.
+	defaultHotWaterPourSec          = 28
+	defaultAmericanoHotWaterPourSec = 15
+	maxHotWaterPourSec              = 30
 )
 
 // openHotWater grips the hot water lever and turns the valve open, leaving it
@@ -44,21 +54,60 @@ const (
 // the pour on its own after about 30 seconds, but does not heat while the
 // valve stays open, so close_hot_water has to follow.
 func (s *beanjaminCoffee) openHotWater(ctx, cancelCtx context.Context) error {
-	return s.turnHotWater(ctx, cancelCtx, "open_hot_water", "Pouring hot water", s.hotWaterOpenDegs())
+	if s.hotWaterLeverAt(s.hotWaterOpenDegs()) {
+		return nil
+	}
+	return s.hotWaterRoutine(ctx, cancelCtx, "open_hot_water", "Pouring hot water", func(l *hotWaterLever) error {
+		return l.turnTo(s.hotWaterOpenDegs())
+	})
 }
 
 // closeHotWater grips the lever where open left it and turns the valve shut.
 // Registered as the close_hot_water execute_action.
 func (s *beanjaminCoffee) closeHotWater(ctx, cancelCtx context.Context) error {
-	return s.turnHotWater(ctx, cancelCtx, "close_hot_water", "Closing hot water", 0)
+	if s.hotWaterLeverAt(0) {
+		return nil
+	}
+	return s.hotWaterRoutine(ctx, cancelCtx, "close_hot_water", "Closing hot water", func(l *hotWaterLever) error {
+		return l.turnTo(0)
+	})
 }
 
-// turnHotWater turns the lever from wherever the scene has it
-// (hotWaterOpenDegs) to toDeg. The claws have to be empty, which during a brew
-// means the portafilter is locked into the machine and released: the modeled
-// filter on a closed gripper cannot be told apart from an empty one, and opening
-// the jaws round the lever would drop a real one.
-func (s *beanjaminCoffee) turnHotWater(ctx, cancelCtx context.Context, action, stepLabel string, toDeg float64) error {
+// hotWaterLeverAt reports whether the scene already has the lever at deg, so
+// there is nothing to turn.
+func (s *beanjaminCoffee) hotWaterLeverAt(deg float64) bool {
+	if at := s.scene().hotWaterOpenDegs; math.Abs(at-deg) < 0.5 {
+		s.logger.Infof("the hot water lever already stands at %.1f°; nothing to turn", at)
+		return true
+	}
+	return false
+}
+
+// pourHotWater grips the lever, turns the valve open, holds it there for pour,
+// turns it shut and lets go: the mug drinks' hot water step. Holding the lever
+// through the pour saves letting go and re-gripping, and keeps the valve from
+// being left open by anything but a fault.
+func (s *beanjaminCoffee) pourHotWater(ctx, cancelCtx context.Context, pour time.Duration) error {
+	return s.hotWaterRoutine(ctx, cancelCtx, "pour_hot_water", "Pouring hot water", func(l *hotWaterLever) error {
+		if err := l.turnTo(s.hotWaterOpenDegs()); err != nil {
+			return err
+		}
+		s.activeOrderLogger().Infof("pour_hot_water: pouring for %s", pour)
+		pourCtx, done := mergedCancelContext(ctx, cancelCtx) // cancel stops the wait
+		defer done()
+		if err := s.handOff(pourCtx, move{name: "pour hot water", sleep: pour}); err != nil {
+			return err
+		}
+		return l.turnTo(0)
+	})
+}
+
+// hotWaterRoutine grips the lever, runs turns, and lets go, all in one chunk.
+// The claws have to be empty, which during a brew means the portafilter is
+// locked into the machine and released: the modeled filter on a closed gripper
+// cannot be told apart from an empty one, and opening the jaws round the lever
+// would drop a real one.
+func (s *beanjaminCoffee) hotWaterRoutine(ctx, cancelCtx context.Context, action, stepLabel string, turns func(*hotWaterLever) error) error {
 	if s.cfg.HotWaterLeverGripRelativePose == nil {
 		return fmt.Errorf("%s requires hot_water_lever_grip_relative_pose", action)
 	}
@@ -69,37 +118,48 @@ func (s *beanjaminCoffee) turnHotWater(ctx, cancelCtx context.Context, action, s
 	if sc.heldItemAttached || sc.heldMilk != "" {
 		return fmt.Errorf("%s needs empty claws, but the gripper is holding something", action)
 	}
-	if math.Abs(toDeg-sc.hotWaterOpenDegs) < 0.5 {
-		s.logger.Infof("%s: the lever already stands at %.1f°; nothing to turn", action, sc.hotWaterOpenDegs)
-		return nil
-	}
-	return s.inChunk(action, func() error { return s.recordHotWaterTurn(ctx, cancelCtx, action, stepLabel, toDeg) })
+	return s.inChunk(action, func() error {
+		s.setStep(stepLabel)
+		l, err := s.gripHotWaterLever(ctx, cancelCtx, action)
+		if err != nil {
+			return err
+		}
+		if err := turns(l); err != nil {
+			return err
+		}
+		return l.release()
+	})
 }
 
-// recordHotWaterTurn is turnHotWater's arm work, the lever's version of
-// recordDoorSweep: go to the hot_water_approach claws pose, open the jaws
-// beyond the lever's tip, slide straight on, close, carry the lever round its
-// axis one waypoint at a time with the lever obstacle re-placed at each angle,
-// then let go and back straight out along the lever. The scene keeps the lever
-// where the turn left it.
-func (s *beanjaminCoffee) recordHotWaterTurn(ctx, cancelCtx context.Context, action, stepLabel string, toDeg float64) error {
-	logger := s.logger
-	s.setStep(stepLabel)
+// hotWaterLever is the claws closed on the lever, for turning it.
+type hotWaterLever struct {
+	s              *beanjaminCoffee
+	ctx, cancelCtx context.Context
+	action         string
+	inputs         *referenceframe.LinearInputs
+	gripRel        spatialmath.Pose
+	baseOriginPose spatialmath.Pose
+	collisions     []AllowedCollision
+}
 
-	before := s.scene()
-	fs := before.fs
-	inputs := placement{inputs: before.inputs}.fullInputs(fs).ToLinearInputs()
-	fromDeg := before.hotWaterOpenDegs
-	baseOriginPose, err := hingeClosedOrigin(fs, frameHotWaterLever, fromDeg)
-	if err != nil {
-		return err
+// gripHotWaterLever goes to the hot_water_approach claws pose, opens the jaws
+// beyond the lever's tip, slides straight on and closes them on the lever.
+func (s *beanjaminCoffee) gripHotWaterLever(ctx, cancelCtx context.Context, action string) (*hotWaterLever, error) {
+	sc := s.scene()
+	fs := sc.fs
+	l := &hotWaterLever{
+		s: s, ctx: ctx, cancelCtx: cancelCtx, action: action,
+		inputs:     placement{inputs: sc.inputs}.fullInputs(fs).ToLinearInputs(),
+		gripRel:    relativePoseToSpatial(s.cfg.HotWaterLeverGripRelativePose),
+		collisions: s.filterFakeModeCollisions(hotWaterLeverCollisions()),
 	}
-	gripRel := relativePoseToSpatial(s.cfg.HotWaterLeverGripRelativePose)
-	collisions := s.filterFakeModeCollisions(hotWaterLeverCollisions())
-
-	gripStart, err := hotWaterGripWorld(fs, inputs, gripRel)
+	var err error
+	if l.baseOriginPose, err = hingeClosedOrigin(fs, frameHotWaterHinge, sc.hotWaterOpenDegs); err != nil {
+		return nil, err
+	}
+	grip, err := hotWaterGripWorld(fs, l.inputs, l.gripRel)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// Through hot_water_approach first: a free move straight to the standoff
 	// from wherever the arm is (the group head, during a brew) can land on the
@@ -107,47 +167,58 @@ func (s *beanjaminCoffee) recordHotWaterTurn(ctx, cancelCtx context.Context, act
 	// From the home side of the machine it lands on the branch the grip was
 	// taught on.
 	if err := s.executeStep(ctx, cancelCtx, Step{PoseName: clawPoseHotWaterApproach, PoseSwitch: s.clawsSw}); err != nil {
-		return fmt.Errorf("move to %s: %w", clawPoseHotWaterApproach, err)
+		return nil, fmt.Errorf("move to %s: %w", clawPoseHotWaterApproach, err)
 	}
 	// Opening at the standoff keeps the wider open-jaw silhouette out of the
 	// traverse. The slide-on is linear because the claws/lever pair is exempt
 	// from collision checks: unconstrained, the planner could swing the claws
 	// through the lever and still call the path clear.
 	if err := s.moveToRawPose(ctx,
-		&poseData{pose: hotWaterStandoff(gripStart), refFrame: referenceframe.World, componentName: frameGripPoint},
+		&poseData{pose: hotWaterStandoff(grip), refFrame: referenceframe.World, componentName: frameGripPoint},
 		nil, nil, nil); err != nil {
-		return fmt.Errorf("approach the hot water lever: %w", err)
+		return nil, fmt.Errorf("approach the hot water lever: %w", err)
 	}
 	if s.gripper != nil {
 		if err := s.openGripper(ctx); err != nil {
-			return fmt.Errorf("open gripper for the hot water lever: %w", err)
+			return nil, fmt.Errorf("open gripper for the hot water lever: %w", err)
 		}
 	}
 	if err := s.moveToRawPose(ctx,
-		&poseData{pose: gripStart, refFrame: referenceframe.World, componentName: frameGripPoint},
-		defaultApproachConstraint, collisions, s.slowMoveOptions()); err != nil {
-		return fmt.Errorf("slide onto the hot water lever: %w", err)
+		&poseData{pose: grip, refFrame: referenceframe.World, componentName: frameGripPoint},
+		defaultApproachConstraint, l.collisions, s.slowMoveOptions()); err != nil {
+		return nil, fmt.Errorf("slide onto the hot water lever: %w", err)
 	}
 	if s.gripper != nil {
 		if err := s.closeGripper(ctx); err != nil {
-			return fmt.Errorf("grip the hot water lever: %w", err)
+			return nil, fmt.Errorf("grip the hot water lever: %w", err)
 		}
 	}
+	return l, nil
+}
 
-	// The turn: one motion per waypoint, each planned against a frame system
-	// with the lever re-placed at that angle, joined into one arm move.
+// turnTo carries the gripped lever from where the scene has it to toDeg: one
+// motion per waypoint, each planned against a frame system with the collar and
+// lever re-placed at that angle, joined into one arm move. The scene keeps the
+// lever where the turn left it.
+func (l *hotWaterLever) turnTo(toDeg float64) error {
+	s := l.s
+	before := s.scene()
+	fromDeg := before.hotWaterOpenDegs
+	if math.Abs(toDeg-fromDeg) < 0.5 {
+		return nil
+	}
 	sweep := computeDoorSweep(fromDeg, toDeg, hotWaterTurnDegsPerStep)
-	logger.Infof("%s: turning the lever %.1f°→%.1f° in %d steps", action, fromDeg, toDeg, len(sweep)-1)
+	s.activeOrderLogger().Infof("%s: turning the lever %.1f°→%.1f° in %d steps", l.action, fromDeg, toDeg, len(sweep)-1)
 	thetas := sweep[1:]
 	for i, theta := range thetas {
-		turned, err := copyFrameSystem(fs)
+		turned, err := copyFrameSystem(before.fs)
 		if err != nil {
 			return err
 		}
-		if err := setHingeTheta(turned, frameHotWaterLever, baseOriginPose, theta); err != nil {
+		if err := setHingeTheta(turned, frameHotWaterHinge, l.baseOriginPose, theta); err != nil {
 			return err
 		}
-		gripNow, err := hotWaterGripWorld(turned, inputs, gripRel)
+		gripNow, err := hotWaterGripWorld(turned, l.inputs, l.gripRel)
 		if err != nil {
 			return err
 		}
@@ -159,50 +230,52 @@ func (s *beanjaminCoffee) recordHotWaterTurn(ctx, cancelCtx context.Context, act
 			// One arm call does not say which waypoint it stopped on, so a failed
 			// turn is located from where the arm actually stopped.
 			op.recover = func(ctx context.Context, segments [][][]referenceframe.Input) *sceneState {
-				return s.hotWaterTurnedTo(ctx, before, baseOriginPose, fromDeg, thetas, segments)
+				return s.hotWaterTurnedTo(ctx, before, l.baseOriginPose, fromDeg, thetas, segments)
 			}
 		}
-		if err := s.addMotion(ctx, cancelCtx, action, op, func(start referenceframe.FrameSystemInputs) (*motionRequest, error) {
+		if err := s.addMotion(l.ctx, l.cancelCtx, l.action, op, func(start referenceframe.FrameSystemInputs) (*motionRequest, error) {
 			return &motionRequest{
-				name:  action,
-				label: action,
+				name:  l.action,
+				label: l.action,
 				req: &armplanning.PlanRequest{
 					FrameSystem: turned,
 					Goals:       []*armplanning.PlanState{goal},
 					StartState:  armplanning.NewPlanState(nil, start),
-					Constraints: buildConstraints(doorSweepConstraint, collisions),
+					Constraints: buildConstraints(doorSweepConstraint, l.collisions),
 				},
 				speed: s.slowMoveOptions(),
 			}, nil
 		}); err != nil {
-			return fmt.Errorf("%s step θ=%.1f: %w", action, theta, err)
+			return fmt.Errorf("%s step θ=%.1f: %w", l.action, theta, err)
 		}
 	}
-	if err := s.editScene(func(sc *sceneState) error {
+	return s.editScene(func(sc *sceneState) error {
 		sc.hotWaterOpenDegs = toDeg
-		return setHingeTheta(sc.fs, frameHotWaterLever, baseOriginPose, toDeg)
-	}); err != nil {
-		return err
-	}
+		return setHingeTheta(sc.fs, frameHotWaterHinge, l.baseOriginPose, toDeg)
+	})
+}
 
-	// Let go, then back straight out along the lever where the turn left it.
+// release lets go of the lever, backs straight out along it where the turns
+// left it, and closes the jaws again for whatever moves next: the collision
+// tuning assumes a closed gripper.
+func (l *hotWaterLever) release() error {
+	s := l.s
 	if s.gripper != nil {
-		if err := s.openGripper(ctx); err != nil {
+		if err := s.openGripper(l.ctx); err != nil {
 			return fmt.Errorf("release the hot water lever: %w", err)
 		}
 	}
-	gripEnd, err := hotWaterGripWorld(s.scene().fs, inputs, gripRel)
+	grip, err := hotWaterGripWorld(s.scene().fs, l.inputs, l.gripRel)
 	if err != nil {
 		return err
 	}
-	if err := s.moveToRawPose(ctx,
-		&poseData{pose: hotWaterStandoff(gripEnd), refFrame: referenceframe.World, componentName: frameGripPoint},
-		defaultApproachConstraint, collisions, nil); err != nil {
+	if err := s.moveToRawPose(l.ctx,
+		&poseData{pose: hotWaterStandoff(grip), refFrame: referenceframe.World, componentName: frameGripPoint},
+		defaultApproachConstraint, l.collisions, nil); err != nil {
 		return fmt.Errorf("back off the hot water lever: %w", err)
 	}
-	// Closed again for whatever moves next: the collision tuning assumes it.
 	if s.gripper != nil {
-		if err := s.closeGripper(ctx); err != nil {
+		if err := s.closeGripper(l.ctx); err != nil {
 			return fmt.Errorf("close gripper after releasing the hot water lever: %w", err)
 		}
 	}
@@ -210,9 +283,9 @@ func (s *beanjaminCoffee) recordHotWaterTurn(ctx, cancelCtx context.Context, act
 }
 
 // hotWaterGripWorld is where the grip point closes on the lever as it stands in
-// fs: hot_water_lever_grip_relative_pose in the lever's frame.
+// fs: hot_water_lever_grip_relative_pose in the hinge (collar) frame.
 func hotWaterGripWorld(fs *referenceframe.FrameSystem, inputs *referenceframe.LinearInputs, gripRel spatialmath.Pose) (spatialmath.Pose, error) {
-	tf, err := fs.Transform(inputs, referenceframe.NewPoseInFrame(frameHotWaterLever, gripRel), referenceframe.World)
+	tf, err := fs.Transform(inputs, referenceframe.NewPoseInFrame(frameHotWaterHinge, gripRel), referenceframe.World)
 	if err != nil {
 		return nil, fmt.Errorf("hot water lever grip to world: %w", err)
 	}
@@ -252,7 +325,7 @@ func (s *beanjaminCoffee) hotWaterTurnedTo(
 		return nil
 	}
 	turned.hotWaterOpenDegs = reached
-	if err := setHingeTheta(turned.fs, frameHotWaterLever, baseOriginPose, reached); err != nil {
+	if err := setHingeTheta(turned.fs, frameHotWaterHinge, baseOriginPose, reached); err != nil {
 		s.logger.Errorf("could not re-place the hot water lever model at %.1f° after a failed turn; "+
 			"run reset_world before moving again: %v", reached, err)
 	}
@@ -263,4 +336,14 @@ func (s *beanjaminCoffee) hotWaterTurnedTo(
 // defaultHotWaterOpenDegs.
 func (s *beanjaminCoffee) hotWaterOpenDegs() float64 {
 	return orDefault(s.cfg.HotWaterOpenDegs, defaultHotWaterOpenDegs)
+}
+
+// hotWaterPourTime is how long drink holds the valve open: an americano tops
+// up a lungo, hot water fills the mug.
+func (s *beanjaminCoffee) hotWaterPourTime(drink string) time.Duration {
+	sec := orDefault(s.cfg.HotWaterPourSec, defaultHotWaterPourSec)
+	if drink == "americano" {
+		sec = orDefault(s.cfg.AmericanoHotWaterPourSec, defaultAmericanoHotWaterPourSec)
+	}
+	return time.Duration(sec * float64(time.Second))
 }

@@ -2,7 +2,9 @@ package coffee
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"go.viam.com/rdk/referenceframe"
 	"go.viam.com/rdk/robot/framesystem"
@@ -70,10 +72,27 @@ func TestStagedMugGrabCollisions(t *testing.T) {
 	}
 }
 
-func TestDispenseHotWaterStubIsNoop(t *testing.T) {
+// TestDispenseHotWaterNeedsTheLever: the hot water comes from the arm turning
+// the valve's lever, so without the lever configured there is none to add.
+func TestDispenseHotWaterNeedsTheLever(t *testing.T) {
 	s, _ := newTestCoffee(t, nil)
-	if err := s.dispenseHotWater(context.Background(), context.Background(), "americano"); err != nil {
-		t.Errorf("dispenseHotWater = %v, want nil", err)
+	err := s.dispenseHotWater(context.Background(), context.Background(), "americano")
+	if err == nil || !strings.Contains(err.Error(), "hot_water_lever_grip_relative_pose") {
+		t.Errorf("dispenseHotWater = %v, want an error naming hot_water_lever_grip_relative_pose", err)
+	}
+}
+
+func TestHotWaterPourTime(t *testing.T) {
+	s := &beanjaminCoffee{cfg: &Config{}}
+	if got := s.hotWaterPourTime("americano"); got != defaultAmericanoHotWaterPourSec*time.Second {
+		t.Errorf("americano default = %v", got)
+	}
+	if got := s.hotWaterPourTime("hot_water"); got != defaultHotWaterPourSec*time.Second {
+		t.Errorf("hot_water default = %v", got)
+	}
+	s.cfg.AmericanoHotWaterPourSec, s.cfg.HotWaterPourSec = 10, 20
+	if s.hotWaterPourTime("americano") != 10*time.Second || s.hotWaterPourTime("hot_water") != 20*time.Second {
+		t.Error("configured pour times not used")
 	}
 }
 

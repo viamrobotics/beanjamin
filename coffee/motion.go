@@ -464,11 +464,11 @@ func (s *beanjaminCoffee) rebuildScene(ctx context.Context, doorOpenDegs, hotWat
 		logger.Infof("frame system rebuilt with fridge door held open at %.1f°", doorOpenDegs)
 	}
 	if hotWaterOpenDegs != 0 {
-		base, berr := hingeBasePose(fs, frameHotWaterLever)
+		base, berr := hingeBasePose(fs, frameHotWaterHinge)
 		if berr != nil {
 			return fmt.Errorf("re-apply hot water lever angle: %w", berr)
 		}
-		if lerr := setHingeTheta(fs, frameHotWaterLever, base, hotWaterOpenDegs); lerr != nil {
+		if lerr := setHingeTheta(fs, frameHotWaterHinge, base, hotWaterOpenDegs); lerr != nil {
 			return fmt.Errorf("re-apply hot water lever angle: %w", lerr)
 		}
 		logger.Infof("frame system rebuilt with the hot water lever held open at %.1f°", hotWaterOpenDegs)

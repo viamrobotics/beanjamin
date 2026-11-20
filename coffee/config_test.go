@@ -41,17 +41,19 @@ func validMugDrinksConfig() *Config {
 	cfg.MugGrabRelativePose = &RelativePose{}
 	cfg.MugDimensions = &ContainerDimensions{DiameterMm: 80, HeightMm: 97}
 	cfg.MugHandleDimensions = &HandleDimensions{DepthMm: 39, WidthMm: 15}
+	cfg.HotWaterLeverGripRelativePose = &RelativePose{}
 	return cfg
 }
 
 func TestValidateMugDrinksRequiresFields(t *testing.T) {
 	for field, clear := range map[string]func(*Config){
-		"mug_vision_service_name":        func(c *Config) { c.MugVisionServiceName = "" },
-		"mug_observe_pose_switcher_name": func(c *Config) { c.MugObservePoseSwitcherName = "" },
-		"mug_approach_relative_pose":     func(c *Config) { c.MugApproachRelativePose = nil },
-		"mug_grab_relative_pose":         func(c *Config) { c.MugGrabRelativePose = nil },
-		"mug_dimensions":                 func(c *Config) { c.MugDimensions = nil },
-		"mug_handle_dimensions":          func(c *Config) { c.MugHandleDimensions = nil },
+		"mug_vision_service_name":            func(c *Config) { c.MugVisionServiceName = "" },
+		"mug_observe_pose_switcher_name":     func(c *Config) { c.MugObservePoseSwitcherName = "" },
+		"mug_approach_relative_pose":         func(c *Config) { c.MugApproachRelativePose = nil },
+		"mug_grab_relative_pose":             func(c *Config) { c.MugGrabRelativePose = nil },
+		"mug_dimensions":                     func(c *Config) { c.MugDimensions = nil },
+		"mug_handle_dimensions":              func(c *Config) { c.MugHandleDimensions = nil },
+		"hot_water_lever_grip_relative_pose": func(c *Config) { c.HotWaterLeverGripRelativePose = nil },
 	} {
 		t.Run(field, func(t *testing.T) {
 			cfg := validMugDrinksConfig()
