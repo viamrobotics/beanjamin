@@ -5,9 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golang/geo/r3"
-	"go.viam.com/rdk/spatialmath"
-
 	"beanjamin/coffee/order"
 )
 
@@ -83,16 +80,11 @@ func TestValidate_SpiceOptions_RejectsBadOptions(t *testing.T) {
 	}
 }
 
-func TestValidate_SpiceOptions_RejectsNegativeShake(t *testing.T) {
+func TestValidate_SpiceOptions_RejectsNegativePourCount(t *testing.T) {
 	cfg := validSpiceConfig()
-	cfg.SpiceShakeCount = -1
-	if _, _, err := cfg.Validate(""); err == nil || !strings.Contains(err.Error(), "spice_shake_count") {
-		t.Errorf("expected a spice_shake_count error, got %v", err)
-	}
-	cfg = validSpiceConfig()
-	cfg.SpiceShakeAmplitudeMm = -5
-	if _, _, err := cfg.Validate(""); err == nil || !strings.Contains(err.Error(), "spice_shake_amplitude_mm") {
-		t.Errorf("expected a spice_shake_amplitude_mm error, got %v", err)
+	cfg.SpicePourCount = -1
+	if _, _, err := cfg.Validate(""); err == nil || !strings.Contains(err.Error(), "spice_pour_count") {
+		t.Errorf("expected a spice_pour_count error, got %v", err)
 	}
 }
 
@@ -116,7 +108,7 @@ func TestRequiredPosesSpice(t *testing.T) {
 			t.Errorf("spice_options should require %q", name)
 		}
 	}
-	for _, name := range []string{clawPoseSpiceShakeApproach, clawPoseSpiceShake, clawPoseSpiceShakeLift} {
+	for _, name := range []string{clawPoseSpiceShakeApproach, clawPoseSpiceShake} {
 		if hasPose(spiced, name) {
 			t.Errorf("%q is resolved against the staged glass and must not be required on a switch", name)
 		}
@@ -147,33 +139,5 @@ func TestStatusReportsSpiceOptions(t *testing.T) {
 	}
 	if spice := st["orders"].([]any)[0].(map[string]any)["spice"]; spice != "nutmeg" {
 		t.Errorf("order spice = %v, want nutmeg", spice)
-	}
-}
-
-// The top of each shake is the shake pose raised straight up by the amplitude,
-// keeping the shaker's tilt.
-func TestResolveSpiceShakeLift(t *testing.T) {
-	s := newPourTestCoffee(t)
-	s.cfg.SpiceShakeRelativePose = &RelativePose{X: 10, Z: 60, OX: 1, OZ: -1}
-	s.cfg.SpiceShakeAmplitudeMm = 25
-	withStagedGlass(t, s, spatialmath.NewPoseFromPoint(r3.Vector{X: 560, Y: -200, Z: 290}))
-
-	shake, err := s.resolvePose(context.Background(), s.clawsSw, clawPoseSpiceShake)
-	if err != nil {
-		t.Fatalf("resolve spice_shake: %v", err)
-	}
-	lift, err := s.resolvePose(context.Background(), s.clawsSw, clawPoseSpiceShakeLift)
-	if err != nil {
-		t.Fatalf("resolve spice_shake_lift: %v", err)
-	}
-	if want := shake.pose.Point().Add(r3.Vector{Z: 25}); lift.pose.Point().Sub(want).Norm() > vecTolMm {
-		t.Errorf("spice_shake_lift at %v, want %v", lift.pose.Point(), want)
-	}
-	if !spatialmath.OrientationAlmostEqual(lift.pose.Orientation(), shake.pose.Orientation()) {
-		t.Errorf("spice_shake_lift orientation = %v, want the shake's %v", lift.pose.Orientation(), shake.pose.Orientation())
-	}
-	// Resolving the lift must not edit the configured offset it is built from.
-	if s.cfg.SpiceShakeRelativePose.Z != 60 {
-		t.Errorf("resolving the lift changed spice_shake_relative_pose.z to %v", s.cfg.SpiceShakeRelativePose.Z)
 	}
 }

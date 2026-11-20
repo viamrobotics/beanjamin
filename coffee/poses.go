@@ -95,7 +95,6 @@ const (
 	// spiceGrabPose).
 	clawPoseSpiceShakeApproach = "spice_shake_approach" // shaker upright above the staged glass (spice_shake_approach_relative_pose)
 	clawPoseSpiceShake         = "spice_shake"          // shaker tilted over the glass (spice_shake_relative_pose)
-	clawPoseSpiceShakeLift     = "spice_shake_lift"     // spice_shake raised by spice_shake_amplitude_mm: the top of each shake
 
 	// camera pose switches (extra vantages live on
 	// the same switch and are enumerated at runtime).

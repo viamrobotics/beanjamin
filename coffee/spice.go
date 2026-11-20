@@ -22,21 +22,12 @@ import (
 // the frame system doesn't define it.
 const spiceAreaShieldFrameName = "spice-rack"
 
-const (
-	// defaultSpiceShakeCount is how many times the tilted shaker is jerked up
-	// and back down when spice_shake_count is unset.
-	defaultSpiceShakeCount = 3
-	// defaultSpiceShakeAmplitudeMm is how far each shake lifts the shaker when
-	// spice_shake_amplitude_mm is unset.
-	defaultSpiceShakeAmplitudeMm = 20.0
-)
+// defaultSpicePourCount is how many times the shaker is tipped over the glass
+// and righted when spice_pour_count is unset.
+const defaultSpicePourCount = 3
 
-func (s *beanjaminCoffee) spiceShakeCount() int {
-	return orDefault(s.cfg.SpiceShakeCount, defaultSpiceShakeCount)
-}
-
-func (s *beanjaminCoffee) spiceShakeAmplitudeMm() float64 {
-	return orDefault(s.cfg.SpiceShakeAmplitudeMm, defaultSpiceShakeAmplitudeMm)
+func (s *beanjaminCoffee) spicePourCount() int {
+	return orDefault(s.cfg.SpicePourCount, defaultSpicePourCount)
 }
 
 // requireSpice rejects the spice actions on a machine that isn't set up for
@@ -197,11 +188,11 @@ func (s *beanjaminCoffee) fetchSpiceShaker(ctx, cancelCtx context.Context, spice
 	return nil
 }
 
-// shakeSpice carries the held shaker upright over the staged glass, tips it
-// over (the same pour pivot the milk uses), jerks it up by
-// spice_shake_amplitude_mm and back down spice_shake_count times so the spice
-// falls through the holes, and rights it again before moving away. Every move
-// over the glass is held to pourConstraint so the shaker stays above it.
+// shakeSpice carries the held shaker upright over the staged glass, then tips
+// it over (the same pour pivot the milk uses) and rights it again
+// spice_pour_count times: each tip knocks a little spice out through the holes.
+// Every move over the glass is held to pourConstraint so the shaker stays
+// above it.
 func (s *beanjaminCoffee) shakeSpice(ctx, cancelCtx context.Context) error {
 	if err := s.requireSpice("shake_spice"); err != nil {
 		return err
@@ -214,26 +205,16 @@ func (s *beanjaminCoffee) shakeSpice(ctx, cancelCtx context.Context) error {
 	}
 	tiltStep := Step{PoseName: clawPoseSpiceShake, PoseSwitch: s.clawsSw, PivotFromPose: clawPoseSpiceShakeApproach, PivotDegreesPerStep: 5,
 		LinearConstraint: pourConstraint, MoveOptions: s.pourMoveOptions()}
-	if err := s.executeStep(ctx, cancelCtx, tiltStep); err != nil {
-		return fmt.Errorf("shake_spice: %w", err)
-	}
-	// The shakes run at the arm's default speed: it is the abrupt stop at the
-	// bottom of each one that knocks the spice out.
-	for i := range s.spiceShakeCount() {
-		up := Step{PoseName: clawPoseSpiceShakeLift, PoseSwitch: s.clawsSw, LinearConstraint: pourConstraint}
-		down := Step{PoseName: clawPoseSpiceShake, PoseSwitch: s.clawsSw, LinearConstraint: pourConstraint}
-		for _, st := range []Step{up, down} {
-			if err := s.executeStep(ctx, cancelCtx, st); err != nil {
-				return fmt.Errorf("shake_spice: shake %d: %w", i+1, err)
-			}
-		}
-	}
 	// Righted along the same pivot so whatever is still falling lands in the
 	// glass, not along the carry back to the rack.
 	uprightStep := Step{PoseName: clawPoseSpiceShakeApproach, PoseSwitch: s.clawsSw, PivotFromPose: clawPoseSpiceShake, PivotDegreesPerStep: 5,
 		LinearConstraint: pourConstraint, Pause: shortPause, MoveOptions: s.slowMoveOptions()}
-	if err := s.executeStep(ctx, cancelCtx, uprightStep); err != nil {
-		return fmt.Errorf("shake_spice: %w", err)
+	for i := range s.spicePourCount() {
+		for _, st := range []Step{tiltStep, uprightStep} {
+			if err := s.executeStep(ctx, cancelCtx, st); err != nil {
+				return fmt.Errorf("shake_spice: pour %d: %w", i+1, err)
+			}
+		}
 	}
 	// heldSpice is empty only for a hand-run shake_spice with no fetch_spice
 	// before it, where there's no telling which shaker was used.
