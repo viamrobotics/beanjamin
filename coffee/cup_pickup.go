@@ -197,7 +197,10 @@ func (t *pickupTarget) heldGeometries(cand geom.Candidate) ([]spatialmath.Geomet
 	if t.handle == nil {
 		return []spatialmath.Geometry{cand.Geom}, nil
 	}
-	return geom.MugGeometries(cand.Geom.Pose().Point(), t.dims.boxDims(), t.handle.DepthMm, t.handle.WidthMm, containerYaw(t.grabRel), t.label)
+	// The detected box takes in the handle, so its center sits off the body. The
+	// grab's sideways offset puts the gripper back on the body, so the body is there.
+	center := cand.Geom.Pose().Point().Add(r3.Vector{Y: t.grabRel.Y})
+	return geom.MugGeometries(center, t.dims.boxDims(), t.handle.DepthMm, t.handle.WidthMm, containerYaw(t.grabRel), t.label)
 }
 
 // observeVantage captures one vision frame at the arm's current pose and lifts
