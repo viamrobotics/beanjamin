@@ -6,6 +6,7 @@ import {
   COMING_SOON_DRINKS,
   GRID_DRINKS,
   beansLabel,
+  drinkLabel,
   hasMilkChoice,
   hasSpiceChoice,
   milkLabel,
@@ -61,18 +62,22 @@ export function ChooseDrink({
   const [unavailableTapped, setUnavailableTapped] = useState<string | null>(
     null,
   );
+  // The selected drink's own choices, shown in a panel under the grid rather
+  // than on its card: the card is too small to keep the chips readable, and
+  // the spice list grows with the machine's rack.
+  const optionsDrink =
+    selectedDrink && !unavailableDrinks.includes(selectedDrink)
+      ? selectedDrink
+      : null;
+  const showMilk =
+    !!optionsDrink && hasMilkChoice(optionsDrink) && milkOptions.length > 1;
+  const showSpice =
+    !!optionsDrink && hasSpiceChoice(optionsDrink) && spiceOptions.length > 0;
   const renderDrinkCard = (drink: (typeof GRID_DRINKS)[number], i: number) => {
     if (unavailableDrinks.includes(drink.id)) {
       return renderPausedCard(drink, i);
     }
     const isSelected = selectedDrink === drink.id;
-    // The milk and spice choices sit on the card itself once it's picked.
-    // They're siblings of the card button, not inside it, since buttons can't
-    // nest.
-    const showMilk =
-      isSelected && hasMilkChoice(drink.id) && milkOptions.length > 1;
-    const showSpice =
-      isSelected && hasSpiceChoice(drink.id) && spiceOptions.length > 0;
     return (
       <div
         key={drink.id}
@@ -105,35 +110,6 @@ export function ChooseDrink({
             </p>
           </div>
         </button>
-        {(showMilk || showSpice) && (
-          <div className="absolute top-1/2 -translate-y-1/2 inset-x-2 flex flex-col gap-1.5">
-            {showMilk && (
-              <OptionPills
-                label="Which milk would you like?"
-                options={milkOptions.map((m) => ({
-                  value: m,
-                  label: milkLabel(m),
-                }))}
-                selected={milk}
-                onChange={onMilkChange}
-              />
-            )}
-            {showSpice && (
-              <OptionPills
-                label="Would you like a dash of spice?"
-                options={[
-                  { value: "", label: "No spice" },
-                  ...spiceOptions.map((s) => ({
-                    value: s,
-                    label: spiceLabel(s),
-                  })),
-                ]}
-                selected={spice}
-                onChange={onSpiceChange}
-              />
-            )}
-          </div>
-        )}
       </div>
     );
   };
@@ -274,6 +250,48 @@ export function ChooseDrink({
           {GRID_DRINKS.map((drink, i) => renderDrinkCard(drink, i))}
         </div>
 
+        {optionsDrink && (showMilk || showSpice) && (
+          <section
+            key={optionsDrink}
+            // Brings the panel into view on a short screen, where it would
+            // otherwise open below the fold under the sticky footer.
+            ref={(el) =>
+              el?.scrollIntoView({ block: "nearest", behavior: "smooth" })
+            }
+            aria-label={`Customize your ${drinkLabel(optionsDrink)}`}
+            className="anim-in scroll-mb-48 flex flex-col gap-4 rounded-2xl bg-neutral-50 p-5"
+          >
+            <h2 className="font-sans font-semibold text-lg text-[#0a0a0a]">
+              Customize your {drinkLabel(optionsDrink)}
+            </h2>
+            {showMilk && (
+              <OptionChips
+                label="Milk"
+                options={milkOptions.map((m) => ({
+                  value: m,
+                  label: milkLabel(m),
+                }))}
+                selected={milk}
+                onChange={onMilkChange}
+              />
+            )}
+            {showSpice && (
+              <OptionChips
+                label="Spice"
+                options={[
+                  { value: "", label: "None" },
+                  ...spiceOptions.map((s) => ({
+                    value: s,
+                    label: spiceLabel(s),
+                  })),
+                ]}
+                selected={spice}
+                onChange={onSpiceChange}
+              />
+            )}
+          </section>
+        )}
+
         {COMING_SOON_DRINKS.length > 0 && (
           <section className="flex flex-col gap-3">
             <div className="anim-in flex flex-col gap-1">
@@ -349,9 +367,10 @@ export function ChooseDrink({
   );
 }
 
-// OptionPills is the row of radio pills a drink card shows for a choice that
-// belongs to the drink (its milk, its spice).
-function OptionPills({
+// OptionChips is one labeled choice in the customize panel (the milk, the
+// spice). The chips wrap, so a longer spice rack adds a line instead of
+// squeezing the labels.
+function OptionChips({
   label,
   options,
   selected,
@@ -363,27 +382,32 @@ function OptionPills({
   onChange: (value: string) => void;
 }) {
   return (
-    <div
-      role="radiogroup"
-      aria-label={label}
-      className="anim-in flex rounded-full bg-white p-1 shadow-sm"
-    >
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          role="radio"
-          aria-checked={selected === o.value}
-          onClick={() => onChange(o.value)}
-          className={`flex-1 py-1.5 rounded-full font-mono font-semibold text-xs uppercase tracking-wider whitespace-nowrap transition-colors duration-150 ${
-            selected === o.value
-              ? "bg-black text-white"
-              : "text-neutral-500 hover:text-neutral-900"
-          }`}
-        >
-          {o.label}
-        </button>
-      ))}
+    <div className="flex flex-col gap-2 @md:flex-row @md:items-start @md:gap-4">
+      <span className="shrink-0 font-mono font-semibold text-sm text-neutral-500 uppercase tracking-wider @md:w-16 @md:pt-2.5">
+        {label}
+      </span>
+      <div
+        role="radiogroup"
+        aria-label={label}
+        className="flex flex-wrap gap-2"
+      >
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={selected === o.value}
+            onClick={() => onChange(o.value)}
+            className={`px-5 py-2.5 rounded-full border font-mono font-semibold text-sm uppercase tracking-wider whitespace-nowrap transition-colors duration-150 ${
+              selected === o.value
+                ? "bg-black border-black text-white"
+                : "bg-white border-neutral-200 text-neutral-700 hover:border-neutral-400"
+            }`}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
