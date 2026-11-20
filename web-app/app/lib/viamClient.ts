@@ -315,6 +315,11 @@ export interface QueueStatus {
   /** Why the ice machine is unavailable, for logs; "" while it is available. */
   iced_unavailable_reason?: string;
   /**
+   * Whether the machine serves the mug drinks (americano, hot_water), its
+   * can_serve_mug_drinks; absent from older modules.
+   */
+  mug_drinks_available?: boolean;
+  /**
    * The spices an iced latte can be dashed with (the machine's spice_options).
    * Absent when the machine offers no spice, and from older modules.
    */
@@ -400,6 +405,8 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
       // A flat two minutes per queued drink, so the wait label renders.
       expected_wait_sec: devQueue.length * 120,
       iced_available: true,
+      // So the mug drinks render orderable in dev mode.
+      mug_drinks_available: true,
       spice_options: ["cinnamon", "nutmeg"],
     };
   }

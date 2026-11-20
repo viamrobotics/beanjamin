@@ -76,6 +76,9 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		"can_serve_decaf": slices.Contains(s.menu().Beans, "decaf"),
 		"fault_active":    s.faultAlarm.Active(),
 		"accept_delivery": s.deliveryAccepting(),
+		// Whether the machine serves the mug drinks (americano, hot_water), for
+		// the kiosk to grey them out where it doesn't.
+		"mug_drinks_available": s.cfg.CanServeMugDrinks,
 	}
 	// Whether the ice machine answered its last probe, for the kiosk to grey out
 	// the iced drinks. Only on a machine serving them.

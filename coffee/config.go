@@ -286,12 +286,9 @@ type Config struct {
 	// Required when spice_options is set.
 	SpiceShakeApproachRelativePose *RelativePose `json:"spice_shake_approach_relative_pose,omitempty"`
 	SpiceShakeRelativePose         *RelativePose `json:"spice_shake_relative_pose,omitempty"`
-	// SpiceShakeCount is how many times the tilted shaker is jerked up and back
-	// down over the glass: the knob that sets how big the dash is. Defaults to 3.
-	SpiceShakeCount int `json:"spice_shake_count,omitempty"`
-	// SpiceShakeAmplitudeMm is how far each shake lifts the tilted shaker.
-	// Defaults to 20.
-	SpiceShakeAmplitudeMm float64 `json:"spice_shake_amplitude_mm,omitempty"`
+	// SpicePourCount is how many times the shaker is tipped over the glass and
+	// righted again: the knob that sets how big the dash is. Defaults to 3.
+	SpicePourCount int `json:"spice_pour_count,omitempty"`
 
 	// Serving placement offsets are composed onto the serving-area slot anchor
 	// when releasing a finished drink onto the served shelf. The same offsets
@@ -788,14 +785,11 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 			return nil, nil, err
 		}
 		if err := validateSpotOptions(path, "spice_options", cfg.SpiceOptions, spiceApproachPose,
-			clawPoseSpiceShakeApproach, clawPoseSpiceShake, clawPoseSpiceShakeLift); err != nil {
+			clawPoseSpiceShakeApproach, clawPoseSpiceShake); err != nil {
 			return nil, nil, err
 		}
-		if cfg.SpiceShakeCount < 0 {
-			return nil, nil, fmt.Errorf("%s: spice_shake_count must be >= 0", path)
-		}
-		if cfg.SpiceShakeAmplitudeMm < 0 {
-			return nil, nil, fmt.Errorf("%s: spice_shake_amplitude_mm must be >= 0", path)
+		if cfg.SpicePourCount < 0 {
+			return nil, nil, fmt.Errorf("%s: spice_pour_count must be >= 0", path)
 		}
 	}
 

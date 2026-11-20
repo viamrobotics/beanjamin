@@ -5,7 +5,9 @@ import { useState } from "react";
 import {
   COMING_SOON_DRINKS,
   GRID_DRINKS,
+  ICED_DRINK_IDS,
   beansLabel,
+  brewsCoffee,
   drinkLabel,
   hasMilkChoice,
   hasSpiceChoice,
@@ -210,7 +212,7 @@ export function ChooseDrink({
             )}
           </div>
 
-          {beanOptions.length > 1 && (
+          {beanOptions.length > 1 && brewsCoffee(optionsDrink ?? "") && (
             <div
               role="radiogroup"
               aria-label="Which beans?"
@@ -236,7 +238,7 @@ export function ChooseDrink({
           )}
         </div>
 
-        {GRID_DRINKS.some((d) => unavailableDrinks.includes(d.id)) && (
+        {ICED_DRINK_IDS.some((id) => unavailableDrinks.includes(id)) && (
           <p
             className="anim-in -mt-3 text-neutral-500 text-sm"
             aria-live="polite"
