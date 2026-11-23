@@ -51,6 +51,9 @@ export function EnterName({
         <div className="flex flex-col gap-4">
           <input
             type="text"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
             value={name}
             onChange={(e) => onNameChange(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && onSubmit()}
@@ -62,6 +65,9 @@ export function EnterName({
 
           <input
             type="email"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
             value={email}
             onChange={(e) => onEmailChange(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && onSubmit()}
