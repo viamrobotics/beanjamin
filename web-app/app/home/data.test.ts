@@ -4,6 +4,8 @@ import * as VIAM from "@viamrobotics/sdk";
 import {
   buildOrderFileFilter,
   startOfToday,
+  tallyCustomers,
+  titleCaseName,
   panelKey,
   panelTitle,
   planTimeLabel,
@@ -84,4 +86,33 @@ test("today panel has its own key and title", () => {
   assert.equal(panelKey({ kind: "today" }), "today");
   assert.notEqual(panelKey({ kind: "today" }), panelKey({ kind: "errors" }));
   assert.equal(panelTitle({ kind: "today" }), "Today · all machines");
+});
+
+test("customer names are title cased", () => {
+  assert.equal(titleCaseName("  nicolas   PALPACUER "), "Nicolas Palpacuer");
+  assert.equal(titleCaseName("o'brien-smith"), "O'Brien-Smith");
+  assert.equal(titleCaseName("élodie"), "Élodie");
+});
+
+test("names differing only by casing share one tally", () => {
+  const entries = tallyCustomers([
+    { name: "nico", email: null, value: 2 },
+    { name: "Nico", email: "nico@example.com", value: 3 },
+    { name: "NICO ", email: "", value: 1 },
+    { name: "Ada", email: null, value: 4 },
+    { name: "  ", email: null, value: 9 },
+    { name: null, email: null, value: 9 },
+  ]);
+  assert.deepEqual(entries, [
+    { name: "Nico", count: 6, email: "nico@example.com" },
+    { name: "Ada", count: 4 },
+  ]);
+});
+
+test("a merged customer carries their most used email", () => {
+  const [entry] = tallyCustomers([
+    { name: "sam", email: "old@example.com", value: 1 },
+    { name: "Sam", email: "new@example.com", value: 3 },
+  ]);
+  assert.equal(entry.email, "new@example.com");
 });

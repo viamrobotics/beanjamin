@@ -22,7 +22,17 @@ function LeaderboardList({
       {entries.slice(0, 5).map((e, i) => (
         <li key={e.name} className="py-0.5">
           <span className="mr-2">{RANK_EMOJI[i]}</span>
-          {formatName ? formatName(e.name) : e.name} —{" "}
+          {formatName ? formatName(e.name) : e.name}
+          {e.email && (
+            <span
+              className="ml-1.5 cursor-help"
+              title={`Loyalty member · ${e.email}`}
+              aria-label={`Loyalty member · ${e.email}`}
+            >
+              ⭐
+            </span>
+          )}{" "}
+          —{" "}
           <strong>{e.count}</strong>
         </li>
       ))}

@@ -21,6 +21,7 @@ import {
   panelKey,
   listMachines,
   loadDailyOrderCounts,
+  loadCustomerLeaderboard,
   loadLeaderboard,
   loadOrdersForDay,
   loadErrorsLast7Days,
@@ -211,7 +212,7 @@ export function Dashboard() {
           );
         })
         .catch((e) => console.error("failed to load reliability:", e));
-      loadLeaderboard(currentClient, "data.readings.customer_name")
+      loadCustomerLeaderboard(currentClient)
         .then((d) => !cancelled && setCustomerLeaderboard(d))
         .catch((e) =>
           console.error("failed to load customer leaderboard:", e)

@@ -68,6 +68,8 @@ export interface OrderRecord {
 export interface LeaderboardEntry {
   name: string;
   count: number;
+  // The customer's loyalty email; empty when none of their orders carried one.
+  email?: string;
 }
 
 export type Panel =
@@ -387,6 +389,84 @@ export async function loadLeaderboard(
   return results
     .filter((r) => typeof r.name === "string" && r.name.trim() !== "")
     .map((r) => ({ name: r.name as string, count: r.value }));
+}
+
+/** "nicolas PALPACUER" -> "Nicolas Palpacuer"; "o'brien-smith" -> "O'Brien-Smith". */
+export function titleCaseName(name: string): string {
+  return name
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .replace(/(^|[\s'-])(\p{L})/gu, (_, sep, c) => sep + c.toUpperCase());
+}
+
+export interface CustomerTallyRow {
+  name: string | null;
+  email: string | null;
+  value: number;
+}
+
+/**
+ * Folds names that differ only by casing or spacing into one entry, since the
+ * kiosk takes the name as typed. The entry carries the email seen on most of
+ * that customer's orders.
+ */
+export function tallyCustomers(rows: CustomerTallyRow[]): LeaderboardEntry[] {
+  type Tally = { name: string; count: number; emails: Map<string, number> };
+  const byKey = new Map<string, Tally>();
+  for (const r of rows) {
+    if (typeof r.name !== "string" || r.name.trim() === "") continue;
+    const name = titleCaseName(r.name);
+    const key = name.toLowerCase();
+    const t = byKey.get(key) ?? { name, count: 0, emails: new Map() };
+    t.count += r.value;
+    const email = r.email?.trim();
+    if (email) t.emails.set(email, (t.emails.get(email) ?? 0) + r.value);
+    byKey.set(key, t);
+  }
+  return [...byKey.values()]
+    .map((t) => {
+      const email = [...t.emails.entries()].sort((a, b) => b[1] - a[1])[0];
+      return {
+        name: t.name,
+        count: t.count,
+        ...(email ? { email: email[0] } : {}),
+      };
+    })
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+export async function loadCustomerLeaderboard(
+  client: VIAM.ViamClient
+): Promise<LeaderboardEntry[]> {
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const results = await runMQL<CustomerTallyRow>(client, [
+    {
+      $match: {
+        location_id: LOCATION_ID,
+        component_name: RESOURCE_NAME,
+        time_received: { $gte: since },
+      },
+    },
+    {
+      $group: {
+        _id: {
+          name: "$data.readings.customer_name",
+          email: "$data.readings.customer_email",
+        },
+        value: { $sum: 1 },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        name: "$_id.name",
+        email: "$_id.email",
+        value: 1,
+      },
+    },
+  ]);
+  return tallyCustomers(results);
 }
 
 /** A null robotId spans every machine in the location. */
