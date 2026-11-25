@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { type IssueReportRecord } from "./data";
-import { splitDrink } from "../order/drinks";
 import { DrinkName } from "../order/drink-name";
 import {
   OTHER_ISSUE,
@@ -100,7 +99,6 @@ export function IssuesTable({
             </thead>
             <tbody>
               {shown.map((i, n) => {
-                const d = splitDrink(i.drink);
                 return (
                   <tr
                     key={`${i.orderId}-${i.reportedAt.getTime()}-${n}`}
@@ -126,13 +124,28 @@ export function IssuesTable({
                       )}
                     </td>
                     <td className="px-3 py-2">
-                      <div>
-                        <DrinkName drink={d.drink} beans={d.beans} />
-                      </div>
-                      <div className="text-neutral-500">
-                        {i.customerName || "Anonymous"}
-                        {i.whichOrder === "current" && " · while being made"}
-                      </div>
+                      {i.order ? (
+                        <>
+                          <div>
+                            <DrinkName
+                              drink={i.order.drink}
+                              beans={i.order.beans}
+                            />
+                            {!i.order.ok && (
+                              <span className="ml-2 text-xs text-red-600">
+                                failed
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-neutral-500">
+                            {i.order.customerName || "Anonymous"}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-neutral-400">
+                          Order not synced yet
+                        </div>
+                      )}
                       <div
                         className="text-xs text-neutral-400 font-mono truncate max-w-[12rem]"
                         title={i.orderId}

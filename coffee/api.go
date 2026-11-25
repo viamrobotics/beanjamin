@@ -82,11 +82,6 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		// Whether report_issue is wired to a sensor, for the kiosk to offer it.
 		"issue_reports_available": s.issueSink != nil,
 	}
-	// The orders a customer can report an issue with; each key is absent when
-	// there is no such order.
-	if reportable := s.reportableOrders(); len(reportable) > 0 {
-		resp["reportable_orders"] = reportable
-	}
 	// Whether the ice machine answered its last probe, for the kiosk to grey out
 	// the iced drinks. Only on a machine serving them.
 	if s.cfg.CanServeIced {

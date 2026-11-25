@@ -3,9 +3,14 @@ import { BSON } from "bson";
 import { splitDrink } from "../order/drinks";
 import { type OrderOutcome } from "./reliability";
 
-export const ORG_ID = "e76d1b3b-0468-4efd-bb7f-fb1d2b352fcb";
-export const LOCATION_ID = "oeq47g5p1m";
-export const RESOURCE_NAME = "order-events";
+import {
+  ISSUES_RESOURCE_NAME,
+  LOCATION_ID,
+  ORG_ID,
+  RESOURCE_NAME,
+} from "../lib/fleet";
+
+export { ISSUES_RESOURCE_NAME, LOCATION_ID, ORG_ID, RESOURCE_NAME };
 
 // The fleet is every machine in LOCATION_ID that imports the eureka-grinder
 // fragment. The location also holds non-barista machines, and no fragment is
@@ -738,21 +743,24 @@ export async function loadPlanRequestsForOrder(
 
 // --- Customer issue reports -------------------------------------------------
 
-/** The coffee service's issue_sensor_name component, captured like order-events. */
-export const ISSUES_RESOURCE_NAME = "issue-reports";
-
 export interface IssueReportRecord {
   robotId: string;
   reportedAt: Date;
   orderId: string;
-  drink: string;
-  customerName: string;
-  /** "current" when reported while the drink was being made, else "previous". */
-  whichOrder: string;
   /** A catalog key (see order/issues.ts) or "other". */
   issue: string;
   description: string;
   severity: string;
+  /**
+   * The order-events reading with the report's order_id; null until that
+   * order has finished and synced, or if it never recorded one.
+   */
+  order: {
+    drink: string;
+    beans: string;
+    customerName: string;
+    ok: boolean;
+  } | null;
 }
 
 interface RawIssueRow {
@@ -761,9 +769,6 @@ interface RawIssueRow {
   data?: {
     readings?: {
       order_id?: string;
-      drink?: string;
-      customer_name?: string;
-      which_order?: string;
       issue?: string;
       description?: string;
       severity?: string;
@@ -772,7 +777,10 @@ interface RawIssueRow {
   };
 }
 
-/** Every issue reported on the given machines over the last `days`, newest first. */
+/**
+ * Every issue reported on the given machines over the last `days`, newest
+ * first, each joined to its order's order-events reading by order_id.
+ */
 export async function loadIssueReports(
   client: VIAM.ViamClient,
   machines: Machine[],
@@ -790,22 +798,46 @@ export async function loadIssueReports(
     },
     { $sort: { time_received: -1 } },
   ]);
+
+  const orderIds = [
+    ...new Set(rows.map((r) => r.data?.readings?.order_id).filter(Boolean)),
+  ];
+  const orders = new Map<string, OrderRecord>();
+  if (orderIds.length > 0) {
+    const orderRows = await runMQL<RawOrderRow>(client, [
+      {
+        $match: {
+          location_id: LOCATION_ID,
+          component_name: RESOURCE_NAME,
+          "data.readings.order_id": { $in: orderIds },
+        },
+      },
+    ]);
+    for (const o of parseOrderResults(orderRows)) orders.set(o.orderId, o);
+  }
+
   return rows.map((r) => {
     const x = r.data?.readings ?? {};
     const received =
       r.time_received instanceof Date
         ? r.time_received
         : new Date(r.time_received);
+    const o = orders.get(x.order_id ?? "");
     return {
       robotId: r.robot_id ?? "",
       reportedAt: x.reported_at ? new Date(x.reported_at) : received,
       orderId: x.order_id ?? "",
-      drink: x.drink ?? "",
-      customerName: x.customer_name ?? "",
-      whichOrder: x.which_order ?? "",
       issue: x.issue ?? "",
       description: x.description ?? "",
       severity: x.severity ?? "",
+      order: o
+        ? {
+            drink: o.drink,
+            beans: o.beans,
+            customerName: o.customerName,
+            ok: o.ok,
+          }
+        : null,
     };
   });
 }

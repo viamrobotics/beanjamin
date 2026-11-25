@@ -85,9 +85,8 @@ type Config struct {
 	FilterReleasedGripRelativePose *RelativePose `json:"filter_released_grip_relative_pose,omitempty"`
 	SaveMotionRequestsDir          string        `json:"save_motion_requests_dir,omitempty"`
 	OrderSensorName                string        `json:"order_sensor_name,omitempty"`
-	// IssueSensorName names a viam:beanjamin:order-sensor kept apart from the
-	// order one, so customer issue reports (report_issue) are captured under
-	// their own component and never counted as orders.
+	// IssueSensorName names a viam:beanjamin:order-issue-sensor, where
+	// report_issue pushes customer issue reports.
 	IssueSensorName string `json:"issue_sensor_name,omitempty"`
 
 	// Optional usage sensor updated during the brew lifecycle via a best-effort

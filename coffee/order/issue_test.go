@@ -14,52 +14,57 @@ func TestParseIssueRequest(t *testing.T) {
 	}{
 		{
 			name:         "suggested issue takes its catalog severity",
-			raw:          map[string]any{"order": "previous", "issue": "large_spill"},
+			raw:          map[string]any{"order_id": "o1", "issue": "large_spill"},
 			wantSeverity: SeverityCritical,
 		},
 		{
 			name:         "suggested issue with its own severity",
-			raw:          map[string]any{"order": "current", "issue": "small_spill", "severity": "minor"},
+			raw:          map[string]any{"order_id": "o1", "issue": "small_spill", "severity": "minor"},
 			wantSeverity: SeverityMinor,
 		},
 		{
 			name:    "suggested issue with a conflicting severity",
-			raw:     map[string]any{"order": "current", "issue": "small_spill", "severity": "critical"},
+			raw:     map[string]any{"order_id": "o1", "issue": "small_spill", "severity": "critical"},
 			wantErr: "is a minor issue",
 		},
 		{
 			name:         "freeform issue",
-			raw:          map[string]any{"order": "current", "issue": "other", "description": " foam everywhere ", "severity": "medium"},
+			raw:          map[string]any{"order_id": "o1", "issue": "other", "description": " foam everywhere ", "severity": "medium"},
 			wantSeverity: SeverityMedium,
 		},
 		{
 			name:    "freeform issue without a description",
-			raw:     map[string]any{"order": "current", "issue": "other", "severity": "medium"},
+			raw:     map[string]any{"order_id": "o1", "issue": "other", "severity": "medium"},
 			wantErr: "needs a description",
 		},
 		{
 			name:    "freeform issue without a severity",
-			raw:     map[string]any{"order": "current", "issue": "other", "description": "x"},
+			raw:     map[string]any{"order_id": "o1", "issue": "other", "description": "x"},
 			wantErr: "needs a severity",
 		},
 		{
 			name:    "unknown severity",
-			raw:     map[string]any{"order": "current", "issue": "other", "description": "x", "severity": "huge"},
+			raw:     map[string]any{"order_id": "o1", "issue": "other", "description": "x", "severity": "huge"},
 			wantErr: "severity must be",
 		},
 		{
 			name:    "unknown issue",
-			raw:     map[string]any{"order": "current", "issue": "sad"},
+			raw:     map[string]any{"order_id": "o1", "issue": "sad"},
 			wantErr: "not a known issue",
 		},
 		{
-			name:    "unknown order",
-			raw:     map[string]any{"order": "next", "issue": "small_spill"},
-			wantErr: "report_issue.order",
+			name:    "missing order_id",
+			raw:     map[string]any{"issue": "small_spill"},
+			wantErr: "order_id is required",
+		},
+		{
+			name:    "order_id too long",
+			raw:     map[string]any{"order_id": strings.Repeat("x", maxOrderIDLen+1), "issue": "small_spill"},
+			wantErr: "order_id is limited",
 		},
 		{
 			name:    "description too long",
-			raw:     map[string]any{"order": "current", "issue": "other", "severity": "minor", "description": strings.Repeat("a", maxIssueDescriptionLen+1)},
+			raw:     map[string]any{"order_id": "o1", "issue": "other", "severity": "minor", "description": strings.Repeat("a", maxIssueDescriptionLen+1)},
 			wantErr: "limited to",
 		},
 		{
@@ -69,7 +74,7 @@ func TestParseIssueRequest(t *testing.T) {
 		},
 		{
 			name:    "wrong field type",
-			raw:     map[string]any{"order": "current", "issue": 3.0},
+			raw:     map[string]any{"order_id": "o1", "issue": 3.0},
 			wantErr: "must be a string",
 		},
 	}
@@ -94,42 +99,12 @@ func TestParseIssueRequest(t *testing.T) {
 
 func TestParseIssueRequest_TrimsDescription(t *testing.T) {
 	req, err := ParseIssueRequest(map[string]any{
-		"order": "current", "issue": "other", "description": "  foam  ", "severity": "minor",
+		"order_id": "o1", "issue": "other", "description": "  foam  ", "severity": "minor",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if req.Description != "foam" {
 		t.Fatalf("description: want %q got %q", "foam", req.Description)
-	}
-}
-
-func TestQueue_Reportable(t *testing.T) {
-	q := NewQueue()
-	if c, p := q.Reportable(); c != nil || p != nil {
-		t.Fatalf("empty queue: want no reportable orders, got %v %v", c, p)
-	}
-
-	q.Enqueue(Order{ID: "a"})
-	q.Enqueue(Order{ID: "b"})
-	q.Start()
-	if c, p := q.Reportable(); c == nil || c.ID != "a" || p != nil {
-		t.Fatalf("first order running: got current=%v previous=%v", c, p)
-	}
-
-	q.Complete()
-	q.Start()
-	c, p := q.Reportable()
-	if c == nil || c.ID != "b" || p == nil || p.ID != "a" {
-		t.Fatalf("second order running: got current=%v previous=%v", c, p)
-	}
-	if p.CompletedAt.IsZero() {
-		t.Fatal("previous order should carry its completion time")
-	}
-
-	// A wipe still leaves the drink that was made reportable.
-	q.Clear()
-	if c, p := q.Reportable(); c != nil || p == nil || p.ID != "a" {
-		t.Fatalf("after Clear: got current=%v previous=%v", c, p)
 	}
 }

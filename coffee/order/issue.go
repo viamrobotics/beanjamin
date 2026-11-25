@@ -17,15 +17,13 @@ const (
 // problem and picks its severity.
 const IssueOther = "other"
 
-// Which order a report is about.
-const (
-	ReportCurrentOrder  = "current"
-	ReportPreviousOrder = "previous"
-)
-
 // maxIssueDescriptionLen bounds a freeform description, which comes straight
 // from a kiosk text box.
 const maxIssueDescriptionLen = 500
+
+// maxOrderIDLen bounds order_id. Order IDs are UUIDs; the bound only keeps a
+// malformed request from writing an arbitrarily long value to tabular data.
+const maxOrderIDLen = 64
 
 // IssueKind is one issue customers can pick without describing it.
 type IssueKind struct {
@@ -60,11 +58,11 @@ func validSeverity(s string) bool {
 	return s == SeverityMinor || s == SeverityMedium || s == SeverityCritical
 }
 
-// IssueRequest is a decoded report_issue command, before the order it names is
-// looked up.
+// IssueRequest is a decoded report_issue command.
 type IssueRequest struct {
-	// Which is ReportCurrentOrder or ReportPreviousOrder.
-	Which string
+	// OrderID is the order the issue was seen on: the ID it carries in
+	// order-events, or the one being made right now.
+	OrderID string
 	// Issue is an IssueKinds key or IssueOther.
 	Issue       string
 	Description string
@@ -73,7 +71,7 @@ type IssueRequest struct {
 
 // ParseIssueRequest decodes the report_issue command's value:
 //
-//	{"order": "current"|"previous", "issue": "<key>"|"other",
+//	{"order_id": "<id>", "issue": "<key>"|"other",
 //	 "description": "...", "severity": "minor"|"medium"|"critical"}
 //
 // A suggested issue carries its catalog severity, so severity may be omitted;
@@ -97,7 +95,7 @@ func ParseIssueRequest(raw any) (IssueRequest, error) {
 	}
 	var req IssueRequest
 	var err error
-	if req.Which, err = str("order"); err != nil {
+	if req.OrderID, err = str("order_id"); err != nil {
 		return IssueRequest{}, err
 	}
 	if req.Issue, err = str("issue"); err != nil {
@@ -110,9 +108,11 @@ func ParseIssueRequest(raw any) (IssueRequest, error) {
 		return IssueRequest{}, err
 	}
 
-	if req.Which != ReportCurrentOrder && req.Which != ReportPreviousOrder {
-		return IssueRequest{}, fmt.Errorf("report_issue.order must be %q or %q, got %q",
-			ReportCurrentOrder, ReportPreviousOrder, req.Which)
+	if req.OrderID == "" {
+		return IssueRequest{}, fmt.Errorf("report_issue.order_id is required")
+	}
+	if len(req.OrderID) > maxOrderIDLen {
+		return IssueRequest{}, fmt.Errorf("report_issue.order_id is limited to %d characters", maxOrderIDLen)
 	}
 	if len(req.Description) > maxIssueDescriptionLen {
 		return IssueRequest{}, fmt.Errorf("report_issue.description is limited to %d characters", maxIssueDescriptionLen)
@@ -142,10 +142,9 @@ func ParseIssueRequest(raw any) (IssueRequest, error) {
 	return req, nil
 }
 
-// IssueReport is one customer report about an order, handed to the issue
-// sensor to be captured as tabular data.
+// IssueReport is one customer report about an order, handed to the
+// order-issue sensor to be captured as tabular data.
 type IssueReport struct {
 	IssueRequest
-	Order      Order
 	ReportedAt time.Time
 }

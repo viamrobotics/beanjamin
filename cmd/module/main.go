@@ -8,6 +8,7 @@ import (
 	"beanjamin/dialcontrolmotion"
 	"beanjamin/maintenancesensor"
 	"beanjamin/multiposesexecutionswitch"
+	"beanjamin/orderissuesensor"
 	"beanjamin/ordersensor"
 	"beanjamin/refilldisplay"
 
@@ -24,6 +25,7 @@ func main() {
 		resource.APIModel{API: toggleswitch.API, Model: multiposesexecutionswitch.Model},
 		resource.APIModel{API: sensor.API, Model: maintenancesensor.Model},
 		resource.APIModel{API: sensor.API, Model: ordersensor.Model},
+		resource.APIModel{API: sensor.API, Model: orderissuesensor.Model},
 		resource.APIModel{API: generic.API, Model: dialcontrolmotion.Model},
 		resource.APIModel{API: generic.API, Model: customerdetector.Model},
 		resource.APIModel{API: generic.API, Model: crm.Model},

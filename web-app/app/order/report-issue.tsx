@@ -3,9 +3,10 @@
 import { useEffect, useState } from "react";
 import {
   getQueue,
+  getRecentOrders,
   reportIssue,
-  type ReportableOrder,
-  type ReportWhich,
+  type QueueStatus,
+  type RecentOrder,
   type ViamConnection,
 } from "../lib/viamClient";
 import { DrinkName } from "./drink-name";
@@ -18,23 +19,44 @@ import {
   severityLabel,
 } from "./issues";
 
-// The reportable orders change as the queue moves, so they are re-read while
-// the screen is open rather than once.
-const POLL_MS = 3000;
+// The queue moves every few seconds; finished orders only arrive as the data
+// manager syncs, so the tabular read can be much slower.
+const QUEUE_POLL_MS = 3000;
+const HISTORY_POLL_MS = 30_000;
 const THANKS_DISMISS_MS = 4000;
 const MAX_DESCRIPTION = 500;
 
-function minutesAgo(iso: string | undefined): string {
-  if (!iso) return "";
-  const min = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
+function timeAgo(d: Date): string {
+  const min = Math.round((Date.now() - d.getTime()) / 60_000);
   if (min < 1) return "just now";
-  if (min === 1) return "1 min ago";
   if (min < 60) return `${min} min ago`;
-  return new Date(iso).toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
+
+/**
+ * The queue's orders a customer could report on before their reading has
+ * synced: the one being made, and those that just finished.
+ */
+function queueOrders(q: QueueStatus): RecentOrder[] {
+  return q.orders
+    .filter((o) => o.completed_at !== "" || o.cancellable === false)
+    .map((o) => ({
+      id: o.id,
+      drink: o.drink,
+      beans: o.beans ?? "regular",
+      customerName: o.customer_name,
+      at: new Date(o.completed_at || o.enqueued_at),
+      // A just-finished order's outcome is only known once it syncs.
+      status: o.completed_at ? ("finished" as const) : ("making" as const),
+    }));
+}
+
+const STATUS_LABEL: Record<RecentOrder["status"], string> = {
+  making: "Being made",
+  finished: "Just finished",
+  done: "Served",
+  failed: "Failed",
+};
 
 function SeverityChip({ severity }: { severity: string }) {
   return (
@@ -46,50 +68,60 @@ function SeverityChip({ severity }: { severity: string }) {
   );
 }
 
-function OrderCard({
-  title,
+function OrderRow({
   order,
-  status,
   selected,
   onSelect,
 }: {
-  title: string;
-  order: ReportableOrder | undefined;
-  status: string;
+  order: RecentOrder;
   selected: boolean;
   onSelect: () => void;
 }) {
   return (
     <button
       type="button"
-      disabled={!order}
       onClick={onSelect}
       aria-pressed={selected}
-      className={`press flex-1 min-w-0 text-left px-5 py-4 rounded-2xl border-2 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+      className={`press w-full flex items-center justify-between gap-4 text-left px-5 py-3 rounded-2xl border-2 transition-colors ${
         selected
           ? "border-neutral-900 bg-neutral-900 text-white"
           : "border-neutral-200 bg-white text-neutral-900 hover:bg-neutral-50"
       }`}
     >
-      <div
-        className={`text-xs font-mono uppercase tracking-widest mb-1 ${selected ? "text-neutral-300" : "text-neutral-400"}`}
-      >
-        {title}
+      <div className="min-w-0">
+        <div className="text-lg font-semibold truncate">
+          <DrinkName drink={order.drink} beans={order.beans} />
+        </div>
+        <div
+          className={`text-sm truncate ${selected ? "text-neutral-300" : "text-neutral-500"}`}
+        >
+          {order.customerName || "Anonymous"}
+        </div>
       </div>
-      {order ? (
-        <>
-          <div className="text-lg font-semibold truncate">
-            <DrinkName drink={order.drink} beans={order.beans} />
+      <div className="shrink-0 text-right text-sm">
+        <div
+          className={
+            order.status === "making"
+              ? selected
+                ? "text-amber-300"
+                : "text-amber-700"
+              : order.status === "failed"
+                ? selected
+                  ? "text-red-300"
+                  : "text-red-600"
+                : selected
+                  ? "text-neutral-300"
+                  : "text-neutral-500"
+          }
+        >
+          {STATUS_LABEL[order.status]}
+        </div>
+        {order.status !== "making" && (
+          <div className="text-neutral-400">
+            {timeAgo(order.at)}
           </div>
-          <div
-            className={`text-sm truncate ${selected ? "text-neutral-300" : "text-neutral-500"}`}
-          >
-            {order.customer_name || "Anonymous"} · {status}
-          </div>
-        </>
-      ) : (
-        <div className="text-sm text-neutral-500">None</div>
-      )}
+        )}
+      </div>
     </button>
   );
 }
@@ -103,11 +135,10 @@ export function ReportIssue({
   connected: boolean;
   onBack: () => void;
 }) {
-  const [orders, setOrders] = useState<{
-    current?: ReportableOrder;
-    previous?: ReportableOrder;
-  } | null>(null);
-  const [which, setWhich] = useState<ReportWhich | null>(null);
+  const [fromQueue, setFromQueue] = useState<RecentOrder[]>([]);
+  const [history, setHistory] = useState<RecentOrder[] | null>(null);
+  const [historyError, setHistoryError] = useState(false);
+  const [orderId, setOrderId] = useState<string | null>(null);
   const [issue, setIssue] = useState<string | null>(null);
   const [description, setDescription] = useState("");
   const [severity, setSeverity] = useState<Severity | null>(null);
@@ -118,29 +149,36 @@ export function ReportIssue({
   useEffect(() => {
     if (!viamConn) return;
     let cancelled = false;
-    const load = async () => {
+    const loadQueue = async () => {
       try {
         const q = await getQueue(viamConn);
-        if (cancelled) return;
-        const next = q.reportable_orders ?? {};
-        setOrders(next);
-        // Default to the only order there is; never switch away from one the
-        // customer picked while it still exists.
-        setWhich((w) => {
-          if (w && next[w]) return w;
-          if (next.current && !next.previous) return "current";
-          if (next.previous && !next.current) return "previous";
-          return null;
-        });
+        if (!cancelled) setFromQueue(queueOrders(q));
       } catch (e) {
-        console.error("failed to load reportable orders:", e);
+        console.error("failed to load the queue:", e);
       }
     };
-    load();
-    const id = setInterval(load, POLL_MS);
+    const loadHistory = async () => {
+      try {
+        const h = await getRecentOrders(viamConn);
+        if (cancelled) return;
+        setHistory(h);
+        setHistoryError(false);
+      } catch (e) {
+        console.error("failed to load recent orders:", e);
+        if (!cancelled) {
+          setHistory((h) => h ?? []);
+          setHistoryError(true);
+        }
+      }
+    };
+    loadQueue();
+    loadHistory();
+    const q = setInterval(loadQueue, QUEUE_POLL_MS);
+    const h = setInterval(loadHistory, HISTORY_POLL_MS);
     return () => {
       cancelled = true;
-      clearInterval(id);
+      clearInterval(q);
+      clearInterval(h);
     };
   }, [viamConn]);
 
@@ -150,21 +188,29 @@ export function ReportIssue({
     return () => clearTimeout(t);
   }, [done, onBack]);
 
+  // The synced copy wins, since it knows the outcome; the queue fills in the
+  // order being made and any finished too recently to have synced.
+  const synced = new Set((history ?? []).map((o) => o.id));
+  const orders: RecentOrder[] = [
+    ...fromQueue.filter((o) => !synced.has(o.id)),
+    ...(history ?? []),
+  ];
+
   const isOther = issue === OTHER_ISSUE;
   const canSubmit =
     connected &&
     !submitting &&
-    which !== null &&
+    orderId !== null &&
     issue !== null &&
     (!isOther || (description.trim() !== "" && severity !== null));
 
   async function submit() {
-    if (!viamConn || !canSubmit || !which || !issue) return;
+    if (!viamConn || !canSubmit || !orderId || !issue) return;
     setSubmitting(true);
     setError(null);
     try {
       await reportIssue(viamConn, {
-        which,
+        orderId,
         issue,
         ...(isOther && { description: description.trim(), severity: severity! }),
       });
@@ -192,8 +238,6 @@ export function ReportIssue({
       </main>
     );
   }
-
-  const noOrders = orders !== null && !orders.current && !orders.previous;
 
   return (
     <main className="relative h-full bg-white flex flex-col items-center overflow-y-auto p-4 pt-20 pb-10 font-sans">
@@ -226,28 +270,24 @@ export function ReportIssue({
           <h2 className="text-sm font-mono uppercase tracking-widest text-neutral-500">
             1 · Which order?
           </h2>
-          {orders === null ? (
+          {history === null && orders.length === 0 ? (
             <p className="text-neutral-500">Loading orders…</p>
-          ) : noOrders ? (
+          ) : orders.length === 0 ? (
             <p className="text-neutral-500">
-              There is no recent order to report on.
+              {historyError
+                ? "Couldn't load recent orders."
+                : "There is no recent order to report on."}
             </p>
           ) : (
-            <div className="flex flex-col sm:flex-row gap-3">
-              <OrderCard
-                title="Current order"
-                order={orders.current}
-                status="being made"
-                selected={which === "current"}
-                onSelect={() => setWhich("current")}
-              />
-              <OrderCard
-                title="Previous order"
-                order={orders.previous}
-                status={`finished ${minutesAgo(orders.previous?.completed_at)}`}
-                selected={which === "previous"}
-                onSelect={() => setWhich("previous")}
-              />
+            <div className="flex flex-col gap-2 max-h-[22rem] overflow-y-auto">
+              {orders.map((o) => (
+                <OrderRow
+                  key={o.id}
+                  order={o}
+                  selected={orderId === o.id}
+                  onSelect={() => setOrderId(o.id)}
+                />
+              ))}
             </div>
           )}
         </section>

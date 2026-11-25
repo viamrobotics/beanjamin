@@ -23,14 +23,10 @@ const RecentDisplayDuration = 15 * time.Second
 // whole lifecycle is owned by the backend.
 type Queue struct {
 	mu      sync.Mutex
-	pending []Order // backlog still waiting to be made, FIFO
-	current *Order  // the order being made right now; nil when idle
-	recent  []Order // completed orders, append-most-recent-last
-	// last is the most recently finished order. Unlike recent it is never
-	// pruned or cleared, so a customer can still report an issue with it
-	// once its "Ready!" card is gone.
-	last   *Order
-	notify chan struct{} // buffered(1), poked on enqueue to wake consumer
+	pending []Order       // backlog still waiting to be made, FIFO
+	current *Order        // the order being made right now; nil when idle
+	recent  []Order       // completed orders, append-most-recent-last
+	notify  chan struct{} // buffered(1), poked on enqueue to wake consumer
 }
 
 // NewQueue creates a new empty order queue.
@@ -152,25 +148,6 @@ func (q *Queue) Complete() {
 	o.CompletedAt = time.Now()
 	q.current = nil
 	q.recent = append(q.recent, o)
-	last := copyOrder(o)
-	q.last = &last
-}
-
-// Reportable returns copies of the order being made right now and of the most
-// recently finished one, each nil when there is none: the orders a customer
-// can report an issue with.
-func (q *Queue) Reportable() (current, previous *Order) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.current != nil {
-		c := copyOrder(*q.current)
-		current = &c
-	}
-	if q.last != nil {
-		p := copyOrder(*q.last)
-		previous = &p
-	}
-	return current, previous
 }
 
 // Len returns how many orders still need to be made: the backlog plus the one
