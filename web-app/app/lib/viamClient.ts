@@ -142,6 +142,14 @@ const devFinished: RecentOrder[] = [
     at: new Date(Date.now() - 38 * 60_000),
     status: "failed",
   },
+  {
+    id: "dev-seed-0",
+    drink: "espresso",
+    beans: "light_roast",
+    customerName: "Ada",
+    at: new Date(Date.now() - 3 * 24 * 60 * 60_000),
+    status: "done",
+  },
 ];
 
 // Mirrors the backend's "claimed order" rule in dev mode: the front order is
@@ -579,9 +587,11 @@ export interface RecentOrder {
   status: "making" | "finished" | "done" | "failed";
 }
 
-// How far back, and how many, finished orders the report screen offers.
-const RECENT_ORDERS_WINDOW_MS = 12 * 60 * 60 * 1000;
-const RECENT_ORDERS_LIMIT = 10;
+/** How many days back the report screen offers finished orders from. */
+export const RECENT_ORDERS_DAYS = 7;
+const RECENT_ORDERS_WINDOW_MS = RECENT_ORDERS_DAYS * 24 * 60 * 60 * 1000;
+// A busy week stays well under this; it only bounds the read.
+const RECENT_ORDERS_LIMIT = 1000;
 
 /**
  * This machine's most recently finished orders, newest first, read from its
@@ -605,6 +615,18 @@ export async function getRecentOrders(
     },
     { $sort: { time_received: -1 } },
     { $limit: RECENT_ORDERS_LIMIT },
+    {
+      $project: {
+        _id: 0,
+        "data.readings.order_id": 1,
+        "data.readings.drink": 1,
+        "data.readings.beans": 1,
+        "data.readings.decaf": 1,
+        "data.readings.customer_name": 1,
+        "data.readings.end_time": 1,
+        "data.readings.order_ok": 1,
+      },
+    },
   ].map((st) => BSON.serialize(st));
   const rows = (await conn.viamClient.dataClient.tabularDataByMQL(
     ORG_ID,

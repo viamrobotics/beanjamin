@@ -17,8 +17,8 @@ const (
 // problem and picks its severity.
 const IssueOther = "other"
 
-// maxIssueDescriptionLen bounds a freeform description, which comes straight
-// from a kiosk text box.
+// maxIssueDescriptionLen bounds a description, which comes straight from a
+// kiosk text box.
 const maxIssueDescriptionLen = 500
 
 // maxOrderIDLen bounds order_id. Order IDs are UUIDs; the bound only keeps a
@@ -76,7 +76,8 @@ type IssueRequest struct {
 //
 // A suggested issue carries its catalog severity, so severity may be omitted;
 // one that disagrees with the catalog is refused rather than silently replaced.
-// A freeform report ("other") needs both a description and a severity.
+// Its description, an optional note, may be empty. A freeform report ("other")
+// needs both a description and a severity.
 func ParseIssueRequest(raw any) (IssueRequest, error) {
 	m, ok := raw.(map[string]any)
 	if !ok {

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { type IssueReportRecord } from "./data";
 import { DrinkName } from "../order/drink-name";
+import { OrderIdCell } from "./order-id-cell";
 import {
   OTHER_ISSUE,
   SEVERITIES,
@@ -95,6 +96,7 @@ export function IssuesTable({
                 <th className="px-3 py-2 font-medium">Severity</th>
                 <th className="px-3 py-2 font-medium">Issue</th>
                 <th className="px-3 py-2 font-medium">Order</th>
+                <th className="px-3 py-2 font-medium">Order ID</th>
               </tr>
             </thead>
             <tbody>
@@ -146,12 +148,9 @@ export function IssuesTable({
                           Order not synced yet
                         </div>
                       )}
-                      <div
-                        className="text-xs text-neutral-400 font-mono truncate max-w-[12rem]"
-                        title={i.orderId}
-                      >
-                        {i.orderId}
-                      </div>
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <OrderIdCell orderId={i.orderId} />
                     </td>
                   </tr>
                 );

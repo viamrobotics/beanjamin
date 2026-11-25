@@ -645,7 +645,7 @@ Two troubleshooting commands run this by hand, outside an order. Neither waits f
 
 Returns `{"order_id": "…", "status": "handed_over"}`, or the same with `"status": "retrying"` or `"failed"` and an `error` string. An unknown id is an error.
 
-**`report_issue`** - Record a customer's report of a problem with an order, even one that technically succeeded. `order_id` names the order; it is not looked up, since finished orders live in tabular data. `issue` is one of `small_spill` (minor), `large_spill` (critical), `surprising_movements` (minor), `light_collision` (medium), `bad_collision` (critical), `empty_cup` (medium), `dropped_cup` (critical), which carry their own severity, or `other`, which needs a `description` and a `severity` (`minor`, `medium` or `critical`). Requires `issue_sensor_name`; `get_queue` reports `issue_reports_available` so a client can tell.
+**`report_issue`** - Record a customer's report of a problem with an order, even one that technically succeeded. `order_id` names the order; it is not looked up, since finished orders live in tabular data. `issue` is one of `small_spill` (minor), `large_spill` (critical), `surprising_movements` (minor), `light_collision` (medium), `bad_collision` (critical), `empty_cup` (medium), `dropped_cup` (critical), which carry their own severity and take an optional `description` as a note, or `other`, which needs a `description` and a `severity` (`minor`, `medium` or `critical`). Requires `issue_sensor_name`; `get_queue` reports `issue_reports_available` so a client can tell.
 
 ```json
 {"report_issue": {"order_id": "6f1c2a7e-…", "issue": "other", "description": "Cup wobbled in the slot", "severity": "medium"}}
@@ -1135,7 +1135,7 @@ Like the order sensor, **each reading is returned at most once**, and `Readings`
 
 - **`order_id`** — the order the issue was seen on; join it to the `order-events` reading with the same `order_id` for the drink, customer and outcome.
 - **`issue`** — one of the suggested issue keys listed under `report_issue`, or `other`.
-- **`description`** — the customer's words; empty for a suggested issue.
+- **`description`** — the customer's words; for a suggested issue, an optional note that may be empty.
 - **`severity`** — `minor`, `medium` or `critical`: the suggested issue's own, or the customer's pick for `other`.
 
 ---

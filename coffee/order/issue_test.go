@@ -23,6 +23,11 @@ func TestParseIssueRequest(t *testing.T) {
 			wantSeverity: SeverityMinor,
 		},
 		{
+			name:         "suggested issue with a note",
+			raw:          map[string]any{"order_id": "o1", "issue": "empty_cup", "description": "only foam"},
+			wantSeverity: SeverityMedium,
+		},
+		{
 			name:    "suggested issue with a conflicting severity",
 			raw:     map[string]any{"order_id": "o1", "issue": "small_spill", "severity": "critical"},
 			wantErr: "is a minor issue",
