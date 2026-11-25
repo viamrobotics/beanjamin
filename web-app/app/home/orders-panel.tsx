@@ -13,6 +13,7 @@ import {
   getBinarySignedUrl,
   countVideosForOrders,
 } from "./data";
+import { OrderIdCell } from "./order-id-cell";
 import { PlanPanel } from "./plan-panel";
 import { beansLabel, drinkLabel, orderParts } from "../order/drinks";
 
@@ -54,43 +55,6 @@ function formatDuration(ms: number): string {
   const seconds = totalSeconds % 60;
   if (minutes === 0) return `${seconds}s`;
   return `${minutes}m ${seconds}s`;
-}
-
-/** The order ID is a UUID; only its first block is readable at a glance. */
-function shortOrderId(orderId: string): string {
-  return orderId.split("-")[0] || orderId;
-}
-
-function OrderIdCell({ orderId }: { orderId: string }) {
-  const [copied, setCopied] = useState(false);
-  if (!orderId) return <span className="text-neutral-400">—</span>;
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span className="font-mono text-xs" title={orderId}>
-        {shortOrderId(orderId)}
-      </span>
-      <button
-        onClick={(e) => {
-          // The row toggles on click; copying an ID is not that.
-          e.stopPropagation();
-          // Clipboard access can be denied (insecure origin, permissions);
-          // the ID stays readable in the title attribute either way.
-          navigator.clipboard.writeText(orderId).then(
-            () => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1200);
-            },
-            (e) => console.error("failed to copy order ID:", e)
-          );
-        }}
-        className="text-neutral-400 hover:text-neutral-900 transition-colors"
-        aria-label={`Copy full order ID ${orderId}`}
-        title="Copy full order ID"
-      >
-        {copied ? "✓" : "⧉"}
-      </button>
-    </span>
-  );
 }
 
 function StatusCell({ order }: { order: OrderRecord }) {

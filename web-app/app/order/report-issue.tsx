@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import {
+  RECENT_ORDERS_DAYS,
   getQueue,
   getRecentOrders,
   reportIssue,
@@ -30,7 +31,17 @@ function timeAgo(d: Date): string {
   const min = Math.round((Date.now() - d.getTime()) / 60_000);
   if (min < 1) return "just now";
   if (min < 60) return `${min} min ago`;
-  return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const time = d.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  if (d.toDateString() === new Date().toDateString()) return time;
+  const day = d.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  return `${day}, ${time}`;
 }
 
 /**
@@ -68,6 +79,8 @@ function SeverityChip({ severity }: { severity: string }) {
   );
 }
 
+// Rows span their scroll container's full width, so they press down but never
+// scale up on hover the way .press does: that would overflow it sideways.
 function OrderRow({
   order,
   selected,
@@ -82,7 +95,7 @@ function OrderRow({
       type="button"
       onClick={onSelect}
       aria-pressed={selected}
-      className={`press w-full flex items-center justify-between gap-4 text-left px-5 py-3 rounded-2xl border-2 transition-colors ${
+      className={`w-full flex items-center justify-between gap-4 text-left px-5 py-3 rounded-2xl border-2 transition-[color,background-color,border-color,transform] active:scale-[0.98] ${
         selected
           ? "border-neutral-900 bg-neutral-900 text-white"
           : "border-neutral-200 bg-white text-neutral-900 hover:bg-neutral-50"
@@ -139,6 +152,7 @@ export function ReportIssue({
   const [history, setHistory] = useState<RecentOrder[] | null>(null);
   const [historyError, setHistoryError] = useState(false);
   const [orderId, setOrderId] = useState<string | null>(null);
+  const [customerFilter, setCustomerFilter] = useState("");
   const [issue, setIssue] = useState<string | null>(null);
   const [description, setDescription] = useState("");
   const [severity, setSeverity] = useState<Severity | null>(null);
@@ -195,6 +209,14 @@ export function ReportIssue({
     ...fromQueue.filter((o) => !synced.has(o.id)),
     ...(history ?? []),
   ];
+  const needle = customerFilter.trim().toLowerCase();
+  // The selected order stays listed so a filter can't hide what will be sent.
+  const shownOrders = orders.filter(
+    (o) =>
+      needle === "" ||
+      o.id === orderId ||
+      o.customerName.toLowerCase().includes(needle),
+  );
 
   const isOther = issue === OTHER_ISSUE;
   const canSubmit =
@@ -209,10 +231,12 @@ export function ReportIssue({
     setSubmitting(true);
     setError(null);
     try {
+      const notes = description.trim();
       await reportIssue(viamConn, {
         orderId,
         issue,
-        ...(isOther && { description: description.trim(), severity: severity! }),
+        ...(notes && { description: notes }),
+        ...(isOther && { severity: severity! }),
       });
       setDone(true);
     } catch (e) {
@@ -270,17 +294,31 @@ export function ReportIssue({
           <h2 className="text-sm font-mono uppercase tracking-widest text-neutral-500">
             1 · Which order?
           </h2>
+          {orders.length > 0 && (
+            <input
+              type="search"
+              value={customerFilter}
+              onChange={(e) => setCustomerFilter(e.target.value)}
+              placeholder="Filter by customer name"
+              aria-label="Filter orders by customer name"
+              className="w-full px-5 py-3 bg-neutral-50 border-2 border-neutral-200 rounded-2xl text-neutral-900 text-base outline-none focus:border-neutral-400 transition-colors font-sans"
+            />
+          )}
           {history === null && orders.length === 0 ? (
             <p className="text-neutral-500">Loading orders…</p>
           ) : orders.length === 0 ? (
             <p className="text-neutral-500">
               {historyError
                 ? "Couldn't load recent orders."
-                : "There is no recent order to report on."}
+                : `There is no order from the last ${RECENT_ORDERS_DAYS} days to report on.`}
+            </p>
+          ) : shownOrders.length === 0 ? (
+            <p className="text-neutral-500">
+              No order from the last {RECENT_ORDERS_DAYS} days matches that name.
             </p>
           ) : (
-            <div className="flex flex-col gap-2 max-h-[22rem] overflow-y-auto">
-              {orders.map((o) => (
+            <div className="flex flex-col gap-2 max-h-[22rem] overflow-y-auto overflow-x-hidden">
+              {shownOrders.map((o) => (
                 <OrderRow
                   key={o.id}
                   order={o}
@@ -330,38 +368,42 @@ export function ReportIssue({
           </div>
         </section>
 
-        {isOther && (
+        {issue !== null && (
           <section className="anim-in flex flex-col gap-3">
             <h2 className="text-sm font-mono uppercase tracking-widest text-neutral-500">
-              3 · Tell us more
+              3 · {isOther ? "Tell us more" : "Anything to add? (optional)"}
             </h2>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               maxLength={MAX_DESCRIPTION}
               rows={3}
-              autoFocus
-              placeholder="What went wrong?"
+              autoFocus={isOther}
+              placeholder={isOther ? "What went wrong?" : "Add a note"}
               className="w-full px-5 py-3 bg-neutral-50 border-2 border-neutral-200 rounded-2xl text-neutral-900 text-base outline-none focus:border-neutral-400 transition-colors font-sans resize-none"
             />
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm text-neutral-500 mr-1">How bad was it?</span>
-              {SEVERITIES.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setSeverity(s)}
-                  aria-pressed={severity === s}
-                  className={`press px-4 py-2 rounded-full border-2 text-sm font-medium transition-colors ${
-                    severity === s
-                      ? `${severityChipClass(s)} !border-neutral-900`
-                      : "border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50"
-                  }`}
-                >
-                  {severityLabel(s)}
-                </button>
-              ))}
-            </div>
+            {isOther && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm text-neutral-500 mr-1">
+                  How bad was it?
+                </span>
+                {SEVERITIES.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setSeverity(s)}
+                    aria-pressed={severity === s}
+                    className={`press px-4 py-2 rounded-full border-2 text-sm font-medium transition-colors ${
+                      severity === s
+                        ? `${severityChipClass(s)} !border-neutral-900`
+                        : "border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50"
+                    }`}
+                  >
+                    {severityLabel(s)}
+                  </button>
+                ))}
+              </div>
+            )}
           </section>
         )}
 
