@@ -72,6 +72,55 @@ func RankCentroidsByProximity(centroids []r3.Vector, reference r3.Vector) []r3.V
 	return ranked
 }
 
+// ApproachDirection is the level direction the gripper travels from the approach
+// pose to the grab pose, given the two offsets from an item's centroid. ok is
+// false when the two sit at the same level position, as for a straight-down
+// grab, where items have no front or back.
+func ApproachDirection(approach, grab r3.Vector) (dir r3.Vector, ok bool) {
+	d := grab.Sub(approach)
+	d.Z = 0
+	if d.Norm() < 1 {
+		return r3.Vector{}, false
+	}
+	return d.Normalize(), true
+}
+
+// RankFrontRowFirst orders centroids row by row along dir, the approach
+// direction: first every centroid within rowDepthMm of the frontmost one, then
+// the next row the same way, and so on. Within a row, centroids are ranked by
+// distance to reference, as RankCentroidsByProximity does. The input is not
+// mutated.
+func RankFrontRowFirst(centroids []r3.Vector, reference, dir r3.Vector, rowDepthMm float64) []r3.Vector {
+	rest := RankCentroidsByProximity(centroids, reference)
+	ranked := make([]r3.Vector, 0, len(rest))
+	for len(rest) > 0 {
+		front := rest[0].Dot(dir)
+		for _, c := range rest[1:] {
+			front = math.Min(front, c.Dot(dir))
+		}
+		var later []r3.Vector
+		for _, c := range rest {
+			if c.Dot(dir) < front+rowDepthMm {
+				ranked = append(ranked, c)
+			} else {
+				later = append(later, c)
+			}
+		}
+		rest = later
+	}
+	return ranked
+}
+
+// InApproachLane reports whether other stands in c's way: in front of it along
+// dir, the approach direction, and less than laneMm to one side of its line.
+func InApproachLane(c, other, dir r3.Vector, laneMm float64) bool {
+	offset := c.Sub(other)
+	offset.Z = 0
+	ahead := offset.Dot(dir)
+	sideways := offset.Sub(dir.Mul(ahead)).Norm()
+	return ahead > 0 && sideways < laneMm
+}
+
 // PoseRelativeTo builds a world-frame target pose by composing a relative
 // pose (translation + orientation) onto a world point with identity
 // orientation, so the relative translation is applied in world axes. The point

@@ -61,3 +61,35 @@ func TestHeldGeometriesMugAddsHandle(t *testing.T) {
 		t.Errorf("handle center = %+v, want X=100, Y=%v", h, 186+59.5)
 	}
 }
+
+// TestPickupBlockedBy: a back-row mug waits while a mug stands in front of it,
+// even one whose grab failed and is still on the shelf.
+func TestPickupBlockedBy(t *testing.T) {
+	s, _ := newTestCoffee(t, &Config{
+		MugDimensions:           &ContainerDimensions{DiameterMm: 80, HeightMm: 97},
+		MugApproachRelativePose: &RelativePose{X: -145, Y: -14, OX: 1},
+		MugGrabRelativePose:     &RelativePose{X: 15, Y: -14, OX: 1},
+	})
+	mug := s.mugPickupTarget()
+	front := geom.Candidate{Centroid: r3.Vector{X: 760, Y: 250, Z: 42}}
+	back := geom.Candidate{Centroid: r3.Vector{X: 870, Y: 248, Z: 42}}
+	backClear := geom.Candidate{Centroid: r3.Vector{X: 870, Y: 40, Z: 42}}
+	all := []geom.Candidate{front, back, backClear}
+
+	if blocker, ok := mug.blockedBy(back, all); !ok || blocker != front.Centroid {
+		t.Errorf("back mug: blockedBy = %v, %v; want the front mug", blocker, ok)
+	}
+	if _, ok := mug.blockedBy(backClear, all); ok {
+		t.Error("back mug with a clear lane reported blocked")
+	}
+	if _, ok := mug.blockedBy(front, all); ok {
+		t.Error("front mug reported blocked")
+	}
+
+	// A straight-down grab never blocks.
+	s.cfg.MugApproachRelativePose = &RelativePose{Z: 100, OZ: -1}
+	s.cfg.MugGrabRelativePose = &RelativePose{OZ: -1}
+	if _, ok := s.mugPickupTarget().blockedBy(back, all); ok {
+		t.Error("straight-down grab reported blocked")
+	}
+}
