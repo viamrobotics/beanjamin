@@ -257,6 +257,9 @@ type Config struct {
 	MugDimensions              *ContainerDimensions `json:"mug_dimensions,omitempty"`
 	// MugHandleDimensions is the known handle box (see HandleDimensions).
 	MugHandleDimensions *HandleDimensions `json:"mug_handle_dimensions,omitempty"`
+	// MugPickupLiftMm is how far the pickup lifts a grabbed mug straight up
+	// before backing out of the mug area. Defaults to defaultMugPickupLiftMm.
+	MugPickupLiftMm float64 `json:"mug_pickup_lift_mm,omitempty"`
 
 	// Pour offsets from the center of the staged glass's rim, resolved against
 	// the staged glass in the frame system (glass_relative_poses.go). The
@@ -739,6 +742,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 		if d := math.Abs(cfg.MugApproachRelativePose.Z - cfg.MugGrabRelativePose.Z); d > mugRelativePoseZToleranceMm {
 			return nil, nil, fmt.Errorf("%s: mug_approach_relative_pose.z (%.1f) must equal mug_grab_relative_pose.z (%.1f) within %.1f mm: the open jaws move straight between them and must not catch the mug's handle",
 				path, cfg.MugApproachRelativePose.Z, cfg.MugGrabRelativePose.Z, mugRelativePoseZToleranceMm)
+		}
+		if cfg.MugPickupLiftMm < 0 {
+			return nil, nil, fmt.Errorf("%s: mug_pickup_lift_mm must be >= 0", path)
 		}
 		// The shelf retreat leaves the released mug with the jaws open, so it
 		// must be level with the drop for the same reason.

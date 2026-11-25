@@ -123,6 +123,7 @@ type pickupTarget struct {
 	graspZFromGeom   bool                 // grab at the geometry centroid's Z (keep detected X/Y); for the tall glass whose detected Z can sit high on the rim
 	shieldFrame      string               // clean-area shield obstacle opened up on the grasp descent/retreat (areaShieldCollisions); "" disables
 	retreatSpeed     *StepMoveOptions     // speed of the retreat with the item in hand; nil is the arm default
+	retreatLiftMm    float64              // straight lift after the grab, before the retreat, which then runs at that height; 0 for none
 	handle           *HandleDimensions    // handle box modeled beside the body (mug); nil for cups and glasses
 }
 
@@ -187,6 +188,27 @@ func (s *beanjaminCoffee) mugPickupTarget() *pickupTarget {
 		unreachableSpeak: "I can see a mug but I'm having trouble grabbing it — could you nudge it a little? Trying again in 15 seconds.",
 		shieldFrame:      cleanMugAreaShieldFrameName,
 		retreatSpeed:     nil, // the mug is empty, so the arm's default speed
+		retreatLiftMm:    s.mugPickupLiftMm(),
+	}
+}
+
+// defaultMugPickupLiftMm is how far a grabbed mug is lifted off its shelf
+// before the pickup backs out, when mug_pickup_lift_mm is unset.
+const defaultMugPickupLiftMm = 15.0
+
+// mugPickupLiftMm returns the configured mug pickup lift, defaulting to
+// defaultMugPickupLiftMm.
+func (s *beanjaminCoffee) mugPickupLiftMm() float64 {
+	return orDefault(s.cfg.MugPickupLiftMm, defaultMugPickupLiftMm)
+}
+
+// raisedPose is pd moved straight up by mm, with the same orientation.
+func raisedPose(pd *poseData, mm float64) *poseData {
+	p := pd.pose
+	return &poseData{
+		pose:          spatialmath.NewPose(p.Point().Add(r3.Vector{Z: mm}), p.Orientation()),
+		refFrame:      pd.refFrame,
+		componentName: pd.componentName,
 	}
 }
 
@@ -491,11 +513,19 @@ func (s *beanjaminCoffee) tryGrab(ctx, cancelCtx context.Context, t *pickupTarge
 		s.activeOrderLogger().Warnf("dynamic %s pickup: attach geometry failed, continuing untracked: %v", t.label, err)
 	}
 
-	// 5. Linear retreat with the item in hand. A failure here is fatal — we
-	// can't drop the item safely by recovering to observe. Strip the
-	// errMotionPlanning chain (%v, not %w) so the caller does not treat this
-	// as a try-another-candidate planning failure.
-	if err := s.moveToRawPose(ctx, approachPD, defaultApproachConstraint, s.areaShieldCollisions(t.shieldFrame), t.retreatSpeed); err != nil {
+	// 5. Linear retreat with the item in hand, lifted first when the target
+	// asks for it: straight up off the shelf, then back out at that height. A
+	// failure here is fatal — we can't drop the item safely by recovering to
+	// observe. Strip the errMotionPlanning chain (%v, not %w) so the caller
+	// does not treat this as a try-another-candidate planning failure.
+	retreatPD := approachPD
+	if t.retreatLiftMm > 0 {
+		if err := s.moveToRawPose(ctx, raisedPose(grabPD, t.retreatLiftMm), defaultApproachConstraint, s.areaShieldCollisions(t.shieldFrame), t.retreatSpeed); err != nil {
+			return fmt.Errorf("lift %s after the grab (centroid x=%.1f, y=%.1f, z=%.1f): %v", t.label, centroid.X, centroid.Y, centroid.Z, err)
+		}
+		retreatPD = raisedPose(approachPD, t.retreatLiftMm)
+	}
+	if err := s.moveToRawPose(ctx, retreatPD, defaultApproachConstraint, s.areaShieldCollisions(t.shieldFrame), t.retreatSpeed); err != nil {
 		return fmt.Errorf("retreat with %s grabbed (centroid x=%.1f, y=%.1f, z=%.1f): %v", t.label, centroid.X, centroid.Y, centroid.Z, err)
 	}
 	return nil

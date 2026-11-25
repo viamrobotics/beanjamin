@@ -140,3 +140,15 @@ func TestValidateMugApproachLevelWithGrab(t *testing.T) {
 		t.Fatalf("want an error naming both z fields, got %v", err)
 	}
 }
+
+func TestValidateMugPickupLift(t *testing.T) {
+	cfg := validMugDrinksConfig()
+	cfg.MugPickupLiftMm = -5
+	if _, _, err := cfg.Validate("path"); err == nil || !strings.Contains(err.Error(), "mug_pickup_lift_mm") {
+		t.Fatalf("negative lift: want an error naming mug_pickup_lift_mm, got %v", err)
+	}
+	cfg.MugPickupLiftMm = 30
+	if _, _, err := cfg.Validate("path"); err != nil {
+		t.Fatalf("30 mm lift: %v", err)
+	}
+}

@@ -61,3 +61,36 @@ func TestHeldGeometriesMugAddsHandle(t *testing.T) {
 		t.Errorf("handle center = %+v, want X=100, Y=%v", h, 186+59.5)
 	}
 }
+
+// Only the mug lifts off its shelf before backing out: 15 mm unless
+// mug_pickup_lift_mm says otherwise. Cups and glasses back straight out.
+func TestPickupRetreatLift(t *testing.T) {
+	s, _ := newTestCoffee(t, nil)
+	if got := s.cupPickupTarget().retreatLiftMm; got != 0 {
+		t.Errorf("cup lift = %v, want none", got)
+	}
+	if got := s.glassPickupTarget().retreatLiftMm; got != 0 {
+		t.Errorf("glass lift = %v, want none", got)
+	}
+	if got := s.mugPickupTarget().retreatLiftMm; got != defaultMugPickupLiftMm {
+		t.Errorf("mug lift = %v, want the default %v", got, defaultMugPickupLiftMm)
+	}
+	s.cfg.MugPickupLiftMm = 45
+	if got := s.mugPickupTarget().retreatLiftMm; got != 45 {
+		t.Errorf("configured mug lift = %v, want 45", got)
+	}
+}
+
+// The lift moves the pose straight up and keeps its orientation.
+func TestRaisedPose(t *testing.T) {
+	orient := &spatialmath.OrientationVectorDegrees{OX: 1, Theta: 20}
+	pd := &poseData{pose: spatialmath.NewPose(r3.Vector{X: 880, Y: 180, Z: 42}, orient), refFrame: "world", componentName: gripPoint}
+	got := raisedPose(pd, 30)
+	requireVecEqual(t, got.pose.Point(), r3.Vector{X: 880, Y: 180, Z: 72}, 1e-9)
+	if !spatialmath.OrientationAlmostEqual(got.pose.Orientation(), orient) {
+		t.Errorf("orientation = %v, want %v", got.pose.Orientation(), orient)
+	}
+	if got.refFrame != pd.refFrame || got.componentName != pd.componentName {
+		t.Errorf("frames = %q/%q, want %q/%q", got.refFrame, got.componentName, pd.refFrame, pd.componentName)
+	}
+}
