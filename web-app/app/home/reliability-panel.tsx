@@ -5,6 +5,8 @@ import {
   type MachineReliability,
   RELIABILITY_WINDOW_DAYS,
 } from "./reliability";
+import { type IssueReportRecord } from "./data";
+import { IssuesTable } from "./issues-table";
 
 const BAR_AREA_HEIGHT = 160;
 const MIN_BAR_HEIGHT = 3;
@@ -180,9 +182,11 @@ function ReliabilityCard({
 
 export function ReliabilityPanel({
   reliability,
+  issues,
   machineNameById,
 }: {
   reliability: MachineReliability[] | null;
+  issues: IssueReportRecord[] | null;
   machineNameById: Map<string, string>;
 }) {
   return (
@@ -209,6 +213,11 @@ export function ReliabilityPanel({
           ))}
         </ul>
       )}
+      <IssuesTable
+        issues={issues}
+        machineNameById={machineNameById}
+        windowDays={RELIABILITY_WINDOW_DAYS}
+      />
     </section>
   );
 }

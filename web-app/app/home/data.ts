@@ -735,3 +735,77 @@ export async function loadPlanRequestsForOrder(
   files.sort((a, b) => a.fileName.localeCompare(b.fileName));
   return files.map((f, i) => ({ ...f, seq: i + 1 }));
 }
+
+// --- Customer issue reports -------------------------------------------------
+
+/** The coffee service's issue_sensor_name component, captured like order-events. */
+export const ISSUES_RESOURCE_NAME = "issue-reports";
+
+export interface IssueReportRecord {
+  robotId: string;
+  reportedAt: Date;
+  orderId: string;
+  drink: string;
+  customerName: string;
+  /** "current" when reported while the drink was being made, else "previous". */
+  whichOrder: string;
+  /** A catalog key (see order/issues.ts) or "other". */
+  issue: string;
+  description: string;
+  severity: string;
+}
+
+interface RawIssueRow {
+  time_received: Date | string;
+  robot_id?: string;
+  data?: {
+    readings?: {
+      order_id?: string;
+      drink?: string;
+      customer_name?: string;
+      which_order?: string;
+      issue?: string;
+      description?: string;
+      severity?: string;
+      reported_at?: string;
+    };
+  };
+}
+
+/** Every issue reported on the given machines over the last `days`, newest first. */
+export async function loadIssueReports(
+  client: VIAM.ViamClient,
+  machines: Machine[],
+  days: number
+): Promise<IssueReportRecord[]> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const rows = await runMQL<RawIssueRow>(client, [
+    {
+      $match: {
+        location_id: LOCATION_ID,
+        component_name: ISSUES_RESOURCE_NAME,
+        robot_id: { $in: machines.map((m) => m.id) },
+        time_received: { $gte: since },
+      },
+    },
+    { $sort: { time_received: -1 } },
+  ]);
+  return rows.map((r) => {
+    const x = r.data?.readings ?? {};
+    const received =
+      r.time_received instanceof Date
+        ? r.time_received
+        : new Date(r.time_received);
+    return {
+      robotId: r.robot_id ?? "",
+      reportedAt: x.reported_at ? new Date(x.reported_at) : received,
+      orderId: x.order_id ?? "",
+      drink: x.drink ?? "",
+      customerName: x.customer_name ?? "",
+      whichOrder: x.which_order ?? "",
+      issue: x.issue ?? "",
+      description: x.description ?? "",
+      severity: x.severity ?? "",
+    };
+  });
+}

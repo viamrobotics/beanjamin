@@ -113,6 +113,7 @@ type beanjaminCoffee struct {
 	// since the operator then has to clean the filter by hand.
 	portafilterHasGrounds atomic.Bool
 	orderSensorSink       orderSensorSink // optional; named order-sensor from deps, nil if unset
+	issueSink             issueSink       // optional; issue_sensor_name from deps, nil if unset
 	// Optional usage sensor updated during the brew lifecycle (sensor_usage.go).
 	// nil when usage_sensor_name is unset, in which case every update is a
 	// no-op. Holds all counters keyed by <beans>_grinds, water_used,
@@ -345,6 +346,11 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		logger.Infof("cam storage: no data_dir configured — pending-clip records disabled (interrupted orders will not be recoverable)")
 	}
 
+	issues, err := issueSinkFromDeps(deps, conf.IssueSensorName, logger)
+	if err != nil {
+		return nil, err
+	}
+
 	var sink orderSensorSink
 	if conf.OrderSensorName != "" {
 		// Same component instance as elsewhere on the robot (not a copy).
@@ -401,6 +407,7 @@ func NewCoffee(ctx context.Context, deps resource.Dependencies, name resource.Na
 		drinkDurations:     newDrinkDurationStore(logger),
 		queueStop:          make(chan struct{}),
 		orderSensorSink:    sink,
+		issueSink:          issues,
 		usageSensor:        usageSensor,
 		cupVision:          cupVision,
 		cupCameraName:      conf.SrcCameraName,

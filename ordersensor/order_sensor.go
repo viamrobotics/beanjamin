@@ -129,3 +129,24 @@ func (s *orderSensor) PushOrderReading(r order.Reading) {
 		"duration_ms": float64(r.EndedAt.Sub(r.StartedAt).Milliseconds()),
 	})
 }
+
+// PushIssueReport queues a customer's issue report as the payload of a future
+// Readings call. The coffee service calls it on report_issue, on the instance
+// named by issue_sensor_name, so reports are captured apart from orders.
+func (s *orderSensor) PushIssueReport(r order.IssueReport) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pending = append(s.pending, map[string]any{
+		"order_id":      r.Order.ID,
+		"drink":         r.Order.WireDrink(),
+		"customer_name": r.Order.CustomerName,
+		// "current" when reported while the drink was being made.
+		"which_order": r.Which,
+		// A catalog key, or "other" for a freeform report.
+		"issue":            r.Issue,
+		"description":      r.Description,
+		"severity":         r.Severity,
+		"reported_at":      r.ReportedAt.UTC().Format(time.RFC3339Nano),
+		"order_started_at": r.Order.StartedAt.UTC().Format(time.RFC3339Nano),
+	})
+}

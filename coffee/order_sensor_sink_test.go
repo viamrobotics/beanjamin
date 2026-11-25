@@ -30,4 +30,8 @@ func TestOrderSensorModelSatisfiesSink(t *testing.T) {
 	if _, ok := res.(orderSensorSink); !ok {
 		t.Fatalf("%T does not implement orderSensorSink", res)
 	}
+	// issue_sensor_name names another instance of the same model.
+	if _, ok := res.(issueSink); !ok {
+		t.Fatalf("%T does not implement issueSink", res)
+	}
 }

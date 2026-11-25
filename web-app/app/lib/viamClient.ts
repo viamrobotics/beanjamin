@@ -97,6 +97,14 @@ function startDevProcessing() {
           rawStep: DEV_STEPS[DEV_STEPS.length - 1],
           completedAt: Date.now(),
         });
+        devLastFinished = {
+          id: finished.id,
+          drink: finished.drink,
+          beans: finished.beans,
+          customer_name: finished.name,
+          started_at: new Date(devProcessingStartedAt).toISOString(),
+          completed_at: new Date().toISOString(),
+        };
       }
       // Start timing the next order
       devProcessingStartedAt = Date.now();
@@ -111,6 +119,32 @@ function pruneDevRecent() {
   while (devRecent.length > 0 && devRecent[0].completedAt < cutoff) {
     devRecent.shift();
   }
+}
+
+// The last order the dev queue finished, standing in for the backend's
+// Queue.last. Seeded so the report flow has a previous order to show before
+// any dev order has run.
+let devLastFinished: ReportableOrder = {
+  id: "dev-seed",
+  drink: "iced_latte",
+  beans: "regular",
+  customer_name: "Ada",
+  started_at: new Date(Date.now() - 6 * 60_000).toISOString(),
+  completed_at: new Date(Date.now() - 4 * 60_000).toISOString(),
+};
+
+function devReportableOrders(): QueueStatus["reportable_orders"] {
+  const current =
+    devProcessing && devQueue.length > 0
+      ? {
+          id: devQueue[0].id,
+          drink: devQueue[0].drink,
+          beans: devQueue[0].beans,
+          customer_name: devQueue[0].name,
+          started_at: new Date(devProcessingStartedAt).toISOString(),
+        }
+      : undefined;
+  return { current, previous: devLastFinished };
 }
 
 // Mirrors the backend's "claimed order" rule in dev mode: the front order is
@@ -324,7 +358,33 @@ export interface QueueStatus {
    * Absent when the machine offers no spice, and from older modules.
    */
   spice_options?: string[];
+  /**
+   * Whether the machine records customer issue reports (its issue_sensor_name
+   * is set). Absent from older modules.
+   */
+  issue_reports_available?: boolean;
+  /**
+   * The orders report_issue can name: the one being made and the last one
+   * finished. Each is absent when there is none; the whole map is absent when
+   * both are.
+   */
+  reportable_orders?: {
+    current?: ReportableOrder;
+    previous?: ReportableOrder;
+  };
 }
+
+export interface ReportableOrder {
+  id: string;
+  drink: string;
+  beans: string;
+  customer_name: string;
+  started_at: string;
+  /** Absent while the order is still being made. */
+  completed_at?: string;
+}
+
+export type ReportWhich = "current" | "previous";
 
 /**
  * Per-machine dashboard state. Absent from the map (`undefined`) means the
@@ -408,6 +468,8 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
       // So the mug drinks render orderable in dev mode.
       mug_drinks_available: true,
       spice_options: ["cinnamon", "nutmeg"],
+      issue_reports_available: true,
+      reportable_orders: devReportableOrders(),
     };
   }
 
@@ -528,6 +590,37 @@ export async function cancelOrder(
   }
 
   return doCommand(conn, COFFEE_SERVICE_NAME, { cancel_order: orderId });
+}
+
+/**
+ * Record a customer's issue with the order being made ("current") or the last
+ * one finished ("previous"). A suggested issue carries its own severity, so
+ * severity is only sent for a freeform ("other") report.
+ */
+export async function reportIssue(
+  conn: ViamConnection,
+  report: {
+    which: ReportWhich;
+    issue: string;
+    description?: string;
+    severity?: string;
+  },
+): Promise<{ reported: boolean; order_id: string; severity: string }> {
+  if (isDevMode()) {
+    const orders = devReportableOrders();
+    const o = report.which === "current" ? orders?.current : orders?.previous;
+    if (!o) throw new Error(`there is no ${report.which} order to report`);
+    console.log("[dev] issue reported:", { ...report, order_id: o.id });
+    return { reported: true, order_id: o.id, severity: report.severity ?? "" };
+  }
+  return doCommand(conn, COFFEE_SERVICE_NAME, {
+    report_issue: {
+      order: report.which,
+      issue: report.issue,
+      ...(report.description && { description: report.description }),
+      ...(report.severity && { severity: report.severity }),
+    },
+  });
 }
 
 // --- Customer Detector ---

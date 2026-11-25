@@ -168,6 +168,32 @@ func TestOrderSensor_Readings_FIFO(t *testing.T) {
 	}
 }
 
+func TestOrderSensor_PushIssueReport(t *testing.T) {
+	s := newTestOrderSensor(t)
+	at := time.Date(2026, 11, 25, 9, 0, 0, 0, time.UTC)
+	s.PushIssueReport(order.IssueReport{
+		IssueRequest: order.IssueRequest{
+			Which: "previous", Issue: "other", Description: "foam everywhere", Severity: "medium",
+		},
+		Order:      order.Order{ID: "o1", Drink: "latte", CustomerName: "Bob", StartedAt: at.Add(-time.Minute)},
+		ReportedAt: at,
+	})
+	r, err := s.Readings(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"order_id": "o1", "drink": "latte", "customer_name": "Bob", "which_order": "previous",
+		"issue": "other", "description": "foam everywhere", "severity": "medium",
+		"reported_at": at.Format(time.RFC3339Nano),
+	}
+	for k, v := range want {
+		if r[k] != v {
+			t.Errorf("%s: want %#v got %#v", k, v, r[k])
+		}
+	}
+}
+
 func TestOrderSensor_Readings_CustomerNames(t *testing.T) {
 	tests := []struct {
 		name         string
