@@ -966,6 +966,22 @@ function devFramePose(frame: string): PoseValue {
   });
 }
 
+export interface CameraSource {
+  /** Stable id for this browser; the component's lease is keyed on it. */
+  sourceId: string;
+  /** The component's `source_token`, if it has one. */
+  token?: string;
+}
+
+function sourceFields({
+  sourceId,
+  token,
+}: CameraSource): Record<string, string> {
+  return token === undefined
+    ? { source_id: sourceId }
+    : { source_id: sourceId, token };
+}
+
 /**
  * Push one JPEG frame to a `viam:beanjamin:ipad-camera` component, which serves
  * the latest frame as an ordinary camera. `jpegBase64` is the bare base64 body
@@ -976,10 +992,28 @@ export async function pushCameraFrame(
   conn: ViamConnection,
   cameraName: string,
   jpegBase64: string,
+  source: CameraSource,
 ): Promise<void> {
   if (isDevMode()) return;
 
   const sdk = await loadSDK();
   const cam = new sdk.CameraClient(conn.robotClient, cameraName);
-  await cam.doCommand({ push_frame: jpegBase64 });
+  await cam.doCommand({ push_frame: jpegBase64, ...sourceFields(source) });
+}
+
+/**
+ * Takes or keeps the component's lease without sending a frame. A browser that
+ * gave way to another source calls this to find out when it can take over
+ * again, without opening its camera to find out.
+ */
+export async function claimCamera(
+  conn: ViamConnection,
+  cameraName: string,
+  source: CameraSource,
+): Promise<void> {
+  if (isDevMode()) return;
+
+  const sdk = await loadSDK();
+  const cam = new sdk.CameraClient(conn.robotClient, cameraName);
+  await cam.doCommand({ claim: true, ...sourceFields(source) });
 }
