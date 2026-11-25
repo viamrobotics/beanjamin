@@ -28,6 +28,7 @@ const FaceRegister = dynamic(
 );
 import { OrderConfirmation } from "./order/order-confirmation";
 import { Profile } from "./order/profile";
+import { ReportIssue } from "./order/report-issue";
 import { OrderTracker } from "./order/order-tracker";
 import { CamFeed } from "./order/cam-feed";
 import {
@@ -60,7 +61,8 @@ type Step =
   | "name"
   | "face-register"
   | "confirmation"
-  | "profile";
+  | "profile"
+  | "report";
 
 // 'hidden' = no tracker. 'auto' = right-rail tracker that appeared either
 // because this kiosk placed an order or because the page-level poll noticed
@@ -167,6 +169,9 @@ export function Kiosk() {
   // The customer's pick; "" for no spice, the default. A pick the machine no
   // longer offers falls back to none.
   const [spice, setSpice] = useState("");
+  // Whether the machine records issue reports; the report button is hidden
+  // until it says so.
+  const [issueReportsAvailable, setIssueReportsAvailable] = useState(false);
   const chosenSpice = spiceOptions.includes(spice) ? spice : "";
   const [misspelled, setMisspelled] = useState("");
   const [loading, setLoading] = useState(false);
@@ -247,6 +252,7 @@ export function Kiosk() {
         const milks = q.milk_options ?? [];
         setMilkOptions((prev) => (prev.join() === milks.join() ? prev : milks));
         setExpectedWaitSec(q.expected_wait_sec);
+        setIssueReportsAvailable(q.issue_reports_available === true);
         setUnavailableDrinks(unavailableDrinksOf(q));
         const spices = q.spice_options ?? [];
         setSpiceOptions((prev) =>
@@ -495,6 +501,10 @@ export function Kiosk() {
     setUsuals([]);
   }
 
+  // Stable, since the report screen's thank-you timer restarts whenever it
+  // changes.
+  const leaveReport = useCallback(() => setStep("welcome"), []);
+
   const handleConfirmationDismiss = useCallback(() => {
     setStep("welcome");
     setName(prefillName);
@@ -545,6 +555,16 @@ export function Kiosk() {
 
   // --- Render the left panel content based on step ---
   function renderStep() {
+    if (step === "report") {
+      return (
+        <ReportIssue
+          viamConn={viamConn}
+          connected={connected}
+          onBack={leaveReport}
+        />
+      );
+    }
+
     if (step === "profile") {
       return (
         <Profile
@@ -667,6 +687,29 @@ export function Kiosk() {
               <circle cx="12" cy="8" r="4" />
               <path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" />
             </svg>
+          </button>
+        )}
+        {issueReportsAvailable && (
+          <button
+            type="button"
+            onClick={() => setStep("report")}
+            disabled={!connected}
+            className="anim-in absolute bottom-6 right-6 flex items-center gap-2 h-11 px-4 rounded-full border border-neutral-200 bg-white text-sm text-neutral-700 transition-colors hover:bg-neutral-50 hover:text-neutral-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-400 disabled:text-neutral-300 disabled:hover:bg-white disabled:cursor-not-allowed"
+            style={{ animationDelay: "1400ms" }}
+          >
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              className="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M4 22V4a1 1 0 0 1 1-1h12l-2 5 2 5H5" />
+            </svg>
+            Report a problem
           </button>
         )}
         <Image

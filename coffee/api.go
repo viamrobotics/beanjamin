@@ -79,6 +79,8 @@ func (s *beanjaminCoffee) Status(ctx context.Context) (map[string]any, error) {
 		// Whether the machine serves the mug drinks (americano, hot_water), for
 		// the kiosk to grey them out where it doesn't.
 		"mug_drinks_available": s.cfg.CanServeMugDrinks,
+		// Whether report_issue is wired to a sensor, for the kiosk to offer it.
+		"issue_reports_available": s.issueSink != nil,
 	}
 	// Whether the ice machine answered its last probe, for the kiosk to grey out
 	// the iced drinks. Only on a machine serving them.
@@ -198,6 +200,9 @@ var coffeeCommands = []commandDef{
 	}},
 	{key: "cancel_order", run: func(s *beanjaminCoffee, ctx context.Context, cmd map[string]any) (map[string]any, error) {
 		return s.cancelOrder(ctx, cmd["cancel_order"])
+	}},
+	{key: "report_issue", run: func(s *beanjaminCoffee, _ context.Context, cmd map[string]any) (map[string]any, error) {
+		return s.reportIssue(cmd["report_issue"])
 	}},
 	{key: "get_queue", run: func(s *beanjaminCoffee, ctx context.Context, _ map[string]any) (map[string]any, error) {
 		return s.Status(ctx)

@@ -18,6 +18,7 @@ import {
   type LeaderboardEntry,
   type Panel,
   type RobotTotal,
+  type IssueReportRecord,
   panelKey,
   listMachines,
   loadDailyOrderCounts,
@@ -27,6 +28,7 @@ import {
   loadErrorsLast7Days,
   loadRobotTotalsLastNDays,
   loadOrderOutcomes,
+  loadIssueReports,
   startOfToday,
 } from "./home/data";
 import {
@@ -61,6 +63,7 @@ export function Dashboard() {
   const [reliability, setReliability] = useState<MachineReliability[] | null>(
     null
   );
+  const [issues, setIssues] = useState<IssueReportRecord[] | null>(null);
   const [customerLeaderboard, setCustomerLeaderboard] = useState<
     LeaderboardEntry[] | null
   >(null);
@@ -212,6 +215,9 @@ export function Dashboard() {
           );
         })
         .catch((e) => console.error("failed to load reliability:", e));
+      loadIssueReports(currentClient, currentMachines, RELIABILITY_WINDOW_DAYS)
+        .then((d) => !cancelled && setIssues(d))
+        .catch((e) => console.error("failed to load issue reports:", e));
       loadCustomerLeaderboard(currentClient)
         .then((d) => !cancelled && setCustomerLeaderboard(d))
         .catch((e) =>
@@ -476,6 +482,7 @@ export function Dashboard() {
 
       <ReliabilityPanel
         reliability={reliability}
+        issues={issues}
         machineNameById={machineNameById}
       />
     </div>

@@ -292,6 +292,7 @@ The save request includes a `tags` entry with the order UUID — this is what li
 | `coffee_locked_final_grip_relative_pose` | object | **Yes** | Where `grab_filter` closes the claws on the locked portafilter, as the `grip-point` pose relative to the `portafilter-handle` frame (`x`/`y`/`z` in mm and `o_x`/`o_y`/`o_z`/`theta` in degrees, all in the handle's own axes). The re-grab pose is derived from it and the filter switch's `coffee_locked_final`, so re-teaching the lock pose moves the re-grab with it; the claws switch carries no `coffee_locked_final`. Requires a `portafilter-handle` frame under the `filter` frame. |
 | `save_motion_requests_dir` | string | No       | Directory to save debugging payloads. Each plan writes a single request+response JSON (RDK's `WriteRequestAndResponseToFile`; readable back with `ReadRequestAndResponseFromFile`, and the response is absent when planning failed), nested under `tag=<order-id>/tag=step_<step>/tag=motion_<move\|pivot\|circular\|carry>/tag=planning_<success\|failure>/`. When this directory is a Viam data-synced capture dir, the data manager reads those `tag=` segments and tags each uploaded file, so plans are searchable on the data page by order, step, motion type, and planning outcome — and a failed order's Slack notification deep-links to that order's plan requests (which the reader can narrow to `planning_failure` or a specific step). Also writes a `visualization_snapshot_<timestamp>_<cup\|glass>.pb.gz` snapshot on each cup/glass observation: the whole frame system resolved at the joint configuration the arm held when the photo was taken, plus every detection's point cloud (as captured, anchored at the camera's world pose) and the world-frame bounding box the grasp was derived from. Drag the file onto a [visualization](https://github.com/viamrobotics/visualization) viewer to replay the observation — the `visualization_snapshot` prefix is what its drag-and-drop loader keys off. |
 | `order_sensor_name`        | string | No       | Name of a `viam:beanjamin:order-sensor` sensor to notify when each order attempt completes (must appear in **depends_on**). |
+| `issue_sensor_name`        | string | No       | Name of a `viam:beanjamin:order-issue-sensor` that captures customer issue reports from `report_issue` (must appear in **depends_on**). The fleet dashboard reads it as `order-issues`. Unset, `report_issue` is refused and the kiosk hides its report button. |
 | `usage_sensor_name`        | string | No       | Name of a single sensor whose per-key counters are updated through the brew lifecycle: `<beans>_grinds` (one per grinder, e.g. `regular_grinds`, `decaf_grinds`), `water_used`, `cleaner_pucks`, `ice_dispenses`, `ice_dispense_timeouts`, `ice_shadow_disagreements`, `drip_tray_brews`, `espresso_cups_used`, `mugs_used`, `latte_glasses_used`, and `successful_consecutive_orders`. See "Usage sensor" below. |
 | `cam_storage_mux_name` | string | No   | Name of a [`viam:multiplexer:resource-multiplexer`](https://github.com/viam-modules/multiplexer) generic service whose dependencies are `viam:video:storage` stores; when set, saves a clip per order attempt (synchronous `save`) to all configured stores. |
 | `data_dir`                 | string | No       | Directory for persistent module data. When set alongside `cam_storage_mux_name`, a pending-clip record is written under `<data_dir>/pending-clips` when each order starts and removed only once that order's clip has been saved successfully — a save that fails (or never runs because the process died first) leaves the record in place. Use with a Viam scheduled job calling `cleanup_pending_clips` to recover clips for any order whose save was interrupted or failed. |
@@ -643,6 +644,14 @@ Two troubleshooting commands run this by hand, outside an order. Neither waits f
 ```
 
 Returns `{"order_id": "…", "status": "handed_over"}`, or the same with `"status": "retrying"` or `"failed"` and an `error` string. An unknown id is an error.
+
+**`report_issue`** - Record a customer's report of a problem with an order, even one that technically succeeded. `order_id` names the order; it is not looked up, since finished orders live in tabular data. `issue` is one of `small_spill` (minor), `large_spill` (critical), `surprising_movements` (minor), `light_collision` (medium), `bad_collision` (critical), `empty_cup` (medium), `dropped_cup` (critical), which carry their own severity, or `other`, which needs a `description` and a `severity` (`minor`, `medium` or `critical`). Requires `issue_sensor_name`; `get_queue` reports `issue_reports_available` so a client can tell.
+
+```json
+{"report_issue": {"order_id": "6f1c2a7e-…", "issue": "other", "description": "Cup wobbled in the slot", "severity": "medium"}}
+```
+
+Returns `{"reported": true, "order_id": "…", "severity": "medium"}`. Each report becomes one reading on the order-issue sensor (see `viam:beanjamin:order-issue-sensor`).
 
 **`send_daily_summary`** - Post a Slack digest of the orders from the last 24 hours. Normally fired on a schedule by viam-server's job manager (see "Daily order summary in Slack" below); calling it by hand is how you test the digest off-schedule. Requires both `slack_notifier_name` and `order_sensor_name`.
 
@@ -1095,6 +1104,39 @@ The remaining fields exist to support observability (per-step error rates and fa
 - **`beans`** — the beans the drink was ground from (`regular` or a `bean_options` name), so you can tell which grinder ran without cross-referencing the coffee service config. Readings also keep the older `decaf` boolean, and a decaf espresso or lungo keeps its legacy `drink` id (`"decaf"` / `"decaf_lungo"`), so readers that predate `beans` (the dashboard) see what they always did. Readings recorded before `beans` existed have only the `decaf` flag; the daily digest reads both forms.
 
 A per-step error rate is then `count(failed_step == X AND NOT operator_cancelled) / count(all orders)`.
+
+---
+
+## Model: `viam:beanjamin:order-issue-sensor`
+
+**API:** `rdk:component:sensor`
+
+Receives customer issue reports from the `viam:beanjamin:coffee` service's `report_issue` command. Configure the coffee service with `issue_sensor_name` set to this component's name (the fleet dashboard reads `order-issues`), add the sensor under its **depends_on**, and give it the same data-capture config as the order sensor.
+
+Like the order sensor, **each reading is returned at most once**, and `Readings` returns `ErrNoCaptureToStore` while nothing is queued.
+
+### Configuration
+
+```json
+{}
+```
+
+### Readings
+
+```json
+{
+  "order_id": "<uuid>",
+  "issue": "other",
+  "description": "Cup wobbled in the slot",
+  "severity": "medium",
+  "reported_at": "2026-11-25T09:00:00Z"
+}
+```
+
+- **`order_id`** — the order the issue was seen on; join it to the `order-events` reading with the same `order_id` for the drink, customer and outcome.
+- **`issue`** — one of the suggested issue keys listed under `report_issue`, or `other`.
+- **`description`** — the customer's words; empty for a suggested issue.
+- **`severity`** — `minor`, `medium` or `critical`: the suggested issue's own, or the customer's pick for `other`.
 
 ---
 

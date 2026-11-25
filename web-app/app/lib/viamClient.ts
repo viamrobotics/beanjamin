@@ -2,6 +2,7 @@
 import type { JsonValue } from "@bufbuild/protobuf";
 import type { ViamClient, RobotClient } from "@viamrobotics/sdk";
 import type { PoseValue } from "./calibration";
+import { ORG_ID, RESOURCE_NAME } from "./fleet";
 
 export interface ViamConnection {
   viamClient: ViamClient;
@@ -97,6 +98,14 @@ function startDevProcessing() {
           rawStep: DEV_STEPS[DEV_STEPS.length - 1],
           completedAt: Date.now(),
         });
+        devFinished.unshift({
+          id: finished.id,
+          drink: finished.drink,
+          beans: finished.beans,
+          customerName: finished.name,
+          at: new Date(),
+          status: "done",
+        });
       }
       // Start timing the next order
       devProcessingStartedAt = Date.now();
@@ -112,6 +121,28 @@ function pruneDevRecent() {
     devRecent.shift();
   }
 }
+
+// Stands in for the machine's order-events readings: dev orders land here as
+// they finish. Seeded so the report flow has orders to show before any dev
+// order has run.
+const devFinished: RecentOrder[] = [
+  {
+    id: "dev-seed-2",
+    drink: "iced_latte",
+    beans: "regular",
+    customerName: "Ada",
+    at: new Date(Date.now() - 4 * 60_000),
+    status: "done",
+  },
+  {
+    id: "dev-seed-1",
+    drink: "lungo",
+    beans: "decaf",
+    customerName: "Grace",
+    at: new Date(Date.now() - 38 * 60_000),
+    status: "failed",
+  },
+];
 
 // Mirrors the backend's "claimed order" rule in dev mode: the front order is
 // only being made while the simulated consumer is running.
@@ -324,6 +355,11 @@ export interface QueueStatus {
    * Absent when the machine offers no spice, and from older modules.
    */
   spice_options?: string[];
+  /**
+   * Whether the machine records customer issue reports (its issue_sensor_name
+   * is set). Absent from older modules.
+   */
+  issue_reports_available?: boolean;
 }
 
 /**
@@ -408,6 +444,7 @@ export async function getQueue(conn: ViamConnection): Promise<QueueStatus> {
       // So the mug drinks render orderable in dev mode.
       mug_drinks_available: true,
       spice_options: ["cinnamon", "nutmeg"],
+      issue_reports_available: true,
     };
   }
 
@@ -528,6 +565,107 @@ export async function cancelOrder(
   }
 
   return doCommand(conn, COFFEE_SERVICE_NAME, { cancel_order: orderId });
+}
+
+/** An order a customer can report an issue with. */
+export interface RecentOrder {
+  id: string;
+  drink: string;
+  beans: string;
+  customerName: string;
+  /** When it was ordered, while being made; when it ended, once finished. */
+  at: Date;
+  /** "finished" is a just-finished order whose outcome has not synced yet. */
+  status: "making" | "finished" | "done" | "failed";
+}
+
+// How far back, and how many, finished orders the report screen offers.
+const RECENT_ORDERS_WINDOW_MS = 12 * 60 * 60 * 1000;
+const RECENT_ORDERS_LIMIT = 10;
+
+/**
+ * This machine's most recently finished orders, newest first, read from its
+ * order-events tabular data. An order shows up once the data manager has
+ * synced its reading, so the one that just finished may lag behind.
+ */
+export async function getRecentOrders(
+  conn: ViamConnection,
+): Promise<RecentOrder[]> {
+  if (isDevMode()) return devFinished.slice(0, RECENT_ORDERS_LIMIT);
+
+  const { BSON } = await import("bson");
+  const since = new Date(Date.now() - RECENT_ORDERS_WINDOW_MS);
+  const stages = [
+    {
+      $match: {
+        robot_id: conn.machineId,
+        component_name: RESOURCE_NAME,
+        time_received: { $gte: since },
+      },
+    },
+    { $sort: { time_received: -1 } },
+    { $limit: RECENT_ORDERS_LIMIT },
+  ].map((st) => BSON.serialize(st));
+  const rows = (await conn.viamClient.dataClient.tabularDataByMQL(
+    ORG_ID,
+    stages as unknown as Parameters<
+      typeof conn.viamClient.dataClient.tabularDataByMQL
+    >[1],
+  )) as {
+    data?: {
+      readings?: {
+        order_id?: string;
+        drink?: string;
+        beans?: string;
+        decaf?: boolean;
+        customer_name?: string;
+        end_time?: string;
+        order_ok?: boolean;
+      };
+    };
+  }[];
+  return rows
+    .map((r) => r.data?.readings ?? {})
+    .filter((x) => x.order_id)
+    .map((x) => ({
+      id: x.order_id!,
+      drink: x.drink ?? "",
+      beans: x.beans || (x.decaf ? "decaf" : "regular"),
+      customerName: x.customer_name ?? "",
+      at: x.end_time ? new Date(x.end_time) : new Date(0),
+      status: x.order_ok ? ("done" as const) : ("failed" as const),
+    }));
+}
+
+/**
+ * Record a customer's issue with an order. A suggested issue carries its own
+ * severity, so severity is only sent for a freeform ("other") report.
+ */
+export async function reportIssue(
+  conn: ViamConnection,
+  report: {
+    orderId: string;
+    issue: string;
+    description?: string;
+    severity?: string;
+  },
+): Promise<{ reported: boolean; order_id: string; severity: string }> {
+  if (isDevMode()) {
+    console.log("[dev] issue reported:", report);
+    return {
+      reported: true,
+      order_id: report.orderId,
+      severity: report.severity ?? "",
+    };
+  }
+  return doCommand(conn, COFFEE_SERVICE_NAME, {
+    report_issue: {
+      order_id: report.orderId,
+      issue: report.issue,
+      ...(report.description && { description: report.description }),
+      ...(report.severity && { severity: report.severity }),
+    },
+  });
 }
 
 // --- Customer Detector ---

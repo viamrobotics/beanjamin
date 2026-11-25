@@ -85,6 +85,9 @@ type Config struct {
 	FilterReleasedGripRelativePose *RelativePose `json:"filter_released_grip_relative_pose,omitempty"`
 	SaveMotionRequestsDir          string        `json:"save_motion_requests_dir,omitempty"`
 	OrderSensorName                string        `json:"order_sensor_name,omitempty"`
+	// IssueSensorName names a viam:beanjamin:order-issue-sensor, where
+	// report_issue pushes customer issue reports.
+	IssueSensorName string `json:"issue_sensor_name,omitempty"`
 
 	// Optional usage sensor updated during the brew lifecycle via a best-effort
 	// read-modify-write: all counters are read with Readings, the changed one is
@@ -662,6 +665,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}{
 		{cfg.SpeechServiceName, generic.Named},
 		{cfg.OrderSensorName, sensor.Named},
+		{cfg.IssueSensorName, sensor.Named},
 		{cfg.UsageSensorName, sensor.Named},
 		{cfg.CamStorageMuxName, generic.Named},
 		{cfg.SlackNotifierName, generic.Named},
